@@ -29,6 +29,29 @@ function getApiUrl(path: string): string {
 }
 
 /**
+ * Verifica a senha administrativa no backend.
+ */
+export async function verifyAdminPassword(password: string): Promise<ApiResponse> {
+  try {
+    const response = await fetch(getApiUrl('/api/admin/verify'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data: ApiResponse = await response.json();
+    return response.ok ? data : {
+      success: false,
+      error: data.error || `Erro ${response.status} ao verificar a senha administrativa`
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Não foi possível verificar a senha administrativa.'
+    };
+  }
+}
+
+/**
  * Cliente de API Centralizado para o Cerberus Finds
  */
 
@@ -121,7 +144,7 @@ export async function deleteProduct(
   adminPassword?: string
 ): Promise<ApiResponse> {
   const headers: Record<string, string> = {};
-  const pass = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || 'cerberus2026' : 'cerberus2026');
+  const pass = adminPassword || '';
   if (pass) {
     headers['x-admin-password'] = pass;
   }

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { AppConfig, Product } from '../types';
-import { extractProduct, createProduct, deleteProduct } from '../services/api';
+import { extractProduct, createProduct, deleteProduct, verifyAdminPassword } from '../services/api';
 import { Sparkles, Lock, Trash2, Check, AlertTriangle, Link as LinkIcon, Loader2, Upload, Image as ImageIcon, ShieldCheck } from 'lucide-react';
 
 interface AdminFormProps {
@@ -62,13 +62,20 @@ export const AdminForm: React.FC<AdminFormProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Handle password submission
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordInput === config.adminPassword) {
+    setAuthError(null);
+
+    if (!passwordInput.trim()) {
+      setAuthError('Informe a senha administrativa.');
+      return;
+    }
+
+    const result = await verifyAdminPassword(passwordInput);
+    if (result.success) {
       setIsAuthenticated(true);
-      setAuthError(null);
     } else {
-      setAuthError('Senha incorreta. Tente novamente.');
+      setAuthError(result.error || 'Senha incorreta. Tente novamente.');
     }
   };
 
@@ -138,7 +145,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     setIsExtracting(true);
 
     try {
-      const adminPass = passwordInput || config.adminPassword;
+      const adminPass = passwordInput;
       const resData = await extractProduct(targetUrl, targetRawText, adminPass);
 
       if (resData.success && resData.data) {
@@ -222,7 +229,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
 
     try {
       const base64List = attachedImages.map(img => img.base64);
-      const adminPass = passwordInput || config.adminPassword;
+      const adminPass = passwordInput;
 
       const payload = {
         senha: adminPass,
@@ -281,7 +288,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     setValidationError(null);
 
     try {
-      const adminPass = passwordInput || config.adminPassword || 'cerberus2026';
+      const adminPass = passwordInput || '';
       const resJson = await deleteProduct(id, adminPass);
 
       if (resJson.success) {
@@ -349,7 +356,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
           </form>
 
           <p className="text-[10px] font-mono text-[#E8E1D3]/50 pt-3 border-t border-[#3A342E]">
-            Acesso reservado. Autenticação via token no servidor.
+            Acesso reservado. A senha é validada exclusivamente no servidor.
           </p>
         </div>
       </div>

@@ -20,7 +20,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [metaPixelId, setMetaPixelId] = useState<string>(config.metaPixelId);
   const [metaAccessToken, setMetaAccessToken] = useState<string>(config.metaAccessToken || '');
   const [tikTokPixelId, setTikTokPixelId] = useState<string>(config.tikTokPixelId);
-  const [adminPassword, setAdminPassword] = useState<string>(config.adminPassword);
 
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [copiedFeed, setCopiedFeed] = useState<boolean>(false);
@@ -35,7 +34,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       metaPixelId: metaPixelId.trim(),
       metaAccessToken: metaAccessToken.trim(),
       tikTokPixelId: tikTokPixelId.trim(),
-      adminPassword: adminPassword.trim() || 'cerberus2026'
+      adminPassword: ''
     });
     setSavedSuccess(true);
     setTimeout(() => {
@@ -169,19 +168,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
           </div>
 
-          {/* Admin Password */}
-          <div className="space-y-1">
-            <label className="text-xs font-display uppercase tracking-widest text-[#E8E1D3] flex items-center space-x-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#8A1F1F]" />
-              <span>Senha do Painel Curatorial</span>
-            </label>
-            <input
-              type="text"
-              value={adminPassword}
-              onChange={(e) => setAdminPassword(e.target.value)}
-              placeholder="Ex: cerberus2026"
-              className="w-full bg-[#0B0908] border border-[#3A342E] focus:border-[#8A1F1F] text-[#E8E1D3] text-xs rounded-none p-2.5 focus:outline-none transition-colors"
-            />
+          <div className="p-3 bg-[#0B0908] border border-[#3A342E] text-[10px] font-condensed text-[#E8E1D3]/60">
+            A senha administrativa é definida exclusivamente pela variável <code>ADMIN_PASSWORD</code> no servidor e não é armazenada neste navegador.
           </div>
 
           {/* Legacy CSV URL */}

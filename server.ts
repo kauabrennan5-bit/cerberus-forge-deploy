@@ -41,8 +41,18 @@ async function startServer() {
   // ==========================================
   // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA
   // ==========================================
+  const getAdminPassword = (): string => (process.env.ADMIN_PASSWORD || "").trim();
+
   const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const adminPass = process.env.ADMIN_PASSWORD || "cerberus2026";
+    const adminPass = getAdminPassword();
+
+    if (!adminPass) {
+      console.error("[Security] ADMIN_PASSWORD não está configurada. Operação administrativa bloqueada.");
+      return res.status(503).json({
+        success: false,
+        error: "A autenticação administrativa não está configurada no servidor. Defina ADMIN_PASSWORD no ambiente."
+      });
+    }
     const authHeader = (req.headers["x-admin-password"] as string) || "";
     const bearerHeader = (req.headers["authorization"] as string) || "";
     const bearerPass = bearerHeader.startsWith("Bearer ") ? bearerHeader.slice(7).trim() : "";
@@ -60,6 +70,26 @@ async function startServer() {
 
     next();
   };
+
+  // Verificação de credencial para o login da interface administrativa.
+  // A senha nunca é armazenada nem comparada no frontend.
+  app.post("/api/admin/verify", (req, res) => {
+    const adminPass = getAdminPassword();
+    const providedPass = String(req.body?.password || "");
+
+    if (!adminPass) {
+      return res.status(503).json({
+        success: false,
+        error: "A autenticação administrativa não está configurada no servidor."
+      });
+    }
+
+    if (!providedPass || providedPass !== adminPass) {
+      return res.status(401).json({ success: false, error: "Senha administrativa inválida." });
+    }
+
+    return res.json({ success: true });
+  });
 
   // ==========================================
   // 1. PRODUCTS REST API (DATABASE ENDPOINTS)
