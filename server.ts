@@ -41,7 +41,30 @@ async function startServer() {
   // ==========================================
   // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA
   // ==========================================
-  const getAdminPassword = (): string => (process.env.ADMIN_PASSWORD || "").trim();
+  // A senha administrativa é resolvida, em ordem de prioridade:
+  // 1. Variável de ambiente ADMIN_PASSWORD (se definida)
+  // 2. Senha persistida em data/admin-config.json (definida pelo painel via /api/admin/set-password)
+  // 3. Senha padrão de segurança (somente quando nenhum valor foi configurado)
+  const ADMIN_CONFIG_FILE = path.join(process.cwd(), "data", "admin-config.json");
+  const DEFAULT_FALLBACK_PASSWORD = "cerberus2026";
+
+  function getRuntimeAdminPassword(): string {
+    try {
+      if (fs.existsSync(ADMIN_CONFIG_FILE)) {
+        const raw = fs.readFileSync(ADMIN_CONFIG_FILE, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.adminPassword === "string" && parsed.adminPassword.trim().length > 0) {
+          return parsed.adminPassword.trim();
+        }
+      }
+    } catch (err) {
+      console.error("[Security] Erro ao ler data/admin-config.json:", err);
+    }
+    return "";
+  }
+
+  const getAdminPassword = (): string =>
+    (process.env.ADMIN_PASSWORD || getRuntimeAdminPassword() || DEFAULT_FALLBACK_PASSWORD).trim();
 
   const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const adminPass = getAdminPassword();
@@ -89,6 +112,50 @@ async function startServer() {
     }
 
     return res.json({ success: true });
+  });
+
+  // GET /api/admin/password-config - Informa ao frontend qual fonte define a senha atual
+  // (apenas indica se a senha vem de ADMIN_PASSWORD ou do arquivo local; nunca expõe o valor).
+  app.get("/api/admin/password-config", (_req, res) => {
+    const envPassword = (process.env.ADMIN_PASSWORD || "").trim();
+    return res.json({
+      success: true,
+      source: envPassword ? "ENVIRONMENT" : "STORED",
+      editable: !envPassword
+    });
+  });
+
+  // POST /api/admin/set-password - Permite trocar a senha do painel pelo próprio SettingsModal.
+  // Exige a senha atual (middleware requireAdminAuth) e persiste a nova senha em data/admin-config.json.
+  // Não sobrescreve a senha definida via ADMIN_PASSWORD (definida pelo operador da infra).
+  app.post("/api/admin/set-password", requireAdminAuth, (req, res) => {
+    const envPassword = (process.env.ADMIN_PASSWORD || "").trim();
+    if (envPassword) {
+      return res.status(400).json({
+        success: false,
+        error: "A senha administrativa está definida pela variável de ambiente ADMIN_PASSWORD. Defina-a em outro local para permitir a troca pelo painel."
+      });
+    }
+
+    const newPassword = String(req.body?.newPassword || "").trim();
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: "A nova senha deve ter pelo menos 6 caracteres."
+      });
+    }
+
+    try {
+      if (!fs.existsSync(path.dirname(ADMIN_CONFIG_FILE))) {
+        fs.mkdirSync(path.dirname(ADMIN_CONFIG_FILE), { recursive: true });
+      }
+      fs.writeFileSync(ADMIN_CONFIG_FILE, JSON.stringify({ adminPassword: newPassword, updatedAt: new Date().toISOString() }, null, 2), "utf-8");
+      console.log("[Security] Senha administrativa atualizada com sucesso via /api/admin/set-password.");
+      return res.json({ success: true, message: "Senha administrativa atualizada com sucesso." });
+    } catch (err: any) {
+      console.error("[Security] Erro ao salvar nova senha:", err);
+      return res.status(500).json({ success: false, error: "Erro ao salvar a nova senha: " + err.message });
+    }
   });
 
   // ==========================================

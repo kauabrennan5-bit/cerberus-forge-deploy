@@ -1,19 +1,23 @@
 import React, { useState } from 'react';
 import { AppConfig } from '../types';
-import { X, Save, Key, Link as LinkIcon, Tag, ShieldCheck, Copy, Check, Rss } from 'lucide-react';
+import { X, Save, Key, Link as LinkIcon, Tag, ShieldCheck, Copy, Check, Rss, LockKeyhole } from 'lucide-react';
+import { getPasswordConfig, setAdminPassword } from '../services/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
   config: AppConfig;
   onSaveConfig: (newConfig: AppConfig) => void;
   onClose: () => void;
+  /** Senha usada na autenticação atual, necessária para autorizar a troca de senha. */
+  authenticatedPassword?: string;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   config,
   onSaveConfig,
-  onClose
+  onClose,
+  authenticatedPassword
 }) => {
   const [csvUrl, setCsvUrl] = useState<string>(config.csvUrl);
   const [appsScriptUrl, setAppsScriptUrl] = useState<string>(config.appsScriptUrl);
@@ -21,12 +25,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [metaAccessToken, setMetaAccessToken] = useState<string>(config.metaAccessToken || '');
   const [tikTokPixelId, setTikTokPixelId] = useState<string>(config.tikTokPixelId);
 
+  // Nova senha administrativa (editável apenas quando definida pelo servidor, não por ADMIN_PASSWORD)
+  const [newAdminPassword, setNewAdminPassword] = useState<string>('');
+  const [passwordEditable, setPasswordEditable] = useState<boolean>(true);
+  const [passwordNotice, setPasswordNotice] = useState<string>('');
+  const [passwordNoticeType, setPasswordNoticeType] = useState<'success' | 'error' | 'info'>('info');
+
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [copiedFeed, setCopiedFeed] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Consulta a fonte da senha atual ao abrir o modal
+  const loadPasswordConfig = async () => {
+    try {
+      const cfg = await getPasswordConfig();
+      if (cfg.success) {
+        setPasswordEditable(cfg.editable);
+        setPasswordNotice(
+          cfg.editable
+            ? 'A senha é gerenciada pelo servidor e pode ser alterada abaixo. As alterações valem imediatamente.'
+            : 'A senha está definida pela variável de ambiente ADMIN_PASSWORD na infraestrutura e não pode ser alterada por aqui.'
+        );
+        setPasswordNoticeType('info');
+      }
+    } catch {
+      setPasswordEditable(true);
+    }
+  };
+
+  if (isOpen && !passwordNotice) {
+    loadPasswordConfig();
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     onSaveConfig({
       csvUrl: csvUrl.trim(),
@@ -36,6 +68,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       tikTokPixelId: tikTokPixelId.trim(),
       adminPassword: ''
     });
+
+    // Atualiza a senha administrativa, se o usuário preencheu o campo
+    const trimmedNewPass = newAdminPassword.trim();
+    if (trimmedNewPass.length > 0) {
+      if (trimmedNewPass.length < 6) {
+        setPasswordNotice('A nova senha deve ter pelo menos 6 caracteres.');
+        setPasswordNoticeType('error');
+        return;
+      }
+      const result = await setAdminPassword(trimmedNewPass, authenticatedPassword || config.adminPassword);
+      if (result.success) {
+        setPasswordNotice('Senha administrativa atualizada com sucesso! Use a nova senha no próximo acesso.');
+        setPasswordNoticeType('success');
+        setNewAdminPassword('');
+      } else {
+        setPasswordNotice(result.error || 'Erro ao atualizar a senha administrativa.');
+        setPasswordNoticeType('error');
+      }
+    }
+
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -168,8 +220,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
           </div>
 
-          <div className="p-3 bg-[#0B0908] border border-[#3A342E] text-[10px] font-condensed text-[#E8E1D3]/60">
-            A senha administrativa é definida exclusivamente pela variável <code>ADMIN_PASSWORD</code> no servidor e não é armazenada neste navegador.
+          {/* Senha Administrativa do Painel */}
+          <div className="space-y-1">
+            <label className="text-xs font-display uppercase tracking-widest text-[#E8E1D3] flex items-center space-x-1.5">
+              <LockKeyhole className="w-3.5 h-3.5 text-[#8A1F1F]" />
+              <span>Nova Senha do Painel (Opcional)</span>
+            </label>
+            <input
+              type="password"
+              value={newAdminPassword}
+              onChange={(e) => setNewAdminPassword(e.target.value)}
+              placeholder={passwordEditable ? "Defina a nova senha do administrador..." : "Senha definida pela infraestrutura (bloqueada)"}
+              disabled={!passwordEditable}
+              className="w-full bg-[#0B0908] border border-[#3A342E] focus:border-[#8A1F1F] disabled:opacity-40 disabled:cursor-not-allowed text-[#E8E1D3] text-xs rounded-none p-2.5 focus:outline-none transition-colors font-mono"
+            />
+            <p className="text-[10px] font-condensed text-[#E8E1D3]/50">
+              Mínimo de 6 caracteres. A senha é persistida no servidor e nunca é armazenada neste navegador.
+              {passwordNotice ? (
+                <span className={passwordNoticeType === 'success' ? ' text-[#5A8A5A]' : passwordNoticeType === 'error' ? ' text-[#8A1F1F]' : ' text-[#E8E1D3]/60'}>
+                  {' '}• {passwordNotice}
+                </span>
+              ) : null}
+            </p>
           </div>
 
           {/* Legacy CSV URL */}

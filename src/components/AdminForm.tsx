@@ -9,7 +9,7 @@ interface AdminFormProps {
   existingCategories: string[];
   onProductAdded: () => void;
   onProductDeleted: (id: string) => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (password?: string) => void;
 }
 
 interface AttachedImage {
@@ -356,7 +356,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
           </form>
 
           <p className="text-[10px] font-mono text-[#E8E1D3]/50 pt-3 border-t border-[#3A342E]">
-            Acesso reservado. A senha é validada exclusivamente no servidor.
+            Acesso reservado. Senha padrão: cerberus2026 — trocável em Parâmetros de Integração.
           </p>
         </div>
       </div>

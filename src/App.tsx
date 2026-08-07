@@ -272,7 +272,7 @@ export default function App() {
                 setSelectedProduct(null);
               }
             }}
-            onOpenSettings={() => setIsSettingsOpen(true)}
+            onOpenSettings={(pass?: string) => setIsSettingsOpen(true)}
           />
         )}
 
@@ -315,6 +315,7 @@ export default function App() {
         config={config}
         onSaveConfig={handleSaveConfig}
         onClose={() => setIsSettingsOpen(false)}
+        authenticatedPassword={config.adminPassword}
       />
 
     </div>

@@ -236,6 +236,54 @@ export async function extractProduct(
 }
 
 /**
+ * Consulta a fonte atual da senha administrativa (ENVIRONMENT = .env / STORED = arquivo do servidor).
+ * O valor da senha nunca é exposto ao navegador.
+ */
+export async function getPasswordConfig(): Promise<{ success: boolean; source: string; editable: boolean }> {
+  try {
+    const response = await fetch(getApiUrl('/api/admin/password-config'));
+    const data = await response.json();
+    return response.ok ? data : { success: false, source: 'UNKNOWN', editable: false };
+  } catch {
+    return { success: false, source: 'UNKNOWN', editable: false };
+  }
+}
+
+/**
+ * Altera a senha administrativa do painel (exige a senha atual para autorizar).
+ * A nova senha é persistida em data/admin-config.json no servidor.
+ */
+export async function setAdminPassword(
+  newPassword: string,
+  adminPassword: string
+): Promise<ApiResponse> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+  if (adminPassword) {
+    headers['x-admin-password'] = adminPassword;
+  }
+
+  try {
+    const response = await fetch(getApiUrl('/api/admin/set-password'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ newPassword })
+    });
+    const data: ApiResponse = await response.json();
+    return response.ok ? data : {
+      success: false,
+      error: data.error || `Erro ${response.status} ao atualizar a senha`
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Não foi possível conectar ao servidor para atualizar a senha.'
+    };
+  }
+}
+
+/**
  * Envia submissão legada (Google Apps Script)
  */
 export async function submitProduct(
