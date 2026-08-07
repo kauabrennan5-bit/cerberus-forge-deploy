@@ -19,13 +19,6 @@ export const CerberusLogo: React.FC<CerberusLogoProps> = ({
       alt="Cerberus Official Asset"
       className={`object-contain select-none ${className}`}
       style={size ? { width: `${size}px`, height: `${size}px` } : undefined}
-      onError={(e) => {
-        // Fallback to SVG if PNG is not present
-        const target = e.currentTarget;
-        if (!target.src.endsWith('.svg')) {
-          target.src = '/cerberus-logo.svg';
-        }
-      }}
     />
   );
 };
