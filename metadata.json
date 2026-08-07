@@ -1,0 +1,6 @@
+{
+  "name": "Cerberus Finds",
+  "description": "Plataforma de curadoria de produtos afiliados com catálogo público e área de cadastro com IA (Gemini).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

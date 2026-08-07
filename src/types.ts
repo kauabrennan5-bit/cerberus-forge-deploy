@@ -1,0 +1,34 @@
+export interface Product {
+  id: string;
+  ref?: string;
+  produto: string;
+  categoria: string;
+  preco: number;
+  imagens: string[];
+  link: string;
+  ativo: boolean;
+  destaque: boolean;
+  status?: 'pending' | 'published';
+  createdBy?: string;
+  slug?: string;
+  descricao?: string;
+  paginaPonteUrl?: string;
+  rawRowIndex?: number;
+}
+
+export interface AppConfig {
+  csvUrl: string;
+  appsScriptUrl: string;
+  metaPixelId: string;
+  tikTokPixelId: string;
+  metaAccessToken?: string;
+  adminPassword: string;
+}
+
+export type ViewMode = 'catalog' | 'admin' | 'guide' | 'product-detail';
+
+export interface ExtractionResult {
+  produto: string;
+  preco: number | null;
+  imagens: string[];
+}

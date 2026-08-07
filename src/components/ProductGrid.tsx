@@ -1,0 +1,262 @@
+import React, { useState, useMemo } from 'react';
+import { Product } from '../types';
+import { ProductCard } from './ProductCard';
+import { Search, RefreshCw, AlertCircle, Sparkles, Filter, X, Heart } from 'lucide-react';
+import { CerberusLogo } from './CerberusLogo';
+
+interface ProductGridProps {
+  products: Product[];
+  favorites: string[];
+  onToggleFavorite: (id: string) => void;
+  onSelectProduct: (product: Product) => void;
+  showOnlyFavorites: boolean;
+  onToggleShowFavorites: () => void;
+  isLoading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+  onOpenSettings: () => void;
+  metaPixelId?: string;
+  metaAccessToken?: string;
+}
+
+export const ProductGrid: React.FC<ProductGridProps> = ({
+  products,
+  favorites,
+  onToggleFavorite,
+  onSelectProduct,
+  showOnlyFavorites,
+  onToggleShowFavorites,
+  isLoading,
+  error,
+  onRefresh,
+  onOpenSettings,
+  metaPixelId,
+  metaAccessToken
+}) => {
+  const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Extract unique categories from actual products
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    products.forEach((p) => {
+      if (p.categoria && p.categoria.trim()) {
+        set.add(p.categoria.trim());
+      }
+    });
+    return ['Todos', ...Array.from(set).sort()];
+  }, [products]);
+
+  // Filter products by selected category, search string, and favorites
+  const filteredProducts = useMemo(() => {
+    return products.filter((product) => {
+      // Favorites filter
+      if (showOnlyFavorites && !favorites.includes(product.id)) {
+        return false;
+      }
+
+      // Category filter
+      const matchesCategory =
+        selectedCategory === 'Todos' ||
+        product.categoria.toLowerCase() === selectedCategory.toLowerCase();
+
+      // Search filter
+      const query = searchQuery.toLowerCase().trim();
+      const matchesSearch =
+        !query ||
+        product.produto.toLowerCase().includes(query) ||
+        product.categoria.toLowerCase().includes(query);
+
+      return matchesCategory && matchesSearch;
+    });
+  }, [products, favorites, showOnlyFavorites, selectedCategory, searchQuery]);
+
+  return (
+    <section className="space-y-6 py-2 font-sans animate-fade-in w-full max-w-full overflow-hidden">
+      
+      {/* Search & Header Controls */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#3A342E] pb-5 w-full">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+            <span className="stamp-badge text-[9px] px-1.5 py-0.2">
+              {showOnlyFavorites ? 'PEÇAS SALVAS' : 'CATÁLOGO ARCHIVAL'}
+            </span>
+            {showOnlyFavorites && (
+              <span className="px-2 py-0.5 bg-[#8A1F1F] text-[#E8E1D3] font-display text-[9px] uppercase tracking-widest rounded-none">
+                FAVORITOS ({favorites.length})
+              </span>
+            )}
+          </div>
+          
+          <h1 className="font-gothic text-3xl sm:text-5xl font-normal tracking-wide text-[#E8E1D3] mt-2">
+            {showOnlyFavorites ? 'Peças Salvas na Lista' : 'Acervo Cerberus'}
+          </h1>
+          
+          <p className="text-xs font-condensed uppercase tracking-wider text-[#E8E1D3]/70 mt-1 max-w-xl leading-relaxed">
+            {showOnlyFavorites
+              ? 'Sua seleção pessoal de peças e vestuário gravados no dispositivo.'
+              : 'Seleção de peças de design, vestuário, calçados e utilitários curados diretamente das melhores lojas oficiais.'}
+          </p>
+        </div>
+
+        {/* Live Search Input */}
+        <div className="relative w-full md:w-72 shrink-0">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8A1F1F]" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Buscar por peça, marca, tipo..."
+            className="w-full bg-[#141210] border border-[#3A342E] focus:border-[#8A1F1F] text-[#E8E1D3] text-xs font-display uppercase tracking-wider rounded-none pl-9 pr-8 py-2.5 focus:outline-none transition-colors"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#E8E1D3]/50 hover:text-[#E8E1D3]"
+              title="Limpar busca"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Dynamic Category Filter Bar */}
+      <div className="w-full max-w-full min-w-0 overflow-x-auto no-scrollbar border-b border-[#3A342E]/60 pb-3 flex items-center justify-between gap-3">
+        <div className="flex items-center space-x-2 shrink-0">
+          <span className="text-[#8A1F1F] font-display text-xs flex items-center shrink-0 mr-1 uppercase tracking-widest text-[10px]">
+            <Filter className="w-3 h-3 mr-1" />
+            <span>CATEGORIA:</span>
+          </span>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`shrink-0 px-3 py-1.5 rounded-none text-xs font-display uppercase tracking-widest transition-all ${
+                selectedCategory === cat
+                  ? 'bg-[#8A1F1F] text-[#E8E1D3] border border-[#8A1F1F]'
+                  : 'bg-[#141210] text-[#E8E1D3]/70 hover:text-[#E8E1D3] border border-[#3A342E] hover:border-[#8A1F1F]'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+
+        {/* Favorites Quick Filter Toggle Pill */}
+        <button
+          onClick={onToggleShowFavorites}
+          className={`shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-none text-xs font-display uppercase tracking-widest transition-all border ${
+            showOnlyFavorites
+              ? 'bg-[#8A1F1F] text-[#E8E1D3] border-[#8A1F1F]'
+              : 'bg-[#141210] text-[#E8E1D3]/70 border-[#3A342E] hover:text-[#E8E1D3] hover:border-[#8A1F1F]'
+          }`}
+        >
+          <Heart className={`w-3.5 h-3.5 ${showOnlyFavorites || favorites.length > 0 ? 'fill-[#8A1F1F] text-[#8A1F1F]' : 'text-[#E8E1D3]'}`} />
+          <span>Salvos ({favorites.length})</span>
+        </button>
+      </div>
+
+      {/* Elegant Shimmer Skeleton Loading */}
+      {isLoading && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-center space-x-3 py-4 text-[#E8E1D3]/50">
+            <CerberusLogo className="w-8 h-8 animate-pulse" />
+            <span className="font-display text-xs uppercase tracking-widest animate-pulse">
+              Carregando Acervo Cerberus...
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
+            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+              <div key={n} className="bg-[#141210] border border-[#3A342E] rounded-none p-3 space-y-3">
+                <div className="aspect-square skeleton-shimmer rounded-none border border-[#3A342E]" />
+                <div className="h-3 skeleton-shimmer rounded-none w-3/4" />
+                <div className="h-3 skeleton-shimmer rounded-none w-1/2" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Error Banner */}
+      {!isLoading && error && (
+        <div className="bg-[#141210] border border-[#8A1F1F] rounded-none p-8 text-center space-y-4 my-6">
+          <div className="w-12 h-12 rounded-none bg-[#8A1F1F]/20 text-[#8A1F1F] flex items-center justify-center mx-auto border border-[#8A1F1F]">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="font-gothic text-2xl font-normal text-[#E8E1D3]">
+              Falha na Conexão do Acervo
+            </h3>
+            <p className="text-xs text-[#E8E1D3]/70 mt-1 max-w-md mx-auto">
+              {error}
+            </p>
+          </div>
+          <div className="flex items-center justify-center space-x-3 pt-2">
+            <button
+              onClick={onRefresh}
+              className="px-4 py-2 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] text-[#E8E1D3] rounded-none text-xs font-display uppercase tracking-widest flex items-center space-x-1.5 transition-colors"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-[#8A1F1F]" />
+              <span>Recarregar</span>
+            </button>
+            <button
+              onClick={onOpenSettings}
+              className="px-4 py-2 bg-[#8A1F1F] text-[#E8E1D3] rounded-none text-xs font-display uppercase tracking-widest transition-colors"
+            >
+              Ajustar Servidor
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!isLoading && !error && filteredProducts.length === 0 && (
+        <div className="bg-[#141210] border border-[#3A342E] rounded-none p-12 text-center space-y-4 my-8">
+          <Sparkles className="w-8 h-8 text-[#8A1F1F] mx-auto opacity-80" />
+          <h3 className="font-gothic text-3xl text-[#E8E1D3]">
+            {showOnlyFavorites ? 'Nenhuma Peça Salva' : 'Nenhuma Peça Encontrada'}
+          </h3>
+          <p className="text-xs text-[#E8E1D3]/70 max-w-sm mx-auto leading-relaxed">
+            {showOnlyFavorites
+              ? 'Você ainda não salvou nenhuma peça. Clique no ícone de coração nos cards do catálogo para salvar.'
+              : searchQuery
+              ? `Nenhuma peça no acervo corresponde a "${searchQuery}".`
+              : 'Não há produtos cadastrados nesta categoria.'}
+          </p>
+          {(searchQuery || showOnlyFavorites) && (
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                if (showOnlyFavorites) onToggleShowFavorites();
+              }}
+              className="px-4 py-2 bg-[#8A1F1F] text-[#E8E1D3] text-xs font-display uppercase tracking-widest rounded-none hover:bg-[#8A1F1F]/80 transition-colors"
+            >
+              Limpar Filtros
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Main Responsive Grid (Mobile: 2 cols | Tablet: 3 cols | Desktop: 4-5 cols) */}
+      {!isLoading && !error && filteredProducts.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
+          {filteredProducts.map((product, idx) => (
+            <ProductCard
+              key={product.id}
+              product={product}
+              index={idx}
+              isFavorite={favorites.includes(product.id)}
+              onToggleFavorite={onToggleFavorite}
+              onSelectProduct={onSelectProduct}
+              metaPixelId={metaPixelId}
+              metaAccessToken={metaAccessToken}
+            />
+          ))}
+        </div>
+      )}
+
+    </section>
+  );
+};
