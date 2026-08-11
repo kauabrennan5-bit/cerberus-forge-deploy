@@ -153,19 +153,13 @@ async function startServer() {
     try {
       const { syncCatalogAndDeploy } = await import("./server/services/catalogSync");
       const result = await syncCatalogAndDeploy("Rebuild Administrativo Manual", "manual-rebuild");
-      if (result.success) {
-        return res.json({
-          success: true,
-          message: "Catálogo estático reconstruído e sincronizado com sucesso!",
-          data: result
-        });
-      } else {
-        return res.status(500).json({
-          success: false,
-          error: "Falha na sincronização do catálogo estático.",
-          data: result
-        });
-      }
+      return res.json({
+        success: result.success,
+        message: result.success ? "Catálogo estático reconstruído e sincronizado com sucesso!" : "Falha na sincronização do catálogo estático.",
+        hookUrlConfigured: !!process.env.RENDER_STATIC_DEPLOY_HOOK_URL,
+        hookUrlPrefix: process.env.RENDER_STATIC_DEPLOY_HOOK_URL ? process.env.RENDER_STATIC_DEPLOY_HOOK_URL.substring(0, 30) + "..." : "none",
+        data: result
+      });
     } catch (err: any) {
       console.error("Erro no rebuild estático:", err);
       return res.status(500).json({ success: false, error: "Erro interno no rebuild: " + err.message });
