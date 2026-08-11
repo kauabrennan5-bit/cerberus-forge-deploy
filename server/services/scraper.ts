@@ -47,7 +47,7 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
   let contentType = "";
 
   if (targetUrl) {
-    const selectedUa = isShopee ? "WhatsApp/2.21.12.21 i" : userAgents[0];
+    const selectedUa = userAgents[0];
     try {
       const response = await fetch(targetUrl, {
         headers: {
@@ -263,6 +263,38 @@ function parseOpenGraph(content: string): { title: string | null; price: number 
  */
 function extractShopeeCdnImages(content: string): string[] {
   const images: string[] = [];
+
+  // 1. Extrai matriz de hashes da galeria oficial do produto em blocos JSON ("images", "image_list", "imageList", "image_ids")
+  const jsonImagesMatches = content.matchAll(/(?:\"images\"|\"image_list\"|\"imageList\"|\"image_ids\")\s*:\s*\[([^\]]+)\]/gi);
+  for (const m of jsonImagesMatches) {
+    if (m[1]) {
+      const hashes = m[1].matchAll(/"([a-zA-Z0-9_\-]{20,50})"/g);
+      const blockImages: string[] = [];
+      for (const h of hashes) {
+        if (h[1]) {
+          const cleanHash = h[1].replace(/_(tn|b)$/i, "");
+          const fullUrl = `https://down-br.img.susercontent.com/file/${cleanHash}`;
+          if (!blockImages.includes(fullUrl)) {
+            blockImages.push(fullUrl);
+          }
+        }
+      }
+      // Se encontramos o bloco da galeria principal com múltiplas imagens do produto,
+      // retornamos diretamente para não capturar produtos recomendados ou anúncios.
+      if (blockImages.length > 1) {
+        return blockImages;
+      }
+      if (blockImages.length > 0 && images.length === 0) {
+        images.push(...blockImages);
+      }
+    }
+  }
+
+  if (images.length > 0) {
+    return images;
+  }
+
+  // 2. Fallback: Se não foi localizado bloco JSON de galeria, busca imagens do CDN no HTML
   const shopeeRegex = /https:\/\/(?:down-br\.img\.susercontent\.com|down-tx-br\.img\.susercontent\.com|sg-11134201-[^"'\s\)\\]+|cf\.shopee\.com\.br)\/file\/([a-zA-Z0-9_\-]+)/gi;
   
   const matches = content.matchAll(shopeeRegex);
@@ -608,20 +640,14 @@ export function extractTitleFromUrl(url: string): string | null {
   const shopeeMatch1 = url.match(/shopee\.com\.br\/([^\?\/]+)-i\.(\d+)\.(\d+)/i);
   if (shopeeMatch1 && shopeeMatch1[1]) {
     const raw = decodeURIComponent(shopeeMatch1[1]).replace(/-/g, " ").trim();
-    if (raw && raw.length > 2) return raw;
+    if (raw && raw.length > 2 && raw.toLowerCase() !== "product") return raw;
   }
 
-  // Shopee URL: shopee.com.br/{loja}/{shopid}/{itemid} or shopee.com.br/{loja}/{slug}/{shopid}/{itemid}
-  const shopeeMatch2 = url.match(/shopee\.com\.br\/([^\/]+)\/(\d+)\/(\d+)/i);
-  if (shopeeMatch2 && shopeeMatch2[1] && shopeeMatch2[1] !== "product") {
-    const raw = decodeURIComponent(shopeeMatch2[1]).replace(/-/g, " ").trim();
-    if (raw && raw.length > 2) return raw;
-  }
-
+  // Shopee URL com 4 segmentos: shopee.com.br/{loja}/{slug-do-produto}/{shopid}/{itemid}
   const shopeeMatch3 = url.match(/shopee\.com\.br\/[^\/]+\/([^\/]+)\/(\d+)\/(\d+)/i);
-  if (shopeeMatch3 && shopeeMatch3[1]) {
+  if (shopeeMatch3 && shopeeMatch3[1] && !/^\d+$/.test(shopeeMatch3[1])) {
     const raw = decodeURIComponent(shopeeMatch3[1]).replace(/-/g, " ").trim();
-    if (raw && raw.length > 2) return raw;
+    if (raw && raw.length > 2 && raw.toLowerCase() !== "product") return raw;
   }
 
   // Mercado Livre URL: MLB-3564024329-slug-name...
@@ -819,6 +845,30 @@ function printScraperDebugLog(params: {
   else if (shopeeImages.length > 0) imagesSource = "Shopee CDN Regex";
   else if (mlImages.length > 0) imagesSource = "Mercado Livre CDN Regex";
   else if (domImages.length > 0) imagesSource = "DOM";
+
+  if (isShopee) {
+    const shopeeFieldFound = priceMinRaw ? "price_min" : priceRaw ? "price" : "Nenhum (Campos de preço na estrutura SSR do MFE/BFF foram estripados/removidos pelo backend da Shopee e constam como null)";
+    const shopeeRawVal = priceMinRaw || priceRaw || "null";
+    const shopeePath = "initialState.DOMAIN_PDP.data.PDP_BFF_DATA.cachedMap[{shop_id}/{item_id}].item.price";
+    const shopeeScale = (priceMinRaw || priceRaw) ? (parseFloat(shopeeRawVal) > 100000 ? "Divisão por 100.000 (micro-unidade)" : "Sem divisão") : "N/A (Campos nulos)";
+    const shopeeConverted = finalPrice !== null ? `R$ ${finalPrice.toFixed(2)}` : "null";
+    const shopeePriceType = finalPrice !== null ? "Preço promocional / atual" : "N/A";
+    const shopeeSource = "HTML SSR MFE/BFF (Shopee)";
+    const shopeeFinal = finalPrice !== null ? `R$ ${finalPrice.toFixed(2)}` : "null (Preço não disponível no SSR da Shopee)";
+
+    console.log(`
+[SHOPEE PRICE DEBUG]
+URL canônica: ${finalUrl}
+Campo encontrado: ${shopeeFieldFound}
+Valor bruto: ${shopeeRawVal}
+Caminho JSON: ${shopeePath}
+Escala aplicada: ${shopeeScale}
+Preço convertido: ${shopeeConverted}
+Tipo de preço: ${shopeePriceType}
+Fonte: ${shopeeSource}
+Resultado final: ${shopeeFinal}
+`);
+  }
 
   console.log(`
 === SCRAPER DEBUG ===

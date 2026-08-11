@@ -160,6 +160,58 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
 }
 
 /**
+ * Obtém a revisão pendente mais recente para um determinado usuário ou chat (não expirada)
+ */
+export async function getLatestPendingReviewForUser(
+  senderId: string | number,
+  chatId?: string | number
+): Promise<PendingReview | null> {
+  const sId = String(senderId);
+  const cId = chatId ? String(chatId) : null;
+  const now = Date.now();
+
+  // 1. Tenta buscar no Supabase se disponível
+  if (supabase) {
+    try {
+      let query = supabase
+        .from("telegram_pending_reviews")
+        .select("data, created_at")
+        .order("created_at", { ascending: false });
+
+      if (cId) {
+        query = query.or(`sender_id.eq.${sId},chat_id.eq.${cId}`);
+      } else {
+        query = query.eq("sender_id", sId);
+      }
+
+      const { data, error } = await query.limit(1);
+
+      if (!error && data && data.length > 0 && data[0].data) {
+        const rev = data[0].data as PendingReview;
+        if (now - rev.createdAt <= SESSION_EXPIRATION_MS) {
+          return rev;
+        }
+      }
+    } catch {
+      // Fallback para o arquivo local
+    }
+  }
+
+  // 2. Fallback para arquivo local
+  const reviews = readReviewsFromFile();
+  const userReviews = Object.values(reviews).filter((r) => {
+    const matchUser = String(r.senderId) === sId || (cId && String(r.chatId) === cId);
+    const valid = now - r.createdAt <= SESSION_EXPIRATION_MS;
+    return matchUser && valid;
+  });
+
+  if (userReviews.length === 0) return null;
+
+  userReviews.sort((a, b) => b.createdAt - a.createdAt);
+  return userReviews[0];
+}
+
+/**
  * Remove uma revisão pendente (após publicação ou cancelamento)
  */
 export async function deletePendingReview(reviewId: string): Promise<void> {

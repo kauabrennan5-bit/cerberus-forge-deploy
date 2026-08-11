@@ -34,6 +34,39 @@ export interface PendingReview extends ExtractedReviewData {
   firstName: string;
   username: string;
   createdAt: number;
+  cardMessageId?: number;
+}
+
+/**
+ * Normaliza o valor de preço enviado pelo usuário para um número decimal (maior que zero).
+ * Suporta formatos: "72", "72,90", "R$ 72,90", "72.90", "r$ 72,90", "1.250,90"
+ */
+export function parseAndNormalizePrice(input: string): number | null {
+  if (!input || typeof input !== "string") return null;
+
+  let cleaned = input
+    .replace(/^[rR]?\$\s*/, "")
+    .replace(/\$/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .trim();
+
+  if (!cleaned) return null;
+
+  if (cleaned.includes(".") && cleaned.includes(",")) {
+    if (cleaned.indexOf(".") < cleaned.indexOf(",")) {
+      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
+    } else {
+      cleaned = cleaned.replace(/,/g, "");
+    }
+  } else if (cleaned.includes(",")) {
+    cleaned = cleaned.replace(",", ".");
+  }
+
+  const val = parseFloat(cleaned);
+  if (isNaN(val) || !isFinite(val)) return null;
+  if (val <= 0) return null;
+
+  return Math.round(val * 100) / 100;
 }
 
 /**
@@ -203,7 +236,7 @@ export async function editTelegramMessageCaption(
 function buildReviewCardText(review: PendingReview): string {
   const priceFormatted = review.preco && review.preco > 0
     ? `R$ ${review.preco.toFixed(2).replace(".", ",")}`
-    : `⚠️ <b>NÃO DETECTADO</b> (Clique em "💰 Alterar Preço" abaixo)`;
+    : `⚠️ <b>Preço não detectado.</b>\n👉 <i>Digite o preço de venda que deseja cadastrar.</i>`;
 
   const existingNotice = review.existingProduct
     ? `\n\n♻️ <i>Nota: Este produto já está cadastrado no acervo. Confirmar irá atualizar os dados.</i>`
@@ -215,7 +248,7 @@ function buildReviewCardText(review: PendingReview): string {
     `📁 <b>Categoria:</b> ${review.categoria}\n` +
     `💰 <b>Preço:</b> ${priceFormatted}\n` +
     `🛒 <b>Marketplace:</b> ${review.marketplace}\n` +
-    `🖼️ <b>Imagens:</b> ${review.imagens.length} encontradas\n` +
+    `🖼️ <b>Imagens:</b> ${review.imagens?.length || 0} encontradas\n` +
     `🔗 <code>${review.normalizedUrl}</code>${existingNotice}\n\n` +
     `<i>Confirme os dados ou ajuste o preço/categoria antes de publicar no acervo:</i>`
   );
@@ -502,39 +535,6 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
-    // Se o usuário estiver no estado de digitação manual de preço
-    const userState = await telegramRepo.getUserState(senderId);
-    if (userState && userState.action === "awaiting_price") {
-      const review = await telegramRepo.getPendingReview(userState.reviewId);
-      if (review) {
-        const parsedPrice = parseFloat(text.replace("R$", "").replace(",", ".").trim());
-        if (isNaN(parsedPrice) || parsedPrice <= 0) {
-          if (chatId) {
-            await sendTelegramMessage(
-              chatId,
-              `❌ <b>Preço inválido.</b> Digite um valor numérico válido (ex: <code>89,90</code> ou <code>120</code>).`
-            );
-          }
-          return;
-        }
-
-        review.preco = parsedPrice;
-        await telegramRepo.savePendingReview(review);
-        await telegramRepo.deleteUserState(senderId);
-
-        if (chatId) {
-          await sendTelegramMessage(
-            chatId,
-            `✅ <b>Preço atualizado para R$ ${parsedPrice.toFixed(2).replace(".", ",")}!</b>\n\n` +
-            `Acesse o card de revisão acima e clique em "✅ Confirmar & Publicar".`
-          );
-        }
-        return;
-      } else {
-        await telegramRepo.deleteUserState(senderId);
-      }
-    }
-
     // Comandos básicos (/start e /help)
     if (text.startsWith("/start") || text.startsWith("/help")) {
       if (chatId) {
@@ -597,24 +597,137 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
         await telegramRepo.savePendingReview(review);
 
+        // Se o preço não for detectado (null ou <= 0), vincula o estado do usuário ao ID desta revisão
+        if (!review.preco || review.preco <= 0) {
+          await telegramRepo.setUserState(senderId, { action: "awaiting_price", reviewId });
+        }
+
         const cardText = buildReviewCardText(review);
         const keyboard = buildMainReviewKeyboard(reviewId);
 
         if (chatId) {
+          let sentMsg: any = null;
           if (review.imagens && review.imagens.length > 0) {
-            await sendTelegramPhoto(chatId, review.imagens[0], cardText, keyboard);
+            sentMsg = await sendTelegramPhoto(chatId, review.imagens[0], cardText, keyboard);
           } else {
-            await sendTelegramMessage(chatId, cardText, keyboard);
+            sentMsg = await sendTelegramMessage(chatId, cardText, keyboard);
+          }
+
+          if (sentMsg?.result?.message_id) {
+            review.cardMessageId = sentMsg.result.message_id;
+            await telegramRepo.savePendingReview(review);
           }
         }
       }
-    } else {
+      return;
+    }
+
+    // Se NÃO for comando e NÃO for link, processa como entrada de preço para a revisão pendente existente!
+    let targetReview: PendingReview | null = null;
+    const userState = await telegramRepo.getUserState(senderId);
+
+    if (userState && userState.action === "awaiting_price") {
+      targetReview = await telegramRepo.getPendingReview(userState.reviewId);
+    }
+
+    if (!targetReview) {
+      // Busca a revisão pendente existente vinculada ao usuário/chat ID
+      targetReview = await telegramRepo.getLatestPendingReviewForUser(senderId, chatId);
+    }
+
+    const normPrice = parseAndNormalizePrice(text);
+
+    if (!targetReview) {
+      console.log(`
+[TELEGRAM PRICE]
+Chat/User: ${chatId || senderId} / ${username} (${firstName})
+Preço recebido: "${text}"
+Preço normalizado: ${normPrice !== null ? `R$ ${normPrice.toFixed(2)}` : "N/A"}
+Revisão atualizada: Nenhuma
+Resultado: Nenhuma revisão pendente encontrada
+`);
+
       if (chatId) {
         await sendTelegramMessage(
           chatId,
-          `ℹ️ Envie um link de produto (Shopee, Mercado Livre, etc.) para cadastrar e revisar no Cerberus Finds.`
+          `⚠️ <b>Nenhuma revisão pendente encontrada.</b>\n\n` +
+          `Envie primeiro o link de um produto (Shopee, Mercado Livre, etc.) para cadastrar e revisar.`
         );
       }
+      return;
+    }
+
+    if (normPrice !== null && normPrice > 0) {
+      targetReview.preco = normPrice;
+      await telegramRepo.savePendingReview(targetReview);
+      await telegramRepo.deleteUserState(senderId);
+
+      console.log(`
+[TELEGRAM PRICE]
+Chat/User: ${chatId || senderId} / ${username} (${firstName})
+Preço recebido: "${text}"
+Preço normalizado: R$ ${normPrice.toFixed(2)}
+Revisão atualizada: ${targetReview.id}
+Resultado: Preço atualizado com sucesso
+`);
+
+      const updatedCardText = buildReviewCardText(targetReview);
+      const keyboard = buildMainReviewKeyboard(targetReview.id);
+
+      if (chatId) {
+        // Envia mensagem simples informando o preço salvo
+        await sendTelegramMessage(
+          chatId,
+          `✅ <b>Preço atualizado para R$ ${normPrice.toFixed(2).replace(".", ",")}!</b>`
+        );
+
+        // Atualiza a legenda/texto do card de revisão existente
+        let updatedOnCard = false;
+        if (targetReview.cardMessageId) {
+          const editRes = await editTelegramMessageCaption(
+            chatId,
+            targetReview.cardMessageId,
+            updatedCardText,
+            keyboard
+          );
+          if (editRes && editRes.ok) {
+            updatedOnCard = true;
+          }
+        }
+
+        // Se não conseguiu editar o card anterior, envia o card atualizado
+        if (!updatedOnCard) {
+          let sentMsg: any = null;
+          if (targetReview.imagens && targetReview.imagens.length > 0) {
+            sentMsg = await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
+          } else {
+            sentMsg = await sendTelegramMessage(chatId, updatedCardText, keyboard);
+          }
+          if (sentMsg?.result?.message_id) {
+            targetReview.cardMessageId = sentMsg.result.message_id;
+            await telegramRepo.savePendingReview(targetReview);
+          }
+        }
+      }
+      return;
+    } else {
+      console.log(`
+[TELEGRAM PRICE]
+Chat/User: ${chatId || senderId} / ${username} (${firstName})
+Preço recebido: "${text}"
+Preço normalizado: N/A
+Revisão atualizada: ${targetReview.id}
+Resultado: Preço inválido (deve ser maior que zero)
+`);
+
+      if (chatId) {
+        await sendTelegramMessage(
+          chatId,
+          `❌ <b>Preço inválido.</b>\n\n` +
+          `Digite o preço de venda numérico desejado (Exemplo: <code>72</code>, <code>72,90</code> ou <code>R$ 72,90</code>).`
+        );
+      }
+      return;
     }
   }
 }

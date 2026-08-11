@@ -74,6 +74,48 @@ export function normalizeProductUrl(rawUrl: string): string {
           parsed.searchParams.delete(k);
         }
       }
+
+      // Normalização Canônica para Shopee: /product/{shopid}/{itemid}
+      let shopId: string | null = null;
+      let itemId: string | null = null;
+
+      // Padrão 1: /product/123456/789012
+      const pMatch1 = parsed.pathname.match(/\/product\/(\d+)\/(\d+)/i);
+      if (pMatch1) {
+        shopId = pMatch1[1];
+        itemId = pMatch1[2];
+      }
+
+      // Padrão 2: /{loja}/{shopid}/{itemid}
+      if (!shopId) {
+        const pMatch2 = parsed.pathname.match(/^\/([^\/]+)\/(\d+)\/(\d+)/i);
+        if (pMatch2) {
+          shopId = pMatch2[2];
+          itemId = pMatch2[3];
+        }
+      }
+
+      // Padrão 3: /{loja}/{slug}/{shopid}/{itemid}
+      if (!shopId) {
+        const pMatch3 = parsed.pathname.match(/^\/([^\/]+)\/([^\/]+)\/(\d+)\/(\d+)/i);
+        if (pMatch3) {
+          shopId = pMatch3[3];
+          itemId = pMatch3[4];
+        }
+      }
+
+      // Padrão 4: ...-i.{shopid}.{itemid}
+      if (!shopId) {
+        const pMatch4 = parsed.pathname.match(/i\.(\d+)\.(\d+)/i);
+        if (pMatch4) {
+          shopId = pMatch4[1];
+          itemId = pMatch4[2];
+        }
+      }
+
+      if (shopId && itemId) {
+        parsed.pathname = `/product/${shopId}/${itemId}`;
+      }
     }
 
     let cleanPath = parsed.pathname;
@@ -150,7 +192,8 @@ export function isGenericTitle(title?: string | null): boolean {
     clean === "e-commerce" ||
     clean === "produto" ||
     clean === "sem título" ||
-    clean === "sem titulo"
+    clean === "sem titulo" ||
+    clean === "opaanlp"
   ) {
     return true;
   }
@@ -261,6 +304,16 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
 
   try {
     const marketplace = detectMarketplace(normalizedUrl);
+
+    // Extract shop_id and item_id for logging
+    let shopId: string | null = null;
+    let itemId: string | null = null;
+    const shopeeIdsMatch = normalizedUrl.match(/product\/(\d+)\/(\d+)/i) || normalizedUrl.match(/i\.(\d+)\.(\d+)/i) || normalizedUrl.match(/shopee\.com\.br\/[^\/]+\/(\d+)\/(\d+)/i);
+    if (shopeeIdsMatch) {
+      shopId = shopeeIdsMatch[1];
+      itemId = shopeeIdsMatch[2];
+    }
+
     const scraped = await fetchProductDataFromUrl(normalizedUrl, rawTextOverride);
     let scrapedTitle = scraped.title;
     const scrapedPrice = scraped.price;
@@ -275,22 +328,28 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
       }
     }
 
-    // Validação de Bloqueio / Falha Estrita
-    // Se o título for genérico ou ausente E não houver imagens nem preço válido, rejeita a extração
-    const hasGenericTitle = !scrapedTitle || isGenericTitle(scrapedTitle);
+    // Regra 8: Se não houver título real nem imagens reais, rejeita a extração
+    const hasInvalidTitle = !scrapedTitle || isGenericTitle(scrapedTitle);
     const hasNoImages = scrapedImages.length === 0;
-    const hasNoPrice = scrapedPrice === null || scrapedPrice <= 0;
 
-    if ((hasGenericTitle && hasNoImages) || (hasNoImages && hasNoPrice && hasGenericTitle)) {
-      const blockError = "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título, preço e imagens válidos.";
+    if (hasInvalidTitle || hasNoImages) {
+      const blockError = "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título e imagens válidos.";
+
+      const priceReason = scrapedPrice !== null
+        ? "Preço identificado"
+        : marketplace === "Shopee"
+          ? "Preço indisponível no SSR da Shopee (requer API privada/autenticada)."
+          : "Preço não localizado.";
 
       console.log(`[TELEGRAM EXTRACTION] URL original: ${rawUrl}`);
       console.log(`[TELEGRAM EXTRACTION] URL normalizada: ${normalizedUrl}`);
-      console.log(`[TELEGRAM EXTRACTION] Marketplace: ${marketplace}`);
-      console.log(`[TELEGRAM EXTRACTION] Título: N/A`);
-      console.log(`[TELEGRAM EXTRACTION] Preço: N/A`);
-      console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: 0`);
-      console.log(`[TELEGRAM EXTRACTION] Fonte dos dados: Scraper (${marketplace})`);
+      console.log(`[TELEGRAM EXTRACTION] shop_id: ${shopId || "N/A"}`);
+      console.log(`[TELEGRAM EXTRACTION] item_id: ${itemId || "N/A"}`);
+      console.log(`[TELEGRAM EXTRACTION] URL canônica: ${normalizedUrl}`);
+      console.log(`[TELEGRAM EXTRACTION] Título extraído: N/A`);
+      console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: ${scrapedImages.length}`);
+      console.log(`[TELEGRAM EXTRACTION] Preço encontrado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : "null"}`);
+      console.log(`[TELEGRAM EXTRACTION] Motivo caso o preço não esteja disponível: ${priceReason}`);
       console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${blockError}`);
 
       return {
@@ -321,7 +380,7 @@ TAREFAS DO CURADOR:
 3. "categoria": Escolha EXATAMENTE uma das seguintes categorias: "Camisetas", "Calças", "Acessórios", "Calçados", "Jaquetas", "Moletons".`;
 
         const geminiRes = await ai.models.generateContent({
-          model: "gemini-2.0-flash",
+          model: "gemini-1.5-flash",
           contents: prompt,
           config: {
             systemInstruction: `Você é o assistente curador do Cerberus Finds Archive.
@@ -365,15 +424,21 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
     const generatedSlug = generateSlug(curatedTitle);
     const existingProduct = await findExistingProduct(normalizedUrl, mktId, generatedSlug, curatedTitle);
 
-    const dataSource = `Scraper (${marketplace}${process.env.GEMINI_API_KEY ? ' + Gemini AI' : ''})`;
+    const priceReason = scrapedPrice !== null
+      ? "Preço extraído com sucesso do anúncio."
+      : marketplace === "Shopee"
+        ? "Preço não disponível no SSR da Shopee (carregado via API restrita do marketplace)."
+        : "Preço não localizado na estrutura do anúncio.";
 
     console.log(`[TELEGRAM EXTRACTION] URL original: ${rawUrl}`);
     console.log(`[TELEGRAM EXTRACTION] URL normalizada: ${normalizedUrl}`);
-    console.log(`[TELEGRAM EXTRACTION] Marketplace: ${marketplace}`);
-    console.log(`[TELEGRAM EXTRACTION] Título: ${curatedTitle}`);
-    console.log(`[TELEGRAM EXTRACTION] Preço: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : 'Não detectado'}`);
+    console.log(`[TELEGRAM EXTRACTION] shop_id: ${shopId || "N/A"}`);
+    console.log(`[TELEGRAM EXTRACTION] item_id: ${itemId || "N/A"}`);
+    console.log(`[TELEGRAM EXTRACTION] URL canônica: ${normalizedUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] Título extraído: ${curatedTitle}`);
     console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: ${scrapedImages.length}`);
-    console.log(`[TELEGRAM EXTRACTION] Fonte dos dados: ${dataSource}`);
+    console.log(`[TELEGRAM EXTRACTION] Preço encontrado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : "null"}`);
+    console.log(`[TELEGRAM EXTRACTION] Motivo caso o preço não esteja disponível: ${priceReason}`);
     console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: Nenhum`);
 
     return {
