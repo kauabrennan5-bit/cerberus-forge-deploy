@@ -199,13 +199,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
               className="px-4 py-2 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] text-[#E8E1D3] rounded-none text-xs font-display uppercase tracking-widest flex items-center space-x-1.5 transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5 text-[#8A1F1F]" />
-              <span>Recarregar</span>
-            </button>
-            <button
-              onClick={onOpenSettings}
-              className="px-4 py-2 bg-[#8A1F1F] text-[#E8E1D3] rounded-none text-xs font-display uppercase tracking-widest transition-colors"
-            >
-              Ajustar Servidor
+              <span>Recarregar Catálogo</span>
             </button>
           </div>
         </div>

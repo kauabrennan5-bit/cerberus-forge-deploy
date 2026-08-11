@@ -122,7 +122,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Erro ao carregar produtos:', err);
-      setFetchError(`Falha de conexão com o backend: ${err.message || 'Servidor indisponível'}`);
+      setFetchError(`Catálogo indisponível: ${err.message || 'Falha ao carregar dados estáticos'}`);
     } finally {
       setIsLoadingProducts(false);
     }

@@ -1,0 +1,87 @@
+import fs from "fs";
+import path from "path";
+import { getProducts } from "../repositories/productsRepository";
+import { Product } from "../../src/types";
+
+/**
+ * Script de exportação do catálogo público para formato estático (/public/data/products.json).
+ * Aplica rigorosamente as regras de sanitização exigidas:
+ * - Apenas produtos válidos, publicados e com URL válida.
+ * - Eliminação de produtos fictícios, fantasmas ou sem dados essenciais.
+ * - Sem inclusão de dados administrativos ou senhas.
+ * - Preservação dos campos essenciais para o frontend (id, produto, preco, imagens, link, categoria, marketplace, etc).
+ */
+export async function exportStaticProductsJson(): Promise<number> {
+  try {
+    const rawProducts = await getProducts();
+    
+    // Filtragem rigorosa conforme regras da migração estática
+    const validProducts = rawProducts.filter((p: Product) => {
+      // 1. Deve existir título/produto
+      if (!p.produto || typeof p.produto !== 'string' || p.produto.trim() === '') {
+        return false;
+      }
+      
+      // 2. Deve possuir link de afiliação/compra válido
+      if (!p.link || typeof p.link !== 'string' || p.link.trim() === '' || p.link.includes('exemplo.com')) {
+        return false;
+      }
+
+      // 3. Excluir produtos fictícios ou teste óbvios
+      const lowerTitle = p.produto.toLowerCase();
+      if (lowerTitle.includes('produto teste') || lowerTitle.includes('item fictício') || lowerTitle.includes('placeholder')) {
+        return false;
+      }
+
+      // 4. Deve possuir preço válido numérico maior que 0
+      const price = Number(p.preco);
+      if (isNaN(price) || price <= 0) {
+        return false;
+      }
+
+      // 5. Somente produtos ativos e publicados
+      if (p.ativo === false || p.status === 'pending') {
+        return false;
+      }
+
+      return true;
+    }).map((p: Product) => ({
+      id: p.id,
+      slug: p.slug || p.id,
+      produto: p.produto.trim(),
+      preco: Number(p.preco),
+      precoAntigo: (p as any).precoAntigo ? Number((p as any).precoAntigo) : undefined,
+      imagens: Array.isArray(p.imagens) ? p.imagens : [],
+      link: p.link,
+      categoria: p.categoria || 'Geral',
+      marketplace: (p as any).marketplace || 'Shopee',
+      cupom: (p as any).cupom || '',
+      freteGratis: Boolean((p as any).freteGratis),
+      descricao: p.descricao || '',
+      paginaPonteUrl: p.paginaPonteUrl || '',
+      ativo: true,
+      status: 'published'
+    }));
+
+    // Garantir que o diretório public/data existe
+    const publicDataDir = path.join(process.cwd(), "public", "data");
+    if (!fs.existsSync(publicDataDir)) {
+      fs.mkdirSync(publicDataDir, { recursive: true });
+    }
+
+    const outputPath = path.join(publicDataDir, "products.json");
+    fs.writeFileSync(outputPath, JSON.stringify(validProducts, null, 2), "utf-8");
+
+    console.log(`[Static Export] Sucesso! ${validProducts.length} produtos válidos exportados para ${outputPath}`);
+    return validProducts.length;
+  } catch (error) {
+    console.error("[Static Export] Erro ao exportar products.json:", error);
+    // Se houver falha, garante array vazio conforme regra de produtos fantasmas
+    const publicDataDir = path.join(process.cwd(), "public", "data");
+    if (!fs.existsSync(publicDataDir)) {
+      fs.mkdirSync(publicDataDir, { recursive: true });
+    }
+    fs.writeFileSync(path.join(publicDataDir, "products.json"), JSON.stringify([], null, 2), "utf-8");
+    return 0;
+  }
+}

@@ -4,6 +4,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
 import { Product } from "../../src/types";
+import { exportStaticProductsJson } from "../services/exportProductsJson";
 
 dotenv.config();
 
@@ -107,6 +108,14 @@ async function saveProducts(products: Product[]): Promise<void> {
       console.error("❌ ERRO CRÍTICO AO GRAVAR NO SUPABASE:", error.message);
       throw new Error(`Falha de persistência no banco Supabase: ${error.message}`);
     }
+  }
+
+  // Sincronização automática do catálogo estático public/data/products.json após qualquer alteração
+  try {
+    await exportStaticProductsJson();
+    console.log("⚡ [Auto-Sync] public/data/products.json regenerado com sucesso após alteração no catálogo!");
+  } catch (syncErr) {
+    console.error("❌ [Auto-Sync Error] Falha ao regenerar products.json estático:", syncErr);
   }
 }
 

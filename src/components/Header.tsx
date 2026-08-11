@@ -103,30 +103,7 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </button>
 
-          {/* Admin Button */}
-          <button
-            onClick={() => onSelectView('admin')}
-            id="nav-admin-btn"
-            title="Painel Administrativo (Cadastro de Produtos)"
-            className={`flex items-center space-x-1 px-2 sm:px-3 py-1.5 sm:py-2 rounded-none text-[11px] sm:text-xs font-display uppercase tracking-wider sm:tracking-widest transition-all ${
-              currentView === 'admin'
-                ? 'bg-[#8A1F1F] text-[#E8E1D3] border border-[#8A1F1F]'
-                : 'bg-[#0B0908] text-[#E8E1D3]/80 border border-[#3A342E] hover:border-[#8A1F1F] hover:text-[#E8E1D3]'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5 text-[#8A1F1F]" />
-            <span className="hidden md:inline">Painel Admin</span>
-          </button>
-
-          {/* Settings Modal Trigger */}
-          <button
-            onClick={onOpenSettings}
-            id="nav-settings-btn"
-            title="Configurações (Pixels & Feeds)"
-            className="p-1.5 sm:p-2 rounded-none text-[#E8E1D3]/70 hover:text-[#E8E1D3] bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] transition-all"
-          >
-            <Settings className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#8A1F1F]" />
-          </button>
+          {/* Admin and Settings buttons removed for public static site */}
 
         </div>
 

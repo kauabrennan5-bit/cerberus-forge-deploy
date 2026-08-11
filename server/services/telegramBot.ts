@@ -348,13 +348,17 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           throw new Error("Falha na verificação pós-gravação: produto não localizado na consulta pública.");
         }
 
+        // Dispara a sincronização automática do catálogo estático antes de confirmar ao usuário
+        const { syncCatalogAndDeploy } = await import("./catalogSync");
+        const syncResult = await syncCatalogAndDeploy(publishedProduct.produto || review.produto, publishedProduct.id);
+
         await telegramRepo.deletePendingReview(reviewId);
         await telegramRepo.deleteUserState(senderId);
 
         await answerCallbackQuery(callbackId, "✅ Peça publicada com sucesso!");
 
         const productUrl = `${siteBaseUrl}/produto/${publishedProduct.slug || publishedProduct.id}`;
-        const successText =
+        let successText =
           `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n` +
           `<b>CERBERUS FINDS ARCHIVE</b>\n\n` +
           `🏷️ <b>Produto:</b> ${publishedProduct.produto || review.produto}\n` +
@@ -362,6 +366,12 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           `💰 <b>Preço:</b> R$ ${review.preco.toFixed(2).replace(".", ",")}\n` +
           `🆔 <b>REF:</b> ${publishedProduct.ref || 'N/A'}\n\n` +
           `🔗 <b>Ver no site:</b>\n${productUrl}`;
+
+        if (!syncResult.success) {
+          successText += `\n\n⚠️ <i>Atenção: O produto foi salvo no Supabase, mas houve um alerta na sincronização da vitrine estática: ${syncResult.error || 'Erro desconhecido'}</i>`;
+        } else {
+          successText += `\n\n⚡ <i>Catálogo estático atualizado com sucesso (${syncResult.jsonCount} peças na vitrine).</i>`;
+        }
 
         if (chatId && messageId) {
           await editTelegramMessageCaption(chatId, messageId, successText);

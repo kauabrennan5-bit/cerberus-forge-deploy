@@ -148,6 +148,30 @@ async function startServer() {
     return res.json({ success: true, message: "Senha de administrador verificada com sucesso!" });
   });
 
+  // POST /api/admin/rebuild-static-catalog - Endpoint para reconstrução manual do catálogo estático
+  app.post("/api/admin/rebuild-static-catalog", requireAdminAuth, async (req, res) => {
+    try {
+      const { syncCatalogAndDeploy } = await import("./server/services/catalogSync");
+      const result = await syncCatalogAndDeploy("Rebuild Administrativo Manual", "manual-rebuild");
+      if (result.success) {
+        return res.json({
+          success: true,
+          message: "Catálogo estático reconstruído e sincronizado com sucesso!",
+          data: result
+        });
+      } else {
+        return res.status(500).json({
+          success: false,
+          error: "Falha na sincronização do catálogo estático.",
+          data: result
+        });
+      }
+    } catch (err: any) {
+      console.error("Erro no rebuild estático:", err);
+      return res.status(500).json({ success: false, error: "Erro interno no rebuild: " + err.message });
+    }
+  });
+
   // ==========================================
   // 1. PRODUCTS REST API (DATABASE ENDPOINTS)
   // ==========================================
@@ -801,11 +825,10 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
-  // Serve static files from public directory
-  app.use(express.static(path.join(process.cwd(), "public")));
-
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
+    // In dev, serve public first
+    app.use(express.static(path.join(process.cwd(), "public")));
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -813,7 +836,20 @@ NUNCA modifique ou invente preços ou imagens.`,
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    
+    // 1. Explicit route for static data (Highest Priority)
+    app.get("/data/*", (req, res) => {
+      const filePath = path.join(distPath, req.path);
+      res.sendFile(filePath);
+    });
+
+    // 2. Serve static assets
+    app.use(express.static(distPath, { index: false }));
+    
+    // 3. Fallback to public folder
+    app.use(express.static(path.join(process.cwd(), "public")));
+
+    // 4. SPA Fallback
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });

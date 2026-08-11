@@ -191,3 +191,28 @@
   --text-main: #E8E1D3;
   --border-dark: #3A342E;
 }
+
+/* Ajustes de responsividade para garantir zero overflow horizontal e layout limpo no mobile */
+@media (max-width: 768px) {
+  .container, section, main, header, footer {
+    max-width: 100vw !important;
+    overflow-x: hidden !important;
+  }
+  
+  /* Redução de espaçamentos verticais excessivos no mobile */
+  .py-16, .py-20, .py-24 {
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+  }
+
+  .my-12, .my-16 {
+    margin-top: 1.5rem !important;
+    margin-bottom: 1.5rem !important;
+  }
+
+  /* Imagem de produto compacta no mobile */
+  .product-image-container, img.product-hero-img {
+    max-height: 280px !important;
+    object-fit: contain !important;
+  }
+}

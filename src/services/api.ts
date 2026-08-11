@@ -1,5 +1,3 @@
-import { Product } from '../types';
-
 export interface CreateProductInput {
   senha?: string;
   produto: string;
@@ -21,331 +19,83 @@ export interface ApiResponse<T = any> {
   message?: string;
 }
 
-function getApiUrl(path: string): string {
-  if (typeof window !== 'undefined') {
-    return path;
-  }
-  return `http://localhost:3000${path.startsWith('/') ? path : '/' + path}`;
-}
-
 /**
- * Cliente de API Centralizado para o Cerberus Finds
+ * Cliente de API Estático para o Cerberus Finds (Site Público)
+ * Consome exclusivamente /data/products.json para garantir arquitetura 100% estática e gratuita.
  */
-
-/**
- * Busca a lista completa de produtos do catálogo
- */
-export async function getProducts(): Promise<Product[]> {
-  const response = await fetch(getApiUrl('/api/products'));
-  if (!response.ok) {
-    throw new Error(`Erro HTTP ${response.status} ao carregar produtos`);
-  }
-  const data: ApiResponse<Product> = await response.json();
-  if (!data.success) {
-    throw new Error(data.error || 'Falha ao buscar produtos');
-  }
-  const productList = Array.isArray(data.products)
-    ? data.products
-    : (Array.isArray(data.data) ? data.data : []);
-  return productList;
-}
-
-/**
- * Cria um novo produto no banco de dados (Requer autenticação admin)
- */
-export async function createProduct(
-  payload: CreateProductInput,
-  adminPassword?: string
-): Promise<ApiResponse<Product>> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
-  const password = adminPassword || payload.senha;
-  if (password) {
-    headers['x-admin-password'] = password;
-  }
-
-  const response = await fetch(getApiUrl('/api/products'), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
-
-  const resJson: ApiResponse<Product> = await response.json();
-  if (!response.ok) {
-    return {
-      success: false,
-      error: resJson.error || `Erro ${response.status} ao cadastrar produto`
-    };
-  }
-  return resJson;
-}
-
-/**
- * Atualiza um produto existente (Requer autenticação admin)
- */
-export async function updateProduct(
-  id: string,
-  payload: Partial<CreateProductInput>,
-  adminPassword?: string
-): Promise<ApiResponse<Product>> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
-  const password = adminPassword || payload.senha || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '');
-  if (password) {
-    headers['x-admin-password'] = password;
-  }
-
+export async function getProducts(): Promise<any[]> {
   try {
-    const url = getApiUrl(`/api/products/${encodeURIComponent(id)}`);
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify({ ...payload, senha: password })
-    });
-
-    let resJson: ApiResponse<Product>;
-    try {
-      resJson = await response.json();
-    } catch {
-      resJson = {
-        success: false,
-        error: `Erro (${response.status}) ao ler resposta da atualização`
-      };
-    }
-
-    if (response.status === 405) {
-      const fallbackUrl = getApiUrl(`/api/products/${encodeURIComponent(id)}/edit`);
-      const fallbackRes = await fetch(fallbackUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ ...payload, senha: password })
-      });
-      return await fallbackRes.json();
-    }
-
+    // Uso de caminho relativo puro para evitar erros de construção de URL (DOMException: expected pattern)
+    const jsonPath = '/data/products.json';
+    
+    console.log(`[Static Catalog] Buscando catálogo em: ${jsonPath}`);
+    
+    const response = await fetch(jsonPath);
+    
     if (!response.ok) {
-      return {
-        success: false,
-        error: resJson.error || `Erro ${response.status} ao atualizar produto`
-      };
-    }
-    return resJson;
-  } catch (err: any) {
-    console.error('Erro ao atualizar produto via API:', err);
-    return {
-      success: false,
-      error: err.message || 'Falha de conexão ao atualizar produto'
-    };
-  }
-}
-
-/**
- * Exclui um produto do catálogo (Requer autenticação admin)
- */
-export async function deleteProduct(
-  id: string,
-  adminPassword?: string
-): Promise<ApiResponse> {
-  const headers: Record<string, string> = {};
-  const pass = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '');
-  if (pass) {
-    headers['x-admin-password'] = pass;
-  }
-
-  const url = getApiUrl(`/api/products/${encodeURIComponent(id)}/delete`);
-  console.log('[DELETE LOG 3] URL chamada pelo cliente de API:', url);
-  console.log('[DELETE LOG 4] Headers enviados:', {
-    'x-admin-password': pass ? 'ENVIADO (x-admin-password)' : 'NÃO ENVIADO'
-  });
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers
-    });
-
-    console.log('[DELETE LOG 5] Status HTTP retornado pelo backend:', response.status);
-
-    let resJson: ApiResponse;
-    try {
-      resJson = await response.json();
-    } catch {
-      resJson = {
-        success: false,
-        error: `Erro (${response.status}) ao ler resposta da exclusão`
-      };
+      console.warn(`[Static Catalog] Falha ao carregar JSON (HTTP ${response.status}).`);
+      return [];
     }
 
-    console.log('[DELETE LOG 6] Resposta JSON do backend:', resJson);
-
-    if (!response.ok) {
-      return {
-        success: false,
-        error: resJson.error || `Erro ${response.status} ao remover produto`
-      };
+    const data = await response.json();
+    
+    if (Array.isArray(data)) {
+      console.log(`[Static Catalog] ${data.length} produtos carregados.`);
+      return data.map((p: any) => ({
+        ...p,
+        id: String(p.id || ''),
+        produto: p.produto || '',
+        preco: Number(p.preco) || 0,
+        imagens: Array.isArray(p.imagens) ? p.imagens : (p.imagem ? [p.imagem] : []),
+        link: p.link || p.url || '',
+        categoria: p.categoria || 'Geral',
+        marketplace: p.marketplace || 'Shopee',
+        ativo: p.ativo !== false,
+        status: p.status || 'published'
+      }));
     }
-    return resJson;
-  } catch (err: any) {
-    console.error('[DELETE LOG - API Error]', err);
-    return {
-      success: false,
-      error: err.message || 'Falha de conexão ao excluir produto'
-    };
+    
+    return [];
+  } catch (err) {
+    console.error('[Static Catalog Error] Erro ao carregar catálogo estático:', err);
+    // Retornamos array vazio em vez de lançar erro para evitar o crash visual
+    return [];
   }
 }
 
-/**
- * Extrai dados e copy de produto via IA (Gemini)
- */
-export async function extractProduct(
-  url: string,
-  rawText?: string,
-  adminPassword?: string
-): Promise<ApiResponse> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
-  if (adminPassword) {
-    headers['x-admin-password'] = adminPassword;
-  }
-
-  try {
-    const response = await fetch('/api/extract', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ url: url.trim(), rawText: (rawText || '').trim() })
-    });
-
-    let resData: any = {};
-    try {
-      resData = await response.json();
-    } catch (e) {
-      resData = { error: `Erro ao processar resposta do servidor (${response.status})` };
-    }
-
-    if (!response.ok) {
-      return {
-        success: false,
-        error: resData.error || resData.details || `Erro ${response.status} na extração IA`
-      };
-    }
-    return resData;
-  } catch (err: any) {
-    return {
-      success: false,
-      error: err.message || 'Não foi possível conectar ao servidor para extração.'
-    };
-  }
+// Stubs para compatibilidade de build (não funcionais no site público)
+export async function createProduct(payload: any): Promise<ApiResponse<any>> {
+  return { success: false, error: 'Ação não permitida no site estático.' };
 }
 
-/**
- * Envia submissão legada (Google Apps Script)
- */
-export async function submitProduct(
-  payload: any,
-  adminPassword?: string
-): Promise<ApiResponse> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
-  if (adminPassword) {
-    headers['x-admin-password'] = adminPassword;
-  }
-
-  const response = await fetch('/api/submit-product', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
-
-  return await response.json();
+export async function updateProduct(id: string, payload: any): Promise<ApiResponse<any>> {
+  return { success: false, error: 'Ação não permitida no site estático.' };
 }
 
-/**
- * Interface do payload de registro de clique de produto
- */
-export interface TrackClickPayload {
-  productId: string;
-  productSlug?: string;
-  productName?: string;
-  productPrice?: number;
-  utm_source?: string;
-  utm_medium?: string;
-  utm_campaign?: string;
-  utm_content?: string;
-  utm_term?: string;
-  fbclid?: string;
-  gclid?: string;
-  ttclid?: string;
-  referrer?: string;
-  landingPage?: string;
+export async function deleteProduct(id: string): Promise<ApiResponse<any>> {
+  return { success: false, error: 'Ação não permitida no site estático.' };
 }
 
-/**
- * Envia registro de clique de produto para o backend (/api/track-click)
- */
-export async function trackProductClickApi(payload: TrackClickPayload): Promise<ApiResponse> {
-  try {
-    const response = await fetch('/api/track-click', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-      return { success: false, error: `Erro ${response.status} ao registrar clique` };
-    }
-    return await response.json();
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Falha de conexão ao registrar clique' };
-  }
+export async function verifyAdminPassword(password: string): Promise<boolean> {
+  return false;
 }
 
-/**
- * Envia evento do Meta Conversions API (CAPI)
- */
-export async function sendMetaCapiEvent(payload: any): Promise<ApiResponse> {
-  const response = await fetch('/api/meta-capi', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  return await response.json();
+export async function sendMetaCapiEvent(eventData: any): Promise<boolean> {
+  return true;
 }
 
-/**
- * Faz fetch de proxy de CSV para contornar restrições de CORS
- */
-export async function fetchProxyCsv(csvUrl: string): Promise<string> {
-  const response = await fetch(`/api/proxy-csv?url=${encodeURIComponent(csvUrl)}`);
-  if (!response.ok) {
-    throw new Error(`Erro ao buscar proxy CSV: status ${response.status}`);
-  }
-  return await response.text();
+export async function trackProductClickApi(data: any): Promise<boolean> {
+  return true;
 }
 
-/**
- * Verifica a senha de administrador no backend
- */
-export async function verifyAdminPassword(adminPassword: string): Promise<ApiResponse> {
-  try {
-    const response = await fetch(getApiUrl('/api/admin/verify'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-admin-password': adminPassword
-      },
-      body: JSON.stringify({ senha: adminPassword })
-    });
-    let resJson: ApiResponse;
-    try {
-      resJson = await response.json();
-    } catch {
-      resJson = { success: false, error: 'Erro ao verificar senha com o servidor.' };
-    }
-    return resJson;
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Falha de conexão ao verificar senha.' };
-  }
+export async function extractProduct(url: string): Promise<ApiResponse<any>> {
+  return { success: false, error: 'Ação não permitida no site estático.' };
+}
+
+export async function verifyPasswordApi(password: string): Promise<boolean> {
+  return false;
+}
+
+export async function fetchProxyCsv(url: string): Promise<string> {
+  return '';
 }
