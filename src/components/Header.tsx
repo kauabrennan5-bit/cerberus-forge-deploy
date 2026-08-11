@@ -1,6 +1,6 @@
 import React from 'react';
 import { ViewMode } from '../types';
-import { ShoppingBag, Heart, Settings, BookOpen, ShieldCheck } from 'lucide-react';
+import { ShoppingBag, Heart, Settings, ShieldCheck } from 'lucide-react';
 import { CerberusLogo } from './CerberusLogo';
 
 interface HeaderProps {
@@ -116,18 +116,6 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <ShieldCheck className="w-3.5 h-3.5 text-[#8A1F1F]" />
             <span className="hidden md:inline">Painel Admin</span>
-          </button>
-
-          {/* Guide */}
-          <button
-            onClick={() => onSelectView('guide')}
-            id="nav-guide-btn"
-            title="Guia do Sistema"
-            className={`p-1.5 sm:p-2 rounded-none text-[#E8E1D3]/70 hover:text-[#E8E1D3] bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] transition-all ${
-              currentView === 'guide' ? 'border-[#8A1F1F] text-[#E8E1D3] bg-[#181512]' : ''
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#8A1F1F]" />
           </button>
 
           {/* Settings Modal Trigger */}

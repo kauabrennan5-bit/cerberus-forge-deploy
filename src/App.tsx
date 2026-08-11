@@ -9,7 +9,6 @@ import { Header } from './components/Header';
 import { ProductGrid } from './components/ProductGrid';
 import { ProductDetail } from './components/ProductDetail';
 import { AdminForm } from './components/AdminForm';
-import { SetupGuide } from './components/SetupGuide';
 import { SettingsModal } from './components/SettingsModal';
 
 const CONFIG_STORAGE_KEY = 'cerberus_finds_config_v2';
@@ -21,7 +20,7 @@ const DEFAULT_CONFIG: AppConfig = {
   metaPixelId: '',
   metaAccessToken: '',
   tikTokPixelId: '',
-  adminPassword: 'cerberus1607'
+  adminPassword: ''
 };
 
 export default function App() {
@@ -35,7 +34,6 @@ export default function App() {
       if (params.get('produto')) return 'product-detail';
       const viewParam = params.get('view') || params.get('mode');
       if (viewParam === 'admin' || viewParam === 'form') return 'admin';
-      if (viewParam === 'guide') return 'guide';
     }
     return 'catalog';
   });
@@ -182,8 +180,6 @@ export default function App() {
       if (typeof window !== 'undefined') {
         if (view === 'admin') {
           window.history.pushState({}, '', '/admin');
-        } else if (view === 'guide') {
-          window.history.pushState({}, '', '/?view=guide');
         } else {
           window.history.pushState({}, '', '/');
         }
@@ -211,8 +207,6 @@ export default function App() {
         const viewParam = params.get('view') || params.get('mode');
         if (viewParam === 'admin' || viewParam === 'form') {
           setCurrentView('admin');
-        } else if (viewParam === 'guide') {
-          setCurrentView('guide');
         } else {
           setCurrentView('catalog');
           setSelectedProduct(null);
@@ -301,8 +295,6 @@ export default function App() {
             onOpenSettings={() => setIsSettingsOpen(true)}
           />
         )}
-
-        {currentView === 'guide' && <SetupGuide />}
       </main>
 
       {/* Gothic / Archival Footer */}
@@ -324,12 +316,6 @@ export default function App() {
               className="hover:text-[#8A1F1F] transition-colors"
             >
               Acervo
-            </button>
-            <button
-              onClick={() => handleSelectView('guide')}
-              className="hover:text-[#8A1F1F] transition-colors"
-            >
-              Guia Técnico
             </button>
           </div>
         </div>

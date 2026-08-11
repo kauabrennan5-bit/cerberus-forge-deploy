@@ -25,7 +25,7 @@ export interface AppConfig {
   adminPassword: string;
 }
 
-export type ViewMode = 'catalog' | 'admin' | 'guide' | 'product-detail';
+export type ViewMode = 'catalog' | 'admin' | 'product-detail';
 
 export interface ExtractionResult {
   produto: string;

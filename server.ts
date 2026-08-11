@@ -4,6 +4,7 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import bcrypt from "bcryptjs";
 import { INITIAL_PRODUCTS, generateSlug } from "./src/data/initialProducts";
 import * as productsRepository from "./server/repositories/productsRepository";
 import { fetchProductDataFromUrl } from "./server/services/scraper";
@@ -98,11 +99,18 @@ async function startServer() {
   };
 
   // ==========================================
-  // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA (FAIL-CLOSED)
+  // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA (FAIL-CLOSED + BCRYPT)
   // ==========================================
   const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const envPass = (process.env.ADMIN_PASSWORD || "cerberus1607").trim();
-    const validPasswords = new Set([envPass, "cerberus1607", "cerberus2026"].filter(Boolean));
+    const rawAdminPassEnv = (process.env.ADMIN_PASSWORD || "").trim();
+
+    // Se ADMIN_PASSWORD não estiver configurada no ambiente, recusa todo acesso (Fail-Closed)
+    if (!rawAdminPassEnv) {
+      return res.status(401).json({
+        success: false,
+        error: "Acesso administrativo desativado: a variável ADMIN_PASSWORD não está configurada no ambiente do servidor."
+      });
+    }
 
     const authHeader = (req.headers["x-admin-password"] as string) || "";
     const bearerHeader = (req.headers["authorization"] as string) || "";
@@ -112,10 +120,23 @@ async function startServer() {
 
     const providedPass = (authHeader || bearerPass || bodyPass || queryPass).trim();
 
-    if (!providedPass || !validPasswords.has(providedPass)) {
+    if (!providedPass) {
       return res.status(401).json({
         success: false,
-        error: "Acesso administrativo não autorizado. Senha inválida ou ausente."
+        error: "Acesso administrativo não autorizado. Senha ausente."
+      });
+    }
+
+    // Verifica se a variável de ambiente já é um hash do bcrypt
+    const isEnvHashed = rawAdminPassEnv.startsWith("$2a$") || rawAdminPassEnv.startsWith("$2b$") || rawAdminPassEnv.startsWith("$2y$");
+    const targetHash = isEnvHashed ? rawAdminPassEnv : bcrypt.hashSync(rawAdminPassEnv, 10);
+
+    const isValid = bcrypt.compareSync(providedPass, targetHash);
+
+    if (!isValid) {
+      return res.status(401).json({
+        success: false,
+        error: "Acesso administrativo não autorizado. Senha incorreta."
       });
     }
 

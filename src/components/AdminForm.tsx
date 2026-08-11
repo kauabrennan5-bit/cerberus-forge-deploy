@@ -71,17 +71,33 @@ export const AdminForm: React.FC<AdminFormProps> = ({
   // Verify saved password on mount
   useEffect(() => {
     const storedPass = typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') : null;
-    const passToCheck = storedPass || config.adminPassword || 'cerberus1607';
+    const passToCheck = storedPass || config.adminPassword;
 
     if (passToCheck) {
       verifyAdminPassword(passToCheck).then((res) => {
         if (res.success) {
           setPasswordInput(passToCheck);
           setIsAuthenticated(true);
+        } else {
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('cerberus_admin_password');
+          }
+          setIsAuthenticated(false);
+          setPasswordInput('');
         }
       });
     }
   }, [config.adminPassword]);
+
+  // Handle logout
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setPasswordInput('');
+    setAuthError(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('cerberus_admin_password');
+    }
+  };
 
   // Handle password submission
   const handleLogin = async (e: React.FormEvent) => {
@@ -93,14 +109,18 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     }
 
     const res = await verifyAdminPassword(typedPass);
-    if (res.success || typedPass === config.adminPassword || typedPass === 'cerberus1607' || typedPass === 'cerberus2026') {
+    if (res.success) {
       setIsAuthenticated(true);
       setAuthError(null);
       if (typeof window !== 'undefined') {
         localStorage.setItem('cerberus_admin_password', typedPass);
       }
     } else {
-      setAuthError(res.error || 'Senha incorreta. A senha de administrador padrão é cerberus1607 ou cerberus2026.');
+      setIsAuthenticated(false);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('cerberus_admin_password');
+      }
+      setAuthError(res.error || 'Senha incorreta. Verifique a variável ADMIN_PASSWORD no servidor.');
     }
   };
 
@@ -170,7 +190,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     setIsExtracting(true);
 
     try {
-      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword || 'cerberus1607';
+      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword;
       const resData = await extractProduct(targetUrl, targetRawText, adminPass);
 
       if (resData.success && resData.data) {
@@ -254,7 +274,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
 
     try {
       const base64List = attachedImages.map(img => img.base64);
-      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword || 'cerberus1607';
+      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword;
 
       const payload = {
         senha: adminPass,
@@ -313,7 +333,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     setValidationError(null);
 
     try {
-      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword || 'cerberus1607';
+      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword;
       const resJson = await deleteProduct(id, adminPass);
 
       if (resJson.success) {
@@ -403,7 +423,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
         </div>
 
         <button
-          onClick={() => setIsAuthenticated(false)}
+          onClick={handleLogout}
           className="text-xs font-display text-[#E8E1D3]/70 hover:text-[#E8E1D3] px-3.5 py-1.5 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none transition-colors uppercase tracking-widest"
         >
           Encerrar Sessão

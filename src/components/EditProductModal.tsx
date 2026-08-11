@@ -198,7 +198,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     try {
       const imagePayload = images.map((i) => i.urlOrBase64);
 
-      const activePassword = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || 'cerberus1607';
+      const activePassword = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '');
 
       const payload = {
         produto: produto.trim(),

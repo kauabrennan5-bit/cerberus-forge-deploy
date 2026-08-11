@@ -179,7 +179,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               type="text"
               value={adminPassword}
               onChange={(e) => setAdminPassword(e.target.value)}
-              placeholder="Ex: cerberus2026"
+              placeholder="Insira a senha do administrador..."
               className="w-full bg-[#0B0908] border border-[#3A342E] focus:border-[#8A1F1F] text-[#E8E1D3] text-xs rounded-none p-2.5 focus:outline-none transition-colors"
             />
           </div>
