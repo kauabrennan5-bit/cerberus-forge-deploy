@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { extractProductForReview, detectMarketplace, ExtractedReviewData } from "./productAutomation";
 import * as productsRepository from "../repositories/productsRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
+import * as categoriesRepository from "../repositories/categoriesRepository";
 
 dotenv.config();
 
@@ -296,6 +297,146 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
+    // --- NOVOS COMANDOS ADMINISTRATIVOS (CALLBACKS) ---
+
+    // Ação: Paginação de Produtos
+    if (data.startsWith("list_page:")) {
+      const page = parseInt(data.split(":")[1]);
+      await answerCallbackQuery(callbackId);
+      const products = await productsRepository.getProducts();
+      const pageSize = 10;
+      const start = page * pageSize;
+      const end = start + pageSize;
+      const paged = products.slice(start, end);
+      
+      let text = `📦 <b>CATÁLOGO CERBERUS (Pág ${page + 1})</b>\n\n`;
+      const buttons = [];
+      
+      for (const p of paged) {
+        text += `• <code>${p.ref}</code> - ${p.produto.slice(0, 30)}${p.produto.length > 30 ? '...' : ''} (${p.ativo ? '✅' : '⏸'})\n`;
+        buttons.push([{ text: `📝 Editar ${p.ref}`, callback_data: `admin_edit:${p.id}` }]);
+      }
+      
+      const navRow = [];
+      if (page > 0) navRow.push({ text: "⬅️ Anterior", callback_data: `list_page:${page - 1}` });
+      if (end < products.length) navRow.push({ text: "Próxima ➡️", callback_data: `list_page:${page + 1}` });
+      if (navRow.length > 0) buttons.push(navRow);
+      
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+      }
+      return;
+    }
+
+    // Ação: Menu de Edição de Produto Específico
+    if (data.startsWith("admin_edit:")) {
+      const prodId = data.split(":")[1];
+      const product = await productsRepository.getProductByIdOrSlug(prodId);
+      if (!product) {
+        await answerCallbackQuery(callbackId, "❌ Produto não encontrado.", true);
+        return;
+      }
+      
+      await answerCallbackQuery(callbackId);
+      const text = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n` +
+                   `🆔 <b>REF:</b> <code>${product.ref}</code>\n` +
+                   `🏷️ <b>Título:</b> ${product.produto}\n` +
+                   `💰 <b>Preço:</b> R$ ${product.preco.toFixed(2)}\n` +
+                   `📁 <b>Categoria:</b> ${product.categoria}\n` +
+                   `📊 <b>Status:</b> ${product.ativo ? 'Ativo ✅' : 'Pausado ⏸'}\n\n` +
+                   `<i>Escolha o que deseja alterar:</i>`;
+                   
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "📝 Título", callback_data: `field_edit:${prodId}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${prodId}:preco` }],
+          [{ text: "📁 Categoria", callback_data: `field_edit:${prodId}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${prodId}:descricao` }],
+          [{ text: product.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${prodId}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${prodId}` }],
+          [{ text: "⬅️ Voltar para Lista", callback_data: "list_page:0" }]
+        ]
+      };
+      
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, keyboard);
+      }
+      return;
+    }
+
+    // Ação: Solicitar novo valor para campo
+    if (data.startsWith("field_edit:")) {
+      const [, prodId, field] = data.split(":");
+      await answerCallbackQuery(callbackId);
+      await telegramRepo.setUserState(senderId, { action: `edit_field:${field}`, productId: prodId });
+      
+      if (chatId) {
+        const fieldNames: any = { produto: "Título", preco: "Preço", categoria: "Categoria", descricao: "Descrição" };
+        await sendTelegramMessage(chatId, `✍️ <b>ALTERAR ${fieldNames[field].toUpperCase()}</b>\n\nDigite o novo valor para este campo:`);
+      }
+      return;
+    }
+
+    // Ação: Alternar Ativo/Pausado
+    if (data.startsWith("toggle_active:")) {
+      const prodId = data.split(":")[1];
+      const product = await productsRepository.getProductByIdOrSlug(prodId);
+      if (product) {
+        await productsRepository.updateProduct(prodId, { ativo: !product.ativo });
+        await answerCallbackQuery(callbackId, `✅ Status alterado para ${!product.ativo ? 'Ativo' : 'Pausado'}`);
+        // Recarrega o menu de edição
+        const updated = await productsRepository.getProductByIdOrSlug(prodId);
+        if (updated && chatId && messageId) {
+          // Re-executa a lógica de admin_edit para atualizar a UI
+          const text = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n` +
+                       `🆔 <b>REF:</b> <code>${updated.ref}</code>\n` +
+                       `🏷️ <b>Título:</b> ${updated.produto}\n` +
+                       `💰 <b>Preço:</b> R$ ${updated.preco.toFixed(2)}\n` +
+                       `📁 <b>Categoria:</b> ${updated.categoria}\n` +
+                       `📊 <b>Status:</b> ${updated.ativo ? 'Ativo ✅' : 'Pausado ⏸'}\n\n` +
+                       `<i>Escolha o que deseja alterar:</i>`;
+          const keyboard = {
+            inline_keyboard: [
+              [{ text: "📝 Título", callback_data: `field_edit:${prodId}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${prodId}:preco` }],
+              [{ text: "📁 Categoria", callback_data: `field_edit:${prodId}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${prodId}:descricao` }],
+              [{ text: updated.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${prodId}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${prodId}` }],
+              [{ text: "⬅️ Voltar para Lista", callback_data: "list_page:0" }]
+            ]
+          };
+          await editTelegramMessageText(chatId, messageId, text, keyboard);
+        }
+      }
+      return;
+    }
+
+    // Ação: Confirmar Remoção
+    if (data.startsWith("confirm_del:")) {
+      const prodId = data.split(":")[1];
+      await answerCallbackQuery(callbackId, "⚠️ Confirmação necessária!");
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🔥 CONFIRMAR REMOÇÃO", callback_data: `exec_del:${prodId}` }],
+          [{ text: "❌ Cancelar", callback_data: `admin_edit:${prodId}` }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, `🚨 <b>VOCÊ TEM CERTEZA?</b>\n\nEsta ação irá remover permanentemente o produto do catálogo estático e do banco de dados.`, keyboard);
+      }
+      return;
+    }
+
+    // Ação: Executar Remoção
+    if (data.startsWith("exec_del:")) {
+      const prodId = data.split(":")[1];
+      await answerCallbackQuery(callbackId, "🗑️ Removendo...");
+      const success = await productsRepository.deleteProduct(prodId);
+      if (success) {
+        if (chatId && messageId) {
+          await editTelegramMessageText(chatId, messageId, `✅ <b>Produto removido com sucesso!</b>\nO catálogo será reconstruído automaticamente.`);
+        }
+      } else {
+        await answerCallbackQuery(callbackId, "❌ Erro ao remover.", true);
+      }
+      return;
+    }
+
     // Ação: Confirmar & Publicar
     if (data.startsWith("confirm_pub:")) {
       console.log("[TELEGRAM PUBLISH 1] Callback recebido");
@@ -587,10 +728,94 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           `🏴 <b>BOT CERBERUS FINDS ARCHIVE</b>\n\n` +
           `Modo de Revisão e Curadoria Ativo!\n\n` +
           `👤 <b>Seu ID Telegram:</b> <code>${senderId}</code>\n` +
-          `👤 <b>Usuário:</b> ${firstName} (${username})\n` +
           `✅ <b>Status Whitelist:</b> Autorizado\n\n` +
-          `Envie um link de produto (Shopee, Mercado Livre, etc.) para extrair e revisar os dados antes de publicar.`
+          `<b>COMANDOS ADMINISTRATIVOS:</b>\n` +
+          `/listar - Ver e editar todos os produtos\n` +
+          `/categorias - Gerenciar categorias\n\n` +
+          `Ou envie um link de produto para cadastrar novo.`
         );
+      }
+      return;
+    }
+
+    // Comando: /listar
+    if (text.startsWith("/listar") || text.startsWith("/produtos")) {
+      const products = await productsRepository.getProducts();
+      const pageSize = 10;
+      const paged = products.slice(0, pageSize);
+      
+      let listText = `📦 <b>CATÁLOGO CERBERUS</b>\nTotal: ${products.length} peças\n\n`;
+      const buttons = [];
+      
+      for (const p of paged) {
+        listText += `• <code>${p.ref}</code> - ${p.produto.slice(0, 30)}${p.produto.length > 30 ? '...' : ''} (${p.ativo ? '✅' : '⏸'})\n`;
+        buttons.push([{ text: `📝 Editar ${p.ref}`, callback_data: `admin_edit:${p.id}` }]);
+      }
+      
+      if (products.length > pageSize) {
+        buttons.push([{ text: "Próxima ➡️", callback_data: "list_page:1" }]);
+      }
+      
+      if (chatId) {
+        await sendTelegramMessage(chatId, listText, { inline_keyboard: buttons });
+      }
+      return;
+    }
+
+    // Comando: /editar [REF]
+    if (text.startsWith("/editar ")) {
+      const ref = text.split(" ")[1];
+      const product = await productsRepository.getProductByIdOrSlug(ref);
+      if (product && chatId) {
+        // Reutiliza a lógica de admin_edit
+        const editTxt = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n🆔 <b>REF:</b> <code>${product.ref}</code>\n🏷️ <b>Título:</b> ${product.produto}\n💰 <b>Preço:</b> R$ ${product.preco.toFixed(2)}\n📁 <b>Categoria:</b> ${product.categoria}\n📊 <b>Status:</b> ${product.ativo ? 'Ativo ✅' : 'Pausado ⏸'}`;
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "📝 Título", callback_data: `field_edit:${product.id}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${product.id}:preco` }],
+            [{ text: "📁 Categoria", callback_data: `field_edit:${product.id}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${product.id}:descricao` }],
+            [{ text: product.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${product.id}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${product.id}` }]
+          ]
+        };
+        await sendTelegramMessage(chatId, editTxt, keyboard);
+      } else if (chatId) {
+        await sendTelegramMessage(chatId, `❌ Produto com REF <code>${ref}</code> não encontrado.`);
+      }
+      return;
+    }
+
+    // Comando: /remover [REF]
+    if (text.startsWith("/remover ")) {
+      const ref = text.split(" ")[1];
+      const product = await productsRepository.getProductByIdOrSlug(ref);
+      if (product && chatId) {
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "🔥 CONFIRMAR REMOÇÃO", callback_data: `exec_del:${product.id}` }],
+            [{ text: "❌ Cancelar", callback_data: `admin_edit:${product.id}` }]
+          ]
+        };
+        await sendTelegramMessage(chatId, `🚨 <b>CONFIRMAR REMOÇÃO</b>\n\nProduto: <b>${product.produto}</b>\nREF: <code>${product.ref}</code>`, keyboard);
+      } else if (chatId) {
+        await sendTelegramMessage(chatId, `❌ Produto com REF <code>${ref}</code> não encontrado.`);
+      }
+      return;
+    }
+
+    // Comando: /categorias
+    if (text.startsWith("/categorias")) {
+      const cats = await categoriesRepository.getCategories();
+      let catTxt = `📁 <b>CATEGORIAS DO CATÁLOGO</b>\n\n`;
+      const buttons = [];
+      
+      for (const c of cats) {
+        catTxt += `• ${c.name}\n`;
+        buttons.push([{ text: `✏️ Renomear ${c.name}`, callback_data: `rename_cat_init:${c.name}` }]);
+      }
+      
+      buttons.push([{ text: "➕ Adicionar Nova", callback_data: "add_cat_init" }]);
+      
+      if (chatId) {
+        await sendTelegramMessage(chatId, catTxt, { inline_keyboard: buttons });
       }
       return;
     }
@@ -669,6 +894,29 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     // Se NÃO for comando e NÃO for link, processa como entrada de preço para a revisão pendente existente!
     let targetReview: PendingReview | null = null;
     const userState = await telegramRepo.getUserState(senderId);
+
+    // Lidar com entradas de texto para estados administrativos
+    if (userState && userState.action.startsWith("edit_field:")) {
+      const field = userState.action.split(":")[1];
+      const prodId = userState.productId;
+      const update: any = {};
+      
+      if (field === "preco") {
+        const p = parseAndNormalizePrice(text);
+        if (p === null) {
+          if (chatId) await sendTelegramMessage(chatId, "❌ Preço inválido. Tente novamente.");
+          return;
+        }
+        update[field] = p;
+      } else {
+        update[field] = text;
+      }
+      
+      await productsRepository.updateProduct(prodId, update);
+      await telegramRepo.deleteUserState(senderId);
+      if (chatId) await sendTelegramMessage(chatId, `✅ Campo <b>${field}</b> atualizado com sucesso!`);
+      return;
+    }
 
     if (userState && userState.action === "awaiting_price") {
       targetReview = await telegramRepo.getPendingReview(userState.reviewId);

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { exportStaticProductsJson } from "./exportProductsJson";
 import { getProducts } from "../repositories/productsRepository";
+import { syncCatalogToGitHub } from "./githubCatalogSync";
 
 interface SyncLogResult {
   success: boolean;
@@ -44,17 +45,16 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
     jsonCount = await exportStaticProductsJson();
     console.log(`[Local Export] products.json gerado. Válidos: ${jsonCount}`);
 
-    // 3. Dispara o Deploy Hook do Render Static Site (se configurado)
-    if (deployHookUrl) {
-      console.log(`[Deploy Hook] Acionando Render Static Site Deploy Hook...`);
+    // 3. Sincroniza com GitHub (Dispara Rebuild Automático no Render)
+    console.log(`[Sync] Sincronizando catálogo com GitHub...`);
+    const githubSyncSuccess = await syncCatalogToGitHub(productTitle ? `update: add/edit product ${productTitle}` : "update: manual catalog sync");
+    
+    if (!githubSyncSuccess && deployHookUrl) {
+      console.log(`[Fallback] GitHub Sync falhou. Tentando acionar via Deploy Hook direto...`);
       const response = await fetch(deployHookUrl, { method: "POST" });
       if (!response.ok) {
         console.warn(`⚠️ [Deploy Hook Warning] HTTP ${response.status} ao acionar deploy hook.`);
-      } else {
-        console.log(`[Deploy Hook] Acionado com sucesso. Aguardando conclusão do build e propagação E2E...`);
       }
-    } else {
-      console.log(`ℹ️ [Deploy Hook] RENDER_STATIC_DEPLOY_HOOK_URL não configurada.`);
     }
 
     // 4. Verificação rigorosa de ponta a ponta (Polling E2E no Static Site público)
