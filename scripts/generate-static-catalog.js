@@ -34,7 +34,25 @@ async function generateStaticCatalog() {
     console.log('ℹ️ [Build Catalog] Credenciais do Supabase não encontradas no build. Tentando fallback local.');
   }
 
-  // Fallback para arquivo local se Supabase falhou ou retornou vazio
+  // Fallback para API do Backend se Supabase falhou ou retornou vazio
+  if (rawProducts.length === 0) {
+    console.log('ℹ️ [Build Catalog] Supabase falhou ou retornou vazio. Tentando buscar da API do Backend...');
+    try {
+      const backendUrl = 'https://cerberus-forge-deploy.onrender.com/api/products';
+      const response = await fetch(backendUrl);
+      if (response.ok) {
+        const json = await response.json();
+        if (json.success && Array.isArray(json.products)) {
+          rawProducts = json.products;
+          console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via API do Backend.`);
+        }
+      }
+    } catch (apiErr) {
+      console.warn('⚠️ [Build Catalog] Falha ao buscar da API do Backend:', apiErr.message);
+    }
+  }
+
+  // Fallback para arquivo local se tudo mais falhou
   if (rawProducts.length === 0) {
     const localFile = path.join(process.cwd(), 'data', 'products.json');
     if (fs.existsSync(localFile)) {

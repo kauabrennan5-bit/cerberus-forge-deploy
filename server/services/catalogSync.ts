@@ -96,14 +96,16 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       }
     }
 
-    if (productFoundPublic || publicJsonCount > 0) {
+    if (productFoundPublic) {
       syncSuccess = true;
       console.log(`🎉 [Static Catalog Sync] Sincronização e verificação E2E concluídas com SUCESSO! Peças na vitrine: ${publicJsonCount}`);
     } else {
-      errorMsg = "O deploy do Static Site foi acionado, mas o tempo limite de propagação E2E expirou antes de o produto aparecer no endpoint público.";
+      errorMsg = productId 
+        ? `O deploy do Static Site foi acionado, mas o produto ID ${productId} ainda não apareceu na vitrine pública após 90s. Verifique o status do build no Render.`
+        : "O deploy do Static Site foi acionado, mas a contagem de produtos não aumentou conforme o esperado após 90s.";
       console.warn(`⚠️ [Static Catalog Sync] ${errorMsg}`);
-      // Consideramos sucesso se o JSON foi gerado e deploy acionado, mas registramos o aviso
-      syncSuccess = true; 
+      // NÃO marcamos como sucesso se a verificação E2E falhou, para que o bot informe o estado real
+      syncSuccess = false; 
     }
 
     return {
