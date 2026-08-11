@@ -278,7 +278,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         return;
       }
 
-      // Salva no Repositório de Produtos
+      // Salva no Repositório de Produtos (Supabase + Fallback)
       try {
         const siteBaseUrl = process.env.APP_URL || "https://cerberusfinds.com";
         let publishedProduct: any = null;
@@ -304,19 +304,30 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           });
         }
 
+        // Valida se o produto foi realmente salvo
+        if (!publishedProduct || !publishedProduct.id) {
+          throw new Error("Não foi possível confirmar a gravação do produto no banco de dados.");
+        }
+
+        // Confirmação de existência no repositório
+        const doubleCheck = await productsRepository.getProductByIdOrSlug(publishedProduct.id);
+        if (!doubleCheck) {
+          throw new Error("Falha na verificação pós-gravação: produto não localizado na consulta pública.");
+        }
+
         await telegramRepo.deletePendingReview(reviewId);
         await telegramRepo.deleteUserState(senderId);
 
         await answerCallbackQuery(callbackId, "✅ Peça publicada com sucesso!");
 
-        const productUrl = `${siteBaseUrl}/produto/${publishedProduct?.slug || publishedProduct?.id}`;
+        const productUrl = `${siteBaseUrl}/produto/${publishedProduct.slug || publishedProduct.id}`;
         const successText =
           `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n` +
           `<b>CERBERUS FINDS ARCHIVE</b>\n\n` +
-          `🏷️ <b>Produto:</b> ${publishedProduct?.produto || review.produto}\n` +
-          `📁 <b>Categoria:</b> ${publishedProduct?.categoria || review.categoria}\n` +
+          `🏷️ <b>Produto:</b> ${publishedProduct.produto || review.produto}\n` +
+          `📁 <b>Categoria:</b> ${publishedProduct.categoria || review.categoria}\n` +
           `💰 <b>Preço:</b> R$ ${review.preco.toFixed(2).replace(".", ",")}\n` +
-          `🆔 <b>REF:</b> ${publishedProduct?.ref || 'N/A'}\n\n` +
+          `🆔 <b>REF:</b> ${publishedProduct.ref || 'N/A'}\n\n` +
           `🔗 <b>Ver no site:</b>\n${productUrl}`;
 
         if (chatId && messageId) {
@@ -326,7 +337,14 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         }
       } catch (err: any) {
         console.error("[Telegram Review Publish Error]:", err);
-        await answerCallbackQuery(callbackId, "❌ Erro ao publicar produto no banco de dados.", true);
+        const errorMsg = err?.message || "Erro desconhecido ao salvar no banco.";
+        await answerCallbackQuery(callbackId, `❌ Erro ao publicar: ${errorMsg.slice(0, 50)}`, true);
+        if (chatId) {
+          await sendTelegramMessage(
+            chatId,
+            `❌ <b>FALHA AO PUBLICAR NO CATÁLOGO:</b>\n\nO produto não pôde ser salvo no banco de dados.\n<i>Motivo: ${errorMsg}</i>`
+          );
+        }
       }
       return;
     }

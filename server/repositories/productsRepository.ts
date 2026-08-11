@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { INITIAL_PRODUCTS, generateSlug } from "../../src/data/initialProducts";
+import { generateSlug } from "../../src/data/initialProducts";
 import { Product } from "../../src/types";
 
 dotenv.config();
@@ -15,9 +15,9 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Initialize Supabase Client if credentials are provided in env vars
+// Initialize Supabase Client prioritizing Service Role Key for server-side administrative access (bypassing RLS)
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
   ? createClient(supabaseUrl, supabaseKey)
@@ -29,20 +29,41 @@ if (supabase) {
   console.log("ℹ️ Supabase não configurado no .env. Repository utilizando data/products.json.");
 }
 
+/**
+ * Valida se a URL de aquisição de um produto é um link válido de produto real
+ */
+export function isValidProductLink(link?: string): boolean {
+  if (!link || typeof link !== "string") return false;
+  const trimmed = link.trim();
+  if (!trimmed || trimmed === "#") return false;
+  if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false;
+
+  try {
+    const parsed = new URL(trimmed);
+    const path = parsed.pathname.trim();
+    // Rejeita links genéricos de home page (ex: https://shopee.com.br/ sem caminho)
+    if ((path === "" || path === "/") && !parsed.search) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function getStoredProductsFromFile(): Product[] {
   try {
     if (fs.existsSync(PRODUCTS_FILE)) {
       const raw = fs.readFileSync(PRODUCTS_FILE, "utf-8");
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed;
+        return parsed.filter((p: Product) => isValidProductLink(p.link));
       }
     }
   } catch (err) {
     console.error("Erro ao ler produtos do arquivo:", err);
   }
-  fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(INITIAL_PRODUCTS, null, 2), "utf-8");
-  return INITIAL_PRODUCTS as Product[];
+  return [];
 }
 
 function saveStoredProductsToFile(products: Product[]) {
@@ -109,7 +130,7 @@ export async function getProducts(): Promise<Product[]> {
     }
 
     if (Array.isArray(data) && data.length > 0) {
-      return data.map((item: any) => ({
+      const mapped = data.map((item: any) => ({
         id: item.id,
         ref: item.ref || item.ref_code,
         produto: item.produto || item.title || item.name,
@@ -129,31 +150,13 @@ export async function getProducts(): Promise<Product[]> {
         descricao: item.descricao || item.description || "",
         paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || ""
       }));
+
+      // Filtra produtos sem link de aquisição válido
+      return mapped.filter((p: Product) => isValidProductLink(p.link));
     }
 
     if (Array.isArray(data) && data.length === 0) {
-      console.log("Seeding Supabase com catálogo inicial...");
-      for (const p of INITIAL_PRODUCTS) {
-        const { error: seedErr } = await supabase.from("products").insert({
-          id: p.id,
-          ref: p.ref || `REF-${Math.floor(100 + Math.random() * 900)}`,
-          produto: p.produto,
-          categoria: p.categoria,
-          preco: p.preco,
-          imagens: p.imagens,
-          link: p.link,
-          ativo: p.ativo,
-          destaque: p.destaque,
-          status: p.status || "published",
-          slug: p.slug,
-          descricao: p.descricao,
-          pagina_ponte_url: p.paginaPonteUrl
-        });
-        if (seedErr) {
-          throw new Error(`Falha ao popular catálogo inicial no Supabase: ${seedErr.message}`);
-        }
-      }
-      return INITIAL_PRODUCTS as Product[];
+      return [];
     }
   }
 
@@ -172,6 +175,7 @@ export async function getProductByIdOrSlug(idOrSlug: string): Promise<Product | 
 
 /**
  * Cria um novo produto no repositório (Supabase + local fallback)
+ * Com deduplicação inteligente por URL e ID de Marketplace.
  */
 export async function createProduct(input: {
   produto: string;
@@ -186,6 +190,43 @@ export async function createProduct(input: {
   ref?: string;
 }): Promise<Product> {
   const products = await getProducts();
+  const inputLink = input.link.trim();
+
+  // Deduplicação: verifica se um produto com o mesmo link já existe
+  const existingProduct = products.find((p) => {
+    if (!p.link) return false;
+    if (p.link.trim() === inputLink) return true;
+    try {
+      const u1 = new URL(p.link);
+      const u2 = new URL(inputLink);
+      if (u1.hostname.toLowerCase() === u2.hostname.toLowerCase() && u1.pathname === u2.pathname) {
+        return true;
+      }
+    } catch {}
+    return false;
+  });
+
+  if (existingProduct) {
+    console.log(`[Repository Deduplication] Produto duplicado detectado (ID: ${existingProduct.id}). Atualizando existente...`);
+    const imagesArray = Array.isArray(input.imagens)
+      ? input.imagens
+      : typeof input.imagens === "string"
+      ? input.imagens.split(" | ").filter(Boolean)
+      : [];
+
+    const updated = await updateProduct(existingProduct.id, {
+      produto: input.produto.trim(),
+      categoria: input.categoria.trim(),
+      preco: Number(input.preco) || 0,
+      imagens: imagesArray.length > 0 ? imagesArray : existingProduct.imagens,
+      link: inputLink,
+      descricao: (input.descricao || "").trim() || existingProduct.descricao,
+      status: input.status || "published"
+    });
+
+    if (updated) return updated;
+  }
+
   const id = `prod-${Date.now()}`;
   const slug = generateSlug(input.produto);
   const ref = input.ref || `REF-${(products.length + 1).toString().padStart(3, "0")}`;
@@ -203,7 +244,7 @@ export async function createProduct(input: {
     categoria: input.categoria.trim(),
     preco: Number(input.preco) || 0,
     imagens: imagesArray.length > 0 ? imagesArray : ["https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&w=800&q=80"],
-    link: input.link.trim(),
+    link: inputLink,
     ativo: true,
     destaque: Boolean(input.destaque),
     status: input.status || "published",
