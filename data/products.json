@@ -1,53 +1,19 @@
 [
   {
-    "id": "prod-1786480173139",
-    "ref": "REF-3137",
-    "produto": "Jaqueta Bomber em Couro Ecológico Premium",
-    "categoria": "Jaquetas",
-    "preco": 199.9,
+    "id": "prod-1786480831010",
+    "ref": "REF-002",
+    "produto": "Óculos de Sol Aviador Polarizado Premium",
+    "categoria": "Acessórios",
+    "preco": 159.9,
     "imagens": [
-      "https://images.unsplash.com/photo-1551028719-00167b16eac5?auto=format&fit=crop&w=800&q=80"
+      "https://images.unsplash.com/photo-1511499767150-a48a237f0083?auto=format&fit=crop&w=800&q=80"
     ],
-    "link": "https://s.shopee.com.br/test-bomber-jacket",
+    "link": "https://s.shopee.com.br/test-aviator-sunglasses-99",
     "ativo": true,
     "destaque": true,
     "status": "published",
-    "slug": "jaqueta-bomber-em-couro-ecologico-premium",
-    "descricao": "Jaqueta bomber estilizada com acabamento premium e punhos reforçados.",
-    "paginaPonteUrl": ""
-  },
-  {
-    "id": "prod-1786462301196",
-    "ref": "REF-008",
-    "produto": "Espelho retangular grande com Moldura Lapidado 100x50 Preto",
-    "categoria": "Acessórios",
-    "preco": 99.99,
-    "imagens": [
-      "https://http2.mlstatic.com/D_NQ_NP_883401-MLA113308418138_072026-O.webp"
-    ],
-    "link": "https://www.mercadolivre.com.br/social/kb20260218145659?matt_word=kb20260218145659&matt_tool=13998350&forceInApp=true&ref=BIa3h0VNHXTV%2BEn8LIFx5Tlo5o3V2rCPFxxIcVQBlAMywyZZud8HrRZBB8ZheK9Kq05itCBpWs%2BrSg07VI%2FDCd4gAS%2FOvAHl%2B2YnPuuPMMZrb1r%2F%2FRaoiNhMofmQDB35REHgPyl268ulpHxFxsuuoYIcXuY5sWfGPNqsZ5PQK14TSJiXMliLcVp%2FW8bnG7H2yUjic1bGov5FGuhSNXHmF6LS%2B486YcngUonEuQ%3D%3D&skipInApp=true&matt_ignore=true",
-    "ativo": true,
-    "destaque": false,
-    "status": "published",
-    "slug": "espelho-retangular-grande-com-moldura-lapidado-100x50-preto",
-    "descricao": "",
-    "paginaPonteUrl": ""
-  },
-  {
-    "id": "prod-1785955708871",
-    "ref": "REF-008",
-    "produto": "Coffee Thermo Café Cappuccino 220g - Multi Natural",
-    "categoria": "Saude",
-    "preco": 133.94,
-    "imagens": [
-      "https://down-br.img.susercontent.com/file/br-11134207-81z1k-mg5ixtqjabk4ed"
-    ],
-    "link": "https://shopee.com.br/UAU!-Coffee-Thermo-Caf%C3%A9-NOVIDADE!-1-Pote-220g-Sabor-CAPPUCCINO-Multi-Natural-i.1477529191.23494552208",
-    "ativo": true,
-    "destaque": false,
-    "status": "published",
-    "slug": "coffee-thermo-cafe-cappuccino-220g-multi-natural",
-    "descricao": "Termogênico em pó sabor cappuccino para manter o foco elevado. Dose prática de energia pura pra aguentar o corre diário.",
+    "slug": "oculos-de-sol-aviador-polarizado-premium",
+    "descricao": "Óculos aviador com armação em aço escovado e lentes polarizadas.",
     "paginaPonteUrl": ""
   },
   {
@@ -64,6 +30,7 @@
     "ativo": true,
     "destaque": false,
     "status": "published",
+    "createdBy": "system",
     "slug": "cama-cabana-pet-formato-de-gato-toca-com-bolinha-interativa",
     "descricao": "Dê uma olhada em Cama Cabana Pet Formato de Gato Toca com Bolinha Interativa por R$74,90. Compre na Shopee agora!",
     "paginaPonteUrl": ""
