@@ -12,7 +12,7 @@
   }
 
   body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     background-color: #0B0908;
     color: #E8E1D3;
     background-image: 
@@ -37,22 +37,28 @@
   }
 
   h1, h2, h3, .font-gothic {
-    font-family: 'Pirata One', 'UnifrakturMaguntia', cursive, serif;
+    font-family: 'Cinzel', 'Plus Jakarta Sans', serif;
+    font-weight: 700;
+    letter-spacing: 0.02em;
   }
 }
 
 .font-gothic {
-  font-family: 'Pirata One', 'UnifrakturMaguntia', cursive, serif;
-  letter-spacing: 0.04em;
+  font-family: 'Cinzel', 'Plus Jakarta Sans', serif;
+  font-weight: 700;
+  letter-spacing: 0.03em;
 }
 
 .font-display {
-  font-family: 'Bebas Neue', 'Barlow Condensed', sans-serif;
-  letter-spacing: 0.05em;
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .font-condensed {
-  font-family: 'Barlow Condensed', sans-serif;
+  font-family: 'Inter', sans-serif;
+  font-weight: 400;
+  letter-spacing: 0;
 }
 
 .font-sans {
@@ -74,13 +80,13 @@
   display: inline-block;
   padding: 0.15rem 0.5rem;
   text-transform: uppercase;
-  font-family: 'Bebas Neue', 'Barlow Condensed', sans-serif;
-  letter-spacing: 0.12em;
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   border: 1px dashed #8A1F1F;
   color: #E8E1D3;
   background-color: rgba(138, 31, 31, 0.15);
   box-shadow: inset 0 0 4px rgba(138, 31, 31, 0.2);
-  transform: rotate(-1deg);
 }
 
 /* Technical Hairline Frame Effect */

@@ -1,30 +1,9 @@
 import dotenv from "dotenv";
+import { processProductUrl, ProcessProductResult, detectMarketplace } from "./productAutomation";
 
 dotenv.config();
 
-/**
- * Detecta o marketplace a partir de uma URL
- */
-export function detectMarketplace(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname.includes("shopee.com.br") || hostname.includes("shope.ee")) {
-      return "Shopee";
-    }
-    if (
-      hostname.includes("mercadolivre.com.br") ||
-      hostname.includes("mercadolibre.com") ||
-      hostname.includes("mercadolivre.com")
-    ) {
-      return "Mercado Livre";
-    }
-    return "Outro / E-Commerce Generalista";
-  } catch {
-    if (url.includes("shopee") || url.includes("shope.ee")) return "Shopee";
-    if (url.includes("mercadolivre") || url.includes("mercadolibre")) return "Mercado Livre";
-    return "Outro / Desconhecido";
-  }
-}
+export { detectMarketplace };
 
 /**
  * Verifica se um usuário do Telegram está autorizado na Whitelist
@@ -34,8 +13,8 @@ export function isUserAllowed(senderId: string | number): boolean {
   const allowedList = allowedStr.split(",").map((id) => id.trim()).filter(Boolean);
 
   if (allowedList.length === 0) {
-    // Se nenhuma restrição for configurada, permite o acesso em dev
-    return true;
+    // Fail-Closed: se nenhuma whitelist estiver configurada, nenhum usuário é autorizado
+    return false;
   }
 
   return allowedList.includes(String(senderId));
@@ -62,6 +41,7 @@ export function sendTelegramMessage(
       chat_id: chatId,
       text: text,
       parse_mode: "HTML",
+      disable_web_page_preview: false,
       reply_markup: replyMarkup,
     }),
   })
@@ -73,7 +53,7 @@ export function sendTelegramMessage(
 }
 
 /**
- * Processador Assíncrono de Updates do Webhook (FASE 4.1 - Apenas registro e infraestrutura)
+ * Processador Assíncrono de Updates do Webhook (FASE 2 - Automação Completa de Produtos)
  */
 export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
   if (!update) return;
@@ -92,6 +72,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       console.warn(
         `🔒 [Telegram Whitelist] Acesso bloqueado para usuário não autorizado: ID ${senderId} (${firstName} - ${username})`
       );
+      if (chatId) {
+        await sendTelegramMessage(
+          chatId,
+          `🔒 <b>Acesso Negado</b>\n\n` +
+            `Seu usuário do Telegram (ID: <code>${senderId}</code>) não está autorizado no Cerberus Finds Archive.`
+        );
+      }
       return;
     }
 
@@ -101,46 +88,96 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) {
         await sendTelegramMessage(
           chatId,
-          `🏴 <b>BOT CERBERUS FINDS - FASE 4.1 (INFRAESTRUTURA)</b>\n\n` +
-            `Infraestrutura ativa com sucesso!\n\n` +
+          `🏴 <b>BOT CERBERUS FINDS ARCHIVE</b>\n\n` +
+            `Sistema de Ingestão e Curadoria Automática Ativo!\n\n` +
             `👤 <b>Seu ID Telegram:</b> <code>${senderId}</code>\n` +
             `👤 <b>Usuário:</b> ${firstName} (${username})\n` +
             `✅ <b>Status Whitelist:</b> Autorizado\n\n` +
-            `Envie um link da Shopee ou Mercado Livre para registrar o log no servidor.`
+            `Envie um link de produto (Shopee, Mercado Livre, etc.) para cadastrar automaticamente no catálogo.`
         );
       }
       return;
     }
 
-    // 3. Detecção de Links na Mensagem
+    // 3. Detecção e Processamento de Links na Mensagem
     const urlRegex = /(https?:\/\/[^\s]+)/gi;
     const matches = text.match(urlRegex);
 
     if (matches && matches.length > 0) {
+      const siteBaseUrl = process.env.APP_URL || "https://cerberusfinds.com";
+
       for (const link of matches) {
-        const marketplace = detectMarketplace(link);
-        const isoDate = new Date().toISOString();
+        const mkt = detectMarketplace(link);
+        console.log(`[Telegram Bot Log] Processando link de ${firstName} (${senderId}): ${link} (${mkt})`);
 
-        // Registra logs detalhados exigidos na Fase 4.1
-        console.log(`
-=== [TELEGRAM WEBHOOK - FASE 4.1 REGISTRO DE LINK] ===
-📅 Data/Hora: ${isoDate}
-👤 Usuário ID: ${senderId}
-👤 Nome: ${firstName}
-👤 Username: ${username}
-🔗 Link Recebido: ${link}
-🛒 Marketplace Detectado: ${marketplace}
-======================================================
-`);
-
+        // Notificação prévia de processamento
         if (chatId) {
           await sendTelegramMessage(
             chatId,
-            `📥 <b>Link Recebido com Sucesso! (Fase 4.1)</b>\n\n` +
-              `🛒 <b>Marketplace:</b> ${marketplace}\n` +
-              `🔗 <b>URL:</b> <code>${link}</code>\n` +
-              `📅 <b>Data:</b> ${isoDate}\n\n` +
-              `ℹ️ <i>Link registrado nos logs de infraestrutura do servidor.</i>`
+            `🔎 <b>Analisando a peça...</b>\n\n` +
+              `🛒 <b>Marketplace:</b> ${mkt}\n` +
+              `🔗 <code>${link}</code>`
+          );
+        }
+
+        // Executa a automação completa (Scraper -> Gemini -> Validação -> Deduplicação -> Repository)
+        const result: ProcessProductResult = await processProductUrl(link, {
+          senderId,
+          firstName,
+          username
+        });
+
+        if (!chatId) continue;
+
+        if (result.action === "created" && result.product) {
+          const p = result.product;
+          const productUrl = `${siteBaseUrl}/produto/${p.slug || p.id}`;
+          await sendTelegramMessage(
+            chatId,
+            `✅ <b>PEÇA ADICIONADA</b>\n\n` +
+              `<b>CERBERUS FINDS ARCHIVE</b>\n\n` +
+              `<b>Produto:</b> ${p.produto}\n` +
+              `<b>Categoria:</b> ${p.categoria}\n` +
+              `<b>Preço:</b> R$ ${p.preco.toFixed(2).replace(".", ",")}\n` +
+              `<b>Status:</b> ${p.status === "published" ? "Publicado" : "Pendente"}\n` +
+              `<b>REF:</b> ${p.ref}\n\n` +
+              `🔗 <b>Ver produto:</b>\n${productUrl}`
+          );
+        } else if (result.action === "updated" && result.product) {
+          const p = result.product;
+          const oldP = result.oldPrice ? `R$ ${result.oldPrice.toFixed(2).replace(".", ",")}` : "N/A";
+          const newP = result.newPrice ? `R$ ${result.newPrice.toFixed(2).replace(".", ",")}` : `R$ ${p.preco.toFixed(2).replace(".", ",")}`;
+          const changesText = result.changedFields && result.changedFields.length > 0
+            ? result.changedFields.map((f) => `• ${f}`).join("\n")
+            : "• dados atualizados";
+          const productUrl = `${siteBaseUrl}/produto/${p.slug || p.id}`;
+
+          await sendTelegramMessage(
+            chatId,
+            `♻️ <b>PEÇA ATUALIZADA</b>\n\n` +
+              `<b>${p.produto}</b>\n\n` +
+              `<b>Preço anterior:</b> ${oldP}\n` +
+              `<b>Preço atual:</b> ${newP}\n\n` +
+              `<b>Alterações:</b>\n${changesText}\n\n` +
+              `🔗 <b>Ver produto:</b>\n${productUrl}`
+          );
+        } else if (result.action === "unchanged" && result.product) {
+          const p = result.product;
+          const productUrl = `${siteBaseUrl}/produto/${p.slug || p.id}`;
+
+          await sendTelegramMessage(
+            chatId,
+            `ℹ️ <b>PEÇA JÁ EXISTENTE</b>\n\n` +
+              `O produto <b>${p.produto}</b> (REF: ${p.ref}) já está cadastrado e nenhuma alteração relevante foi encontrada.\n\n` +
+              `🔗 <b>Ver produto:</b>\n${productUrl}`
+          );
+        } else {
+          // Falha de processamento
+          await sendTelegramMessage(
+            chatId,
+            `❌ <b>NÃO FOI POSSÍVEL CADASTRAR</b>\n\n` +
+              `<b>Motivo:</b>\n${result.reason || "Erro desconhecido ao processar o anúncio."}\n\n` +
+              `<i>Nenhum produto foi criado.</i>`
           );
         }
       }
@@ -149,9 +186,10 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) {
         await sendTelegramMessage(
           chatId,
-          `ℹ️ <b>Mensagem recebida.</b> Envie um link de produto (Shopee ou Mercado Livre) para teste da infraestrutura.`
+          `ℹ️ <b>Mensagem recebida.</b> Envie um link de produto (Shopee, Mercado Livre, etc.) para cadastrar no Cerberus Finds.`
         );
       }
     }
   }
 }
+

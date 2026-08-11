@@ -182,11 +182,13 @@ export async function createProduct(input: {
   destaque?: boolean;
   descricao?: string;
   paginaPonteUrl?: string;
+  status?: "pending" | "published";
+  ref?: string;
 }): Promise<Product> {
   const products = await getProducts();
   const id = `prod-${Date.now()}`;
   const slug = generateSlug(input.produto);
-  const ref = `REF-${(products.length + 1).toString().padStart(3, "0")}`;
+  const ref = input.ref || `REF-${(products.length + 1).toString().padStart(3, "0")}`;
 
   const imagesArray = Array.isArray(input.imagens)
     ? input.imagens
@@ -204,7 +206,7 @@ export async function createProduct(input: {
     link: input.link.trim(),
     ativo: true,
     destaque: Boolean(input.destaque),
-    status: "published",
+    status: input.status || "published",
     slug,
     descricao: (input.descricao || "").trim(),
     paginaPonteUrl: (input.paginaPonteUrl || "").trim()
@@ -276,3 +278,90 @@ export async function deleteProduct(id: string): Promise<boolean> {
 
   return true;
 }
+
+export interface ProductClickData {
+  productId: string;
+  productSlug?: string;
+  productName?: string;
+  productPrice?: number;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_content?: string;
+  utm_term?: string;
+  fbclid?: string;
+  gclid?: string;
+  ttclid?: string;
+  referrer?: string;
+  landingPage?: string;
+  userAgent?: string;
+  ipAddress?: string;
+}
+
+/**
+ * Registra o clique de um produto no Supabase (tabela product_clicks)
+ * com fallback gracioso em arquivo local (data/clicks.json).
+ */
+export async function recordProductClick(clickData: ProductClickData): Promise<boolean> {
+  const clickRecord = {
+    product_id: clickData.productId,
+    product_slug: clickData.productSlug || '',
+    product_name: clickData.productName || '',
+    product_price: Number(clickData.productPrice) || 0,
+    utm_source: clickData.utm_source || null,
+    utm_medium: clickData.utm_medium || null,
+    utm_campaign: clickData.utm_campaign || null,
+    utm_content: clickData.utm_content || null,
+    utm_term: clickData.utm_term || null,
+    fbclid: clickData.fbclid || null,
+    gclid: clickData.gclid || null,
+    ttclid: clickData.ttclid || null,
+    referrer: clickData.referrer || null,
+    landing_page: clickData.landingPage || null,
+    user_agent: clickData.userAgent || null,
+    ip_address: clickData.ipAddress || null,
+    created_at: new Date().toISOString()
+  };
+
+  // 1. Grava no Supabase se disponível
+  if (supabase) {
+    try {
+      const { error } = await supabase.from("product_clicks").insert([clickRecord]);
+      if (error) {
+        if (error.code === "PGRST205" || error.message?.includes("does not exist")) {
+          console.warn("⚠️ A tabela 'public.product_clicks' ainda não existe no Supabase. Gravando no fallback local.");
+        } else {
+          console.error("❌ Erro ao registrar clique no Supabase:", error.message);
+        }
+      } else {
+        console.log(`📊 Clique no produto registrado no Supabase: ${clickData.productName || clickData.productId}`);
+      }
+    } catch (e: any) {
+      console.warn("Exceção ao gravar clique no Supabase:", e?.message);
+    }
+  }
+
+  // 2. Grava no fallback local em data/clicks.json
+  try {
+    const clicksFile = path.join(DATA_DIR, "clicks.json");
+    let existingClicks: any[] = [];
+    if (fs.existsSync(clicksFile)) {
+      try {
+        existingClicks = JSON.parse(fs.readFileSync(clicksFile, "utf-8"));
+        if (!Array.isArray(existingClicks)) existingClicks = [];
+      } catch {
+        existingClicks = [];
+      }
+    }
+    existingClicks.push(clickRecord);
+    if (existingClicks.length > 10000) {
+      existingClicks = existingClicks.slice(-10000);
+    }
+    fs.writeFileSync(clicksFile, JSON.stringify(existingClicks, null, 2), "utf-8");
+  } catch (err) {
+    console.error("Erro ao gravar clique no fallback local (clicks.json):", err);
+  }
+
+  return true;
+}
+

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Product } from '../types';
-import { trackProductClick } from '../lib/pixels';
+import { trackClickAndGetUrl } from '../lib/analytics';
 import { ArrowLeft, ExternalLink, Heart, Share2, Check, ChevronLeft, ChevronRight, ImageOff, ShieldCheck, Maximize2, X } from 'lucide-react';
 
 interface ProductDetailProps {
@@ -78,18 +78,21 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     touchEndX.current = null;
   };
 
-  const handleBuy = () => {
+  const handleBuy = async () => {
     if (isRedirecting) return;
     setIsRedirecting(true);
 
-    // Track InitiateCheckout with Deduplicated Server CAPI + Client Pixel
-    trackProductClick(product, metaPixelId, metaAccessToken);
+    let finalUrl = product.paginaPonteUrl || product.link;
+    try {
+      finalUrl = await trackClickAndGetUrl(product, metaPixelId, metaAccessToken);
+    } catch (err) {
+      console.warn('Falha no tracking de clique (redirecionamento mantido):', err);
+    }
 
     setTimeout(() => {
-      const targetUrl = product.paginaPonteUrl || product.link;
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      window.open(finalUrl, '_blank', 'noopener,noreferrer');
       setIsRedirecting(false);
-    }, 400);
+    }, 250);
   };
 
   const handleShare = () => {

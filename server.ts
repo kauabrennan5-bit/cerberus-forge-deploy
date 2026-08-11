@@ -8,6 +8,7 @@ import { INITIAL_PRODUCTS, generateSlug } from "./src/data/initialProducts";
 import * as productsRepository from "./server/repositories/productsRepository";
 import { fetchProductDataFromUrl } from "./server/services/scraper";
 import { handleTelegramWebhookUpdate } from "./server/services/telegramBot";
+import { processProductUrl } from "./server/services/productAutomation";
 
 dotenv.config();
 
@@ -39,43 +40,77 @@ async function startServer() {
   });
 
   // ==========================================
-  // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA
+  // HELPER DE VALIDAÇÃO DE URL PARA PROXY CSV (PREVENÇÃO DE SSRF)
   // ==========================================
-  // A senha administrativa é resolvida, em ordem de prioridade:
-  // 1. Variável de ambiente ADMIN_PASSWORD (se definida)
-  // 2. Senha persistida em data/admin-config.json (definida pelo painel via /api/admin/set-password)
-  // 3. Senha padrão de segurança (somente quando nenhum valor foi configurado)
-  const ADMIN_CONFIG_FILE = path.join(process.cwd(), "data", "admin-config.json");
-  const DEFAULT_FALLBACK_PASSWORD = "cerberus2026";
-
-  function getRuntimeAdminPassword(): string {
+  const isValidCsvProxyUrl = (rawUrl: string): boolean => {
     try {
-      if (fs.existsSync(ADMIN_CONFIG_FILE)) {
-        const raw = fs.readFileSync(ADMIN_CONFIG_FILE, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed.adminPassword === "string" && parsed.adminPassword.trim().length > 0) {
-          return parsed.adminPassword.trim();
-        }
+      const parsed = new URL(rawUrl);
+
+      // Exige protocolo HTTPS estritamente
+      if (parsed.protocol !== "https:") {
+        return false;
       }
-    } catch (err) {
-      console.error("[Security] Erro ao ler data/admin-config.json:", err);
+
+      const hostname = parsed.hostname.toLowerCase();
+
+      // Bloqueio explícito de localhost, loopback, IPs de link-local e metadata
+      const forbiddenHostnames = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "169.254.169.254",
+        "metadata.google.internal"
+      ];
+
+      if (forbiddenHostnames.includes(hostname)) {
+        return false;
+      }
+
+      // Bloqueio de faixas de IP privadas e reservadas (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, etc)
+      if (
+        /^127\./.test(hostname) ||
+        /^10\./.test(hostname) ||
+        /^192\.168\./.test(hostname) ||
+        /^172\.(1[6-9]|2[0-9]|3[01])\./.test(hostname) ||
+        /^0\./.test(hostname) ||
+        /^169\.254\./.test(hostname)
+      ) {
+        return false;
+      }
+
+      // Domínios autorizados para exportação de planilhas do Google Sheets
+      const allowedDomains = [
+        "docs.google.com",
+        "drive.google.com",
+        "googleusercontent.com",
+        "sheets.googleapis.com"
+      ];
+
+      const isAllowedDomain = allowedDomains.some(domain =>
+        hostname === domain || hostname.endsWith("." + domain)
+      );
+
+      return isAllowedDomain;
+    } catch {
+      return false;
     }
-    return "";
-  }
+  };
 
-  const getAdminPassword = (): string =>
-    (process.env.ADMIN_PASSWORD || getRuntimeAdminPassword() || DEFAULT_FALLBACK_PASSWORD).trim();
-
+  // ==========================================
+  // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA (FAIL-CLOSED)
+  // ==========================================
   const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const adminPass = getAdminPassword();
+    const adminPass = (process.env.ADMIN_PASSWORD || "").trim();
 
+    // Se ADMIN_PASSWORD não estiver configurada no servidor, falhar fechado (Fail-Closed)
     if (!adminPass) {
-      console.error("[Security] ADMIN_PASSWORD não está configurada. Operação administrativa bloqueada.");
-      return res.status(503).json({
+      return res.status(401).json({
         success: false,
-        error: "A autenticação administrativa não está configurada no servidor. Defina ADMIN_PASSWORD no ambiente."
+        error: "Acesso administrativo desativado: ADMIN_PASSWORD não está configurada no servidor."
       });
     }
+
     const authHeader = (req.headers["x-admin-password"] as string) || "";
     const bearerHeader = (req.headers["authorization"] as string) || "";
     const bearerPass = bearerHeader.startsWith("Bearer ") ? bearerHeader.slice(7).trim() : "";
@@ -93,70 +128,6 @@ async function startServer() {
 
     next();
   };
-
-  // Verificação de credencial para o login da interface administrativa.
-  // A senha nunca é armazenada nem comparada no frontend.
-  app.post("/api/admin/verify", (req, res) => {
-    const adminPass = getAdminPassword();
-    const providedPass = String(req.body?.password || "");
-
-    if (!adminPass) {
-      return res.status(503).json({
-        success: false,
-        error: "A autenticação administrativa não está configurada no servidor."
-      });
-    }
-
-    if (!providedPass || providedPass !== adminPass) {
-      return res.status(401).json({ success: false, error: "Senha administrativa inválida." });
-    }
-
-    return res.json({ success: true });
-  });
-
-  // GET /api/admin/password-config - Informa ao frontend qual fonte define a senha atual
-  // (apenas indica se a senha vem de ADMIN_PASSWORD ou do arquivo local; nunca expõe o valor).
-  app.get("/api/admin/password-config", (_req, res) => {
-    const envPassword = (process.env.ADMIN_PASSWORD || "").trim();
-    return res.json({
-      success: true,
-      source: envPassword ? "ENVIRONMENT" : "STORED",
-      editable: !envPassword
-    });
-  });
-
-  // POST /api/admin/set-password - Permite trocar a senha do painel pelo próprio SettingsModal.
-  // Exige a senha atual (middleware requireAdminAuth) e persiste a nova senha em data/admin-config.json.
-  // Não sobrescreve a senha definida via ADMIN_PASSWORD (definida pelo operador da infra).
-  app.post("/api/admin/set-password", requireAdminAuth, (req, res) => {
-    const envPassword = (process.env.ADMIN_PASSWORD || "").trim();
-    if (envPassword) {
-      return res.status(400).json({
-        success: false,
-        error: "A senha administrativa está definida pela variável de ambiente ADMIN_PASSWORD. Defina-a em outro local para permitir a troca pelo painel."
-      });
-    }
-
-    const newPassword = String(req.body?.newPassword || "").trim();
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        error: "A nova senha deve ter pelo menos 6 caracteres."
-      });
-    }
-
-    try {
-      if (!fs.existsSync(path.dirname(ADMIN_CONFIG_FILE))) {
-        fs.mkdirSync(path.dirname(ADMIN_CONFIG_FILE), { recursive: true });
-      }
-      fs.writeFileSync(ADMIN_CONFIG_FILE, JSON.stringify({ adminPassword: newPassword, updatedAt: new Date().toISOString() }, null, 2), "utf-8");
-      console.log("[Security] Senha administrativa atualizada com sucesso via /api/admin/set-password.");
-      return res.json({ success: true, message: "Senha administrativa atualizada com sucesso." });
-    } catch (err: any) {
-      console.error("[Security] Erro ao salvar nova senha:", err);
-      return res.status(500).json({ success: false, error: "Erro ao salvar a nova senha: " + err.message });
-    }
-  });
 
   // ==========================================
   // 1. PRODUCTS REST API (DATABASE ENDPOINTS)
@@ -238,6 +209,58 @@ async function startServer() {
   app.post("/api/products/:id/delete", requireAdminAuth, handleDeleteRequest);
   app.post("/api/products/delete", requireAdminAuth, handleDeleteRequest);
 
+  // Handler para edição/atualização de produto
+  const handleUpdateRequest = async (req: express.Request, res: express.Response) => {
+    try {
+      const id = req.params.id || req.body?.id;
+      console.log("[UPDATE LOG] Entrada na rota de atualização de produto. ID recebido:", id);
+      if (!id) {
+        return res.status(400).json({ success: false, error: "ID do produto é obrigatório." });
+      }
+
+      const { produto, categoria, preco, imagens, link, destaque, descricao, paginaPonteUrl, ativo } = req.body;
+
+      let imagesArray: string[] | undefined = undefined;
+      if (Array.isArray(imagens)) {
+        imagesArray = imagens;
+      } else if (typeof imagens === "string" && imagens.trim()) {
+        imagesArray = imagens.split(" | ").map((s) => s.trim()).filter(Boolean);
+      }
+
+      const updatePayload: any = {};
+      if (produto !== undefined) updatePayload.produto = String(produto).trim();
+      if (categoria !== undefined) updatePayload.categoria = String(categoria).trim();
+      if (preco !== undefined) updatePayload.preco = Number(preco) || 0;
+      if (imagesArray !== undefined) updatePayload.imagens = imagesArray;
+      if (link !== undefined) updatePayload.link = String(link).trim();
+      if (destaque !== undefined) updatePayload.destaque = Boolean(destaque);
+      if (descricao !== undefined) updatePayload.descricao = String(descricao).trim();
+      if (paginaPonteUrl !== undefined) updatePayload.paginaPonteUrl = String(paginaPonteUrl).trim();
+      if (ativo !== undefined) updatePayload.ativo = Boolean(ativo);
+
+      const updated = await productsRepository.updateProduct(id, updatePayload);
+
+      if (!updated) {
+        return res.status(404).json({ success: false, error: "Produto não encontrado para atualização." });
+      }
+
+      console.log(`[UPDATE LOG] Produto "${updated.produto}" (ID: ${updated.id}) atualizado com sucesso.`);
+      return res.json({
+        success: true,
+        message: "Produto atualizado com sucesso!",
+        product: updated
+      });
+    } catch (err: any) {
+      console.error("[UPDATE LOG Error]", err);
+      return res.status(500).json({ success: false, error: "Erro no servidor ao atualizar produto: " + err.message });
+    }
+  };
+
+  // PUT e POST para atualização de produto
+  app.put("/api/products/:id", requireAdminAuth, handleUpdateRequest);
+  app.post("/api/products/:id/edit", requireAdminAuth, handleUpdateRequest);
+  app.post("/api/products/:id/update", requireAdminAuth, handleUpdateRequest);
+
   // ==========================================
   // 2. META CONVERSIONS API (CAPI) & FEED
   // ==========================================
@@ -302,6 +325,66 @@ async function startServer() {
       return res.status(500).json({ success: false, error: err.message });
     }
   });
+
+  // POST /api/track-click - Outbound Affiliate Click Analytics Tracker
+  app.post("/api/track-click", async (req, res) => {
+    try {
+      const {
+        productId,
+        productSlug,
+        productName,
+        productPrice,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_content,
+        utm_term,
+        fbclid,
+        gclid,
+        ttclid,
+        referrer,
+        landingPage
+      } = req.body || {};
+
+      if (!productId) {
+        return res.status(400).json({ success: false, error: "productId é obrigatório" });
+      }
+
+      // Valida o produto no repositório oficial antes de registrar
+      const realProduct = await productsRepository.getProductByIdOrSlug(productId);
+      const verifiedName = realProduct?.produto || productName || productId;
+      const verifiedPrice = realProduct?.preco ?? Number(productPrice) ?? 0;
+      const verifiedSlug = realProduct?.slug || productSlug || productId;
+
+      const clientIp = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "").split(",")[0].trim();
+      const userAgent = req.headers["user-agent"] || "";
+
+      await productsRepository.recordProductClick({
+        productId,
+        productSlug: verifiedSlug,
+        productName: verifiedName,
+        productPrice: verifiedPrice,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        utm_content,
+        utm_term,
+        fbclid,
+        gclid,
+        ttclid,
+        referrer,
+        landingPage,
+        userAgent,
+        ipAddress: clientIp
+      });
+
+      return res.json({ success: true, message: "Clique de produto registrado com sucesso" });
+    } catch (err: any) {
+      console.error("Erro no POST /api/track-click:", err);
+      return res.status(500).json({ success: false, error: err?.message || "Erro ao registrar clique" });
+    }
+  });
+
 
   // GET /api/meta-feed.csv - Meta Commerce Manager CSV Feed
   app.get(["/api/meta-feed.csv", "/feed.csv"], async (req, res) => {
@@ -578,8 +661,22 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
+  // Automation process endpoint (Direct REST trigger for product automation)
+  app.post(["/api/automation/process", "/api/process-url"], requireAdminAuth, async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) {
+        return res.status(400).json({ success: false, error: "URL do produto é obrigatória" });
+      }
+      const result = await processProductUrl(url, { source: "REST API" });
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
   // ==========================================
-  // 3. TELEGRAM BOT INTEGRATION (FASE 4.1)
+  // 3. TELEGRAM BOT INTEGRATION (FASE 2)
   // ==========================================
 
   // GET /api/telegram-status - Status da configuração e healthcheck do Telegram Bot
@@ -595,7 +692,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       hasToken: Boolean(token),
       allowedUsers: allowed.split(",").map((u) => u.trim()).filter(Boolean),
       webhookUrl: webhookUrl,
-      phase: "4.1 - Infraestrutura & Assincronismo"
+      phase: "Fase 2 - Automação Completa de Ingestão de Produtos"
     });
   });
 
@@ -637,18 +734,43 @@ NUNCA modifique ou invente preços ou imagens.`,
     });
   });
 
-  // API Route: Proxy Google Sheets CSV
-  app.get("/api/proxy-csv", async (req, res) => {
+  // API Route: Proxy Google Sheets CSV (Protegido contra SSRF e Acesso Não Autorizado)
+  app.get("/api/proxy-csv", requireAdminAuth, async (req, res) => {
     try {
       const csvUrl = req.query.url as string;
       if (!csvUrl) {
         return res.status(400).json({ error: "URL do CSV não informada" });
       }
-      const fetchRes = await fetch(csvUrl, {
+
+      if (!isValidCsvProxyUrl(csvUrl)) {
+        return res.status(400).json({
+          error: "Acesso negado: URL inválida ou não autorizada. Apenas URLs HTTPS oficiais do Google Sheets são permitidas."
+        });
+      }
+
+      // Requisita com redirect: "manual" para inspecionar redirecionamentos e evitar SSRF via 301/302
+      let fetchRes = await fetch(csvUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
+        },
+        redirect: "manual"
       });
+
+      if (fetchRes.status >= 300 && fetchRes.status < 400) {
+        const redirectUrl = fetchRes.headers.get("location");
+        if (!redirectUrl || !isValidCsvProxyUrl(redirectUrl)) {
+          return res.status(400).json({
+            error: "Acesso negado: O redirecionamento aponta para um destino não autorizado."
+          });
+        }
+        fetchRes = await fetch(redirectUrl, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+          },
+          redirect: "error"
+        });
+      }
+
       if (!fetchRes.ok) {
         throw new Error(`HTTP Status ${fetchRes.status}`);
       }
@@ -659,6 +781,9 @@ NUNCA modifique ou invente preços ou imagens.`,
       return res.status(500).json({ error: "Erro ao buscar planilha CSV: " + err.message });
     }
   });
+
+  // Serve static files from public directory
+  app.use(express.static(path.join(process.cwd(), "public")));
 
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {

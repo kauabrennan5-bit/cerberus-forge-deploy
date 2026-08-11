@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Product } from '../types';
-import { trackProductClick } from '../lib/pixels';
+import { trackClickAndGetUrl, trackSelectItem } from '../lib/analytics';
 import { ExternalLink, ImageOff, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 
 interface ProductCardProps {
@@ -78,20 +78,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   };
 
   // Direct checkout action button
-  const handleBuyClick = (e: React.MouseEvent) => {
+  const handleBuyClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isRedirecting) return;
 
     setIsRedirecting(true);
 
-    // Track InitiateCheckout with Deduplicated Server CAPI + Client Pixel
-    trackProductClick(product, metaPixelId, metaAccessToken);
+    let finalUrl = product.paginaPonteUrl || product.link;
+    try {
+      finalUrl = await trackClickAndGetUrl(product, metaPixelId, metaAccessToken);
+    } catch (err) {
+      console.warn('Falha no tracking de clique (redirecionamento mantido):', err);
+    }
 
     setTimeout(() => {
-      const targetUrl = product.paginaPonteUrl || product.link;
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+      window.open(finalUrl, '_blank', 'noopener,noreferrer');
       setIsRedirecting(false);
-    }, 400);
+    }, 250);
   };
 
   const handleFavoriteClick = (e: React.MouseEvent) => {
@@ -106,7 +109,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   return (
     <div
-      onClick={() => onSelectProduct(product)}
+      onClick={() => {
+        trackSelectItem(product);
+        onSelectProduct(product);
+      }}
       id={`product-card-${product.id}`}
       className="group relative bg-[#141210] hover:bg-[#1C1815] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none overflow-hidden flex flex-col transition-all duration-300 cursor-pointer select-none touch-pan-y shadow-md hover:shadow-xl hover:-translate-y-0.5 w-full min-w-0"
     >

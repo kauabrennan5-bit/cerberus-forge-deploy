@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { AppConfig, Product, ViewMode } from './types';
 import { initMetaPixel, initTikTokPixel } from './lib/pixels';
+import { captureUTMs } from './lib/utm';
+import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
 import { getProducts } from './services/api';
 
 import { Header } from './components/Header';
@@ -65,8 +67,11 @@ export default function App() {
   const [isLoadingProducts, setIsLoadingProducts] = useState<boolean>(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  // Initialize Pixels on mount and when config changes
+  // Initialize Tracking (UTMs, Pixels, GA4) on mount and when config changes
   useEffect(() => {
+    captureUTMs();
+    initGA4();
+
     if (config.metaPixelId) {
       initMetaPixel(config.metaPixelId);
     }
@@ -74,6 +79,20 @@ export default function App() {
       initTikTokPixel(config.tikTokPixelId);
     }
   }, [config.metaPixelId, config.tikTokPixelId]);
+
+  // Track Page Views on View / Route Change
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      trackPageView(window.location.pathname);
+    }
+  }, [currentView, selectedProduct]);
+
+  // Track ViewContent when a product detail is viewed
+  useEffect(() => {
+    if (currentView === 'product-detail' && selectedProduct) {
+      trackViewItem(selectedProduct);
+    }
+  }, [currentView, selectedProduct]);
 
   // Load Products from Backend REST API (/api/products)
   const loadProducts = useCallback(async () => {
@@ -261,6 +280,13 @@ export default function App() {
             products={products}
             existingCategories={existingCategories}
             onProductAdded={loadProducts}
+            onProductUpdated={(updatedProduct) => {
+              setProducts((prev) => prev.map((p) => (p.id === updatedProduct.id ? updatedProduct : p)));
+              if (selectedProduct?.id === updatedProduct.id) {
+                setSelectedProduct(updatedProduct);
+              }
+              loadProducts();
+            }}
             onProductDeleted={(deletedId) => {
               console.log('[DELETE LOG 11] Atualização do estado React em App.tsx. Removendo ID do estado:', deletedId);
               setProducts((prev) => {
@@ -272,7 +298,7 @@ export default function App() {
                 setSelectedProduct(null);
               }
             }}
-            onOpenSettings={(pass?: string) => setIsSettingsOpen(true)}
+            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         )}
 
@@ -315,7 +341,6 @@ export default function App() {
         config={config}
         onSaveConfig={handleSaveConfig}
         onClose={() => setIsSettingsOpen(false)}
-        authenticatedPassword={config.adminPassword}
       />
 
     </div>

@@ -29,29 +29,6 @@ function getApiUrl(path: string): string {
 }
 
 /**
- * Verifica a senha administrativa no backend.
- */
-export async function verifyAdminPassword(password: string): Promise<ApiResponse> {
-  try {
-    const response = await fetch(getApiUrl('/api/admin/verify'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    const data: ApiResponse = await response.json();
-    return response.ok ? data : {
-      success: false,
-      error: data.error || `Erro ${response.status} ao verificar a senha administrativa`
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      error: err.message || 'Não foi possível verificar a senha administrativa.'
-    };
-  }
-}
-
-/**
  * Cliente de API Centralizado para o Cerberus Finds
  */
 
@@ -115,25 +92,53 @@ export async function updateProduct(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
   };
-  const password = adminPassword || payload.senha;
+  const password = adminPassword || payload.senha || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '');
   if (password) {
     headers['x-admin-password'] = password;
   }
 
-  const response = await fetch(getApiUrl(`/api/products/${encodeURIComponent(id)}`), {
-    method: 'PUT',
-    headers,
-    body: JSON.stringify(payload)
-  });
+  try {
+    const url = getApiUrl(`/api/products/${encodeURIComponent(id)}`);
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ ...payload, senha: password })
+    });
 
-  const resJson: ApiResponse<Product> = await response.json();
-  if (!response.ok) {
+    let resJson: ApiResponse<Product>;
+    try {
+      resJson = await response.json();
+    } catch {
+      resJson = {
+        success: false,
+        error: `Erro (${response.status}) ao ler resposta da atualização`
+      };
+    }
+
+    if (response.status === 405) {
+      const fallbackUrl = getApiUrl(`/api/products/${encodeURIComponent(id)}/edit`);
+      const fallbackRes = await fetch(fallbackUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...payload, senha: password })
+      });
+      return await fallbackRes.json();
+    }
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error: resJson.error || `Erro ${response.status} ao atualizar produto`
+      };
+    }
+    return resJson;
+  } catch (err: any) {
+    console.error('Erro ao atualizar produto via API:', err);
     return {
       success: false,
-      error: resJson.error || `Erro ${response.status} ao atualizar produto`
+      error: err.message || 'Falha de conexão ao atualizar produto'
     };
   }
-  return resJson;
 }
 
 /**
@@ -144,7 +149,7 @@ export async function deleteProduct(
   adminPassword?: string
 ): Promise<ApiResponse> {
   const headers: Record<string, string> = {};
-  const pass = adminPassword || '';
+  const pass = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '');
   if (pass) {
     headers['x-admin-password'] = pass;
   }
@@ -236,54 +241,6 @@ export async function extractProduct(
 }
 
 /**
- * Consulta a fonte atual da senha administrativa (ENVIRONMENT = .env / STORED = arquivo do servidor).
- * O valor da senha nunca é exposto ao navegador.
- */
-export async function getPasswordConfig(): Promise<{ success: boolean; source: string; editable: boolean }> {
-  try {
-    const response = await fetch(getApiUrl('/api/admin/password-config'));
-    const data = await response.json();
-    return response.ok ? data : { success: false, source: 'UNKNOWN', editable: false };
-  } catch {
-    return { success: false, source: 'UNKNOWN', editable: false };
-  }
-}
-
-/**
- * Altera a senha administrativa do painel (exige a senha atual para autorizar).
- * A nova senha é persistida em data/admin-config.json no servidor.
- */
-export async function setAdminPassword(
-  newPassword: string,
-  adminPassword: string
-): Promise<ApiResponse> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json'
-  };
-  if (adminPassword) {
-    headers['x-admin-password'] = adminPassword;
-  }
-
-  try {
-    const response = await fetch(getApiUrl('/api/admin/set-password'), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ newPassword })
-    });
-    const data: ApiResponse = await response.json();
-    return response.ok ? data : {
-      success: false,
-      error: data.error || `Erro ${response.status} ao atualizar a senha`
-    };
-  } catch (err: any) {
-    return {
-      success: false,
-      error: err.message || 'Não foi possível conectar ao servidor para atualizar a senha.'
-    };
-  }
-}
-
-/**
  * Envia submissão legada (Google Apps Script)
  */
 export async function submitProduct(
@@ -304,6 +261,45 @@ export async function submitProduct(
   });
 
   return await response.json();
+}
+
+/**
+ * Interface do payload de registro de clique de produto
+ */
+export interface TrackClickPayload {
+  productId: string;
+  productSlug?: string;
+  productName?: string;
+  productPrice?: number;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_content?: string;
+  utm_term?: string;
+  fbclid?: string;
+  gclid?: string;
+  ttclid?: string;
+  referrer?: string;
+  landingPage?: string;
+}
+
+/**
+ * Envia registro de clique de produto para o backend (/api/track-click)
+ */
+export async function trackProductClickApi(payload: TrackClickPayload): Promise<ApiResponse> {
+  try {
+    const response = await fetch('/api/track-click', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      return { success: false, error: `Erro ${response.status} ao registrar clique` };
+    }
+    return await response.json();
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Falha de conexão ao registrar clique' };
+  }
 }
 
 /**

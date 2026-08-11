@@ -32,25 +32,24 @@ export const Header: React.FC<HeaderProps> = ({
             if (showOnlyFavorites) onToggleShowFavorites();
             onSelectView('catalog');
           }}
-          className="flex items-center space-x-2 sm:space-x-3.5 group text-left focus:outline-none min-w-0 shrink"
+          className="flex items-center space-x-2 sm:space-x-3 group text-left focus:outline-none shrink-0"
           id="brand-logo-btn"
         >
           {/* Official White Cerberus 3-Headed Hound Emblem */}
-          <div className="w-8 h-8 sm:w-11 sm:h-11 border border-[#8A1F1F] bg-[#0B0908] flex items-center justify-center group-hover:border-[#E8E1D3] transition-all duration-300 relative tech-frame group-hover:scale-105 shrink-0">
-            <CerberusLogo className="w-5 h-5 sm:w-7 sm:h-7 transition-transform duration-300 group-hover:rotate-3" />
-            <span className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-[#8A1F1F]"></span>
+          <div className="w-10 h-10 sm:w-14 sm:h-14 flex items-center justify-center transition-all duration-300 relative group-hover:scale-105 shrink-0 border border-[#8A1F1F] bg-[#0B0908] tech-frame">
+            <CerberusLogo className="w-7 h-7 sm:w-10 sm:h-10" />
           </div>
 
-          <div className="flex flex-col min-w-0">
+          <div className="flex flex-col shrink-0">
             <div className="flex items-center space-x-1 sm:space-x-2">
-              <span className="font-gothic text-xl sm:text-3xl text-[#E8E1D3] tracking-wide group-hover:text-[#8A1F1F] transition-colors uppercase leading-none truncate">
+              <span className="font-gothic text-lg sm:text-2xl md:text-3xl text-[#E8E1D3] tracking-wider group-hover:text-[#8A1F1F] transition-colors uppercase leading-none whitespace-nowrap shrink-0">
                 CERBERUS
               </span>
-              <span className="stamp-badge text-[7.5px] sm:text-[9px] px-1 sm:px-1.5 py-0.2 hidden sm:inline-block">
+              <span className="stamp-badge text-[7.5px] sm:text-[9px] px-1 sm:px-1.5 py-0.2 hidden lg:inline-block shrink-0 whitespace-nowrap">
                 EDITION 2026
               </span>
             </div>
-            <p className="text-[7.5px] sm:text-[9px] font-display text-[#E8E1D3]/60 uppercase tracking-wider sm:tracking-[0.22em] -mt-0.5 truncate">
+            <p className="text-[7px] sm:text-[9px] font-display text-[#E8E1D3]/60 uppercase tracking-wider sm:tracking-[0.2em] -mt-0.5 whitespace-nowrap">
               CURATORIA ARCHIVAL & DESIGN
             </p>
           </div>
