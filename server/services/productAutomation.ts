@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Product } from "../../src/types";
 import { generateSlug } from "../../src/data/initialProducts";
 import * as productsRepository from "../repositories/productsRepository";
-import { fetchProductDataFromUrl } from "./scraper";
+import { fetchProductDataFromUrl, extractTitleFromUrl } from "./scraper";
 
 dotenv.config();
 
@@ -34,7 +34,7 @@ const inFlightRequests = new Map<string, Promise<ProcessProductResult>>();
 
 /**
  * Normaliza a URL do produto removendo parâmetros de tracking (utm_*, fbclid, etc)
- * mas PRESERVANDO parâmetros essenciais de afiliados e identificadores.
+ * mas PRESERVANDO o caminho do produto e identificadores.
  */
 export function normalizeProductUrl(rawUrl: string): string {
   if (!rawUrl) return "";
@@ -44,14 +44,37 @@ export function normalizeProductUrl(rawUrl: string): string {
   }
   try {
     const parsed = new URL(urlStr);
+    parsed.hostname = parsed.hostname.toLowerCase();
+
+    // Relação abrangente de parâmetros de rastreamento / afiliados / campanhas a serem removidos
     const trackingParams = [
+      "__mobile__", "exp_group", "gads_t_sig", "mmp_pid", "uls_trackid",
+      "smtt", "sp_atk", "xptdk", "af_siteid", "pid", "af_click_lookback",
+      "c", "is_from_signup", "deep_and_deferred", "st", "st_sig",
       "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
       "fbclid", "gclid", "ttclid", "spm", "_ga", "_gl", "x_src", "source_caller",
-      "gbraid", "wbraid", "dclid", "msclkid"
+      "gbraid", "wbraid", "dclid", "msclkid", "matt_tool", "matt_word"
     ];
+
     trackingParams.forEach((param) => parsed.searchParams.delete(param));
 
-    parsed.hostname = parsed.hostname.toLowerCase();
+    // Para Shopee, remova qualquer parâmetro de busca de tracking (começa com __, sp_, uls_, gads_, mmp_, af_, etc.)
+    if (parsed.hostname.includes("shopee") || parsed.hostname.includes("shope.ee")) {
+      const keys = Array.from(parsed.searchParams.keys());
+      for (const k of keys) {
+        if (
+          k.startsWith("__") ||
+          k.startsWith("sp_") ||
+          k.startsWith("uls_") ||
+          k.startsWith("gads_") ||
+          k.startsWith("mmp_") ||
+          k.startsWith("af_") ||
+          trackingParams.includes(k.toLowerCase())
+        ) {
+          parsed.searchParams.delete(k);
+        }
+      }
+    }
 
     let cleanPath = parsed.pathname;
     if (cleanPath.length > 1 && cleanPath.endsWith("/")) {
@@ -59,7 +82,11 @@ export function normalizeProductUrl(rawUrl: string): string {
     }
     parsed.pathname = cleanPath;
 
-    return parsed.toString();
+    let res = parsed.toString();
+    if (res.endsWith("?")) {
+      res = res.slice(0, -1);
+    }
+    return res;
   } catch {
     return urlStr;
   }
@@ -77,17 +104,57 @@ export function extractMarketplaceId(url: string): string | null {
     return `${mlMatch[1].toUpperCase()}${mlMatch[2]}`;
   }
 
-  // Shopee: i.12345678.98765432 ou product/12345678/98765432
+  // Shopee Format 1: i.12345678.98765432
   const shopeeMatch1 = url.match(/i\.(\d+)\.(\d+)/i);
   if (shopeeMatch1) {
     return `shopee-${shopeeMatch1[1]}-${shopeeMatch1[2]}`;
   }
+  // Shopee Format 2: product/12345678/98765432
   const shopeeMatch2 = url.match(/product\/(\d+)\/(\d+)/i);
   if (shopeeMatch2) {
     return `shopee-${shopeeMatch2[1]}-${shopeeMatch2[2]}`;
   }
+  // Shopee Format 3: {loja}/{shopid}/{itemid} ou {loja}/{slug}/{shopid}/{itemid}
+  const shopeeMatch3 = url.match(/shopee\.com\.br\/[^\/]+\/(\d+)\/(\d+)/i);
+  if (shopeeMatch3) {
+    return `shopee-${shopeeMatch3[1]}-${shopeeMatch3[2]}`;
+  }
+  const shopeeMatch4 = url.match(/shopee\.com\.br\/[^\/]+\/[^\/]+\/(\d+)\/(\d+)/i);
+  if (shopeeMatch4) {
+    return `shopee-${shopeeMatch4[1]}-${shopeeMatch4[2]}`;
+  }
 
   return null;
+}
+
+/**
+ * Identifica se um título é genérico/inválido
+ */
+export function isGenericTitle(title?: string | null): boolean {
+  if (!title || typeof title !== "string") return true;
+  const clean = title.trim().toLowerCase();
+  if (clean.length < 3) return true;
+  if (
+    clean === "produto cerberus" ||
+    clean.includes("shopee brasil") ||
+    clean.includes("ofertas incríveis") ||
+    clean.includes("melhores preços") ||
+    clean.includes("account verification") ||
+    clean.includes("access denied") ||
+    clean.includes("403 forbidden") ||
+    clean.includes("404 not found") ||
+    clean.includes("captcha") ||
+    clean === "shopee" ||
+    clean === "mercado livre" ||
+    clean === "mercado libre" ||
+    clean === "e-commerce" ||
+    clean === "produto" ||
+    clean === "sem título" ||
+    clean === "sem titulo"
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -180,20 +247,61 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
 }> {
   const normalizedUrl = normalizeProductUrl(rawUrl);
   if (!normalizedUrl && !rawTextOverride) {
-    return { success: false, error: "URL ou texto de produto inválido." };
+    const err = "URL ou texto de produto inválido.";
+    console.log(`[TELEGRAM EXTRACTION] URL original: ${rawUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] URL normalizada: ${normalizedUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] Marketplace: Indefinido`);
+    console.log(`[TELEGRAM EXTRACTION] Título: N/A`);
+    console.log(`[TELEGRAM EXTRACTION] Preço: N/A`);
+    console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: 0`);
+    console.log(`[TELEGRAM EXTRACTION] Fonte dos dados: Validação de Entrada`);
+    console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${err}`);
+    return { success: false, error: err };
   }
 
   try {
     const marketplace = detectMarketplace(normalizedUrl);
     const scraped = await fetchProductDataFromUrl(normalizedUrl, rawTextOverride);
-    const scrapedTitle = scraped.title;
+    let scrapedTitle = scraped.title;
     const scrapedPrice = scraped.price;
-    const scrapedImages = scraped.images;
+    const scrapedImages = scraped.images || [];
     const rawContent = scraped.rawContent;
 
-    let curatedTitle = scrapedTitle || "Produto Cerberus";
+    // Tenta resgatar título pela URL se o Scraper retornou nulo ou título genérico
+    if (!scrapedTitle || isGenericTitle(scrapedTitle)) {
+      const urlTitle = extractTitleFromUrl(normalizedUrl);
+      if (urlTitle && !isGenericTitle(urlTitle)) {
+        scrapedTitle = urlTitle;
+      }
+    }
+
+    // Validação de Bloqueio / Falha Estrita
+    // Se o título for genérico ou ausente E não houver imagens nem preço válido, rejeita a extração
+    const hasGenericTitle = !scrapedTitle || isGenericTitle(scrapedTitle);
+    const hasNoImages = scrapedImages.length === 0;
+    const hasNoPrice = scrapedPrice === null || scrapedPrice <= 0;
+
+    if ((hasGenericTitle && hasNoImages) || (hasNoImages && hasNoPrice && hasGenericTitle)) {
+      const blockError = "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título, preço e imagens válidos.";
+
+      console.log(`[TELEGRAM EXTRACTION] URL original: ${rawUrl}`);
+      console.log(`[TELEGRAM EXTRACTION] URL normalizada: ${normalizedUrl}`);
+      console.log(`[TELEGRAM EXTRACTION] Marketplace: ${marketplace}`);
+      console.log(`[TELEGRAM EXTRACTION] Título: N/A`);
+      console.log(`[TELEGRAM EXTRACTION] Preço: N/A`);
+      console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: 0`);
+      console.log(`[TELEGRAM EXTRACTION] Fonte dos dados: Scraper (${marketplace})`);
+      console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${blockError}`);
+
+      return {
+        success: false,
+        error: blockError
+      };
+    }
+
+    let curatedTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "";
     let curatedDescription = "";
-    let curatedCategory = inferCategoryFromTitle(curatedTitle);
+    let curatedCategory = inferCategoryFromTitle(curatedTitle || "Acessórios");
 
     if (process.env.GEMINI_API_KEY) {
       try {
@@ -213,12 +321,12 @@ TAREFAS DO CURADOR:
 3. "categoria": Escolha EXATAMENTE uma das seguintes categorias: "Camisetas", "Calças", "Acessórios", "Calçados", "Jaquetas", "Moletons".`;
 
         const geminiRes = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
+          model: "gemini-2.0-flash",
           contents: prompt,
           config: {
             systemInstruction: `Você é o assistente curador do Cerberus Finds Archive.
 Sua função é APENAS formatar o nome do produto, escrever a descrição curatorial de 2 frases e sugerir a categoria.
-NUNCA invente preços ou URLs.`,
+NUNCA invente preços, títulos fictícios ou URLs.`,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -235,7 +343,7 @@ NUNCA invente preços ou URLs.`,
         const geminiText = geminiRes.text || "{}";
         const geminiJson = JSON.parse(geminiText);
 
-        if (geminiJson.produto && geminiJson.produto.trim().length > 3) {
+        if (geminiJson.produto && geminiJson.produto.trim().length > 3 && !isGenericTitle(geminiJson.produto)) {
           curatedTitle = geminiJson.produto.trim();
         }
         if (geminiJson.descricao) {
@@ -245,13 +353,28 @@ NUNCA invente preços ou URLs.`,
           curatedCategory = geminiJson.categoria.trim();
         }
       } catch (geminiErr: any) {
-        console.warn("[Product Review Extraction Warning] Gemini falhou, usando fallback:", geminiErr?.message);
+        console.warn("[Product Review Extraction Warning] Gemini falhou, mantendo dados brutos do scraper:", geminiErr?.message);
       }
+    }
+
+    if (!curatedTitle || isGenericTitle(curatedTitle)) {
+      curatedTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "Produto sem Título";
     }
 
     const mktId = extractMarketplaceId(normalizedUrl);
     const generatedSlug = generateSlug(curatedTitle);
     const existingProduct = await findExistingProduct(normalizedUrl, mktId, generatedSlug, curatedTitle);
+
+    const dataSource = `Scraper (${marketplace}${process.env.GEMINI_API_KEY ? ' + Gemini AI' : ''})`;
+
+    console.log(`[TELEGRAM EXTRACTION] URL original: ${rawUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] URL normalizada: ${normalizedUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] Marketplace: ${marketplace}`);
+    console.log(`[TELEGRAM EXTRACTION] Título: ${curatedTitle}`);
+    console.log(`[TELEGRAM EXTRACTION] Preço: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : 'Não detectado'}`);
+    console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: ${scrapedImages.length}`);
+    console.log(`[TELEGRAM EXTRACTION] Fonte dos dados: ${dataSource}`);
+    console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: Nenhum`);
 
     return {
       success: true,
@@ -267,10 +390,20 @@ NUNCA invente preços ou URLs.`,
       }
     };
   } catch (err: any) {
-    console.error("[Product Review Extraction Error]:", err);
+    const errorMsg = err?.message || "Falha ao extrair dados do produto.";
+
+    console.log(`[TELEGRAM EXTRACTION] URL original: ${rawUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] URL normalizada: ${normalizedUrl}`);
+    console.log(`[TELEGRAM EXTRACTION] Marketplace: ${detectMarketplace(normalizedUrl)}`);
+    console.log(`[TELEGRAM EXTRACTION] Título: N/A`);
+    console.log(`[TELEGRAM EXTRACTION] Preço: N/A`);
+    console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: 0`);
+    console.log(`[TELEGRAM EXTRACTION] Fonte dos dados: Scraper`);
+    console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${errorMsg}`);
+
     return {
       success: false,
-      error: err?.message || "Falha ao extrair dados do produto."
+      error: errorMsg
     };
   }
 }

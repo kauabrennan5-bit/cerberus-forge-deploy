@@ -601,22 +601,37 @@ function parseBrlNumber(raw: string): number {
   return isNaN(num) ? 0 : num;
 }
 
-function extractTitleFromUrl(url: string): string | null {
+export function extractTitleFromUrl(url: string): string | null {
   if (!url) return null;
 
   // Shopee URL: shopee.com.br/SLUG-i.SHOPID.ITEMID
-  const shopeeMatch = url.match(/shopee\.com\.br\/([^\?]+)-i\.(\d+)\.(\d+)/i);
-  if (shopeeMatch && shopeeMatch[1]) {
-    return decodeURIComponent(shopeeMatch[1]).replace(/-/g, " ").trim();
+  const shopeeMatch1 = url.match(/shopee\.com\.br\/([^\?\/]+)-i\.(\d+)\.(\d+)/i);
+  if (shopeeMatch1 && shopeeMatch1[1]) {
+    const raw = decodeURIComponent(shopeeMatch1[1]).replace(/-/g, " ").trim();
+    if (raw && raw.length > 2) return raw;
+  }
+
+  // Shopee URL: shopee.com.br/{loja}/{shopid}/{itemid} or shopee.com.br/{loja}/{slug}/{shopid}/{itemid}
+  const shopeeMatch2 = url.match(/shopee\.com\.br\/([^\/]+)\/(\d+)\/(\d+)/i);
+  if (shopeeMatch2 && shopeeMatch2[1] && shopeeMatch2[1] !== "product") {
+    const raw = decodeURIComponent(shopeeMatch2[1]).replace(/-/g, " ").trim();
+    if (raw && raw.length > 2) return raw;
+  }
+
+  const shopeeMatch3 = url.match(/shopee\.com\.br\/[^\/]+\/([^\/]+)\/(\d+)\/(\d+)/i);
+  if (shopeeMatch3 && shopeeMatch3[1]) {
+    const raw = decodeURIComponent(shopeeMatch3[1]).replace(/-/g, " ").trim();
+    if (raw && raw.length > 2) return raw;
   }
 
   // Mercado Livre URL: MLB-3564024329-slug-name...
   const mlMatch = url.match(/MLB-?\d+-([a-zA-Z0-9\-]+)/i);
   if (mlMatch && mlMatch[1]) {
-    return mlMatch[1]
+    const raw = mlMatch[1]
       .replace(/-_JM/gi, "")
       .replace(/-/g, " ")
       .trim();
+    if (raw && raw.length > 2) return raw;
   }
 
   return null;
