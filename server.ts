@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import { INITIAL_PRODUCTS, generateSlug } from "./src/data/initialProducts";
 import * as productsRepository from "./server/repositories/productsRepository";
 import { fetchProductDataFromUrl } from "./server/services/scraper";
-import { handleTelegramWebhookUpdate } from "./server/services/telegramBot";
+import { handleTelegramWebhookUpdate, startTelegramPolling } from "./server/services/telegramBot";
 import { processProductUrl } from "./server/services/productAutomation";
 
 dotenv.config();
@@ -821,6 +821,7 @@ NUNCA modifique ou invente preços ou imagens.`,
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
+    startTelegramPolling();
   });
 }
 

@@ -158,6 +158,123 @@ export async function findExistingProduct(
   return null;
 }
 
+export interface ExtractedReviewData {
+  normalizedUrl: string;
+  marketplace: string;
+  produto: string;
+  categoria: string;
+  preco: number | null;
+  imagens: string[];
+  descricao: string;
+  existingProduct: Product | null;
+}
+
+/**
+ * Extrai dados do produto (Scraper + Gemini) para revisão prévia no Telegram ou Admin
+ * Sem criar diretamente no banco de dados.
+ */
+export async function extractProductForReview(rawUrl: string, rawTextOverride?: string): Promise<{
+  success: boolean;
+  data?: ExtractedReviewData;
+  error?: string;
+}> {
+  const normalizedUrl = normalizeProductUrl(rawUrl);
+  if (!normalizedUrl && !rawTextOverride) {
+    return { success: false, error: "URL ou texto de produto inválido." };
+  }
+
+  try {
+    const marketplace = detectMarketplace(normalizedUrl);
+    const scraped = await fetchProductDataFromUrl(normalizedUrl, rawTextOverride);
+    const scrapedTitle = scraped.title;
+    const scrapedPrice = scraped.price;
+    const scrapedImages = scraped.images;
+    const rawContent = scraped.rawContent;
+
+    let curatedTitle = scrapedTitle || "Produto Cerberus";
+    let curatedDescription = "";
+    let curatedCategory = inferCategoryFromTitle(curatedTitle);
+
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const prompt = `DADOS EXTRAÍDOS DO SCRAPER:
+- Título Bruto: "${scrapedTitle || 'Extrair do texto abaixo'}"
+- Preço Real Detectado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : 'NÃO ENCONTRADO'}
+- Imagens Oficiais: ${scrapedImages.length}
+
+CONTEÚDO DO ANÚNCIO:
+"""
+${rawContent.slice(0, 3000)}
+"""
+
+TAREFAS DO CURADOR:
+1. "produto": Limpe e formate o título real em Português no estilo editorial e curatorial da marca Cerberus Finds. Remova jargões de marketplace como "PROMOÇÃO IMPERDÍVEL", "TOP SELLER", "ENVIO GRÁTIS", "FRETE GRÁTIS", "SHOPEE", "MERCADO LIVRE", "100% ORIGINAL", "OFERTA". (Exemplo: "Camiseta Heavy Cotton Oversized").
+2. "descricao": Escreva uma descrição curta de no máximo 2 frases no tom cru, direto e curatorial da marca Cerberus (foco em tecido, corte, caimento e estética).
+3. "categoria": Escolha EXATAMENTE uma das seguintes categorias: "Camisetas", "Calças", "Acessórios", "Calçados", "Jaquetas", "Moletons".`;
+
+        const geminiRes = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+          config: {
+            systemInstruction: `Você é o assistente curador do Cerberus Finds Archive.
+Sua função é APENAS formatar o nome do produto, escrever a descrição curatorial de 2 frases e sugerir a categoria.
+NUNCA invente preços ou URLs.`,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                produto: { type: Type.STRING },
+                descricao: { type: Type.STRING },
+                categoria: { type: Type.STRING }
+              },
+              required: ["produto", "descricao", "categoria"]
+            }
+          }
+        });
+
+        const geminiText = geminiRes.text || "{}";
+        const geminiJson = JSON.parse(geminiText);
+
+        if (geminiJson.produto && geminiJson.produto.trim().length > 3) {
+          curatedTitle = geminiJson.produto.trim();
+        }
+        if (geminiJson.descricao) {
+          curatedDescription = geminiJson.descricao.trim();
+        }
+        if (geminiJson.categoria) {
+          curatedCategory = geminiJson.categoria.trim();
+        }
+      } catch (geminiErr: any) {
+        console.warn("[Product Review Extraction Warning] Gemini falhou, usando fallback:", geminiErr?.message);
+      }
+    }
+
+    const mktId = extractMarketplaceId(normalizedUrl);
+    const generatedSlug = generateSlug(curatedTitle);
+    const existingProduct = await findExistingProduct(normalizedUrl, mktId, generatedSlug, curatedTitle);
+
+    return {
+      success: true,
+      data: {
+        normalizedUrl,
+        marketplace,
+        produto: curatedTitle,
+        categoria: curatedCategory,
+        preco: scrapedPrice,
+        imagens: scrapedImages,
+        descricao: curatedDescription,
+        existingProduct
+      }
+    };
+  } catch (err: any) {
+    console.error("[Product Review Extraction Error]:", err);
+    return {
+      success: false,
+      error: err?.message || "Falha ao extrair dados do produto."
+    };
+  }
+}
+
 /**
  * Infere a categoria com base em palavras-chave no título
  */
