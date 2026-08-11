@@ -9,7 +9,11 @@ export { detectMarketplace };
 
 // Token e Whitelist Padrão com Fallbacks Confiáveis
 function getBotToken(): string {
-  return process.env.TELEGRAM_BOT_TOKEN || "8819631444:AAHaMTgMardKa9ZlRi4T2QEkEqmUck3tTeA";
+  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
+  if (!token) {
+    throw new Error("TELEGRAM_BOT_TOKEN não configurado no ambiente");
+  }
+  return token;
 }
 
 /**
