@@ -1,5 +1,22 @@
 [
   {
+    "id": "prod-1786480173139",
+    "ref": "REF-3137",
+    "produto": "Jaqueta Bomber em Couro Ecológico Premium",
+    "categoria": "Jaquetas",
+    "preco": 199.9,
+    "imagens": [
+      "https://images.unsplash.com/photo-1551028719-00167b16eac5?auto=format&fit=crop&w=800&q=80"
+    ],
+    "link": "https://s.shopee.com.br/test-bomber-jacket",
+    "ativo": true,
+    "destaque": true,
+    "status": "published",
+    "slug": "jaqueta-bomber-em-couro-ecologico-premium",
+    "descricao": "Jaqueta bomber estilizada com acabamento premium e punhos reforçados.",
+    "paginaPonteUrl": ""
+  },
+  {
     "id": "prod-1786462301196",
     "ref": "REF-008",
     "produto": "Espelho retangular grande com Moldura Lapidado 100x50 Preto",

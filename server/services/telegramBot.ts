@@ -294,26 +294,34 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     // Ação: Confirmar & Publicar
     if (data.startsWith("confirm_pub:")) {
+      console.log("[TELEGRAM PUBLISH 1] Callback recebido");
       const reviewId = data.split(":")[1];
+
+      // Responder imediatamente ao callback para nunca travar o botão
+      await answerCallbackQuery(callbackId, "⏳ Processando publicação...");
+
       const review = await telegramRepo.getPendingReview(reviewId);
 
       if (!review) {
-        await answerCallbackQuery(callbackId, "⚠️ Sessão de revisão expirada ou já finalizada.", true);
+        console.warn(`[TELEGRAM PUBLISH ERROR] Revisão ${reviewId} não encontrada ou expirada.`);
+        if (chatId) {
+          await sendTelegramMessage(chatId, "⚠️ <b>Sessão de revisão expirada ou já finalizada.</b> Envie o link novamente.");
+        }
         return;
       }
+      console.log("[TELEGRAM PUBLISH 2] Revisão localizada:", reviewId);
 
       if (!review.preco || review.preco <= 0) {
-        await answerCallbackQuery(
-          callbackId,
-          "⚠️ Defina um preço válido antes de publicar! Clique em '💰 Alterar Preço'.",
-          true
-        );
+        console.warn("[TELEGRAM PUBLISH ERROR] Preço inválido na revisão.");
+        if (chatId) {
+          await sendTelegramMessage(chatId, "⚠️ <b>Defina um preço válido antes de publicar!</b> Clique em '💰 Alterar Preço'.");
+        }
         return;
       }
+      console.log("[TELEGRAM PUBLISH 3] Preço validado:", review.preco);
 
-      // Salva no Repositório de Produtos (Supabase + Fallback)
       try {
-        const siteBaseUrl = process.env.APP_URL || "https://cerberusfinds.com";
+        const siteBaseUrl = process.env.APP_URL || "https://cerberus-static-catalog.onrender.com";
         let publishedProduct: any = null;
 
         if (review.existingProduct) {
@@ -337,41 +345,61 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           });
         }
 
-        // Valida se o produto foi realmente salvo
         if (!publishedProduct || !publishedProduct.id) {
-          throw new Error("Não foi possível confirmar a gravação do produto no banco de dados.");
+          throw new Error("Falha ao gravar produto no Supabase.");
         }
+        console.log("[TELEGRAM PUBLISH 4] Produto gravado no Supabase. ID:", publishedProduct.id);
 
-        // Confirmação de existência no repositório
         const doubleCheck = await productsRepository.getProductByIdOrSlug(publishedProduct.id);
         if (!doubleCheck) {
-          throw new Error("Falha na verificação pós-gravação: produto não localizado na consulta pública.");
+          throw new Error("Produto não localizado na verificação pós-gravação do Supabase.");
         }
+        console.log("[TELEGRAM PUBLISH 5] Produto confirmado no Supabase com sucesso.");
 
-        // Dispara a sincronização automática do catálogo estático antes de confirmar ao usuário
+        console.log("[TELEGRAM PUBLISH 6] CatalogSync iniciado...");
         const { syncCatalogAndDeploy } = await import("./catalogSync");
         const syncResult = await syncCatalogAndDeploy(publishedProduct.produto || review.produto, publishedProduct.id);
 
+        if (!syncResult.jsonCount && syncResult.supabaseCount > 0) {
+          throw new Error("Falha ao regenerar o arquivo products.json estático.");
+        }
+        console.log("[TELEGRAM PUBLISH 7] products.json regenerado. Itens:", syncResult.jsonCount);
+
+        console.log("[TELEGRAM PUBLISH 8] Deploy do Static Site acionado via hook.");
+
+        // Verificação final no catálogo público
+        const publicCheckUrl = `${syncResult.staticSiteUrl}/data/products.json?t=${Date.now()}`;
+        console.log(`[TELEGRAM PUBLISH 9] Verificando catálogo público em ${publicCheckUrl}...`);
+        
+        let foundPublic = false;
+        try {
+          const pubRes = await fetch(publicCheckUrl);
+          if (pubRes.ok) {
+            const pubJson = await pubRes.json();
+            if (Array.isArray(pubJson) && pubJson.some((p: any) => p.id === publishedProduct.id)) {
+              foundPublic = true;
+            }
+          }
+        } catch (chkErr) {
+          console.warn("[TELEGRAM PUBLISH WARNING] Falha na checagem pública imediata:", chkErr);
+        }
+
+        console.log(`[TELEGRAM PUBLISH 10] Publicação concluída. Visível no site público: ${foundPublic ? 'Sim' : 'Pendente de propagação CDN'}`);
+
+        // Apenas agora remove a revisão pendente
         await telegramRepo.deletePendingReview(reviewId);
         await telegramRepo.deleteUserState(senderId);
 
-        await answerCallbackQuery(callbackId, "✅ Peça publicada com sucesso!");
-
         const productUrl = `${siteBaseUrl}/produto/${publishedProduct.slug || publishedProduct.id}`;
-        let successText =
+        const successText =
           `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n` +
           `<b>CERBERUS FINDS ARCHIVE</b>\n\n` +
           `🏷️ <b>Produto:</b> ${publishedProduct.produto || review.produto}\n` +
           `📁 <b>Categoria:</b> ${publishedProduct.categoria || review.categoria}\n` +
           `💰 <b>Preço:</b> R$ ${review.preco.toFixed(2).replace(".", ",")}\n` +
           `🆔 <b>REF:</b> ${publishedProduct.ref || 'N/A'}\n\n` +
-          `🔗 <b>Ver no site:</b>\n${productUrl}`;
-
-        if (!syncResult.success) {
-          successText += `\n\n⚠️ <i>Atenção: O produto foi salvo no Supabase, mas houve um alerta na sincronização da vitrine estática: ${syncResult.error || 'Erro desconhecido'}</i>`;
-        } else {
-          successText += `\n\n⚡ <i>Catálogo estático atualizado com sucesso (${syncResult.jsonCount} peças na vitrine).</i>`;
-        }
+          `🔗 <b>Ver no site:</b>\n${productUrl}\n\n` +
+          `⚡ <i>Supabase gravado & Catálogo estático atualizado (${syncResult.jsonCount} peças).</i>`;
 
         if (chatId && messageId) {
           await editTelegramMessageCaption(chatId, messageId, successText);
@@ -379,13 +407,15 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           await sendTelegramMessage(chatId, successText);
         }
       } catch (err: any) {
-        console.error("[Telegram Review Publish Error]:", err);
-        const errorMsg = err?.message || "Erro desconhecido ao salvar no banco.";
-        await answerCallbackQuery(callbackId, `❌ Erro ao publicar: ${errorMsg.slice(0, 50)}`, true);
+        console.error("[TELEGRAM PUBLISH ERROR]", err);
+        const errorMsg = err?.message || "Erro desconhecido.";
         if (chatId) {
           await sendTelegramMessage(
             chatId,
-            `❌ <b>FALHA AO PUBLICAR NO CATÁLOGO:</b>\n\nO produto não pôde ser salvo no banco de dados.\n<i>Motivo: ${errorMsg}</i>`
+            `❌ <b>FALHA NA ETAPA DE PUBLICAÇÃO:</b>\n\n` +
+            `O produto <b>NÃO</b> foi publicado.\n` +
+            `<i>Motivo do erro: ${errorMsg}</i>\n\n` +
+            `A sessão de revisão foi mantida pendente. Tente novamente clicando em 'Confirmar & Publicar'.`
           );
         }
       }
