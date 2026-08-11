@@ -1,41 +1,5 @@
 [
   {
-    "id": "prod-1786462301196",
-    "slug": "espelho-retangular-grande-com-moldura-lapidado-100x50-preto",
-    "produto": "Espelho retangular grande com Moldura Lapidado 100x50 Preto",
-    "preco": 99.99,
-    "imagens": [
-      "https://http2.mlstatic.com/D_NQ_NP_883401-MLA113308418138_072026-O.webp"
-    ],
-    "link": "https://www.mercadolivre.com.br/social/kb20260218145659?matt_word=kb20260218145659&matt_tool=13998350&forceInApp=true&ref=BIa3h0VNHXTV%2BEn8LIFx5Tlo5o3V2rCPFxxIcVQBlAMywyZZud8HrRZBB8ZheK9Kq05itCBpWs%2BrSg07VI%2FDCd4gAS%2FOvAHl%2B2YnPuuPMMZrb1r%2F%2FRaoiNhMofmQDB35REHgPyl268ulpHxFxsuuoYIcXuY5sWfGPNqsZ5PQK14TSJiXMliLcVp%2FW8bnG7H2yUjic1bGov5FGuhSNXHmF6LS%2B486YcngUonEuQ%3D%3D&skipInApp=true&matt_ignore=true",
-    "categoria": "Acessórios",
-    "marketplace": "Shopee",
-    "cupom": "",
-    "freteGratis": false,
-    "descricao": "",
-    "paginaPonteUrl": "",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1785955708871",
-    "slug": "coffee-thermo-cafe-cappuccino-220g-multi-natural",
-    "produto": "Coffee Thermo Café Cappuccino 220g - Multi Natural",
-    "preco": 133.94,
-    "imagens": [
-      "https://down-br.img.susercontent.com/file/br-11134207-81z1k-mg5ixtqjabk4ed"
-    ],
-    "link": "https://shopee.com.br/UAU!-Coffee-Thermo-Caf%C3%A9-NOVIDADE!-1-Pote-220g-Sabor-CAPPUCCINO-Multi-Natural-i.1477529191.23494552208",
-    "categoria": "Saude",
-    "marketplace": "Shopee",
-    "cupom": "",
-    "freteGratis": false,
-    "descricao": "Termogênico em pó sabor cappuccino para manter o foco elevado. Dose prática de energia pura pra aguentar o corre diário.",
-    "paginaPonteUrl": "",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1785953676108",
     "slug": "cama-cabana-pet-formato-de-gato-toca-com-bolinha-interativa",
     "produto": "￼Cama Cabana Pet Formato de Gato Toca com Bolinha Interativa",

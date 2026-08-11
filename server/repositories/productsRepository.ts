@@ -17,8 +17,8 @@ if (!fs.existsSync(DATA_DIR)) {
 }
 
 // Initialize Supabase Client prioritizing Service Role Key for server-side administrative access (bypassing RLS)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "";
 
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
   ? createClient(supabaseUrl, supabaseKey)
