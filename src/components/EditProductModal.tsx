@@ -198,6 +198,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     try {
       const imagePayload = images.map((i) => i.urlOrBase64);
 
+      const activePassword = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || 'cerberus1607';
+
       const payload = {
         produto: produto.trim(),
         categoria: finalCategory,
@@ -207,10 +209,10 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         paginaPonteUrl: paginaPonteUrl.trim(),
         destaque,
         imagens: imagePayload,
-        senha: adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || 'cerberus2026' : 'cerberus2026')
+        senha: activePassword
       };
 
-      const res = await updateProduct(product.id, payload, adminPassword);
+      const res = await updateProduct(product.id, payload, activePassword);
 
       if (res.success) {
         setShowSuccessToast(true);

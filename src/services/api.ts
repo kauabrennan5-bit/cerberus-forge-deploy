@@ -324,3 +324,28 @@ export async function fetchProxyCsv(csvUrl: string): Promise<string> {
   }
   return await response.text();
 }
+
+/**
+ * Verifica a senha de administrador no backend
+ */
+export async function verifyAdminPassword(adminPassword: string): Promise<ApiResponse> {
+  try {
+    const response = await fetch(getApiUrl('/api/admin/verify'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-admin-password': adminPassword
+      },
+      body: JSON.stringify({ senha: adminPassword })
+    });
+    let resJson: ApiResponse;
+    try {
+      resJson = await response.json();
+    } catch {
+      resJson = { success: false, error: 'Erro ao verificar senha com o servidor.' };
+    }
+    return resJson;
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Falha de conexão ao verificar senha.' };
+  }
+}

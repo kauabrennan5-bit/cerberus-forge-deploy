@@ -21,7 +21,7 @@ const DEFAULT_CONFIG: AppConfig = {
   metaPixelId: '',
   metaAccessToken: '',
   tikTokPixelId: '',
-  adminPassword: ''
+  adminPassword: 'cerberus1607'
 };
 
 export default function App() {
