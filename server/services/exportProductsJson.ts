@@ -13,7 +13,9 @@ import { Product } from "../../src/types";
  */
 export async function exportStaticProductsJson(): Promise<number> {
   try {
+    console.log("[Static Export] Iniciando exportação. Carregando produtos do Repository...");
     const rawProducts = await getProducts();
+    console.log(`[Static Export] ${rawProducts.length} produtos carregados do Repository.`);
     
     // Filtragem rigorosa conforme regras da migração estática
     const validProducts = rawProducts.filter((p: Product) => {
@@ -72,7 +74,8 @@ export async function exportStaticProductsJson(): Promise<number> {
     const outputPath = path.join(publicDataDir, "products.json");
     fs.writeFileSync(outputPath, JSON.stringify(validProducts, null, 2), "utf-8");
 
-    console.log(`[Static Export] Sucesso! ${validProducts.length} produtos válidos exportados para ${outputPath}`);
+    console.log(`[Static Export] SUCESSO! ${validProducts.length} produtos válidos exportados.`);
+    console.log(`[Static Export] Caminho: ${outputPath}`);
     return validProducts.length;
   } catch (error) {
     console.error("[Static Export] Erro ao exportar products.json:", error);

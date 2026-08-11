@@ -18,16 +18,18 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // Initialize Supabase Client prioritizing Service Role Key for server-side administrative access (bypassing RLS)
 const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_SECRET_KEY || "";
 
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
   ? createClient(supabaseUrl, supabaseKey)
   : null;
 
 if (supabase) {
-  console.log("⚡ Supabase PostgreSQL ativado e conectado no Repository!");
+  console.log("⚡ [Supabase] PostgreSQL ativado e conectado no Repository!");
+  console.log(`⚡ [Supabase] URL: ${supabaseUrl}`);
+  console.log(`⚡ [Supabase] Key Length: ${supabaseKey.length} chars`);
 } else {
-  console.log("ℹ️ Supabase não configurado no .env. Repository utilizando data/products.json.");
+  console.warn("ℹ️ [Supabase] Não configurado ou chaves ausentes. Utilizando fallback local data/products.json.");
 }
 
 /**
@@ -99,15 +101,17 @@ async function saveProducts(products: Product[]): Promise<void> {
       pagina_ponte_url: p.paginaPonteUrl || ""
     }));
 
+    console.log(`[Supabase] Tentando upsert de ${formatted.length} produtos...`);
     const { error } = await supabase.from("products").upsert(formatted, { onConflict: "id" });
     if (error) {
       if (error.code === "PGRST205") {
-        console.warn("⚠️ A tabela 'public.products' ainda não foi criada no Supabase.");
+        console.warn("⚠️ [Supabase] A tabela 'public.products' ainda não foi criada.");
         return;
       }
-      console.error("❌ ERRO CRÍTICO AO GRAVAR NO SUPABASE:", error.message);
+      console.error("❌ [Supabase] ERRO CRÍTICO AO GRAVAR:", error.message);
       throw new Error(`Falha de persistência no banco Supabase: ${error.message}`);
     }
+    console.log("✅ [Supabase] Upsert concluído com sucesso!");
   }
 
   // Sincronização automática do catálogo estático public/data/products.json após qualquer alteração
