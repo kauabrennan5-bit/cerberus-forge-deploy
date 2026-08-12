@@ -1,14 +1,16 @@
 @import "tailwindcss";
 
+/* Mobile refinement: preserve Cerberus's dark archival identity; contain real layout causes with min-width, wrapping, clipping, and breakpoint-safe spacing rather than hiding structural overflow. */
 @layer base {
   *, ::before, ::after {
     box-sizing: border-box;
   }
 
   html {
-    overflow-x: hidden;
-    max-width: 100vw;
+    overflow-x: clip;
+    max-width: 100%;
     width: 100%;
+    overscroll-behavior-x: none;
   }
 
   body {
@@ -19,20 +21,28 @@
       linear-gradient(to right, rgba(58, 52, 46, 0.1) 1px, transparent 1px),
       linear-gradient(to bottom, rgba(58, 52, 46, 0.1) 1px, transparent 1px);
     background-size: 32px 32px;
-    overflow-x: hidden;
-    max-width: 100vw;
+    overflow-x: clip;
+    max-width: 100%;
+    min-width: 0;
     width: 100%;
     margin: 0;
     padding: 0;
+    overscroll-behavior-x: none;
+    overflow-wrap: anywhere;
   }
 
   #root {
-    overflow-x: hidden;
-    max-width: 100vw;
+    max-width: 100%;
+    min-width: 0;
     width: 100%;
   }
 
   img, video, svg, canvas {
+    display: block;
+    max-width: 100%;
+  }
+
+  button, a, input, textarea, select {
     max-width: 100%;
   }
 
@@ -192,14 +202,17 @@
   --border-dark: #3A342E;
 }
 
-/* Ajustes de responsividade para garantir zero overflow horizontal e layout limpo no mobile */
+/* Mobile containment is structural: flexible children wrap, grids own min-width: 0, and only the document edge clips overscroll. */
 @media (max-width: 768px) {
-  .container, section, main, header, footer {
-    max-width: 100vw !important;
-    overflow-x: hidden !important;
+  html, body {
+    overflow-x: clip;
   }
-  
-  /* Redução de espaçamentos verticais excessivos no mobile */
+
+  main, section, header, footer {
+    min-width: 0;
+  }
+
+  /* Preserve the compact public-vitrine rhythm without imposing a global hidden overflow. */
   .py-16, .py-20, .py-24 {
     padding-top: 2rem !important;
     padding-bottom: 2rem !important;
@@ -210,9 +223,7 @@
     margin-bottom: 1.5rem !important;
   }
 
-  /* Imagem de produto compacta no mobile */
-  .product-image-container, img.product-hero-img {
-    max-height: 280px !important;
-    object-fit: contain !important;
+  button, a {
+    touch-action: manipulation;
   }
 }

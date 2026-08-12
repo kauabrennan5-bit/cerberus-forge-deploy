@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+// Mobile refinement: preserve the Cerberus archival dark/red identity while keeping every public layout region intrinsically contained across narrow viewports.
 import { AppConfig, Product, ViewMode } from './types';
 import { initMetaPixel, initTikTokPixel } from './lib/pixels';
 import { captureUTMs } from './lib/utm';
@@ -224,7 +225,7 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-screen bg-noise bg-[#0B0908] text-[#E8E1D3] flex flex-col font-sans selection:bg-[#8A1F1F] selection:text-[#E8E1D3] w-full max-w-full overflow-x-hidden">
+    <div className="min-h-screen min-w-0 bg-noise bg-[#0B0908] text-[#E8E1D3] flex flex-col font-sans selection:bg-[#8A1F1F] selection:text-[#E8E1D3] w-full max-w-full">
       
       {/* Public Header Bar (No Admin button visible) */}
       <Header
@@ -298,8 +299,8 @@ export default function App() {
       </main>
 
       {/* Gothic / Archival Footer */}
-      <footer className="border-t border-[#3A342E] bg-[#141210] py-8 px-4 text-center text-xs text-[#E8E1D3]/60 w-full max-w-full overflow-x-hidden">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 font-sans">
+      <footer className="border-t border-[#3A342E] bg-[#141210] py-8 px-4 text-center text-xs text-[#E8E1D3]/60 w-full max-w-full min-w-0">
+        <div className="max-w-7xl mx-auto min-w-0 flex flex-col sm:flex-row items-center justify-between gap-4 font-sans">
           <div className="flex items-center space-x-3">
             <span className="font-gothic text-xl text-[#E8E1D3] tracking-wide uppercase">
               CERBERUS FINDS

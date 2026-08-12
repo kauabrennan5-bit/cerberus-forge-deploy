@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+// Mobile refinement: preserve the existing archival grid while making filters, headings, and controls wrap within the viewport.
 import { Product } from '../types';
 import { ProductCard } from './ProductCard';
 import { Search, RefreshCw, AlertCircle, Sparkles, Filter, X, Heart } from 'lucide-react';
@@ -72,10 +73,10 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
   }, [products, favorites, showOnlyFavorites, selectedCategory, searchQuery]);
 
   return (
-    <section className="space-y-6 py-2 font-sans animate-fade-in w-full max-w-full overflow-hidden">
+    <section className="space-y-6 py-2 font-sans animate-fade-in w-full max-w-full min-w-0">
       
       {/* Search & Header Controls */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#3A342E] pb-5 w-full">
+      <div className="flex min-w-0 flex-col md:flex-row md:items-end justify-between gap-4 border-b border-[#3A342E] pb-5 w-full">
         <div className="min-w-0 flex-1">
           <div className="flex items-center space-x-2 flex-wrap gap-y-1">
             <span className="stamp-badge text-[9px] px-1.5 py-0.2">
@@ -88,7 +89,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
             )}
           </div>
           
-          <h1 className="font-gothic text-3xl sm:text-5xl font-normal tracking-wide text-[#E8E1D3] mt-2">
+          <h1 className="font-gothic text-[clamp(1.75rem,8vw,3rem)] sm:text-5xl font-normal tracking-wide text-[#E8E1D3] mt-2 break-words">
             {showOnlyFavorites ? 'Peças Salvas na Lista' : 'Acervo Cerberus'}
           </h1>
           
@@ -100,7 +101,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
         </div>
 
         {/* Live Search Input */}
-        <div className="relative w-full md:w-72 shrink-0">
+        <div className="relative w-full md:w-72 md:max-w-[18rem] shrink-0">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#8A1F1F]" />
           <input
             type="text"
@@ -122,8 +123,8 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
       </div>
 
       {/* Dynamic Category Filter Bar */}
-      <div className="w-full max-w-full min-w-0 overflow-x-auto no-scrollbar border-b border-[#3A342E]/60 pb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center space-x-2 shrink-0">
+      <div className="w-full max-w-full min-w-0 border-b border-[#3A342E]/60 pb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 pb-1 shrink-0">
           <span className="text-[#8A1F1F] font-display text-xs flex items-center shrink-0 mr-1 uppercase tracking-widest text-[10px]">
             <Filter className="w-3 h-3 mr-1" />
             <span>CATEGORIA:</span>
@@ -132,7 +133,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
             <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`shrink-0 px-3 py-1.5 rounded-none text-xs font-display uppercase tracking-widest transition-all ${
+              className={`shrink-0 min-h-10 px-3 py-1.5 rounded-none text-xs font-display uppercase tracking-widest transition-all ${
                 selectedCategory === cat
                   ? 'bg-[#8A1F1F] text-[#E8E1D3] border border-[#8A1F1F]'
                   : 'bg-[#141210] text-[#E8E1D3]/70 hover:text-[#E8E1D3] border border-[#3A342E] hover:border-[#8A1F1F]'
@@ -146,7 +147,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
         {/* Favorites Quick Filter Toggle Pill */}
         <button
           onClick={onToggleShowFavorites}
-          className={`shrink-0 flex items-center space-x-1.5 px-3 py-1.5 rounded-none text-xs font-display uppercase tracking-widest transition-all border ${
+          className={`shrink-0 min-h-10 flex items-center space-x-1.5 px-3 py-1.5 rounded-none text-xs font-display uppercase tracking-widest transition-all border ${
             showOnlyFavorites
               ? 'bg-[#8A1F1F] text-[#E8E1D3] border-[#8A1F1F]'
               : 'bg-[#141210] text-[#E8E1D3]/70 border-[#3A342E] hover:text-[#E8E1D3] hover:border-[#8A1F1F]'
@@ -167,7 +168,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
             </span>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
+          <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
               <div key={n} className="bg-[#141210] border border-[#3A342E] rounded-none p-3 space-y-3">
                 <div className="aspect-square skeleton-shimmer rounded-none border border-[#3A342E]" />
@@ -235,7 +236,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
 
       {/* Main Responsive Grid (Mobile: 2 cols | Tablet: 3 cols | Desktop: 4-5 cols) */}
       {!isLoading && !error && filteredProducts.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
+        <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
           {filteredProducts.map((product, idx) => (
             <ProductCard
               key={product.id}

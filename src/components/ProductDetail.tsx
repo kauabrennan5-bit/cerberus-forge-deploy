@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+// Mobile refinement: keep the approved product-detail composition while constraining gallery, metadata, actions, and lightbox content to the viewport.
 import { Product } from '../types';
 import { trackClickAndGetUrl } from '../lib/analytics';
 import { ArrowLeft, ExternalLink, Heart, Share2, Check, ChevronLeft, ChevronRight, ImageOff, ShieldCheck, Maximize2, X } from 'lucide-react';
@@ -107,22 +108,22 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   };
 
   return (
-    <div className="max-w-5xl mx-auto py-2 sm:py-6 space-y-3 sm:space-y-5 font-sans animate-fade-in w-full max-w-full overflow-hidden min-w-0">
+    <div className="max-w-5xl mx-auto py-2 sm:py-6 space-y-3 sm:space-y-5 font-sans animate-fade-in w-full max-w-full min-w-0">
       
       {/* Top Navigation & Action Bar */}
-      <div className="flex items-center justify-between border-b border-[#3A342E] pb-2 sm:pb-4">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-[#3A342E] pb-2 sm:pb-4">
         <button
           onClick={onBack}
-          className="flex items-center space-x-2 text-xs font-display uppercase tracking-widest text-[#E8E1D3]/80 hover:text-[#8A1F1F] transition-colors"
+          className="min-h-10 flex items-center space-x-2 text-xs font-display uppercase tracking-widest text-[#E8E1D3]/80 hover:text-[#8A1F1F] transition-colors"
         >
           <ArrowLeft className="w-4 h-4 text-[#8A1F1F]" />
           <span>Voltar ao Acervo</span>
         </button>
 
-        <div className="flex items-center space-x-2 sm:space-x-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <button
             onClick={handleShare}
-            className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-[#141210] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none text-xs font-display uppercase tracking-widest text-[#E8E1D3] transition-colors"
+            className="min-h-10 flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 bg-[#141210] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none text-xs font-display uppercase tracking-widest text-[#E8E1D3] transition-colors"
             title="Copiar link direto do produto"
           >
             {copiedLink ? (
@@ -140,7 +141,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
 
           <button
             onClick={() => onToggleFavorite(product.id)}
-            className={`p-1.5 sm:p-2 rounded-none border transition-all ${
+            className={`min-h-10 min-w-10 p-1.5 sm:p-2 rounded-none border transition-all ${
               isFavorite
                 ? 'bg-[#8A1F1F] text-[#E8E1D3] border-[#8A1F1F]'
                 : 'bg-[#141210] text-[#E8E1D3]/70 border-[#3A342E] hover:border-[#8A1F1F]'
@@ -153,10 +154,10 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
       </div>
 
       {/* Main Product Layout Grid - Mobile optimized to fit above the fold */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6 lg:gap-10 items-start">
+      <div className="grid min-w-0 grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6 lg:gap-10 items-start">
         
         {/* Left: Interactive Image Gallery - Max ~35vh on mobile */}
-        <div className="space-y-2 sm:space-y-4">
+        <div className="min-w-0 space-y-2 sm:space-y-4">
           <div
             className="relative w-full h-[32vh] max-h-[260px] sm:h-auto sm:max-h-none sm:aspect-square bg-[#090807] border border-[#3A342E] rounded-none overflow-hidden flex items-center justify-center p-2 sm:p-4 touch-pan-y tech-frame group cursor-pointer"
             onClick={() => setIsZoomOpen(true)}
@@ -240,7 +241,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
 
           {/* Gallery Thumbnails */}
           {images.length > 1 && (
-            <div className="flex space-x-2 overflow-x-auto pb-1 no-scrollbar">
+            <div className="flex max-w-full flex-wrap gap-2 pb-1">
               {images.map((img, idx) => (
                 <button
                   key={idx}
@@ -259,18 +260,18 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
         </div>
 
         {/* Right Column: Title, Price, Buy Button Immediately Above fold */}
-        <div className="space-y-3 sm:space-y-4 flex flex-col justify-between">
+        <div className="min-w-0 space-y-3 sm:space-y-4 flex flex-col justify-between">
           <div className="space-y-2 sm:space-y-3">
-            <div className="flex items-center justify-between border-b border-[#3A342E] pb-1.5">
+            <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[#3A342E] pb-1.5">
               <span className="text-[10px] sm:text-xs uppercase font-display tracking-widest text-[#8A1F1F] font-bold">
                 {product.categoria}
               </span>
-              <span className="text-[9px] font-mono text-[#E8E1D3]/50">
+              <span className="min-w-0 max-w-[48%] text-right break-all text-[9px] font-mono text-[#E8E1D3]/50">
                 REG. {product.id}
               </span>
             </div>
 
-            <h1 className="font-gothic text-2xl sm:text-4xl font-normal text-[#E8E1D3] leading-tight">
+            <h1 className="font-gothic text-2xl sm:text-4xl font-normal text-[#E8E1D3] leading-tight break-words">
               {product.produto}
             </h1>
 
@@ -288,7 +289,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               <button
                 onClick={handleBuy}
                 disabled={isRedirecting}
-                className="w-full py-3 sm:py-4 bg-[#8A1F1F] hover:bg-[#8A1F1F]/80 text-[#E8E1D3] font-display text-xs sm:text-base uppercase tracking-widest flex items-center justify-center space-x-2 rounded-none transition-colors border border-[#8A1F1F] shadow-lg"
+                className="min-h-12 w-full py-3 sm:py-4 bg-[#8A1F1F] hover:bg-[#8A1F1F]/80 text-[#E8E1D3] font-display text-xs sm:text-base uppercase tracking-widest flex items-center justify-center space-x-2 rounded-none transition-colors border border-[#8A1F1F] shadow-lg"
               >
                 {isRedirecting ? (
                   <span>REDIRECIONANDO...</span>
@@ -333,14 +334,14 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
 
       {/* Lightbox / Fullscreen Zoom Modal */}
       {isZoomOpen && images[selectedImageIndex] && (
-        <div className="fixed inset-0 z-50 bg-[#0B0908]/98 backdrop-blur-md flex flex-col items-center justify-between p-4 sm:p-6 animate-fade-in">
+        <div className="fixed inset-0 z-50 w-full min-w-0 overflow-x-clip overflow-y-auto bg-[#0B0908]/98 backdrop-blur-md flex min-h-full flex-col items-center justify-between p-3 sm:p-6 animate-fade-in">
           
           {/* Lightbox Header Bar */}
-          <div className="w-full max-w-5xl flex items-center justify-between border-b border-[#3A342E] pb-3 text-xs font-display uppercase tracking-widest text-[#E8E1D3]">
+          <div className="w-full max-w-5xl min-w-0 flex flex-wrap items-center justify-between gap-2 border-b border-[#3A342E] pb-3 text-xs font-display uppercase tracking-widest text-[#E8E1D3]">
             <span className="text-[#8A1F1F] font-mono">{refNumber} — TELA CHEIA</span>
             <button
               onClick={() => setIsZoomOpen(false)}
-              className="px-3 py-1 bg-[#141210] border border-[#3A342E] text-[#E8E1D3] hover:text-[#8A1F1F] hover:border-[#8A1F1F] transition-colors flex items-center space-x-1"
+              className="min-h-10 px-3 py-1 bg-[#141210] border border-[#3A342E] text-[#E8E1D3] hover:text-[#8A1F1F] hover:border-[#8A1F1F] transition-colors flex items-center space-x-1"
             >
               <span>FECHAR</span>
               <X className="w-4 h-4" />
@@ -348,7 +349,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
           </div>
 
           {/* Lightbox Main Image Stage */}
-          <div className="relative max-w-4xl max-h-[75vh] w-full h-full flex items-center justify-center my-auto p-2">
+          <div className="relative max-w-4xl max-h-[75vh] w-full min-h-0 flex items-center justify-center my-auto p-2">
             <img
               src={images[selectedImageIndex]}
               alt={product.produto}
@@ -359,13 +360,13 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               <>
                 <button
                   onClick={handlePrevImage}
-                  className="absolute left-2 top-1/2 -translate-y-1/2 p-2 sm:p-3 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] hover:bg-[#8A1F1F] hover:border-[#8A1F1F] transition-colors"
+                  className="absolute left-2 top-1/2 -translate-y-1/2 min-h-10 min-w-10 p-2 sm:p-3 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] hover:bg-[#8A1F1F] hover:border-[#8A1F1F] transition-colors"
                 >
                   <ChevronLeft className="w-5 h-5" />
                 </button>
                 <button
                   onClick={handleNextImage}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-2 sm:p-3 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] hover:bg-[#8A1F1F] hover:border-[#8A1F1F] transition-colors"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 min-h-10 min-w-10 p-2 sm:p-3 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] hover:bg-[#8A1F1F] hover:border-[#8A1F1F] transition-colors"
                 >
                   <ChevronRight className="w-5 h-5" />
                 </button>
@@ -374,7 +375,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
           </div>
 
           {/* Lightbox Footer Navigation */}
-          <div className="w-full max-w-xl flex items-center justify-center space-x-2 pt-2 border-t border-[#3A342E]">
+          <div className="w-full max-w-xl max-h-24 overflow-y-auto flex flex-wrap items-center justify-center gap-2 pt-2 border-t border-[#3A342E]">
             {images.map((img, idx) => (
               <button
                 key={idx}
