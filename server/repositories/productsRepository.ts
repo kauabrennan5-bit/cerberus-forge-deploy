@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
 import { Product } from "../../src/types";
 import { exportStaticProductsJson } from "../services/exportProductsJson";
+import { syncCatalogToGitHub } from "../services/githubCatalogSync";
 
 dotenv.config();
 
@@ -328,6 +329,14 @@ export async function deleteProduct(id: string): Promise<boolean> {
     }
   } else {
     console.log('[DELETE LOG 9] Supabase não configurado/desativado. Exclusão operando no armazenamento persistente local.');
+  }
+
+  // Sincroniza com GitHub (Dispara Rebuild Automático no Render) após remoção
+  try {
+    console.log(`[Sync] Sincronizando remoção de "${target.produto}" com GitHub...`);
+    await syncCatalogToGitHub(`update: remove product ${target.ref} - ${target.produto}`);
+  } catch (syncErr) {
+    console.error("❌ [GitHub Sync Error] Falha ao sincronizar remoção no GitHub:", syncErr);
   }
 
   return true;
