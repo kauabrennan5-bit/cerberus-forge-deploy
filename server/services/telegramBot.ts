@@ -379,28 +379,31 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       const prodId = data.split(":")[1];
       const product = await productsRepository.getProductByIdOrSlug(prodId);
       if (product) {
-        await productsRepository.updateProduct(prodId, { ativo: !product.ativo });
-        await answerCallbackQuery(callbackId, `✅ Status alterado para ${!product.ativo ? 'Ativo' : 'Pausado'}`);
-        // Recarrega o menu de edição
-        const updated = await productsRepository.getProductByIdOrSlug(prodId);
-        if (updated && chatId && messageId) {
-          // Re-executa a lógica de admin_edit para atualizar a UI
-          const text = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n` +
-                       `🆔 <b>REF:</b> <code>${updated.ref}</code>\n` +
-                       `🏷️ <b>Título:</b> ${updated.produto}\n` +
-                       `💰 <b>Preço:</b> R$ ${updated.preco.toFixed(2)}\n` +
-                       `📁 <b>Categoria:</b> ${updated.categoria}\n` +
-                       `📊 <b>Status:</b> ${updated.ativo ? 'Ativo ✅' : 'Pausado ⏸'}\n\n` +
-                       `<i>Escolha o que deseja alterar:</i>`;
-          const keyboard = {
-            inline_keyboard: [
-              [{ text: "📝 Título", callback_data: `field_edit:${prodId}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${prodId}:preco` }],
-              [{ text: "📁 Categoria", callback_data: `field_edit:${prodId}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${prodId}:descricao` }],
-              [{ text: updated.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${prodId}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${prodId}` }],
-              [{ text: "⬅️ Voltar para Lista", callback_data: "list_page:0" }]
-            ]
-          };
-          await editTelegramMessageText(chatId, messageId, text, keyboard);
+        try {
+          await productsRepository.updateProduct(prodId, { ativo: !product.ativo });
+          await answerCallbackQuery(callbackId, `✅ Status alterado para ${!product.ativo ? 'Ativo' : 'Pausado'}`);
+          // Recarrega o menu de edição
+          const updated = await productsRepository.getProductByIdOrSlug(prodId);
+          if (updated && chatId && messageId) {
+            const text = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n` +
+                         `🆔 <b>REF:</b> <code>${updated.ref}</code>\n` +
+                         `🏷️ <b>Título:</b> ${updated.produto}\n` +
+                         `💰 <b>Preço:</b> R$ ${updated.preco.toFixed(2)}\n` +
+                         `📁 <b>Categoria:</b> ${updated.categoria}\n` +
+                         `📊 <b>Status:</b> ${updated.ativo ? 'Ativo ✅' : 'Pausado ⏸'}\n\n` +
+                         `<i>Escolha o que deseja alterar:</i>`;
+            const keyboard = {
+              inline_keyboard: [
+                [{ text: "📝 Título", callback_data: `field_edit:${prodId}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${prodId}:preco` }],
+                [{ text: "📁 Categoria", callback_data: `field_edit:${prodId}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${prodId}:descricao` }],
+                [{ text: updated.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${prodId}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${prodId}` }],
+                [{ text: "⬅️ Voltar para Lista", callback_data: "list_page:0" }]
+              ]
+            };
+            await editTelegramMessageText(chatId, messageId, text, keyboard);
+          }
+        } catch (err: any) {
+          await answerCallbackQuery(callbackId, `❌ Erro: ${err.message}`, true);
         }
       }
       return;
@@ -426,13 +429,18 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data.startsWith("exec_del:")) {
       const prodId = data.split(":")[1];
       await answerCallbackQuery(callbackId, "🗑️ Removendo...");
-      const success = await productsRepository.deleteProduct(prodId);
-      if (success) {
-        if (chatId && messageId) {
-          await editTelegramMessageText(chatId, messageId, `✅ <b>Produto removido com sucesso!</b>\nO catálogo será reconstruído automaticamente.`);
+      try {
+        const success = await productsRepository.deleteProduct(prodId);
+        if (success) {
+          if (chatId && messageId) {
+            await editTelegramMessageText(chatId, messageId, `✅ <b>Produto removido com sucesso!</b>\nO catálogo será reconstruído automaticamente.`);
+          }
+        } else {
+          await answerCallbackQuery(callbackId, "❌ Produto não encontrado.", true);
         }
-      } else {
-        await answerCallbackQuery(callbackId, "❌ Erro ao remover.", true);
+      } catch (err: any) {
+        await answerCallbackQuery(callbackId, `❌ Erro crítico: ${err.message}`, true);
+        if (chatId) await sendTelegramMessage(chatId, `❌ <b>FALHA NA REMOÇÃO:</b>\n\n${err.message}`);
       }
       return;
     }
@@ -698,6 +706,23 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       return;
     }
+
+    // Ação: Iniciar Adição de Categoria
+    if (data === "add_cat_init") {
+      await answerCallbackQuery(callbackId);
+      await telegramRepo.setUserState(senderId, { action: "add_cat_name" });
+      if (chatId) await sendTelegramMessage(chatId, "📁 <b>ADICIONAR CATEGORIA</b>\n\nDigite o nome da nova categoria:");
+      return;
+    }
+
+    // Ação: Iniciar Renomeação de Categoria
+    if (data.startsWith("rename_cat_init:")) {
+      const oldName = data.split(":")[1];
+      await answerCallbackQuery(callbackId);
+      await telegramRepo.setUserState(senderId, { action: `rename_cat_name:${oldName}` });
+      if (chatId) await sendTelegramMessage(chatId, `✏️ <b>RENOMEAR CATEGORIA: ${oldName}</b>\n\nDigite o novo nome para esta categoria:`);
+      return;
+    }
   }
 
   // 2. LIDAR COM MENSAGENS DE TEXTO
@@ -912,9 +937,42 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         update[field] = text;
       }
       
-      await productsRepository.updateProduct(prodId, update);
-      await telegramRepo.deleteUserState(senderId);
-      if (chatId) await sendTelegramMessage(chatId, `✅ Campo <b>${field}</b> atualizado com sucesso!`);
+      try {
+        await productsRepository.updateProduct(prodId, update);
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, `✅ Campo <b>${field}</b> atualizado com sucesso!`);
+      } catch (err: any) {
+        if (chatId) await sendTelegramMessage(chatId, `❌ <b>ERRO NA ATUALIZAÇÃO:</b>\n\n${err.message}`);
+      }
+      return;
+    }
+
+    // Lidar com adição de categoria por texto
+    if (userState && userState.action === "add_cat_name") {
+      try {
+        const cat = await categoriesRepository.addCategory(text);
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, `✅ Categoria <b>${text}</b> adicionada com sucesso!`);
+      } catch (err: any) {
+        if (chatId) await sendTelegramMessage(chatId, `❌ <b>ERRO AO ADICIONAR CATEGORIA:</b>\n\n${err.message}`);
+      }
+      return;
+    }
+
+    // Lidar com renomeação de categoria por texto
+    if (userState && userState.action.startsWith("rename_cat_name:")) {
+      const oldName = userState.action.split(":")[1];
+      try {
+        const success = await categoriesRepository.renameCategory(oldName, text);
+        await telegramRepo.deleteUserState(senderId);
+        if (success) {
+          if (chatId) await sendTelegramMessage(chatId, `✅ Categoria renomeada de <b>${oldName}</b> para <b>${text}</b> com sucesso!`);
+        } else {
+          throw new Error("Falha ao renomear categoria no banco.");
+        }
+      } catch (err: any) {
+        if (chatId) await sendTelegramMessage(chatId, `❌ <b>ERRO AO RENOMEAR CATEGORIA:</b>\n\n${err.message}`);
+      }
       return;
     }
 

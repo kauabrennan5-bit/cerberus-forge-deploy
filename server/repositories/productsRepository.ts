@@ -115,12 +115,17 @@ async function saveProducts(products: Product[]): Promise<void> {
     console.log("✅ [Supabase] Upsert concluído com sucesso!");
   }
 
-  // Sincronização automática do catálogo estático public/data/products.json após qualquer alteração
+  // Sincronização automática do catálogo estático e GitHub após qualquer alteração
   try {
     await exportStaticProductsJson();
     console.log("⚡ [Auto-Sync] public/data/products.json regenerado com sucesso após alteração no catálogo!");
-  } catch (syncErr) {
-    console.error("❌ [Auto-Sync Error] Falha ao regenerar products.json estático:", syncErr);
+    const syncOk = await syncCatalogToGitHub("update: catalog products updated via repository");
+    if (!syncOk) {
+      throw new Error("Falha ao sincronizar com GitHub (syncCatalogToGitHub retornou false)");
+    }
+  } catch (syncErr: any) {
+    console.error("❌ [GitHub Sync Error] Falha ao sincronizar catálogo com GitHub:", syncErr);
+    throw syncErr;
   }
 }
 

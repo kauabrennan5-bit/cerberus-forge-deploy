@@ -1,5 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import { exportStaticProductsJson } from "./exportProductsJson";
+import { syncCatalogToGitHub } from "../services/githubCatalogSync";
 
 dotenv.config();
 
@@ -51,6 +53,13 @@ export async function addCategory(name: string): Promise<Category | null> {
     console.error("❌ [Categories Repo] Erro ao adicionar categoria:", error.message);
     return null;
   }
+
+  try {
+    await exportStaticProductsJson();
+    await syncCatalogToGitHub(`update: add category ${name}`);
+  } catch (err) {
+    console.error("❌ [GitHub Sync Error] Falha ao sincronizar nova categoria com GitHub:", err);
+  }
   
   return data;
 }
@@ -78,6 +87,13 @@ export async function renameCategory(oldName: string, newName: string): Promise<
       
     if (prodError) {
       console.warn("⚠️ [Categories Repo] Categoria renomeada, mas falha ao atualizar produtos:", prodError.message);
+    }
+
+    try {
+      await exportStaticProductsJson();
+      await syncCatalogToGitHub(`update: rename category ${oldName} to ${newName}`);
+    } catch (err) {
+      console.error("❌ [GitHub Sync Error] Falha ao sincronizar renomeação de categoria com GitHub:", err);
     }
     
     return true;
