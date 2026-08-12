@@ -19,34 +19,43 @@ export interface ApiResponse<T = any> {
   message?: string;
 }
 
+function getApiUrl(path: string): string {
+  try {
+    if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin !== 'null' && !window.location.origin.startsWith('blob:')) {
+      return `${window.location.origin}${path.startsWith('/') ? path : '/' + path}`;
+    }
+  } catch {
+    // Fallback to relative path
+  }
+  return path;
+}
+
 /**
- * Cliente de API Estático para o Cerberus Finds (Site Público)
- * Consome exclusivamente /data/products.json para garantir arquitetura 100% estática e gratuita.
+ * Cliente de API para o Cerberus Finds
+ * Consome o endpoint backend /api/products que reflete diretamente a tabela public.products do Supabase.
  */
 export async function getProducts(): Promise<any[]> {
   try {
-    // Uso de caminho relativo puro para evitar erros de construção de URL (DOMException: expected pattern)
-    const jsonPath = '/data/products.json';
-    
-    console.log(`[Static Catalog] Buscando catálogo em: ${jsonPath}`);
-    
-    const response = await fetch(jsonPath);
+    console.log('[Catalog API] Buscando catálogo dinâmico em: /api/products');
+    const apiUrl = getApiUrl('/api/products');
+    const response = await fetch(apiUrl);
     
     if (!response.ok) {
-      console.warn(`[Static Catalog] Falha ao carregar JSON (HTTP ${response.status}).`);
+      console.error(`[Catalog API Error] /api/products retornou HTTP ${response.status}.`);
       return [];
     }
 
-    const data = await response.json();
+    const resData = await response.json();
+    const list = resData.products || resData.data || (Array.isArray(resData) ? resData : []);
     
-    if (Array.isArray(data)) {
-      console.log(`[Static Catalog] ${data.length} produtos carregados.`);
-      return data.map((p: any) => ({
+    if (Array.isArray(list)) {
+      console.log(`[Catalog API] ${list.length} produtos carregados.`);
+      return list.map((p: any) => ({
         ...p,
         id: String(p.id || ''),
         produto: p.produto || '',
         preco: Number(p.preco) || 0,
-        imagens: Array.isArray(p.imagens) ? p.imagens : (p.imagem ? [p.imagem] : []),
+        imagens: Array.isArray(p.imagens) ? p.imagens : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
         link: p.link || p.url || '',
         categoria: p.categoria || 'Geral',
         marketplace: p.marketplace || 'Shopee',
@@ -56,28 +65,67 @@ export async function getProducts(): Promise<any[]> {
     }
     
     return [];
-  } catch (err) {
-    console.error('[Static Catalog Error] Erro ao carregar catálogo estático:', err);
-    // Retornamos array vazio em vez de lançar erro para evitar o crash visual
+  } catch (err: any) {
+    console.error('[Catalog API Error] Erro ao carregar catálogo:', err?.message || err);
     return [];
   }
 }
 
-// Stubs para compatibilidade de build (não funcionais no site público)
-export async function createProduct(payload: any): Promise<ApiResponse<any>> {
-  return { success: false, error: 'Ação não permitida no site estático.' };
+export async function verifyAdminPassword(password: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(getApiUrl('/api/admin/verify'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    if (!res.ok) return { success: false, error: 'Senha incorreta.' };
+    const data = await res.json();
+    return { success: Boolean(data.success), error: data.error };
+  } catch {
+    return { success: false, error: 'Erro ao conectar ao servidor.' };
+  }
 }
 
-export async function updateProduct(id: string, payload: any): Promise<ApiResponse<any>> {
-  return { success: false, error: 'Ação não permitida no site estático.' };
+export async function createProduct(payload: any, password?: string): Promise<ApiResponse<any>> {
+  try {
+    const res = await fetch(getApiUrl('/api/products'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, senha: password || payload.senha })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erro ao criar produto.' };
+  }
 }
 
-export async function deleteProduct(id: string): Promise<ApiResponse<any>> {
-  return { success: false, error: 'Ação não permitida no site estático.' };
+export async function updateProduct(id: string, payload: any, password?: string): Promise<ApiResponse<any>> {
+  try {
+    const res = await fetch(getApiUrl(`/api/products/${id}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, senha: password || payload.senha })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erro ao atualizar produto.' };
+  }
 }
 
-export async function verifyAdminPassword(password: string): Promise<boolean> {
-  return false;
+export async function deleteProduct(id: string, password?: string): Promise<ApiResponse<any>> {
+  try {
+    const res = await fetch(getApiUrl(`/api/products/${id}`), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ senha: password })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erro ao remover produto.' };
+  }
 }
 
 export async function sendMetaCapiEvent(eventData: any): Promise<boolean> {
@@ -88,12 +136,23 @@ export async function trackProductClickApi(data: any): Promise<boolean> {
   return true;
 }
 
-export async function extractProduct(url: string): Promise<ApiResponse<any>> {
-  return { success: false, error: 'Ação não permitida no site estático.' };
+export async function extractProduct(url: string, rawText?: string, adminPass?: string): Promise<ApiResponse<any>> {
+  try {
+    const res = await fetch('/api/admin/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, rawText, senha: adminPass })
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Erro ao extrair produto com IA.' };
+  }
 }
 
 export async function verifyPasswordApi(password: string): Promise<boolean> {
-  return false;
+  const res = await verifyAdminPassword(password);
+  return res.success;
 }
 
 export async function fetchProxyCsv(url: string): Promise<string> {

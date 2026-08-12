@@ -27,8 +27,9 @@ export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
 
 export interface UserState {
   senderId: string;
-  action: "awaiting_price";
-  reviewId: string;
+  action: string;
+  reviewId?: string;
+  productId?: string;
   updatedAt: number;
 }
 
@@ -87,28 +88,41 @@ function writeUserStatesToFile(states: Record<string, UserState>): void {
 // --- MÉTODOS PÚBLICOS DE PERSISTÊNCIA ---
 
 /**
- * Salva ou atualiza uma revisão pendente (no arquivo e Supabase se disponível)
+ * Salva ou atualiza uma revisão pendente (no arquivo e Supabase)
  */
 export async function savePendingReview(review: PendingReview): Promise<void> {
-  // 1. Salva no arquivo local
+  const createdAt = review.createdAt || Date.now();
+  const expiresAt = review.expiresAt || (createdAt + SESSION_EXPIRATION_MS);
+  const status = review.status || "pending";
+
+  const normReview: PendingReview = {
+    ...review,
+    createdAt,
+    expiresAt,
+    status
+  };
+
+  // 1. Salva no arquivo local (backup)
   const reviews = readReviewsFromFile();
-  reviews[review.id] = review;
+  reviews[normReview.id] = normReview;
   writeReviewsToFile(reviews);
 
-  // 2. Tenta salvar no Supabase se configurado
+  // 2. Salva no Supabase se configurado
   if (supabase) {
     try {
       const { error } = await supabase.from("telegram_pending_reviews").upsert({
-        id: review.id,
-        chat_id: String(review.chatId),
-        sender_id: String(review.senderId),
-        first_name: review.firstName,
-        username: review.username,
-        created_at: review.createdAt,
-        data: review
+        id: normReview.id,
+        chat_id: String(normReview.chatId),
+        sender_id: String(normReview.senderId),
+        first_name: normReview.firstName,
+        username: normReview.username,
+        created_at: normReview.createdAt,
+        expires_at: normReview.expiresAt,
+        status: normReview.status,
+        data: normReview
       }, { onConflict: "id" });
 
-      if (error && error.code !== "PGRST205") { // Ignora se tabela não existir ainda
+      if (error && error.code !== "PGRST205") {
         console.warn("[Telegram Repo Warning] Erro ao salvar revisão no Supabase:", error.message);
       }
     } catch (err: any) {
@@ -118,7 +132,7 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
 }
 
 /**
- * Obtém uma revisão pendente por ID (verifica expiração de 1 hora)
+ * Obtém uma revisão pendente por ID (marca como expirada se passou de 1 hora, sem apagar do banco)
  */
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
   let review: PendingReview | null = null;
@@ -128,12 +142,14 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
     try {
       const { data, error } = await supabase
         .from("telegram_pending_reviews")
-        .select("data, created_at")
+        .select("data, created_at, expires_at, status")
         .eq("id", reviewId)
         .single();
 
       if (!error && data?.data) {
         review = data.data as PendingReview;
+        if (data.expires_at) review.expiresAt = data.expires_at;
+        if (data.status) review.status = data.status;
       }
     } catch (err) {
       // Fallback para arquivo local se Supabase falhar
@@ -148,12 +164,17 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
 
   if (!review) return null;
 
-  // 3. Validação de expiração (1 hora)
+  // Garantia de propriedades obrigatórias
+  if (!review.createdAt) review.createdAt = Date.now();
+  if (!review.expiresAt) review.expiresAt = review.createdAt + SESSION_EXPIRATION_MS;
+  if (!review.status) review.status = "pending";
+
+  // 3. Validação de expiração: Apenas altera o status se 'pending' e tempo estourado
   const now = Date.now();
-  if (now - review.createdAt > SESSION_EXPIRATION_MS) {
-    console.log(`[Telegram Repo] Sessão de revisão ${reviewId} expirou (${Math.round((now - review.createdAt)/1000)}s decorridos). Deletando.`);
-    await deletePendingReview(reviewId);
-    return null;
+  if (review.status === "pending" && now >= review.expiresAt) {
+    console.log(`[Telegram Repo] Sessão de revisão ${reviewId} atingiu limite de expiração (${Math.round((now - review.createdAt)/1000)}s). Atualizando status para 'expired'.`);
+    review.status = "expired";
+    await savePendingReview(review);
   }
 
   return review;
@@ -235,12 +256,13 @@ export async function deletePendingReview(reviewId: string): Promise<void> {
 /**
  * Define o estado do usuário (ex: aguardando digitação de preço)
  */
-export async function setUserState(senderId: string | number, state: { action: "awaiting_price"; reviewId: string }): Promise<void> {
+export async function setUserState(senderId: string | number, state: { action: string; reviewId?: string; productId?: string }): Promise<void> {
   const sId = String(senderId);
   const userStateObj: UserState = {
     senderId: sId,
     action: state.action,
     reviewId: state.reviewId,
+    productId: state.productId,
     updatedAt: Date.now()
   };
 
@@ -256,6 +278,7 @@ export async function setUserState(senderId: string | number, state: { action: "
         sender_id: sId,
         action: state.action,
         review_id: state.reviewId,
+        product_id: state.productId,
         updated_at: userStateObj.updatedAt
       }, { onConflict: "sender_id" });
     } catch (err) {
@@ -267,7 +290,7 @@ export async function setUserState(senderId: string | number, state: { action: "
 /**
  * Obtém o estado atual do usuário
  */
-export async function getUserState(senderId: string | number): Promise<{ action: "awaiting_price"; reviewId: string } | null> {
+export async function getUserState(senderId: string | number): Promise<{ action: string; reviewId?: string; productId?: string } | null> {
   const sId = String(senderId);
   let stateObj: UserState | null = null;
 
@@ -285,6 +308,7 @@ export async function getUserState(senderId: string | number): Promise<{ action:
           senderId: data.sender_id,
           action: data.action,
           reviewId: data.review_id,
+          productId: data.product_id,
           updatedAt: data.updated_at || Date.now()
         };
       }
@@ -307,7 +331,7 @@ export async function getUserState(senderId: string | number): Promise<{ action:
     return null;
   }
 
-  return { action: stateObj.action, reviewId: stateObj.reviewId };
+  return { action: stateObj.action, reviewId: stateObj.reviewId, productId: stateObj.productId };
 }
 
 /**

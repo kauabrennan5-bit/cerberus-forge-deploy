@@ -39,6 +39,8 @@ export interface PendingReview extends ExtractedReviewData {
   firstName: string;
   username: string;
   createdAt: number;
+  expiresAt?: number;
+  status?: "pending" | "published" | "cancelled" | "expired";
   cardMessageId?: number;
 }
 
@@ -445,24 +447,65 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
+function logAndValidateReviewCallback(
+  actionName: string,
+  reviewId: string,
+  chatId: string | number | undefined,
+  review: PendingReview | null
+): { valid: boolean; reason?: string } {
+  const statusStr = review ? (review.status || "pending") : "não localizada";
+  const createdStr = review ? new Date(review.createdAt).toISOString() : "N/A";
+  const expiresStr = review ? new Date(review.expiresAt || (review.createdAt + 3600000)).toISOString() : "N/A";
+
+  let outcome = "OK";
+  let valid = true;
+
+  if (!review) {
+    outcome = "Revisão não localizada no sistema.";
+    valid = false;
+  } else if (statusStr === "expired") {
+    outcome = "Sessão de revisão expirada (limite de 1 hora excedido).";
+    valid = false;
+  } else if (statusStr === "published") {
+    outcome = "Esta revisão já foi publicada.";
+    valid = false;
+  } else if (statusStr === "cancelled") {
+    outcome = "Esta revisão foi cancelada.";
+    valid = false;
+  }
+
+  console.log(`
+[TELEGRAM REVIEW] callback recebido: ${actionName}
+[TELEGRAM REVIEW] reviewId: ${reviewId}
+[TELEGRAM REVIEW] chatId: ${chatId || "N/A"}
+[TELEGRAM REVIEW] status encontrado: ${statusStr}
+[TELEGRAM REVIEW] createdAt: ${createdStr}
+[TELEGRAM REVIEW] expiresAt: ${expiresStr}
+[TELEGRAM REVIEW] ação: ${actionName}
+[TELEGRAM REVIEW] resultado: ${outcome}
+`);
+
+  return { valid, reason: outcome };
+}
+
     // Ação: Confirmar & Publicar
     if (data.startsWith("confirm_pub:")) {
-      console.log("[TELEGRAM PUBLISH 1] Callback recebido");
       const reviewId = data.split(":")[1];
-
-      // Responder imediatamente ao callback para nunca travar o botão
       await answerCallbackQuery(callbackId, "⏳ Processando publicação...");
 
       const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("Confirmar & Publicar", reviewId, chatId, review);
 
-      if (!review) {
-        console.warn(`[TELEGRAM PUBLISH ERROR] Revisão ${reviewId} não encontrada ou expirada.`);
+      if (!validation.valid || !review) {
         if (chatId) {
-          await sendTelegramMessage(chatId, "⚠️ <b>Sessão de revisão expirada ou já finalizada.</b> Envie o link novamente.");
+          if (!review) {
+            await sendTelegramMessage(chatId, "⚠️ <b>Revisão não localizada no sistema.</b> Envie o link da peça novamente.");
+          } else {
+            await sendTelegramMessage(chatId, `⚠️ <b>${validation.reason}</b>`);
+          }
         }
         return;
       }
-      console.log("[TELEGRAM PUBLISH 2] Revisão localizada:", reviewId);
 
       if (!review.preco || review.preco <= 0) {
         console.warn("[TELEGRAM PUBLISH ERROR] Preço inválido na revisão.");
@@ -471,7 +514,6 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         }
         return;
       }
-      console.log("[TELEGRAM PUBLISH 3] Preço validado:", review.preco);
 
       try {
         const siteBaseUrl = process.env.APP_URL || "https://cerberus-static-catalog.onrender.com";
@@ -499,48 +541,38 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         }
 
         if (!publishedProduct || !publishedProduct.id) {
-          throw new Error("Falha ao gravar produto no Supabase.");
+          throw new Error("Falha ao gravar produto na tabela public.products do Supabase.");
         }
-        console.log("[TELEGRAM PUBLISH 4] Produto gravado no Supabase. ID:", publishedProduct.id);
+        console.log("[TELEGRAM PUBLISH] Produto gravado no Supabase public.products. ID:", publishedProduct.id);
 
+        // 1. Verificação no Banco de Dados (Supabase public.products)
         const doubleCheck = await productsRepository.getProductByIdOrSlug(publishedProduct.id);
         if (!doubleCheck) {
-          throw new Error("Produto não localizado na verificação pós-gravação do Supabase.");
+          throw new Error("Produto não localizado na verificação de confirmação do banco Supabase.");
         }
-        console.log("[TELEGRAM PUBLISH 5] Produto confirmado no Supabase com sucesso.");
 
-        console.log("[TELEGRAM PUBLISH 6] CatalogSync iniciado...");
-        const { syncCatalogAndDeploy } = await import("./catalogSync");
-        const syncResult = await syncCatalogAndDeploy(publishedProduct.produto || review.produto, publishedProduct.id);
-
-        if (!syncResult.jsonCount && syncResult.supabaseCount > 0) {
-          throw new Error("Falha ao regenerar o arquivo products.json estático.");
-        }
-        console.log("[TELEGRAM PUBLISH 7] products.json regenerado. Itens:", syncResult.jsonCount);
-
-        console.log("[TELEGRAM PUBLISH 8] Deploy do Static Site acionado via hook.");
-
-        // Verificação final no catálogo público
-        const publicCheckUrl = `${syncResult.staticSiteUrl}/data/products.json?t=${Date.now()}`;
-        console.log(`[TELEGRAM PUBLISH 9] Verificando catálogo público em ${publicCheckUrl}...`);
-        
-        let foundPublic = false;
+        // 2. Verificação na API Pública via requisição HTTP real (/api/products)
+        let visibleInHttpApi = false;
         try {
-          const pubRes = await fetch(publicCheckUrl);
-          if (pubRes.ok) {
-            const pubJson = await pubRes.json();
-            if (Array.isArray(pubJson) && pubJson.some((p: any) => p.id === publishedProduct.id)) {
-              foundPublic = true;
+          const localPort = process.env.PORT || "3000";
+          const httpRes = await fetch(`http://127.0.0.1:${localPort}/api/products`);
+          if (httpRes.ok) {
+            const apiData = await httpRes.json();
+            const list = apiData.products || apiData.data || (Array.isArray(apiData) ? apiData : []);
+            if (Array.isArray(list) && list.some((p: any) => p.id === publishedProduct.id)) {
+              visibleInHttpApi = true;
             }
           }
-        } catch (chkErr) {
-          console.warn("[TELEGRAM PUBLISH WARNING] Falha na checagem pública imediata:", chkErr);
+        } catch (httpErr: any) {
+          console.warn("[TELEGRAM PUBLISH WARNING] Falha ao consultar endpoint HTTP /api/products:", httpErr?.message);
         }
 
-        console.log(`[TELEGRAM PUBLISH 10] Publicação concluída. Visível no site público: ${foundPublic ? 'Sim' : 'Pendente de propagação CDN'}`);
+        if (!visibleInHttpApi) {
+          throw new Error("Produto gravado no Supabase, mas a requisição HTTP real para /api/products não retornou a peça.");
+        }
 
-        // Apenas agora remove a revisão pendente
-        await telegramRepo.deletePendingReview(reviewId);
+        review.status = "published";
+        await telegramRepo.savePendingReview(review);
         await telegramRepo.deleteUserState(senderId);
 
         const productUrl = `${siteBaseUrl}/produto/${publishedProduct.slug || publishedProduct.id}`;
@@ -552,7 +584,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           `💰 <b>Preço:</b> R$ ${review.preco.toFixed(2).replace(".", ",")}\n` +
           `🆔 <b>REF:</b> ${publishedProduct.ref || 'N/A'}\n\n` +
           `🔗 <b>Ver no site:</b>\n${productUrl}\n\n` +
-          `⚡ <i>Supabase gravado & Catálogo estático atualizado (${syncResult.jsonCount} peças).</i>`;
+          `⚡ <i>Confirmado em public.products no Supabase e visível em /api/products.</i>`;
 
         if (chatId && messageId) {
           await editTelegramMessageCaption(chatId, messageId, successText);
@@ -579,9 +611,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data.startsWith("edit_price:")) {
       const reviewId = data.split(":")[1];
       const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("Alterar Preço", reviewId, chatId, review);
 
-      if (!review) {
-        await answerCallbackQuery(callbackId, "⚠️ Sessão de revisão expirada.", true);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
+        if (chatId && !review) {
+          await sendTelegramMessage(chatId, "⚠️ <b>Revisão não localizada no sistema.</b> Envie o link da peça novamente.");
+        }
         return;
       }
 
@@ -602,9 +638,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data.startsWith("edit_cat:")) {
       const reviewId = data.split(":")[1];
       const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("Alterar Categoria", reviewId, chatId, review);
 
-      if (!review) {
-        await answerCallbackQuery(callbackId, "⚠️ Sessão de revisão expirada.", true);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
+        if (chatId && !review) {
+          await sendTelegramMessage(chatId, "⚠️ <b>Revisão não localizada no sistema.</b> Envie o link da peça novamente.");
+        }
         return;
       }
 
@@ -649,9 +689,10 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       const reviewId = parts[1];
       const selectedCategory = parts[2];
       const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback(`Definir Categoria (${selectedCategory})`, reviewId, chatId, review);
 
-      if (!review) {
-        await answerCallbackQuery(callbackId, "⚠️ Sessão de revisão expirada.", true);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
         return;
       }
 
@@ -674,9 +715,10 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data.startsWith("back_rev:")) {
       const reviewId = data.split(":")[1];
       const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("Voltar ao Card", reviewId, chatId, review);
 
-      if (!review) {
-        await answerCallbackQuery(callbackId, "⚠️ Sessão expirada.", true);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
         return;
       }
 
@@ -696,7 +738,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     // Ação: Cancelar Revisão
     if (data.startsWith("cancel_rev:")) {
       const reviewId = data.split(":")[1];
-      await telegramRepo.deletePendingReview(reviewId);
+      const review = await telegramRepo.getPendingReview(reviewId);
+      logAndValidateReviewCallback("Cancelar Revisão", reviewId, chatId, review);
+
+      if (review) {
+        review.status = "cancelled";
+        await telegramRepo.savePendingReview(review);
+      }
       await telegramRepo.deleteUserState(senderId);
 
       await answerCallbackQuery(callbackId, "❌ Cadastro cancelado.");

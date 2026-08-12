@@ -28,9 +28,20 @@ export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
 if (supabase) {
   console.log("⚡ [Supabase] PostgreSQL ativado e conectado no Repository!");
   console.log(`⚡ [Supabase] URL: ${supabaseUrl}`);
-  console.log(`⚡ [Supabase] Key Length: ${supabaseKey.length} chars`);
 } else {
-  console.warn("ℹ️ [Supabase] Não configurado ou chaves ausentes. Utilizando fallback local data/products.json.");
+  console.error("❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!");
+}
+
+/**
+ * Garante que o cliente Supabase esteja ativo. Não permite fallback local.
+ */
+export function requireSupabase(): SupabaseClient {
+  if (!supabase) {
+    throw new Error(
+      "CONFIGURAÇÃO INCORRETA DO SISTEMA: SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY (ou SUPABASE_KEY) são obrigatórios. O catálogo exige acesso direto à tabela public.products do Supabase como fonte única de verdade."
+    );
+  }
+  return supabase;
 }
 
 /**
@@ -55,131 +66,101 @@ export function isValidProductLink(link?: string): boolean {
   }
 }
 
-function getStoredProductsFromFile(): Product[] {
-  try {
-    if (fs.existsSync(PRODUCTS_FILE)) {
-      const raw = fs.readFileSync(PRODUCTS_FILE, "utf-8");
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((p: Product) => isValidProductLink(p.link));
-      }
-    }
-  } catch (err) {
-    console.error("Erro ao ler produtos do arquivo:", err);
-  }
-  return [];
-}
-
 function saveStoredProductsToFile(products: Product[]) {
   try {
     fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2), "utf-8");
   } catch (err) {
-    console.error("Erro ao salvar produtos no arquivo:", err);
+    console.warn("Aviso ao salvar cópia de backup local:", err);
   }
 }
 
 /**
- * Salva a lista de produtos no arquivo local e faz upsert no Supabase (se configurado)
+ * Salva a lista de produtos diretamente na tabela public.products do Supabase
  */
 async function saveProducts(products: Product[]): Promise<void> {
+  const client = requireSupabase();
+
   saveStoredProductsToFile(products);
 
-  if (supabase) {
-    const formatted = products.map((p) => ({
-      id: p.id,
-      ref: p.ref,
-      produto: p.produto,
-      categoria: p.categoria,
-      preco: Number(p.preco) || 0,
-      imagens: p.imagens,
-      link: p.link,
-      ativo: p.ativo !== undefined ? p.ativo : true,
-      destaque: Boolean(p.destaque),
-      status: p.status || "published",
-      created_by: p.createdBy || "system",
-      slug: p.slug || generateSlug(p.produto),
-      descricao: p.descricao || "",
-      pagina_ponte_url: p.paginaPonteUrl || ""
-    }));
+  const formatted = products.map((p) => ({
+    id: p.id,
+    ref: p.ref,
+    produto: p.produto,
+    categoria: p.categoria,
+    preco: Number(p.preco) || 0,
+    imagens: p.imagens,
+    link: p.link,
+    ativo: p.ativo !== undefined ? p.ativo : true,
+    destaque: Boolean(p.destaque),
+    status: p.status || "published",
+    created_by: p.createdBy || "system",
+    slug: p.slug || generateSlug(p.produto),
+    descricao: p.descricao || "",
+    pagina_ponte_url: p.paginaPonteUrl || ""
+  }));
 
-    console.log(`[Supabase] Tentando upsert de ${formatted.length} produtos...`);
-    const { error } = await supabase.from("products").upsert(formatted, { onConflict: "id" });
-    if (error) {
-      if (error.code === "PGRST205") {
-        console.warn("⚠️ [Supabase] A tabela 'public.products' ainda não foi criada.");
-        return;
-      }
-      console.error("❌ [Supabase] ERRO CRÍTICO AO GRAVAR:", error.message);
-      throw new Error(`Falha de persistência no banco Supabase: ${error.message}`);
-    }
-    console.log("✅ [Supabase] Upsert concluído com sucesso!");
+  console.log(`[Supabase] Gravando ${formatted.length} produtos em public.products...`);
+  const { error } = await client.from("products").upsert(formatted, { onConflict: "id" });
+  if (error) {
+    console.error("❌ [Supabase] ERRO CRÍTICO AO GRAVAR EM public.products:", error.message);
+    throw new Error(`Falha de persistência no banco Supabase (public.products): ${error.message}`);
   }
+  console.log("✅ [Supabase] Gravação em public.products concluída com sucesso!");
 
-  // Sincronização automática do catálogo estático e GitHub após qualquer alteração
+  // Sincronização automática auxiliar (não-bloqueante se falhar)
   try {
     await exportStaticProductsJson();
-    console.log("⚡ [Auto-Sync] public/data/products.json regenerado com sucesso após alteração no catálogo!");
-    const syncOk = await syncCatalogToGitHub("update: catalog products updated via repository");
-    if (!syncOk) {
-      throw new Error("Falha ao sincronizar com GitHub (syncCatalogToGitHub retornou false)");
-    }
+    await syncCatalogToGitHub("update: catalog products updated via repository");
   } catch (syncErr: any) {
-    console.error("❌ [GitHub Sync Error] Falha ao sincronizar catálogo com GitHub:", syncErr);
-    throw syncErr;
+    console.warn("⚠️ [Sync Info] Aviso na sincronização estática/GitHub:", syncErr?.message);
   }
 }
 
 /**
- * Busca todos os produtos ativos do banco/cache
+ * Busca todos os produtos diretamente da tabela public.products do Supabase
  */
 export async function getProducts(): Promise<Product[]> {
-  if (supabase) {
-    const { data, error } = await supabase
-      .from("products")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      if (error.code === "PGRST205") {
-        console.warn("⚠️ A tabela 'public.products' ainda não foi criada no Supabase.");
-        return getStoredProductsFromFile();
-      }
-      console.error("❌ ERRO CRÍTICO NO SUPABASE ao buscar produtos:", error.message);
-      throw new Error(`Falha de consulta no banco de dados Supabase: ${error.message}`);
-    }
-
-    if (Array.isArray(data) && data.length > 0) {
-      const mapped = data.map((item: any) => ({
-        id: item.id,
-        ref: item.ref || item.ref_code,
-        produto: item.produto || item.title || item.name,
-        categoria: item.categoria || item.category,
-        preco: Number(item.preco || item.price || 0),
-        imagens: Array.isArray(item.imagens)
-          ? item.imagens
-          : typeof item.imagens === "string"
-          ? JSON.parse(item.imagens)
-          : [],
-        link: item.link || item.affiliate_url,
-        ativo: item.ativo !== undefined ? item.ativo : true,
-        destaque: Boolean(item.destaque),
-        status: item.status || "published",
-        createdBy: item.created_by || item.createdBy,
-        slug: item.slug || generateSlug(item.produto || ""),
-        descricao: item.descricao || item.description || "",
-        paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || ""
-      }));
-
-      // Filtra produtos sem link de aquisição válido
-      return mapped.filter((p: Product) => isValidProductLink(p.link));
-    }
-
-    if (Array.isArray(data) && data.length === 0) {
-      return [];
-    }
+  if (!supabase) {
+    console.warn("⚠️ [Supabase Warning] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente. Retornando lista vazia.");
+    return [];
   }
 
-  return getStoredProductsFromFile();
+  const { data, error } = await supabase
+    .from("products")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    console.error("❌ ERRO CRÍTICO NO SUPABASE ao buscar produtos em public.products:", error.message);
+    throw new Error(`Falha de consulta no banco de dados Supabase (public.products): ${error.message}`);
+  }
+
+  if (Array.isArray(data)) {
+    const mapped = data.map((item: any) => ({
+      id: item.id,
+      ref: item.ref || item.ref_code,
+      produto: item.produto || item.title || item.name,
+      categoria: item.categoria || item.category,
+      preco: Number(item.preco || item.price || 0),
+      imagens: Array.isArray(item.imagens)
+        ? item.imagens
+        : typeof item.imagens === "string"
+        ? JSON.parse(item.imagens)
+        : [],
+      link: item.link || item.affiliate_url,
+      ativo: item.ativo !== undefined ? item.ativo : true,
+      destaque: Boolean(item.destaque),
+      status: item.status || "published",
+      createdBy: item.created_by || item.createdBy,
+      slug: item.slug || generateSlug(item.produto || ""),
+      descricao: item.descricao || item.description || "",
+      paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || ""
+    }));
+
+    return mapped.filter((p: Product) => isValidProductLink(p.link));
+  }
+
+  return [];
 }
 
 /**

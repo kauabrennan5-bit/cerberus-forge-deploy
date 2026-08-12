@@ -172,18 +172,33 @@ async function startServer() {
 
   // GET /api/products - Get all active products
   app.get("/api/products", async (req, res) => {
-    const products = await productsRepository.getProducts();
-    return res.json({ success: true, products, data: products });
+    try {
+      const products = await productsRepository.getProducts();
+      return res.json({ success: true, products, data: products });
+    } catch (err: any) {
+      console.error("❌ [/api/products] Erro de repositório:", err.message);
+      return res.status(500).json({
+        success: false,
+        error: err.message || "Erro interno ao carregar produtos.",
+        products: [],
+        data: []
+      });
+    }
   });
 
   // GET /api/products/:idOrSlug - Get single product details
   app.get("/api/products/:idOrSlug", async (req, res) => {
-    const { idOrSlug } = req.params;
-    const product = await productsRepository.getProductByIdOrSlug(idOrSlug);
-    if (!product) {
-      return res.status(404).json({ success: false, error: "Produto não encontrado" });
+    try {
+      const { idOrSlug } = req.params;
+      const product = await productsRepository.getProductByIdOrSlug(idOrSlug);
+      if (!product) {
+        return res.status(404).json({ success: false, error: "Produto não encontrado" });
+      }
+      return res.json({ success: true, product });
+    } catch (err: any) {
+      console.error("❌ [/api/products/:idOrSlug] Erro de repositório:", err.message);
+      return res.status(500).json({ success: false, error: err.message || "Erro ao buscar produto." });
     }
-    return res.json({ success: true, product });
   });
 
   // POST /api/products - Create new product with requireAdminAuth middleware
