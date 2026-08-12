@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { exportStaticProductsJson } from "./exportProductsJson";
+import { exportStaticProductsJson } from "../services/exportProductsJson";
 import { syncCatalogToGitHub } from "../services/githubCatalogSync";
 
 dotenv.config();
