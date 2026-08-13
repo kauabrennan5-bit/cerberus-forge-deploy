@@ -670,28 +670,28 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
 
       const p = stats.product;
-      let periodClicks = stats.clicks7d;
-      let periodLabel = "7 dias";
-      if (period === "today") { periodClicks = stats.todayClicks; periodLabel = "Hoje"; }
-      else if (period === "30d") { periodClicks = stats.clicks30d; periodLabel = "30 dias"; }
-      else if (period === "total") { periodClicks = stats.totalClicks; periodLabel = "Total"; }
+      const shortTitle = p.produto.length > 38 ? p.produto.slice(0, 35) + "..." : p.produto;
+
+      const totalMkt = (stats.marketplaceCounts.Shopee || 0) + (stats.marketplaceCounts["Mercado Livre"] || 0);
+      const shopeePct = totalMkt > 0 ? Math.round(((stats.marketplaceCounts.Shopee || 0) / totalMkt) * 100) : 0;
+      const meliPct = totalMkt > 0 ? Math.round(((stats.marketplaceCounts["Mercado Livre"] || 0) / totalMkt) * 100) : 0;
 
       const text = `📊 <b>ANALYTICS DO PRODUTO</b>\n` +
                    `━━━━━━━━━━━━━━━━━━\n\n` +
-                   `📦 <b>${p.produto}</b>\n` +
-                   `${p.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"} (REF: <code>${p.ref}</code>)\n\n` +
-                   `👆 <b>Cliques</b>\n\n` +
+                   `📦 <b>${shortTitle}</b>\n` +
+                   `REF: <code>${p.ref}</code> | ${p.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"}\n\n` +
+                   `📈 <b>Desempenho</b>\n` +
                    `• Hoje: <b>${stats.todayClicks}</b>\n` +
                    `• 7 dias: <b>${stats.clicks7d}</b>\n` +
                    `• 30 dias: <b>${stats.clicks30d}</b>\n` +
                    `• Total: <b>${stats.totalClicks}</b>\n\n` +
-                   `━━━━━━━━━━━━━━━━━━\n` +
-                   `🛒 <b>MARKETPLACES</b>\n\n` +
-                   `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
-                   `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n\n` +
-                   `━━━━━━━━━━━━━━━━━━\n` +
-                   `🕐 <b>Último clique:</b>\n${stats.lastClickTime}\n\n` +
-                   `🔗 <b>Última origem:</b>\nDisponível no sistema\n` +
+                   `🛒 <b>Marketplaces</b>\n` +
+                   `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b> (${shopeePct}%)\n` +
+                   `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b> (${meliPct}%)\n\n` +
+                   `🕐 <b>Último clique</b>\n` +
+                   `• ${stats.lastClickTime}\n\n` +
+                   `🌐 <b>Origem</b>\n` +
+                   `• ${stats.lastUtmSource}\n` +
                    `━━━━━━━━━━━━━━━━━━`;
 
       const keyboard = {
@@ -702,8 +702,14 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
             { text: period === "30d" ? "• 30d •" : "30d", callback_data: `analytics_product:${p.id}:30d` },
             { text: period === "total" ? "• Total •" : "Total", callback_data: `analytics_product:${p.id}:total` }
           ],
-          [{ text: "🔄 Atualizar", callback_data: `analytics_product:${p.id}:${period}` }],
-          [{ text: "⬅️ Produtos", callback_data: "analytics_products:0" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+          [
+            { text: "🔎 Trocar produto", callback_data: "analytics_products:0" },
+            { text: "📊 Ranking", callback_data: "analytics_ranking:7d" }
+          ],
+          [
+            { text: "⬅️ Voltar", callback_data: "analytics_products:0" },
+            { text: "🏠 Painel", callback_data: "admin_menu" }
+          ]
         ]
       };
 

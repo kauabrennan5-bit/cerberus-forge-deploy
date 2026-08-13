@@ -12,3 +12,12 @@
 - [x] Atualizar o telegramBot.ts com o novo menu principal, visão geral de analytics, lista paginada de produtos, analytics detalhado por produto com períodos, ranking e tratamento de erros sem fallback.
 - [x] Preservar integralmente o tracking validado no commit 109d95b e o restante do bot/catálogo.
 - [x] Executar build de produção, testes e enviar commit para a branch main.
+
+# Melhoria de UX/UI do Analytics por Produto no Telegram
+
+- [x] Abreviar títulos de produtos longos e exibir nome completo quando necessário.
+- [x] Organizar métricas em blocos visuais claros (📈 Desempenho, 🛒 Marketplaces, 🕐 Último clique, 🌐 Origem).
+- [x] Destacar o período atualmente selecionado (Hoje, 7 dias, 30 dias, Total).
+- [x] Adicionar botões inline (🔎 Trocar produto, 📊 Ranking, ⬅️ Voltar, 🏠 Painel).
+- [x] Mostrar percentual por marketplace e tratar origem não identificada sem inventar dados.
+- [x] Executar build de produção, validar e enviar para main.

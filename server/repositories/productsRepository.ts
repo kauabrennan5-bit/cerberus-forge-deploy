@@ -490,6 +490,7 @@ export async function getProductAnalytics(identifier: string, period: string = '
   let prevClicks30d = 0;
   const marketplaceCounts: Record<string, number> = { Shopee: 0, "Mercado Livre": 0 };
   let lastClickTime: string | null = null;
+  let lastUtmSource: string | null = null;
 
   for (const c of clicks) {
     const createdAt = c.created_at ? new Date(c.created_at) : new Date();
@@ -497,6 +498,9 @@ export async function getProductAnalytics(identifier: string, period: string = '
 
     if (!lastClickTime || createdAt > new Date(lastClickTime)) {
       lastClickTime = c.created_at;
+      if (c.utm_source) {
+        lastUtmSource = c.utm_source;
+      }
     }
 
     if (dateStr === todayStr) todayClicks++;
@@ -528,7 +532,8 @@ export async function getProductAnalytics(identifier: string, period: string = '
     prevClicks30d,
     totalClicks: clicks.length,
     marketplaceCounts,
-    lastClickTime: lastClickTime ? new Date(lastClickTime).toLocaleString("pt-BR") : "Nunca"
+    lastClickTime: lastClickTime ? new Date(lastClickTime).toLocaleString("pt-BR") : "Nunca",
+    lastUtmSource: lastUtmSource || "Não identificada"
   };
 }
 
