@@ -477,3 +477,86 @@ export async function getAnalyticsSummary(): Promise<any> {
     topProducts
   };
 }
+
+/**
+ * Retorna os detalhes de analytics para um produto específico (por ID, REF ou Slug) e período (today, 7d, 30d, total)
+ */
+export async function getProductAnalytics(identifier: string, period: string = '7d'): Promise<any> {
+  const products = await getProducts();
+  const product = products.find(p => p.id === identifier || p.ref === identifier || p.slug === identifier || generateSlug(p.produto) === identifier);
+
+  if (!product) {
+    return null;
+  }
+
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para analytics operacionais.");
+  }
+
+  const { data, error } = await supabase
+    .from("product_clicks")
+    .select("*")
+    .eq("product_id", product.id);
+
+  if (error) {
+    throw new Error("Falha ao consultar cliques do produto no Supabase: " + error.message);
+  }
+
+  const clicks = data || [];
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const yesterdayStr = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const prev7DaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const prev30DaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
+  let todayClicks = 0;
+  let yesterdayClicks = 0;
+  let clicks7d = 0;
+  let prevClicks7d = 0;
+  let clicks30d = 0;
+  let prevClicks30d = 0;
+  const marketplaceCounts: Record<string, number> = { Shopee: 0, "Mercado Livre": 0 };
+  let lastClickTime: string | null = null;
+
+  for (const c of clicks) {
+    const createdAt = c.created_at ? new Date(c.created_at) : new Date();
+    const dateStr = createdAt.toISOString().slice(0, 10);
+
+    if (!lastClickTime || createdAt > new Date(lastClickTime)) {
+      lastClickTime = c.created_at;
+    }
+
+    if (dateStr === todayStr) todayClicks++;
+    if (dateStr === yesterdayStr) yesterdayClicks++;
+
+    if (createdAt >= sevenDaysAgo) {
+      clicks7d++;
+    } else if (createdAt >= prev7DaysAgo) {
+      prevClicks7d++;
+    }
+
+    if (createdAt >= thirtyDaysAgo) {
+      clicks30d++;
+    } else if (createdAt >= prev30DaysAgo) {
+      prevClicks30d++;
+    }
+
+    const mkt = (c.product_name || "").toLowerCase().includes("mercado") ? "Mercado Livre" : "Shopee";
+    marketplaceCounts[mkt] = (marketplaceCounts[mkt] || 0) + 1;
+  }
+
+  return {
+    product,
+    todayClicks,
+    yesterdayClicks,
+    clicks7d,
+    prevClicks7d,
+    clicks30d,
+    prevClicks30d,
+    totalClicks: clicks.length,
+    marketplaceCounts,
+    lastClickTime: lastClickTime ? new Date(lastClickTime).toLocaleString("pt-BR") : "Nunca"
+  };
+}
