@@ -3,12 +3,13 @@ import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
 
+
 dotenv.config();
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const REPO_OWNER = "kauabrennan5-bit";
 const REPO_NAME = "cerberus-forge-deploy";
-const FILE_PATH = "data/products.json";
+const FILE_PATH = "public/data/products.json";
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
@@ -23,9 +24,11 @@ export async function syncCatalogToGitHub(message: string = "update: catalog pro
   }
 
   try {
-    const localPath = path.join(process.cwd(), "data", "products.json");
+    // Sincroniza o arquivo público gerado pelo exportador estático (public/data/products.json)
+    const localPath = path.join(process.cwd(), "public", "data", "products.json");
+
     if (!fs.existsSync(localPath)) {
-      console.error("❌ [GitHub Sync] Arquivo local data/products.json não encontrado.");
+      console.error("❌ [GitHub Sync] Impossível sincronizar: products.json não gerado.");
       return false;
     }
 
@@ -57,7 +60,7 @@ export async function syncCatalogToGitHub(message: string = "update: catalog pro
       message: `${message} [bot]`,
       content: contentEncoded,
       sha: sha,
-      branch: "main"
+      branch: "master"
     });
 
     console.log("✅ [GitHub Sync] Catálogo sincronizado com sucesso no GitHub!");

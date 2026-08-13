@@ -162,7 +162,7 @@ export interface PendingReview {
   imagens: string[];
   normalizedUrl: string;
   descricao?: string;
-  status?: "pending" | "published" | "cancelled";
+  status?: "pending" | "published" | "cancelled" | "expired";
   cardMessageId?: number;
   existingProduct?: any;
 }
@@ -193,18 +193,21 @@ function buildMainReviewKeyboard(reviewId: string) {
 async function extractProductForReview(url: string): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
     const scraped = await fetchProductDataFromUrl(url);
-    if (!scraped || !scraped.success) {
-      return { success: false, error: scraped?.error || "Falha ao extrair dados do link." };
+    const hasExtractedData = Boolean(scraped?.title || scraped?.price !== null || scraped?.images?.length);
+    if (!scraped || !hasExtractedData) {
+      return { success: false, error: "Falha ao extrair dados do link." };
     }
+
+    const marketplace = detectMarketplace(url);
     return {
       success: true,
       data: {
         produto: scraped.title || "Produto Cerberus",
-        categoria: scraped.category || "Acessórios",
+        categoria: marketplace === "Outros" ? "Acessórios" : marketplace,
         preco: Number(scraped.price) || 0,
         imagens: scraped.images && scraped.images.length > 0 ? scraped.images : ["https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&w=800&q=80"],
         normalizedUrl: url,
-        descricao: scraped.description || ""
+        descricao: scraped.rawContent || ""
       }
     };
   } catch (err: any) {
