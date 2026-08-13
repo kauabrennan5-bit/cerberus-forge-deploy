@@ -60,7 +60,7 @@ export async function syncCatalogToGitHub(message: string = "update: catalog pro
       message: `${message} [bot]`,
       content: contentEncoded,
       sha: sha,
-      branch: "master"
+      branch: "main"
     });
 
     console.log("✅ [GitHub Sync] Catálogo sincronizado com sucesso no GitHub!");

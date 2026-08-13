@@ -138,11 +138,33 @@ export async function deleteProduct(id: string, password?: string): Promise<ApiR
 }
 
 export async function sendMetaCapiEvent(eventData: any): Promise<boolean> {
-  return true;
+  try {
+    const res = await fetch(getApiUrl('/api/meta-capi'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(eventData),
+      keepalive: true
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('[Meta CAPI] Falha ao enviar evento CAPI:', err);
+    return false;
+  }
 }
 
 export async function trackProductClickApi(data: any): Promise<boolean> {
-  return true;
+  try {
+    const res = await fetch(getApiUrl('/api/track-click'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+      keepalive: true
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('[Analytics] Falha ao enviar clique para o backend:', err);
+    return false;
+  }
 }
 
 export async function extractProduct(url: string, rawText?: string, adminPass?: string): Promise<ApiResponse<any>> {

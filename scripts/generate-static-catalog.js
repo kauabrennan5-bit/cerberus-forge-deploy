@@ -103,5 +103,5 @@ async function generateStaticCatalog() {
 
 generateStaticCatalog().catch((err) => {
   console.error('❌ [Build Catalog] Erro fatal:', err);
-  process.exit(0); // Não quebra o build se houver falha de rede temporária
+  process.exit(1);
 });
