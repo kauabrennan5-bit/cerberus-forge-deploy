@@ -38,7 +38,7 @@ async function generateStaticCatalog() {
   if (rawProducts.length === 0) {
     console.log('ℹ️ [Build Catalog] Supabase falhou ou retornou vazio. Tentando buscar da API do Backend...');
     try {
-      const backendUrl = 'https://cerberus-forge-deploy.onrender.com/api/products';
+      const backendUrl = 'https://cerberus-forge-deploy-backend.onrender.com/api/products';
       const response = await fetch(backendUrl);
       if (response.ok) {
         const json = await response.json();
