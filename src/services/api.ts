@@ -19,15 +19,24 @@ export interface ApiResponse<T = any> {
   message?: string;
 }
 
+const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
+
 function getApiUrl(path: string): string {
   try {
-    if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin !== 'null' && !window.location.origin.startsWith('blob:')) {
-      return `${window.location.origin}${path.startsWith('/') ? path : '/' + path}`;
+    if (typeof window !== 'undefined' && window.location) {
+      const hostname = window.location.hostname;
+      // Se estivermos no domínio estático de produção, usa o Web Service do Render
+      if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-static-catalog')) {
+        return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+      }
+      if (window.location.origin && window.location.origin !== 'null' && !window.location.origin.startsWith('blob:')) {
+        return `${window.location.origin}${path.startsWith('/') ? path : '/' + path}`;
+      }
     }
   } catch {
-    // Fallback to relative path
+    // Fallback
   }
-  return path;
+  return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
 }
 
 /**
@@ -36,12 +45,12 @@ function getApiUrl(path: string): string {
  */
 export async function getProducts(): Promise<any[]> {
   try {
-    console.log('[Catalog API] Buscando catálogo dinâmico em: /api/products');
     const apiUrl = getApiUrl('/api/products');
+    console.log('[Catalog API] Buscando catálogo dinâmico em:', apiUrl);
     const response = await fetch(apiUrl);
     
     if (!response.ok) {
-      console.error(`[Catalog API Error] /api/products retornou HTTP ${response.status}.`);
+      console.error(`[Catalog API Error] ${apiUrl} retornou HTTP ${response.status}.`);
       return [];
     }
 
@@ -138,7 +147,7 @@ export async function trackProductClickApi(data: any): Promise<boolean> {
 
 export async function extractProduct(url: string, rawText?: string, adminPass?: string): Promise<ApiResponse<any>> {
   try {
-    const res = await fetch('/api/admin/extract', {
+    const res = await fetch(getApiUrl('/api/admin/extract'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, rawText, senha: adminPass })
