@@ -467,6 +467,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     // Ação: Submenu Analytics Operacional
         // Ação: Submenu Analytics Operacional
     if (data === "admin_analytics") {
+      console.log("[ANALYTICS_ROUTER_V2] callback admin_analytics acionado, commit d34e4f7+");
       await answerCallbackQuery(callbackId);
       let opSummary;
       let opError = null;
@@ -1194,6 +1195,7 @@ function logAndValidateReviewCallback(
     
     // Comando: /analytics (Tratado estritamente ANTES de pending reviews ou fallbacks)
     if (text.startsWith("/analytics")) {
+      console.log("[ANALYTICS_ROUTER_V2] /analytics recebido em produção, texto:", text);
       const parts = text.split(" ");
       const arg = parts[1] ? parts[1].trim() : "";
 
