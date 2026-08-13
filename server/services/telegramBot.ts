@@ -1,280 +1,262 @@
-import dotenv from "dotenv";
-import { extractProductForReview, detectMarketplace, ExtractedReviewData } from "./productAutomation";
+import path from "path";
+import fs from "fs";
+import { fetchProductDataFromUrl } from "./scraper";
 import * as productsRepository from "../repositories/productsRepository";
-import * as telegramRepo from "../repositories/telegramRepository";
 import * as categoriesRepository from "../repositories/categoriesRepository";
+import * as telegramRepo from "../repositories/telegramRepository";
+import * as googleAnalytics from "./googleAnalytics";
 
-dotenv.config();
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+const TELEGRAM_API_BASE = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 
-export { detectMarketplace };
-
-// Token e Whitelist Padrão com Fallbacks Confiáveis
-function getBotToken(): string {
-  const token = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
-  if (!token) {
-    throw new Error("TELEGRAM_BOT_TOKEN não configurado no ambiente");
-  }
-  return token;
+export function isUserAllowed(userId: string | number): boolean {
+  const allowedEnv = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "1976526372";
+  const allowedIds = allowedEnv.split(",").map(id => id.trim()).filter(Boolean);
+  return allowedIds.includes(String(userId));
 }
 
-/**
- * Verifica se um usuário do Telegram está autorizado na Whitelist
- */
-export function isUserAllowed(senderId: string | number): boolean {
-  const allowedStr = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "1976526372";
-  const allowedList = allowedStr.split(",").map((id) => id.trim()).filter(Boolean);
-
-  if (allowedList.length === 0) {
-    return false;
+export async function sendTelegramMessage(chatId: number | string, text: string, replyMarkup?: any): Promise<any> {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: "HTML"
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+    const res = await fetch(`${TELEGRAM_API_BASE}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Erro ao enviar mensagem Telegram:", err);
   }
-
-  return allowedList.includes(String(senderId));
 }
 
-// Interface da sessão de revisão pendente
-export interface PendingReview extends ExtractedReviewData {
+export async function sendTelegramPhoto(chatId: number | string, photoUrl: string, caption: string, replyMarkup?: any): Promise<any> {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      photo: photoUrl,
+      caption: caption,
+      parse_mode: "HTML"
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+    const res = await fetch(`${TELEGRAM_API_BASE}/sendPhoto`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Erro ao enviar foto Telegram:", err);
+  }
+}
+
+export async function editTelegramMessageText(chatId: number | string, messageId: number, text: string, replyMarkup?: any): Promise<any> {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: text,
+      parse_mode: "HTML"
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+    const res = await fetch(`${TELEGRAM_API_BASE}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Erro ao editar texto Telegram:", err);
+  }
+}
+
+export async function editTelegramMessageCaption(chatId: number | string, messageId: number, caption: string, replyMarkup?: any): Promise<any> {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    const payload: any = {
+      chat_id: chatId,
+      message_id: messageId,
+      caption: caption,
+      parse_mode: "HTML"
+    };
+    if (replyMarkup) {
+      payload.reply_markup = replyMarkup;
+    }
+    const res = await fetch(`${TELEGRAM_API_BASE}/editMessageCaption`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    return await res.json();
+  } catch (err) {
+    console.error("Erro ao editar legenda Telegram:", err);
+  }
+}
+
+export async function answerCallbackQuery(callbackQueryId: string, text?: string, showAlert: boolean = false): Promise<any> {
+  if (!TELEGRAM_BOT_TOKEN) return;
+  try {
+    const payload: any = {
+      callback_query_id: callbackQueryId,
+      show_alert: showAlert
+    };
+    if (text) payload.text = text;
+    await fetch(`${TELEGRAM_API_BASE}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch (err) {
+    console.error("Erro ao responder callback query:", err);
+  }
+}
+
+function detectMarketplace(url: string): string {
+  const lower = url.toLowerCase();
+  if (lower.includes("shopee")) return "Shopee";
+  if (lower.includes("mercadolivre") || lower.includes("mercadolado") || lower.includes("mercadol")) return "Mercado Livre";
+  return "Outros";
+}
+
+function parseAndNormalizePrice(input: string): number | null {
+  if (!input) return null;
+  let clean = input.replace(/[^0-9,.]/g, "").trim();
+  if (!clean) return null;
+  if (clean.includes(",") && clean.includes(".")) {
+    if (clean.indexOf(",") > clean.indexOf(".")) {
+      clean = clean.replace(".", "").replace(",", ".");
+    } else {
+      clean = clean.replace(",", "");
+    }
+  } else if (clean.includes(",")) {
+    clean = clean.replace(",", ".");
+  }
+  const val = parseFloat(clean);
+  return isNaN(val) ? null : val;
+}
+
+export interface PendingReview {
   id: string;
-  chatId: string | number;
-  senderId: string | number;
+  chatId: number;
+  senderId: number | string;
   firstName: string;
   username: string;
   createdAt: number;
   expiresAt?: number;
-  status?: "pending" | "published" | "cancelled" | "expired";
+  produto: string;
+  categoria: string;
+  preco: number;
+  imagens: string[];
+  normalizedUrl: string;
+  descricao?: string;
+  status?: "pending" | "published" | "cancelled";
   cardMessageId?: number;
+  existingProduct?: any;
 }
 
-/**
- * Normaliza o valor de preço enviado pelo usuário para um número decimal (maior que zero).
- * Suporta formatos: "72", "72,90", "R$ 72,90", "72.90", "r$ 72,90", "1.250,90"
- */
-export function parseAndNormalizePrice(input: string): number | null {
-  if (!input || typeof input !== "string") return null;
-
-  let cleaned = input
-    .replace(/^[rR]?\$\s*/, "")
-    .replace(/\$/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .trim();
-
-  if (!cleaned) return null;
-
-  if (cleaned.includes(".") && cleaned.includes(",")) {
-    if (cleaned.indexOf(".") < cleaned.indexOf(",")) {
-      cleaned = cleaned.replace(/\./g, "").replace(",", ".");
-    } else {
-      cleaned = cleaned.replace(/,/g, "");
-    }
-  } else if (cleaned.includes(",")) {
-    cleaned = cleaned.replace(",", ".");
-  }
-
-  const val = parseFloat(cleaned);
-  if (isNaN(val) || !isFinite(val)) return null;
-  if (val <= 0) return null;
-
-  return Math.round(val * 100) / 100;
-}
-
-/**
- * Envia uma mensagem de texto em formato HTML usando a API do Telegram
- */
-export async function sendTelegramMessage(
-  chatId: string | number,
-  text: string,
-  replyMarkup?: any
-): Promise<any> {
-  const token = getBotToken();
-  if (!token) return null;
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: "HTML",
-        disable_web_page_preview: false,
-        reply_markup: replyMarkup,
-      }),
-    });
-    return await res.json();
-  } catch (err) {
-    console.error("[Telegram Bot Error] Erro ao enviar mensagem:", err);
-    return null;
-  }
-}
-
-/**
- * Envia uma foto com legenda e botões inline
- */
-export async function sendTelegramPhoto(
-  chatId: string | number,
-  photoUrl: string,
-  caption: string,
-  replyMarkup?: any
-): Promise<any> {
-  const token = getBotToken();
-  if (!token) return null;
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        photo: photoUrl,
-        caption: caption,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup,
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      // Fallback para texto se a foto falhar
-      return await sendTelegramMessage(chatId, caption, replyMarkup);
-    }
-    return data;
-  } catch (err) {
-    console.warn("[Telegram Bot Warning] Falha ao enviar foto, fallback para texto:", err);
-    return await sendTelegramMessage(chatId, caption, replyMarkup);
-  }
-}
-
-/**
- * Responde a uma requisição de Callback Query (para parar o carregamento do botão inline)
- */
-export async function answerCallbackQuery(
-  callbackQueryId: string,
-  text?: string,
-  showAlert: boolean = false
-): Promise<any> {
-  const token = getBotToken();
-  if (!token) return null;
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        callback_query_id: callbackQueryId,
-        text: text,
-        show_alert: showAlert,
-      }),
-    });
-    return await res.json();
-  } catch (err) {
-    console.error("[Telegram Bot Error] Erro ao responder Callback Query:", err);
-    return null;
-  }
-}
-
-/**
- * Edita o texto de uma mensagem de texto enviada anteriormente
- */
-export async function editTelegramMessageText(
-  chatId: string | number,
-  messageId: number,
-  text: string,
-  replyMarkup?: any
-): Promise<any> {
-  const token = getBotToken();
-  if (!token) return null;
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: text,
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-        reply_markup: replyMarkup,
-      }),
-    });
-    return await res.json();
-  } catch (err) {
-    console.error("[Telegram Bot Error] Erro ao editar texto da mensagem:", err);
-    return null;
-  }
-}
-
-/**
- * Edita a legenda de uma mensagem de foto enviada anteriormente
- */
-export async function editTelegramMessageCaption(
-  chatId: string | number,
-  messageId: number,
-  caption: string,
-  replyMarkup?: any
-): Promise<any> {
-  const token = getBotToken();
-  if (!token) return null;
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/editMessageCaption`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        caption: caption,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup,
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      // Se não for uma mensagem de mídia com foto, tenta editar o texto
-      return await editTelegramMessageText(chatId, messageId, caption, replyMarkup);
-    }
-    return data;
-  } catch {
-    return await editTelegramMessageText(chatId, messageId, caption, replyMarkup);
-  }
-}
-
-/**
- * Monta o texto HTML formatado para o card de revisão do produto
- */
 function buildReviewCardText(review: PendingReview): string {
-  const priceFormatted = review.preco && review.preco > 0
-    ? `R$ ${review.preco.toFixed(2).replace(".", ",")}`
-    : `⚠️ <b>Preço não detectado.</b>\n👉 <i>Digite o preço de venda que deseja cadastrar.</i>`;
-
-  const existingNotice = review.existingProduct
-    ? `\n\n♻️ <i>Nota: Este produto já está cadastrado no acervo. Confirmar irá atualizar os dados.</i>`
-    : "";
-
-  return (
-    `📋 <b>REVISÃO DE CADASTRO CERBERUS</b>\n\n` +
-    `🏷️ <b>Produto:</b> ${review.produto}\n` +
-    `📁 <b>Categoria:</b> ${review.categoria}\n` +
-    `💰 <b>Preço:</b> ${priceFormatted}\n` +
-    `🛒 <b>Marketplace:</b> ${review.marketplace}\n` +
-    `🖼️ <b>Imagens:</b> ${review.imagens?.length || 0} encontradas\n` +
-    `🔗 <code>${review.normalizedUrl}</code>${existingNotice}\n\n` +
-    `<i>Confirme os dados ou ajuste o preço/categoria antes de publicar no acervo:</i>`
-  );
+  const precoStr = review.preco && review.preco > 0 ? `R$ ${review.preco.toFixed(2).replace(".", ",")}` : "⚠️ <i>Não detectado (Definir abaixo)</i>";
+  return `🛡️ <b>CERBERUS FINDS — PAINEL DE REVISÃO</b>\n\n` +
+         `🏷️ <b>Produto:</b> ${review.produto}\n` +
+         `📁 <b>Categoria:</b> ${review.categoria}\n` +
+         `💰 <b>Preço:</b> ${precoStr}\n` +
+         `🔗 <b>Link:</b> <code>${review.normalizedUrl}</code>\n\n` +
+         `<i>Revise os dados abaixo antes de confirmar a publicação:</i>`;
 }
 
-/**
- * Monta os botões inline do card principal de revisão
- */
 function buildMainReviewKeyboard(reviewId: string) {
   return {
     inline_keyboard: [
       [{ text: "✅ Confirmar & Publicar", callback_data: `confirm_pub:${reviewId}` }],
       [
         { text: "💰 Alterar Preço", callback_data: `edit_price:${reviewId}` },
-        { text: "🏷️ Alterar Categoria", callback_data: `edit_cat:${reviewId}` }
+        { text: "📁 Alterar Categoria", callback_data: `edit_cat:${reviewId}` }
       ],
       [{ text: "❌ Cancelar", callback_data: `cancel_rev:${reviewId}` }]
     ]
   };
+}
+
+async function extractProductForReview(url: string): Promise<{ success: boolean; data?: any; error?: string }> {
+  try {
+    const scraped = await fetchProductDataFromUrl(url);
+    if (!scraped || !scraped.success) {
+      return { success: false, error: scraped?.error || "Falha ao extrair dados do link." };
+    }
+    return {
+      success: true,
+      data: {
+        produto: scraped.title || "Produto Cerberus",
+        categoria: scraped.category || "Acessórios",
+        preco: Number(scraped.price) || 0,
+        imagens: scraped.images && scraped.images.length > 0 ? scraped.images : ["https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&w=800&q=80"],
+        normalizedUrl: url,
+        descricao: scraped.description || ""
+      }
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || "Erro interno no scraper." };
+  }
+}
+
+function logAndValidateReviewCallback(
+  actionName: string,
+  reviewId: string,
+  chatId: string | number | undefined,
+  review: PendingReview | null
+): { valid: boolean; reason?: string } {
+  const statusStr = review ? (review.status || "pending") : "não localizada";
+  let valid = true;
+  let reason = "OK";
+  if (!review) {
+    valid = false;
+    reason = "Revisão não localizada no sistema.";
+  } else if (statusStr === "published") {
+    valid = false;
+    reason = "Esta revisão já foi publicada.";
+  } else if (statusStr === "cancelled") {
+    valid = false;
+    reason = "Esta revisão foi cancelada.";
+  }
+  return { valid, reason };
+}
+
+/**
+ * Renderizador do Menu Principal /start e /admin
+ */
+async function renderMainMenu(chatId: number | string, messageId?: number, isEdit: boolean = false): Promise<void> {
+  const text = 
+    "🏛️ <b>CERBERUS FINDS</b>\n" +
+    "<b>Painel Administrativo</b>\n\n" +
+    "Selecione uma opção abaixo:";
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "➕ Adicionar produto", callback_data: "admin_add" }, { text: "📋 Produtos", callback_data: "products_list:0" }],
+      [{ text: "🔎 Buscar produto", callback_data: "products_search_init" }, { text: "📊 Visão geral", callback_data: "analytics_overview" }],
+      [{ text: "🎯 Analytics por produto", callback_data: "analytics_products:0" }, { text: "🏷️ Categorias", callback_data: "admin_categories" }],
+      [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "🩺 Status do sistema", callback_data: "admin_system" }]
+    ]
+  };
+
+  if (isEdit && messageId) {
+    await editTelegramMessageText(chatId, messageId, text, keyboard);
+  } else {
+    await sendTelegramMessage(chatId, text, keyboard);
+  }
 }
 
 /**
@@ -283,12 +265,11 @@ function buildMainReviewKeyboard(reviewId: string) {
 export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
   if (!update) return;
 
-  // 1. LIDAR COM CALLBACK QUERIES (Cliques nos botões inline)
+  // 1. CALLBACK QUERIES
   if (update.callback_query) {
     const cb = update.callback_query;
     const callbackId = cb.id;
     const senderId = cb.from?.id || "Desconhecido";
-    const firstName = cb.from?.first_name || "Anônimo";
     const data: string = cb.data || "";
     const msg = cb.message;
     const chatId = msg?.chat?.id;
@@ -299,396 +280,60 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
-    // INTERCEPTAÇÃO ABSOLUTA DE /analytics — ANTES DE QUALQUER ESTADO OU PENDING REVIEW
-    if (text.startsWith("/analytics") || text.toLowerCase() === "analytics") {
-      const parts = text.split(" ");
-      const arg = parts[1] ? parts[1].trim() : "";
-
-      if (arg) {
-        const stats = await productsRepository.getProductAnalytics(arg, "7d");
-        if (!stats) {
-          if (chatId) {
-            await sendTelegramMessage(chatId, `⚠️ Produto <code>${arg}</code> não encontrado no catálogo do Supabase.`);
-          }
-          return;
-        }
-
-        const p = stats.product;
-        const textResp = `📊 <b>ANALYTICS DO PRODUTO</b>\n\n` +
-                         `🛍️ <b>Nome:</b> ${p.produto}\n` +
-                         `🔖 <b>REF:</b> <code>${p.ref}</code>\n` +
-                         `🆔 <b>ID:</b> <code>${p.id}</code>\n` +
-                         `💰 <b>Preço:</b> R$ ${p.preco.toFixed(2).replace(".", ",")}\n` +
-                         `📂 <b>Categoria:</b> ${p.categoria}\n` +
-                         `🟢 <b>Status:</b> ${p.ativo ? "Ativo" : "Pausado"}\n\n` +
-                         `────────────────\n` +
-                         `🖱️ <b>CLIQUES (Últimos 7 dias)</b>\n` +
-                         `• Hoje: <b>${stats.todayClicks}</b> | Ontem: <b>${stats.yesterdayClicks}</b>\n` +
-                         `• 7 dias: <b>${stats.clicks7d}</b>\n` +
-                         `• 30 dias: <b>${stats.clicks30d}</b>\n` +
-                         `• Total: <b>${stats.totalClicks}</b>\n\n` +
-                         `🛒 <b>MARKETPLACE</b>\n` +
-                         `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
-                         `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n\n` +
-                         `🕐 Último clique: <b>${stats.lastClickTime}</b>`;
-
-        const keyboard = {
-          inline_keyboard: [
-            [
-              { text: "Hoje", callback_data: `analytics_prod:${p.id}:today` },
-              { text: "7d", callback_data: `analytics_prod:${p.id}:7d` },
-              { text: "30d", callback_data: `analytics_prod:${p.id}:30d` },
-              { text: "Total", callback_data: `analytics_prod:${p.id}:total` }
-            ],
-            [{ text: "📊 Analytics Geral", callback_data: "admin_analytics" }, { text: "🔗 Abrir produto", url: p.link }]
-          ]
-        };
-
-        if (chatId) {
-          await sendTelegramMessage(chatId, textResp, keyboard);
-        }
-        return;
-      } else {
-        let opSummary;
-        let opError = null;
-        try {
-          opSummary = await productsRepository.getAnalyticsSummary();
-        } catch (err: any) {
-          opError = err.message;
-        }
-
-        let textResp = "📊 <b>CERBERUS FINDS — ANALYTICS</b>\n\n";
-
-        if (opError) {
-          textResp += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
-        } else if (opSummary) {
-          textResp += "📦 <b>PRODUTOS</b>\n" +
-                      "• Total: <b>" + opSummary.totalProducts + "</b>\n" +
-                      "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
-                      "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
-                      "🖱️ <b>CLIQUES</b>\n" +
-                      "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
-                      "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
-                      "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n\n" +
-                      "🛍️ <b>MARKETPLACES</b>\n" +
-                      "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
-                      "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
-                      "🏆 <b>TOP PRODUTOS — 7 DIAS</b>\n" +
-                      (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda") + "\n\n" +
-                      "🕐 Dados atualizados em: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
-        }
-
-        const keyboard = {
-          inline_keyboard: [
-            [{ text: "🔎 Escolher Produto", callback_data: "analytics_select_page:0" }],
-            [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
-          ]
-        };
-
-        if (chatId) {
-          await sendTelegramMessage(chatId, textResp, keyboard);
-        }
-        return;
-      }
-    }
-
-    // --- NOVOS COMANDOS ADMINISTRATIVOS (CALLBACKS) ---
-
-    // Ação: Paginação de Produtos
-    if (data.startsWith("list_page:")) {
-      const page = parseInt(data.split(":")[1]);
+    // --- NAMESPACE: ADMIN / MENU ---
+    if (data === "admin_menu" || data === "admin_back") {
       await answerCallbackQuery(callbackId);
-      const products = await productsRepository.getProducts();
-      const pageSize = 10;
-      const start = page * pageSize;
-      const end = start + pageSize;
-      const paged = products.slice(start, end);
-      
-      let text = `📦 <b>CATÁLOGO CERBERUS (Pág ${page + 1})</b>\n\n`;
-      const buttons = [];
-      
-      for (const p of paged) {
-        text += `• <code>${p.ref}</code> - ${p.produto.slice(0, 30)}${p.produto.length > 30 ? '...' : ''} (${p.ativo ? '✅' : '⏸'})\n`;
-        buttons.push([{ text: `📝 Editar ${p.ref}`, callback_data: `admin_edit:${p.id}` }]);
-      }
-      
-      const navRow = [];
-      if (page > 0) navRow.push({ text: "⬅️ Anterior", callback_data: `list_page:${page - 1}` });
-      if (end < products.length) navRow.push({ text: "Próxima ➡️", callback_data: `list_page:${page + 1}` });
-      if (navRow.length > 0) buttons.push(navRow);
-      
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
-      }
+      if (chatId && messageId) await renderMainMenu(chatId, messageId, true);
       return;
     }
 
-    // Ação: Menu de Edição de Produto Específico
-    // Ação: Menu Principal /admin
-    if (data === "admin_menu") {
-      await answerCallbackQuery(callbackId);
-      const text = "🐺 <b>CERBERUS FINDS — PAINEL ADMINISTRATIVO</b>\n\nSelecione uma opção abaixo:";
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "📦 Produtos", callback_data: "admin_products" }, { text: "📊 Analytics", callback_data: "admin_analytics" }],
-          [{ text: "➕ Adicionar Produto", callback_data: "admin_add" }, { text: "⚙️ Categorias", callback_data: "admin_categories" }],
-          [{ text: "🔧 Sistema", callback_data: "admin_system" }]
-        ]
-      };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
-      return;
-    }
-    // Ação: Submenu Produtos
-    if (data === "admin_products") {
-      await answerCallbackQuery(callbackId);
-      const products = await productsRepository.getProducts();
-      const total = products.length;
-      const actives = products.filter(p => p.ativo !== false).length;
-      const inactives = total - actives;
-      const text = "📦 <b>GERENCIAMENTO DE PRODUTOS</b>\n\n" +
-                   "• Total: <b>" + total + "</b>\n" +
-                   "• Ativos: <b>" + actives + "</b>\n" +
-                   "• Inativos: <b>" + inactives + "</b>\n\n" +
-                   "<i>Escolha uma ação:</i>";
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "📋 Listar", callback_data: "list_page:0" }],
-          [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "⏸️ Ativos/Pausados", callback_data: "admin_toggle_list" }],
-          [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
-        ]
-      };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
-      return;
-    }
-    // Ação: Submenu Analytics Operacional
-        // Ação: Submenu Analytics Operacional
-    if (data === "admin_analytics") {
-      console.log("[ANALYTICS_CALLBACK_V3] entrando em admin_analytics");
-      console.log("[ANALYTICS_ROUTER_V2] callback admin_analytics acionado, commit d34e4f7+");
-      await answerCallbackQuery(callbackId);
-      let opSummary;
-      let opError = null;
-      try {
-        opSummary = await productsRepository.getAnalyticsSummary();
-      } catch (err: any) {
-        opError = err.message;
-      }
-
-      let text = "📊 <b>CERBERUS FINDS — ANALYTICS</b>\n\n";
-
-      if (opError) {
-        text += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
-      } else if (opSummary) {
-        text += "📦 <b>PRODUTOS</b>\n" +
-                "• Cadastrados: <b>" + opSummary.totalProducts + "</b>\n" +
-                "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
-                "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
-                "🖱️ <b>CLIQUES</b>\n" +
-                "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
-                "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
-                "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n\n" +
-                "🛍️ <b>MARKETPLACES</b>\n" +
-                "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
-                "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
-                "🏆 <b>TOP PRODUTOS</b>\n" +
-                (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda") + "\n\n" +
-                "<i>Fonte: Supabase (product_clicks)</i>";
-      }
-
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
-        ]
-      };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
-      return;
-    }
-
-        // Ação: Submenu Sistema
     if (data === "admin_system") {
       await answerCallbackQuery(callbackId);
       const products = await productsRepository.getProducts();
       const gaStatus = googleAnalytics.getGA4Status();
       const gaApiStr = gaStatus.isConfigured ? "🟢 Configurada" : "⚪ Não configurada";
-      const text = "🔧 <b>STATUS DO SISTEMA</b>\n\n" +
+      const text = "🩺 <b>STATUS DO SISTEMA</b>\n\n" +
                    "Backend 🟢\n" +
                    "Supabase 🟢\n" +
                    "Telegram 🟢\n" +
                    "API 🟢\n" +
                    "Site 🟢\n" +
                    "Analytics operacional 🟢\n" +
-                   "GA4 coleta frontend 🟢\n" +
                    "GA4 Data API " + gaApiStr + "\n\n" +
                    "📦 Produtos cadastrados: <b>" + products.length + "</b>\n" +
                    "🕒 Atualizado: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
-        ]
-      };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: "admin_menu" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 
-    
-    // Ação: Submenu Analytics Operacional
-    if (data === "admin_analytics") {
-      await answerCallbackQuery(callbackId);
-      let opSummary;
-      let opError = null;
-      try {
-        opSummary = await productsRepository.getAnalyticsSummary();
-      } catch (err: any) {
-        opError = err.message;
-      }
-
-      let text = "📊 <b>CERBERUS FINDS — ANALYTICS</b>\n\n";
-
-      if (opError) {
-        text += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
-      } else if (opSummary) {
-        text += "📦 <b>PRODUTOS</b>\n" +
-                "• Total: <b>" + opSummary.totalProducts + "</b>\n" +
-                "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
-                "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
-                "🖱️ <b>CLIQUES</b>\n" +
-                "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
-                "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
-                "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n\n" +
-                "🛍️ <b>MARKETPLACES</b>\n" +
-                "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
-                "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
-                "🏆 <b>TOP PRODUTOS — 7 DIAS</b>\n" +
-                (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda") + "\n\n" +
-                "🕐 Dados atualizados em: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
-      }
-
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🔎 Escolher Produto", callback_data: "analytics_select_page:0" }],
-          [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
-        ]
-      };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
-      return;
-    }
-
-    // Ação: Seleção Paginada de Produtos para Analytics
-    if (data.startsWith("analytics_select_page:")) {
-      console.log("[ANALYTICS_CALLBACK_V3] entrando em analytics_select_page:", data);
-      const page = parseInt(data.split(":")[1]);
+    if (data === "admin_highlights") {
       await answerCallbackQuery(callbackId);
       const products = await productsRepository.getProducts();
-      const pageSize = 7;
-      const start = page * pageSize;
-      const end = start + pageSize;
-      const paged = products.slice(start, end);
-
-      let text = `📊 <b>ESCOLHER PRODUTO (Pág ${page + 1})</b>\n\nSelecione o produto para ver os analytics detalhados:`;
+      const highlights = products.filter(p => p.destaque);
+      let text = `⭐ <b>DESTAQUES DO CATÁLOGO</b>\nTotal em destaque: <b>${highlights.length}</b>\n\n`;
       const buttons = [];
-
-      for (const p of paged) {
-        buttons.push([{ text: `[${p.ref}] ${p.produto.slice(0, 28)}`, callback_data: `analytics_prod:${p.id}:7d` }]);
+      for (const p of highlights.slice(0, 10)) {
+        text += `• <code>${p.ref}</code> - ${p.produto}\n`;
+        buttons.push([{ text: `✏️ ${p.ref}`, callback_data: `product_edit:${p.id}` }]);
       }
-
-      const navRow = [];
-      if (page > 0) navRow.push({ text: "◀️ Anterior", callback_data: `analytics_select_page:${page - 1}` });
-      if (end < products.length) navRow.push({ text: "Próxima ▶️", callback_data: `analytics_select_page:${page + 1}` });
-      if (navRow.length > 0) buttons.push(navRow);
-
-      buttons.push([{ text: "⬅️ Voltar para Analytics", callback_data: "admin_analytics" }]);
-
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
-      }
+      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_menu" }]);
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
       return;
     }
 
-    // Ação: Analytics de Produto Específico com Período
-    if (data.startsWith("analytics_prod:")) {
-      console.log("[ANALYTICS_CALLBACK_V3] entrando em analytics_prod:", data);
-      const parts = data.split(":");
-      const prodIdentifier = parts[1];
-      const period = parts[2] || "7d";
+    if (data === "admin_categories") {
       await answerCallbackQuery(callbackId);
-
-      const stats = await productsRepository.getProductAnalytics(prodIdentifier, period);
-      if (!stats) {
-        if (chatId && messageId) {
-          await editTelegramMessageText(chatId, messageId, "⚠️ <b>Produto não encontrado.</b>", {
-            inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: "analytics_select_page:0" }]]
-          });
-        }
-        return;
+      const cats = await categoriesRepository.getCategories();
+      let text = "🏷️ <b>GERENCIAR CATEGORIAS</b>\n\n";
+      const buttons = [];
+      for (const c of cats) {
+        text += `• ${c.name}\n`;
+        buttons.push([{ text: `✏️ Renomear ${c.name}`, callback_data: `rename_cat_init:${c.name}` }]);
       }
-
-      const p = stats.product;
-      let periodClicks = stats.clicks7d;
-      let periodLabel = "Últimos 7 dias";
-      if (period === "today") {
-        periodClicks = stats.todayClicks;
-        periodLabel = "Hoje";
-      } else if (period === "30d") {
-        periodClicks = stats.clicks30d;
-        periodLabel = "Últimos 30 dias";
-      } else if (period === "total") {
-        periodClicks = stats.totalClicks;
-        periodLabel = "Total Geral";
-      }
-
-      const text = `📊 <b>ANALYTICS DO PRODUTO</b>\n\n` +
-                   `🛍️ <b>Nome:</b> ${p.produto}\n` +
-                   `🔖 <b>REF:</b> <code>${p.ref}</code>\n` +
-                   `🆔 <b>ID:</b> <code>${p.id}</code>\n` +
-                   `💰 <b>Preço:</b> R$ ${p.preco.toFixed(2).replace(".", ",")}\n` +
-                   `📂 <b>Categoria:</b> ${p.categoria}\n` +
-                   `🟢 <b>Status:</b> ${p.ativo ? "Ativo" : "Pausado"}\n\n` +
-                   `────────────────\n` +
-                   `🖱️ <b>CLIQUES (${periodLabel})</b>\n` +
-                   `• Cliques: <b>${periodClicks}</b>\n` +
-                   `• Hoje: <b>${stats.todayClicks}</b> | Ontem: <b>${stats.yesterdayClicks}</b>\n` +
-                   `• 7 dias: <b>${stats.clicks7d}</b> (Anterior: ${stats.prevClicks7d})\n` +
-                   `• 30 dias: <b>${stats.clicks30d}</b> (Anterior: ${stats.prevClicks30d})\n` +
-                   `• Total: <b>${stats.totalClicks}</b>\n\n` +
-                   `🛒 <b>MARKETPLACE</b>\n` +
-                   `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
-                   `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n\n` +
-                   `────────────────\n` +
-                   `🕐 Último clique: <b>${stats.lastClickTime}</b>`;
-
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: period === "today" ? "• Hoje •" : "Hoje", callback_data: `analytics_prod:${p.id}:today` },
-            { text: period === "7d" ? "• 7d •" : "7d", callback_data: `analytics_prod:${p.id}:7d` },
-            { text: period === "30d" ? "• 30d •" : "30d", callback_data: `analytics_prod:${p.id}:30d` },
-            { text: period === "total" ? "• Total •" : "Total", callback_data: `analytics_prod:${p.id}:total` }
-          ],
-          [
-            { text: "📊 Analytics Geral", callback_data: "admin_analytics" },
-            { text: "✏️ Editar", callback_data: `admin_edit:${p.id}` }
-          ],
-          [
-            { text: p.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${p.id}` },
-            { text: "🔗 Abrir produto", url: p.link }
-          ],
-          [{ text: "⬅️ Escolher Outro Produto", callback_data: "analytics_select_page:0" }]
-        ]
-      };
-
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
+      buttons.push([{ text: "➕ Adicionar Categoria", callback_data: "add_cat_init" }]);
+      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_menu" }]);
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
       return;
     }
 
@@ -699,464 +344,300 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       return;
     }
-    // Ação: Listar Destaques
-    if (data === "admin_highlights") {
+
+    // --- NAMESPACE: PRODUCTS ---
+    if (data.startsWith("products_list:")) {
+      const page = parseInt(data.split(":")[1]) || 0;
       await answerCallbackQuery(callbackId);
       const products = await productsRepository.getProducts();
-      const highlights = products.filter(p => p.destaque === true);
-      let text = "⭐ <b>PRODUTOS EM DESTAQUE</b> (" + highlights.length + ")\n\n";
+      const pageSize = 5;
+      const start = page * pageSize;
+      const end = start + pageSize;
+      const paged = products.slice(start, end);
+      const total = products.length;
+      const actives = products.filter(p => p.ativo !== false).length;
+      const inactives = total - actives;
+
+      let text = `📋 <b>CATÁLOGO DE PRODUTOS</b>\n\n` +
+                 `• Total: <b>${total}</b>\n` +
+                 `• Ativos: <b>${actives}</b>\n` +
+                 `• Pausados: <b>${inactives}</b>\n\n` +
+                 `Exibindo pág ${page + 1} de ${Math.ceil(total / pageSize) || 1}:\n\n`;
+
       const buttons = [];
-      for (const p of highlights) {
-        text += "• <code>" + p.ref + "</code> - " + p.produto.slice(0, 30) + "\n";
-        buttons.push([{ text: "📝 Editar " + p.ref, callback_data: "admin_edit:" + p.id }]);
+      for (const p of paged) {
+        const statusEmoji = p.ativo !== false ? "🟢" : "⏸️";
+        text += `${statusEmoji} <b>${p.produto.slice(0, 32)}</b>\n` +
+                `REF: <code>${p.ref}</code> | R$ ${p.preco.toFixed(2).replace(".", ",")}\n\n`;
+        
+        buttons.push([
+          { text: `👁️ ${p.ref}`, callback_data: `product_view:${p.id}` },
+          { text: `✏️ Editar`, callback_data: `product_edit:${p.id}` },
+          { text: p.ativo !== false ? "⏸️ Pausar" : "🟢 Ativar", callback_data: `product_toggle:${p.id}` }
+        ]);
       }
-      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_products" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]);
+
+      const navRow = [];
+      if (page > 0) navRow.push({ text: "◀️ Anterior", callback_data: `products_list:${page - 1}` });
+      if (end < total) navRow.push({ text: "Próxima ▶️", callback_data: `products_list:${page + 1}` });
+      if (navRow.length > 0) buttons.push(navRow);
+
+      buttons.push([{ text: "🔎 Buscar", callback_data: "products_search_init" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
+
       if (chatId && messageId) {
         await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
       }
       return;
     }
-    // Ação: Ativos / Pausados toggle list
-    if (data === "admin_toggle_list") {
-      await answerCallbackQuery(callbackId);
-      const products = await productsRepository.getProducts();
-      let text = "⏸️ <b>GERENCIAR STATUS DE PRODUTOS</b>\n\nClique em um produto para gerenciar:\n\n";
-      const buttons = [];
-      for (const p of products.slice(0, 10)) {
-        buttons.push([{ text: (p.ativo ? "✅" : "⏸") + " " + p.ref + " - " + p.produto.slice(0, 25), callback_data: "admin_edit:" + p.id }]);
-      }
-      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_products" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]);
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
-      }
-      return;
-    }
-    
-        if (data.startsWith("admin_edit:")) {
+
+    if (data.startsWith("product_view:")) {
       const prodId = data.split(":")[1];
+      await answerCallbackQuery(callbackId);
       const product = await productsRepository.getProductByIdOrSlug(prodId);
       if (!product) {
-        await answerCallbackQuery(callbackId, "❌ Produto não encontrado.", true);
+        if (chatId && messageId) await editTelegramMessageText(chatId, messageId, "⚠️ Produto não encontrado.", { inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: "products_list:0" }]] });
         return;
       }
-      
-      await answerCallbackQuery(callbackId);
-      const text = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n` +
-                   `🆔 <b>REF:</b> <code>${product.ref}</code>\n` +
-                   `🏷️ <b>Título:</b> ${product.produto}\n` +
-                   `💰 <b>Preço:</b> R$ ${product.preco.toFixed(2)}\n` +
-                   `📁 <b>Categoria:</b> ${product.categoria}\n` +
-                   `📊 <b>Status:</b> ${product.ativo ? 'Ativo ✅' : 'Pausado ⏸'}\n\n` +
-                   `<i>Escolha o que deseja alterar:</i>`;
-                   
+
+      let text = `👁️ <b>DETALHES DO PRODUTO</b>\n\n` +
+                 `<b>Nome:</b> ${product.produto}\n` +
+                 `<b>REF:</b> <code>${product.ref}</code>\n` +
+                 `<b>Preço:</b> R$ ${product.preco.toFixed(2).replace(".", ",")}\n` +
+                 `<b>Categoria:</b> ${product.categoria}\n` +
+                 `<b>Status:</b> ${product.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"}\n` +
+                 `<b>Destaque:</b> ${product.destaque ? "Sim" : "Não"}\n`;
+
       const keyboard = {
         inline_keyboard: [
-          [{ text: "📝 Título", callback_data: `field_edit:${prodId}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${prodId}:preco` }],
-          [{ text: "📁 Categoria", callback_data: `field_edit:${prodId}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${prodId}:descricao` }],
-          [{ text: product.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${prodId}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${prodId}` }],
-          [{ text: "⬅️ Voltar para Lista", callback_data: "list_page:0" }]
+          [{ text: "🎯 Ver Analytics", callback_data: `analytics_product:${product.id}:7d` }],
+          [{ text: "✏️ Editar", callback_data: `product_edit:${product.id}` }, { text: "🗑️ Remover", callback_data: `product_del_confirm:${product.id}` }],
+          [{ text: "🔗 Abrir no Site", url: `https://cerberusfinds.com/produto/${product.slug || product.id}` }],
+          [{ text: "⬅️ Voltar", callback_data: "products_list:0" }]
         ]
       };
-      
+
       if (chatId && messageId) {
         await editTelegramMessageText(chatId, messageId, text, keyboard);
       }
       return;
     }
 
-    // Ação: Solicitar novo valor para campo
-    if (data.startsWith("field_edit:")) {
-      const [, prodId, field] = data.split(":");
-      await answerCallbackQuery(callbackId);
-      await telegramRepo.setUserState(senderId, { action: `edit_field:${field}`, productId: prodId });
-      
-      if (chatId) {
-        const fieldNames: any = { produto: "Título", preco: "Preço", categoria: "Categoria", descricao: "Descrição" };
-        await sendTelegramMessage(chatId, `✍️ <b>ALTERAR ${fieldNames[field].toUpperCase()}</b>\n\nDigite o novo valor para este campo:`);
-      }
-      return;
-    }
-
-    // Ação: Alternar Ativo/Pausado
-    if (data.startsWith("toggle_active:")) {
+    if (data.startsWith("product_toggle:")) {
       const prodId = data.split(":")[1];
+      await answerCallbackQuery(callbackId);
       const product = await productsRepository.getProductByIdOrSlug(prodId);
       if (product) {
-        try {
-          await productsRepository.updateProduct(prodId, { ativo: !product.ativo });
-          await answerCallbackQuery(callbackId, `✅ Status alterado para ${!product.ativo ? 'Ativo' : 'Pausado'}`);
-          // Recarrega o menu de edição
-          const updated = await productsRepository.getProductByIdOrSlug(prodId);
-          if (updated && chatId && messageId) {
-            const text = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n` +
-                         `🆔 <b>REF:</b> <code>${updated.ref}</code>\n` +
-                         `🏷️ <b>Título:</b> ${updated.produto}\n` +
-                         `💰 <b>Preço:</b> R$ ${updated.preco.toFixed(2)}\n` +
-                         `📁 <b>Categoria:</b> ${updated.categoria}\n` +
-                         `📊 <b>Status:</b> ${updated.ativo ? 'Ativo ✅' : 'Pausado ⏸'}\n\n` +
-                         `<i>Escolha o que deseja alterar:</i>`;
-            const keyboard = {
-              inline_keyboard: [
-                [{ text: "📝 Título", callback_data: `field_edit:${prodId}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${prodId}:preco` }],
-                [{ text: "📁 Categoria", callback_data: `field_edit:${prodId}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${prodId}:descricao` }],
-                [{ text: updated.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${prodId}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${prodId}` }],
-                [{ text: "⬅️ Voltar para Lista", callback_data: "list_page:0" }]
-              ]
-            };
-            await editTelegramMessageText(chatId, messageId, text, keyboard);
-          }
-        } catch (err: any) {
-          await answerCallbackQuery(callbackId, `❌ Erro: ${err.message}`, true);
-        }
+        const newStatus = product.ativo === false ? true : false;
+        await productsRepository.updateProduct(product.id, { ativo: newStatus });
       }
-      return;
+      // Retorna para a lista
+      const products = await productsRepository.getProducts();
+      // ... redirecionar para products_list:0 reusando o callback
+      const callbackDataCopy = "products_list:0";
+      // Executa o handler de listagem
+      return handleTelegramWebhookUpdate({ callback_query: { ...cb, data: callbackDataCopy } });
     }
 
-    // Ação: Confirmar Remoção
-    if (data.startsWith("confirm_del:")) {
+    if (data.startsWith("product_edit:")) {
       const prodId = data.split(":")[1];
-      await answerCallbackQuery(callbackId, "⚠️ Confirmação necessária!");
+      await answerCallbackQuery(callbackId);
+      const product = await productsRepository.getProductByIdOrSlug(prodId);
+      if (!product) return;
+
+      const editTxt = `🛠️ <b>EDITAR PRODUTO</b>\n\n` +
+                      `🆔 <b>REF:</b> <code>${product.ref}</code>\n` +
+                      `🏷️ <b>Título:</b> ${product.produto}\n` +
+                      `💰 <b>Preço:</b> R$ ${product.preco.toFixed(2).replace(".", ",")}\n` +
+                      `📁 <b>Categoria:</b> ${product.categoria}\n` +
+                      `📊 <b>Status:</b> ${product.ativo !== false ? 'Ativo 🟢' : 'Pausado ⏸️'}\n\n` +
+                      `<i>Selecione o campo que deseja alterar:</i>`;
+
       const keyboard = {
         inline_keyboard: [
-          [{ text: "🔥 CONFIRMAR REMOÇÃO", callback_data: `exec_del:${prodId}` }],
-          [{ text: "❌ Cancelar", callback_data: `admin_edit:${prodId}` }]
+          [{ text: "📝 Título", callback_data: `field_edit:${product.id}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${product.id}:preco` }],
+          [{ text: "📁 Categoria", callback_data: `field_edit:${product.id}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${product.id}:descricao` }],
+          [{ text: product.ativo !== false ? "⏸ Pausar" : "🟢 Ativar", callback_data: `product_toggle:${product.id}` }, { text: "🗑️ REMOVER", callback_data: `product_del_confirm:${product.id}` }],
+          [{ text: "⬅️ Voltar", callback_data: `product_view:${product.id}` }]
         ]
       };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, `🚨 <b>VOCÊ TEM CERTEZA?</b>\n\nEsta ação irá remover permanentemente o produto do catálogo estático e do banco de dados.`, keyboard);
-      }
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, editTxt, keyboard);
       return;
     }
 
-    // Ação: Executar Remoção
-    if (data.startsWith("exec_del:")) {
-      const prodId = data.split(":")[1];
-      await answerCallbackQuery(callbackId, "🗑️ Removendo...");
-      try {
-        const success = await productsRepository.deleteProduct(prodId);
-        if (success) {
-          if (chatId && messageId) {
-            await editTelegramMessageText(chatId, messageId, `✅ <b>Produto removido com sucesso!</b>\nO catálogo será reconstruído automaticamente.`);
-          }
-        } else {
-          await answerCallbackQuery(callbackId, "❌ Produto não encontrado.", true);
-        }
-      } catch (err: any) {
-        await answerCallbackQuery(callbackId, `❌ Erro crítico: ${err.message}`, true);
-        if (chatId) await sendTelegramMessage(chatId, `❌ <b>FALHA NA REMOÇÃO:</b>\n\n${err.message}`);
-      }
-      return;
-    }
-
-function logAndValidateReviewCallback(
-  actionName: string,
-  reviewId: string,
-  chatId: string | number | undefined,
-  review: PendingReview | null
-): { valid: boolean; reason?: string } {
-  const statusStr = review ? (review.status || "pending") : "não localizada";
-  const createdStr = review ? new Date(review.createdAt).toISOString() : "N/A";
-  const expiresStr = review ? new Date(review.expiresAt || (review.createdAt + 3600000)).toISOString() : "N/A";
-
-  let outcome = "OK";
-  let valid = true;
-
-  if (!review) {
-    outcome = "Revisão não localizada no sistema.";
-    valid = false;
-  } else if (statusStr === "expired") {
-    outcome = "Sessão de revisão expirada (limite de 1 hora excedido).";
-    valid = false;
-  } else if (statusStr === "published") {
-    outcome = "Esta revisão já foi publicada.";
-    valid = false;
-  } else if (statusStr === "cancelled") {
-    outcome = "Esta revisão foi cancelada.";
-    valid = false;
-  }
-
-  console.log(`
-[TELEGRAM REVIEW] callback recebido: ${actionName}
-[TELEGRAM REVIEW] reviewId: ${reviewId}
-[TELEGRAM REVIEW] chatId: ${chatId || "N/A"}
-[TELEGRAM REVIEW] status encontrado: ${statusStr}
-[TELEGRAM REVIEW] createdAt: ${createdStr}
-[TELEGRAM REVIEW] expiresAt: ${expiresStr}
-[TELEGRAM REVIEW] ação: ${actionName}
-[TELEGRAM REVIEW] resultado: ${outcome}
-`);
-
-  return { valid, reason: outcome };
-}
-
-    // Ação: Confirmar & Publicar
-    if (data.startsWith("confirm_pub:")) {
-      const reviewId = data.split(":")[1];
-      await answerCallbackQuery(callbackId, "⏳ Processando publicação...");
-
-      const review = await telegramRepo.getPendingReview(reviewId);
-      const validation = logAndValidateReviewCallback("Confirmar & Publicar", reviewId, chatId, review);
-
-      if (!validation.valid || !review) {
-        if (chatId) {
-          if (!review) {
-            await sendTelegramMessage(chatId, "⚠️ <b>Revisão não localizada no sistema.</b> Envie o link da peça novamente.");
-          } else {
-            await sendTelegramMessage(chatId, `⚠️ <b>${validation.reason}</b>`);
-          }
-        }
-        return;
-      }
-
-      if (!review.preco || review.preco <= 0) {
-        console.warn("[TELEGRAM PUBLISH ERROR] Preço inválido na revisão.");
-        if (chatId) {
-          await sendTelegramMessage(chatId, "⚠️ <b>Defina um preço válido antes de publicar!</b> Clique em '💰 Alterar Preço'.");
-        }
-        return;
-      }
-
-      try {
-        const siteBaseUrl = process.env.APP_URL || "https://cerberus-static-catalog.onrender.com";
-        let publishedProduct: any = null;
-
-        if (review.existingProduct) {
-          publishedProduct = await productsRepository.updateProduct(review.existingProduct.id, {
-            produto: review.produto,
-            categoria: review.categoria,
-            preco: review.preco,
-            imagens: review.imagens,
-            link: review.normalizedUrl,
-            descricao: review.descricao
-          });
-        } else {
-          publishedProduct = await productsRepository.createProduct({
-            produto: review.produto,
-            categoria: review.categoria,
-            preco: review.preco,
-            imagens: review.imagens,
-            link: review.normalizedUrl,
-            descricao: review.descricao,
-            status: "published"
-          });
-        }
-
-        if (!publishedProduct || !publishedProduct.id) {
-          throw new Error("Falha ao gravar produto na tabela public.products do Supabase.");
-        }
-        console.log("[TELEGRAM PUBLISH] Produto gravado no Supabase public.products. ID:", publishedProduct.id);
-
-        // 1. Verificação no Banco de Dados (Supabase public.products)
-        const doubleCheck = await productsRepository.getProductByIdOrSlug(publishedProduct.id);
-        if (!doubleCheck) {
-          throw new Error("Produto não localizado na verificação de confirmação do banco Supabase.");
-        }
-
-        // 2. Verificação na API Pública via requisição HTTP real (/api/products)
-        let visibleInHttpApi = false;
-        try {
-          const localPort = process.env.PORT || "3000";
-          const httpRes = await fetch(`http://127.0.0.1:${localPort}/api/products`);
-          if (httpRes.ok) {
-            const apiData = await httpRes.json();
-            const list = apiData.products || apiData.data || (Array.isArray(apiData) ? apiData : []);
-            if (Array.isArray(list) && list.some((p: any) => p.id === publishedProduct.id)) {
-              visibleInHttpApi = true;
-            }
-          }
-        } catch (httpErr: any) {
-          console.warn("[TELEGRAM PUBLISH WARNING] Falha ao consultar endpoint HTTP /api/products:", httpErr?.message);
-        }
-
-        if (!visibleInHttpApi) {
-          throw new Error("Produto gravado no Supabase, mas a requisição HTTP real para /api/products não retornou a peça.");
-        }
-
-        review.status = "published";
-        await telegramRepo.savePendingReview(review);
-        await telegramRepo.deleteUserState(senderId);
-
-        const productUrl = `${siteBaseUrl}/produto/${publishedProduct.slug || publishedProduct.id}`;
-        const successText =
-          `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n` +
-          `<b>CERBERUS FINDS ARCHIVE</b>\n\n` +
-          `🏷️ <b>Produto:</b> ${publishedProduct.produto || review.produto}\n` +
-          `📁 <b>Categoria:</b> ${publishedProduct.categoria || review.categoria}\n` +
-          `💰 <b>Preço:</b> R$ ${review.preco.toFixed(2).replace(".", ",")}\n` +
-          `🆔 <b>REF:</b> ${publishedProduct.ref || 'N/A'}\n\n` +
-          `🔗 <b>Ver no site:</b>\n${productUrl}\n\n` +
-          `⚡ <i>Confirmado em public.products no Supabase e visível em /api/products.</i>`;
-
-        if (chatId && messageId) {
-          await editTelegramMessageCaption(chatId, messageId, successText);
-        } else if (chatId) {
-          await sendTelegramMessage(chatId, successText);
-        }
-      } catch (err: any) {
-        console.error("[TELEGRAM PUBLISH ERROR]", err);
-        const errorMsg = err?.message || "Erro desconhecido.";
-        if (chatId) {
-          await sendTelegramMessage(
-            chatId,
-            `❌ <b>FALHA NA ETAPA DE PUBLICAÇÃO:</b>\n\n` +
-            `O produto <b>NÃO</b> foi publicado.\n` +
-            `<i>Motivo do erro: ${errorMsg}</i>\n\n` +
-            `A sessão de revisão foi mantida pendente. Tente novamente clicando em 'Confirmar & Publicar'.`
-          );
-        }
-      }
-      return;
-    }
-
-    // Ação: Alterar Preço
-    if (data.startsWith("edit_price:")) {
-      const reviewId = data.split(":")[1];
-      const review = await telegramRepo.getPendingReview(reviewId);
-      const validation = logAndValidateReviewCallback("Alterar Preço", reviewId, chatId, review);
-
-      if (!validation.valid || !review) {
-        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
-        if (chatId && !review) {
-          await sendTelegramMessage(chatId, "⚠️ <b>Revisão não localizada no sistema.</b> Envie o link da peça novamente.");
-        }
-        return;
-      }
-
-      await telegramRepo.setUserState(senderId, { action: "awaiting_price", reviewId });
-      await answerCallbackQuery(callbackId, "✍️ Aguardando novo preço...");
-
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `💰 <b>DIGITE O NOVO PREÇO:</b>\n\n` +
-          `Envie apenas o valor numérico em reais (Exemplo: <code>89,90</code> ou <code>120</code>).`
-        );
-      }
-      return;
-    }
-
-    // Ação: Menu de Categorias
-    if (data.startsWith("edit_cat:")) {
-      const reviewId = data.split(":")[1];
-      const review = await telegramRepo.getPendingReview(reviewId);
-      const validation = logAndValidateReviewCallback("Alterar Categoria", reviewId, chatId, review);
-
-      if (!validation.valid || !review) {
-        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
-        if (chatId && !review) {
-          await sendTelegramMessage(chatId, "⚠️ <b>Revisão não localizada no sistema.</b> Envie o link da peça novamente.");
-        }
-        return;
-      }
-
-      await answerCallbackQuery(callbackId, "Escolha a categoria:");
-
-      const catKeyboard = {
-        inline_keyboard: [
-          [
-            { text: "Camisetas", callback_data: `set_cat:${reviewId}:Camisetas` },
-            { text: "Calças", callback_data: `set_cat:${reviewId}:Calças` }
-          ],
-          [
-            { text: "Moletons", callback_data: `set_cat:${reviewId}:Moletons` },
-            { text: "Jaquetas", callback_data: `set_cat:${reviewId}:Jaquetas` }
-          ],
-          [
-            { text: "Calçados", callback_data: `set_cat:${reviewId}:Calçados` },
-            { text: "Acessórios", callback_data: `set_cat:${reviewId}:Acessórios` }
-          ],
-          [
-            { text: "⬅️ Voltar", callback_data: `back_rev:${reviewId}` }
-          ]
-        ]
-      };
-
-      if (chatId && messageId) {
-        await editTelegramMessageCaption(
-          chatId,
-          messageId,
-          `🏷️ <b>SELECIONE A CATEGORIA DESEJADA:</b>\n\n` +
-          `Produto atual: <b>${review.produto}</b>\n` +
-          `Categoria atual: <i>${review.categoria}</i>`,
-          catKeyboard
-        );
-      }
-      return;
-    }
-
-    // Ação: Definir Categoria Escolhida
-    if (data.startsWith("set_cat:")) {
+    if (data.startsWith("field_edit:")) {
       const parts = data.split(":");
-      const reviewId = parts[1];
-      const selectedCategory = parts[2];
-      const review = await telegramRepo.getPendingReview(reviewId);
-      const validation = logAndValidateReviewCallback(`Definir Categoria (${selectedCategory})`, reviewId, chatId, review);
-
-      if (!validation.valid || !review) {
-        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
-        return;
-      }
-
-      review.categoria = selectedCategory;
-      await telegramRepo.savePendingReview(review);
-      await answerCallbackQuery(callbackId, `✅ Categoria alterada para ${selectedCategory}`);
-
-      if (chatId && messageId) {
-        await editTelegramMessageCaption(
-          chatId,
-          messageId,
-          buildReviewCardText(review),
-          buildMainReviewKeyboard(reviewId)
-        );
+      const prodId = parts[1];
+      const field = parts[2];
+      await answerCallbackQuery(callbackId, `Digite o novo valor para ${field}:`);
+      await telegramRepo.setUserState(senderId, { action: `edit_field:${field}`, productId: prodId });
+      if (chatId) {
+        await sendTelegramMessage(chatId, `✏️ <b>EDITAR CAMPO: ${field.toUpperCase()}</b>\n\nEnvie o novo valor por mensagem de texto:`);
       }
       return;
     }
 
-    // Ação: Voltar ao menu principal da revisão
-    if (data.startsWith("back_rev:")) {
-      const reviewId = data.split(":")[1];
-      const review = await telegramRepo.getPendingReview(reviewId);
-      const validation = logAndValidateReviewCallback("Voltar ao Card", reviewId, chatId, review);
+    if (data.startsWith("product_del_confirm:")) {
+      const prodId = data.split(":")[1];
+      await answerCallbackQuery(callbackId);
+      const product = await productsRepository.getProductByIdOrSlug(prodId);
+      if (!product) return;
 
-      if (!validation.valid || !review) {
-        await answerCallbackQuery(callbackId, !review ? "⚠️ Revisão não localizada no sistema." : `⚠️ ${validation.reason}`, true);
-        return;
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🔥 CONFIRMAR REMOÇÃO", callback_data: `product_del_exec:${product.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `product_edit:${product.id}` }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, `🚨 <b>CONFIRMAR REMOÇÃO</b>\n\nProduto: <b>${product.produto}</b>\nREF: <code>${product.ref}</code>\n\nEsta ação removerá o produto do Supabase, gerará commit no GitHub e rebuild estático.`, keyboard);
+      }
+      return;
+    }
+
+    if (data.startsWith("product_del_exec:")) {
+      const prodId = data.split(":")[1];
+      await answerCallbackQuery(callbackId, "Removendo produto...");
+      const success = await productsRepository.deleteProduct(prodId);
+      if (chatId) {
+        if (success) {
+          await sendTelegramMessage(chatId, "✅ <b>Produto removido com sucesso do Supabase e do site estático!</b>");
+          await renderMainMenu(chatId);
+        } else {
+          await sendTelegramMessage(chatId, "❌ Falha ao remover produto.");
+        }
+      }
+      return;
+    }
+
+    if (data === "products_search_init") {
+      await answerCallbackQuery(callbackId);
+      await telegramRepo.setUserState(senderId, { action: "products_search" });
+      if (chatId) {
+        await sendTelegramMessage(chatId, "🔎 <b>BUSCAR PRODUTO</b>\n\nDigite o nome, REF ou termo para buscar no catálogo:");
+      }
+      return;
+    }
+
+    // --- NAMESPACE: ANALYTICS (ESTRITO SUPABASE) ---
+    if (data === "analytics_overview") {
+      await answerCallbackQuery(callbackId);
+      let opSummary;
+      let opError = null;
+      try {
+        opSummary = await productsRepository.getAnalyticsSummary();
+      } catch (err: any) {
+        opError = err.message;
       }
 
+      let text = "📊 <b>CERBERUS ANALYTICS</b>\n\n";
+      if (opError) {
+        text += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
+      } else if (opSummary) {
+        text += "📦 <b>CATÁLOGO</b>\n" +
+                "• Total: <b>" + opSummary.totalProducts + "</b>\n" +
+                "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
+                "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
+                "🖱️ <b>CLIQUES</b>\n" +
+                "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
+                "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
+                "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n" +
+                "• Total: <b>" + opSummary.totalClicks + "</b>\n\n" +
+                "🛒 <b>MARKETPLACES</b>\n" +
+                "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
+                "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
+                "🔥 <b>TOP PRODUTOS</b>\n" +
+                (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda");
+      }
+
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🎯 Analytics por produto", callback_data: "analytics_products:0" }],
+          [{ text: "🔄 Atualizar", callback_data: "analytics_overview" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data.startsWith("analytics_products:")) {
+      const page = parseInt(data.split(":")[1]) || 0;
+      await answerCallbackQuery(callbackId);
+      const products = await productsRepository.getProducts();
+      const pageSize = 5;
+      const start = page * pageSize;
+      const end = start + pageSize;
+      const paged = products.slice(start, end);
+      const total = products.length;
+
+      let text = `🎯 <b>ESCOLHER PRODUTO (Pág ${page + 1}/${Math.ceil(total / pageSize) || 1})</b>\n\nSelecione um produto abaixo para ver o analytics detalhado:\n\n`;
+      const buttons = [];
+
+      for (const p of paged) {
+        buttons.push([{ text: `[${p.ref}] ${p.produto.slice(0, 30)}`, callback_data: `analytics_product:${p.id}:7d` }]);
+      }
+
+      const navRow = [];
+      if (page > 0) navRow.push({ text: "◀️ Anterior", callback_data: `analytics_products:${page - 1}` });
+      if (end < total) navRow.push({ text: "Próxima ▶️", callback_data: `analytics_products:${page + 1}` });
+      if (navRow.length > 0) buttons.push(navRow);
+
+      buttons.push([{ text: "📈 Visão Geral", callback_data: "analytics_overview" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
+
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+      return;
+    }
+
+    if (data.startsWith("analytics_product:")) {
+      const parts = data.split(":");
+      const prodId = parts[1];
+      const period = parts[2] || "7d";
       await answerCallbackQuery(callbackId);
 
-      if (chatId && messageId) {
-        await editTelegramMessageCaption(
-          chatId,
-          messageId,
-          buildReviewCardText(review),
-          buildMainReviewKeyboard(reviewId)
-        );
+      const stats = await productsRepository.getProductAnalytics(prodId, period);
+      if (!stats) {
+        if (chatId && messageId) await editTelegramMessageText(chatId, messageId, "⚠️ Produto não encontrado.", { inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: "analytics_products:0" }]] });
+        return;
       }
+
+      const p = stats.product;
+      let periodClicks = stats.clicks7d;
+      let periodLabel = "7 dias";
+      if (period === "today") { periodClicks = stats.todayClicks; periodLabel = "Hoje"; }
+      else if (period === "30d") { periodClicks = stats.clicks30d; periodLabel = "30 dias"; }
+      else if (period === "total") { periodClicks = stats.totalClicks; periodLabel = "Total"; }
+
+      const text = `📊 <b>ANALYTICS DO PRODUTO</b>\n\n` +
+                   `<b>Nome:</b> ${p.produto}\n` +
+                   `<b>REF:</b> <code>${p.ref}</code>\n` +
+                   `<b>Categoria:</b> ${p.categoria}\n` +
+                   `<b>Status:</b> ${p.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"}\n\n` +
+                   `🖱️ <b>CLIQUES (${periodLabel})</b>\n` +
+                   `• Hoje: <b>${stats.todayClicks}</b>\n` +
+                   `• 7 dias: <b>${stats.clicks7d}</b>\n` +
+                   `• 30 dias: <b>${stats.clicks30d}</b>\n` +
+                   `• Total: <b>${stats.totalClicks}</b>\n\n` +
+                   `🛒 <b>MARKETPLACE</b>\n` +
+                   `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
+                   `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n`;
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: period === "today" ? "• Hoje •" : "Hoje", callback_data: `analytics_product:${p.id}:today` },
+            { text: period === "7d" ? "• 7d •" : "7d", callback_data: `analytics_product:${p.id}:7d` },
+            { text: period === "30d" ? "• 30d •" : "30d", callback_data: `analytics_product:${p.id}:30d` },
+            { text: period === "total" ? "• Total •" : "Total", callback_data: `analytics_product:${p.id}:total` }
+          ],
+          [{ text: "🔄 Atualizar", callback_data: `analytics_product:${p.id}:${period}` }],
+          [{ text: "⬅️ Produtos", callback_data: "analytics_products:0" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 
-    // Ação: Cancelar Revisão
-    if (data.startsWith("cancel_rev:")) {
-      const reviewId = data.split(":")[1];
-      const review = await telegramRepo.getPendingReview(reviewId);
-      logAndValidateReviewCallback("Cancelar Revisão", reviewId, chatId, review);
-
-      if (review) {
-        review.status = "cancelled";
-        await telegramRepo.savePendingReview(review);
-      }
-      await telegramRepo.deleteUserState(senderId);
-
-      await answerCallbackQuery(callbackId, "❌ Cadastro cancelado.");
-
-      if (chatId && messageId) {
-        await editTelegramMessageCaption(chatId, messageId, `❌ <b>Cadastro da peça cancelado.</b>`);
-      }
-      return;
-    }
-
-    // Ação: Iniciar Adição de Categoria
+    // --- NAMESPACE: CATEGORIES / REVIEWS ---
     if (data === "add_cat_init") {
       await answerCallbackQuery(callbackId);
       await telegramRepo.setUserState(senderId, { action: "add_cat_name" });
@@ -1164,17 +645,66 @@ function logAndValidateReviewCallback(
       return;
     }
 
-    // Ação: Iniciar Renomeação de Categoria
     if (data.startsWith("rename_cat_init:")) {
       const oldName = data.split(":")[1];
       await answerCallbackQuery(callbackId);
       await telegramRepo.setUserState(senderId, { action: `rename_cat_name:${oldName}` });
-      if (chatId) await sendTelegramMessage(chatId, `✏️ <b>RENOMEAR CATEGORIA: ${oldName}</b>\n\nDigite o novo nome para esta categoria:`);
+      if (chatId) await sendTelegramMessage(chatId, `✏️ <b>RENOMEAR CATEGORIA: ${oldName}</b>\n\nDigite o novo nome:`);
+      return;
+    }
+
+    if (data.startsWith("confirm_pub:")) {
+      const reviewId = data.split(":")[1];
+      await answerCallbackQuery(callbackId, "⏳ Publicando...");
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("Confirmar & Publicar", reviewId, chatId, review);
+      if (!validation.valid || !review) {
+        if (chatId) await sendTelegramMessage(chatId, `⚠️ ${validation.reason}`);
+        return;
+      }
+      try {
+        const publishedProduct = await productsRepository.createProduct({
+          produto: review.produto,
+          categoria: review.categoria,
+          preco: review.preco,
+          imagens: review.imagens,
+          link: review.normalizedUrl,
+          descricao: review.descricao,
+          status: "published"
+        });
+        review.status = "published";
+        await telegramRepo.savePendingReview(review);
+        await telegramRepo.deleteUserState(senderId);
+
+        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço: R$ ${review.preco.toFixed(2)}`;
+        if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, successText);
+        else if (chatId) await sendTelegramMessage(chatId, successText);
+      } catch (err: any) {
+        if (chatId) await sendTelegramMessage(chatId, `❌ Falha ao publicar: ${err.message}`);
+      }
+      return;
+    }
+
+    if (data.startsWith("edit_price:")) {
+      const reviewId = data.split(":")[1];
+      await telegramRepo.setUserState(senderId, { action: "awaiting_price", reviewId });
+      await answerCallbackQuery(callbackId, "Digite o novo preço:");
+      if (chatId) await sendTelegramMessage(chatId, "💰 <b>DIGITE O NOVO PREÇO EM REAIS:</b>");
+      return;
+    }
+
+    if (data.startsWith("cancel_rev:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      if (review) { review.status = "cancelled"; await telegramRepo.savePendingReview(review); }
+      await telegramRepo.deleteUserState(senderId);
+      await answerCallbackQuery(callbackId, "❌ Cancelado.");
+      if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, "❌ Cadastro cancelado.");
       return;
     }
   }
 
-  // 2. LIDAR COM MENSAGENS DE TEXTO
+  // 2. MENSAGENS DE TEXTO
   if (update.message && update.message.text) {
     const msg = update.message;
     const senderId = msg.from?.id || "Desconhecido";
@@ -1184,268 +714,98 @@ function logAndValidateReviewCallback(
     const chatId = msg.chat?.id;
 
     if (!isUserAllowed(senderId)) {
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `🔒 <b>Acesso Negado</b>\n\n` +
-          `Seu usuário do Telegram (ID: <code>${senderId}</code>) não está autorizado no Cerberus Finds Archive.`
-        );
-      }
+      if (chatId) await sendTelegramMessage(chatId, `🔒 <b>Acesso Negado</b> (ID: <code>${senderId}</code>)`);
       return;
     }
 
-    // Comando: /admin
-    
-    // Comando: /analytics (Tratado estritamente ANTES de pending reviews ou fallbacks)
+    // --- INTERCEPTAÇÃO ABSOLUTA DE /analytics ---
     if (text.startsWith("/analytics")) {
-      console.log("[ANALYTICS_ROUTER_V2] /analytics recebido em produção, texto:", text);
       const parts = text.split(" ");
       const arg = parts[1] ? parts[1].trim() : "";
 
       if (arg) {
-        // Consultar produto específico por REF, ID ou Slug
         const stats = await productsRepository.getProductAnalytics(arg, "7d");
         if (!stats) {
-          if (chatId) {
-            await sendTelegramMessage(chatId, `⚠️ Produto <code>${arg}</code> não encontrado no catálogo.`);
-          }
+          if (chatId) await sendTelegramMessage(chatId, `⚠️ Produto <code>${arg}</code> não encontrado no Supabase.`);
           return;
         }
-
         const p = stats.product;
         const textResp = `📊 <b>ANALYTICS DO PRODUTO</b>\n\n` +
-                         `🛍️ <b>Nome:</b> ${p.produto}\n` +
-                         `🔖 <b>REF:</b> <code>${p.ref}</code>\n` +
-                         `🆔 <b>ID:</b> <code>${p.id}</code>\n` +
-                         `💰 <b>Preço:</b> R$ ${p.preco.toFixed(2).replace(".", ",")}\n` +
-                         `📂 <b>Categoria:</b> ${p.categoria}\n` +
-                         `🟢 <b>Status:</b> ${p.ativo ? "Ativo" : "Pausado"}\n\n` +
-                         `────────────────\n` +
-                         `🖱️ <b>CLIQUES (Últimos 7 dias)</b>\n` +
-                         `• Hoje: <b>${stats.todayClicks}</b> | Ontem: <b>${stats.yesterdayClicks}</b>\n` +
-                         `• 7 dias: <b>${stats.clicks7d}</b>\n` +
-                         `• 30 dias: <b>${stats.clicks30d}</b>\n` +
-                         `• Total: <b>${stats.totalClicks}</b>\n\n` +
-                         `🛒 <b>MARKETPLACE</b>\n` +
-                         `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
-                         `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n\n` +
-                         `🕐 Último clique: <b>${stats.lastClickTime}</b>`;
-
+                         `<b>Nome:</b> ${p.produto}\n` +
+                         `<b>REF:</b> <code>${p.ref}</code>\n` +
+                         `<b>Preço:</b> R$ ${p.preco.toFixed(2).replace(".", ",")}\n` +
+                         `<b>Cliques (7d):</b> ${stats.clicks7d} (Hoje: ${stats.todayClicks})\n` +
+                         `<b>Total:</b> ${stats.totalClicks}\n`;
         const keyboard = {
           inline_keyboard: [
-            [
-              { text: "Hoje", callback_data: `analytics_prod:${p.id}:today` },
-              { text: "7d", callback_data: `analytics_prod:${p.id}:7d` },
-              { text: "30d", callback_data: `analytics_prod:${p.id}:30d` },
-              { text: "Total", callback_data: `analytics_prod:${p.id}:total` }
-            ],
-            [{ text: "📊 Analytics Geral", callback_data: "admin_analytics" }, { text: "🔗 Abrir produto", url: p.link }]
+            [{ text: "📊 Visão Geral", callback_data: "analytics_overview" }, { text: "🔗 Abrir", url: p.link }]
           ]
         };
-
-        if (chatId) {
-          await sendTelegramMessage(chatId, textResp, keyboard);
-        }
+        if (chatId) await sendTelegramMessage(chatId, textResp, keyboard);
         return;
       } else {
-        // Visão geral de analytics
-        let opSummary;
-        let opError = null;
-        try {
-          opSummary = await productsRepository.getAnalyticsSummary();
-        } catch (err: any) {
-          opError = err.message;
-        }
-
-        let textResp = "📊 <b>CERBERUS FINDS — ANALYTICS</b>\n\n";
-
-        if (opError) {
-          textResp += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
-        } else if (opSummary) {
-          textResp += "📦 <b>PRODUTOS</b>\n" +
-                      "• Total: <b>" + opSummary.totalProducts + "</b>\n" +
-                      "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
-                      "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
-                      "🖱️ <b>CLIQUES</b>\n" +
-                      "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
-                      "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
-                      "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n\n" +
-                      "🛍️ <b>MARKETPLACES</b>\n" +
-                      "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
-                      "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
-                      "🏆 <b>TOP PRODUTOS — 7 DIAS</b>\n" +
-                      (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda") + "\n\n" +
-                      "🕐 Dados atualizados em: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
-        }
-
+        // Redireciona para visão geral
+        let opSummary = await productsRepository.getAnalyticsSummary();
+        let textResp = "📊 <b>CERBERUS ANALYTICS</b>\n\n" +
+                       "📦 Total: <b>" + opSummary.totalProducts + "</b> | Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
+                       "🖱️ Cliques hoje: <b>" + opSummary.todayClicks + "</b> | 7d: <b>" + opSummary.clicks7d + "</b> | Total: <b>" + opSummary.totalClicks + "</b>\n";
         const keyboard = {
           inline_keyboard: [
-            [{ text: "🔎 Escolher Produto", callback_data: "analytics_select_page:0" }],
-            [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+            [{ text: "🎯 Analytics por produto", callback_data: "analytics_products:0" }],
+            [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
           ]
         };
-
-        if (chatId) {
-          await sendTelegramMessage(chatId, textResp, keyboard);
-        }
+        if (chatId) await sendTelegramMessage(chatId, textResp, keyboard);
         return;
       }
     }
 
-    if (text.startsWith("/admin")) {
-      if (chatId) {
-        const welcomeText = "🐺 <b>CERBERUS FINDS — PAINEL ADMINISTRATIVO</b>\n\nSelecione uma opção abaixo para gerenciar o catálogo, visualizar analytics ou checar o sistema:";
-        const keyboard = {
-          inline_keyboard: [
-            [{ text: "📦 Produtos", callback_data: "admin_products" }, { text: "📊 Analytics", callback_data: "admin_analytics" }],
-            [{ text: "➕ Adicionar Produto", callback_data: "admin_add" }, { text: "⚙️ Categorias", callback_data: "admin_categories" }],
-            [{ text: "🔧 Sistema", callback_data: "admin_system" }]
-          ]
-        };
-        await sendTelegramMessage(chatId, welcomeText, keyboard);
-      }
+    // --- COMANDOS /start /admin /listar /categorias /help ---
+    if (text.startsWith("/start") || text.startsWith("/admin")) {
+      if (chatId) await renderMainMenu(chatId);
       return;
     }
 
-    // Comandos básicos (/start e /help)
-    if (text.startsWith("/start") || text.startsWith("/admin") || text.startsWith("/help")) {
-      if (chatId) {
-        const welcomeText = 
-          "🏴 <b>CERBERUS FINDS</b>\n" +
-          "<b>Painel Administrativo</b>\n\n" +
-          "👤 <b>ID Telegram:</b> <code>" + senderId + "</code>\n" +
-          "✅ <b>Administrador autorizado</b>\n\n" +
-          "📊 <b>MENU PRINCIPAL</b>\n\n" +
-          "Selecione uma opção abaixo para gerenciar o catálogo, analytics ou sistema:";
-
-        const keyboard = {
-          inline_keyboard: [
-            [{ text: "📦 Produtos", callback_data: "admin_products" }, { text: "➕ Adicionar Produto", callback_data: "admin_add" }],
-            [{ text: "📊 Analytics", callback_data: "admin_analytics" }, { text: "🏷️ Categorias", callback_data: "admin_categories" }],
-            [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "🔧 Sistema", callback_data: "admin_system" }]
-          ]
-        };
-        await sendTelegramMessage(chatId, welcomeText, keyboard);
-      }
-      return;
-    }
-
-    // Comando: /listar
     if (text.startsWith("/listar") || text.startsWith("/produtos")) {
-      const products = await productsRepository.getProducts();
-      const pageSize = 10;
-      const paged = products.slice(0, pageSize);
-      
-      let listText = `📦 <b>CATÁLOGO CERBERUS</b>\nTotal: ${products.length} peças\n\n`;
-      const buttons = [];
-      
-      for (const p of paged) {
-        listText += `• <code>${p.ref}</code> - ${p.produto.slice(0, 30)}${p.produto.length > 30 ? '...' : ''} (${p.ativo ? '✅' : '⏸'})\n`;
-        buttons.push([{ text: `📝 Editar ${p.ref}`, callback_data: `admin_edit:${p.id}` }]);
-      }
-      
-      if (products.length > pageSize) {
-        buttons.push([{ text: "Próxima ➡️", callback_data: "list_page:1" }]);
-      }
-      
       if (chatId) {
-        await sendTelegramMessage(chatId, listText, { inline_keyboard: buttons });
+        // Redireciona para o callback list_page:0 via simulação de mensagem ou chamada direta
+        const fakeCb = { callback_query: { id: "fake", from: { id: senderId }, message: { chat: { id: chatId }, message_id: 0 }, data: "products_list:0" } };
+        await handleTelegramWebhookUpdate(fakeCb);
       }
       return;
     }
 
-    // Comando: /editar [REF]
-    if (text.startsWith("/editar ")) {
-      const ref = text.split(" ")[1];
-      const product = await productsRepository.getProductByIdOrSlug(ref);
-      if (product && chatId) {
-        // Reutiliza a lógica de admin_edit
-        const editTxt = `🛠️ <b>ADMIN: EDITAR PRODUTO</b>\n\n🆔 <b>REF:</b> <code>${product.ref}</code>\n🏷️ <b>Título:</b> ${product.produto}\n💰 <b>Preço:</b> R$ ${product.preco.toFixed(2)}\n📁 <b>Categoria:</b> ${product.categoria}\n📊 <b>Status:</b> ${product.ativo ? 'Ativo ✅' : 'Pausado ⏸'}`;
-        const keyboard = {
-          inline_keyboard: [
-            [{ text: "📝 Título", callback_data: `field_edit:${product.id}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${product.id}:preco` }],
-            [{ text: "📁 Categoria", callback_data: `field_edit:${product.id}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${product.id}:descricao` }],
-            [{ text: product.ativo ? "⏸ Pausar" : "✅ Ativar", callback_data: `toggle_active:${product.id}` }, { text: "🗑️ REMOVER", callback_data: `confirm_del:${product.id}` }]
-          ]
-        };
-        await sendTelegramMessage(chatId, editTxt, keyboard);
-      } else if (chatId) {
-        await sendTelegramMessage(chatId, `❌ Produto com REF <code>${ref}</code> não encontrado.`);
-      }
-      return;
-    }
-
-    // Comando: /remover [REF]
-    if (text.startsWith("/remover ")) {
-      const ref = text.split(" ")[1];
-      const product = await productsRepository.getProductByIdOrSlug(ref);
-      if (product && chatId) {
-        const keyboard = {
-          inline_keyboard: [
-            [{ text: "🔥 CONFIRMAR REMOÇÃO", callback_data: `exec_del:${product.id}` }],
-            [{ text: "❌ Cancelar", callback_data: `admin_edit:${product.id}` }]
-          ]
-        };
-        await sendTelegramMessage(chatId, `🚨 <b>CONFIRMAR REMOÇÃO</b>\n\nProduto: <b>${product.produto}</b>\nREF: <code>${product.ref}</code>`, keyboard);
-      } else if (chatId) {
-        await sendTelegramMessage(chatId, `❌ Produto com REF <code>${ref}</code> não encontrado.`);
-      }
-      return;
-    }
-
-    // Comando: /categorias
     if (text.startsWith("/categorias")) {
       const cats = await categoriesRepository.getCategories();
-      let catTxt = `📁 <b>CATEGORIAS DO CATÁLOGO</b>\n\n`;
+      let catTxt = "🏷️ <b>CATEGORIAS DO CATÁLOGO</b>\n\n";
       const buttons = [];
-      
       for (const c of cats) {
         catTxt += `• ${c.name}\n`;
-        buttons.push([{ text: `✏️ Renomear ${c.name}`, callback_data: `rename_cat_init:${c.name}` }]);
+        buttons.push([{ text: `✏️ ${c.name}`, callback_data: `rename_cat_init:${c.name}` }]);
       }
-      
-      buttons.push([{ text: "➕ Adicionar Nova", callback_data: "add_cat_init" }]);
-      
-      if (chatId) {
-        await sendTelegramMessage(chatId, catTxt, { inline_keyboard: buttons });
-      }
+      buttons.push([{ text: "➕ Adicionar", callback_data: "add_cat_init" }]);
+      buttons.push([{ text: "⬅️ Menu", callback_data: "admin_menu" }]);
+      if (chatId) await sendTelegramMessage(chatId, catTxt, { inline_keyboard: buttons });
       return;
     }
 
-    // Detecção de links na mensagem
+    if (text.startsWith("/help")) {
+      if (chatId) await renderMainMenu(chatId);
+      return;
+    }
+
+    // --- DETECÇÃO DE LINKS (FLUXO DE PUBLICAÇÃO) ---
     const urlRegex = /(https?:\/\/[^\s]+)/gi;
     const matches = text.match(urlRegex);
-
     if (matches && matches.length > 0) {
       for (const link of matches) {
-        const mkt = detectMarketplace(link);
-
-        if (chatId) {
-          await sendTelegramMessage(
-            chatId,
-            `🔎 <b>Analisando a peça...</b>\n\n` +
-            `🛒 <b>Marketplace:</b> ${mkt}\n` +
-            `🔗 <code>${link}</code>`
-          );
-        }
-
-        // Executa extração por IA + Scraper
+        if (chatId) await sendTelegramMessage(chatId, `🔎 Analisando peça de <b>${detectMarketplace(link)}</b>...`);
         const extResult = await extractProductForReview(link);
-
         if (!extResult.success || !extResult.data) {
-          if (chatId) {
-            await sendTelegramMessage(
-              chatId,
-              `❌ <b>NÃO FOI POSSÍVEL EXTRAIR</b>\n\n` +
-              `<b>Motivo:</b>\n${extResult.error || "Erro ao ler a página."}`
-            );
-          }
+          if (chatId) await sendTelegramMessage(chatId, `❌ Falha ao extrair: ${extResult.error || "Erro desconhecido"}`);
           continue;
         }
-
-        const data = extResult.data;
         const reviewId = `rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-
         const review: PendingReview = {
           id: reviewId,
           chatId: chatId || 0,
@@ -1453,16 +813,9 @@ function logAndValidateReviewCallback(
           firstName,
           username,
           createdAt: Date.now(),
-          ...data
+          ...extResult.data
         };
-
         await telegramRepo.savePendingReview(review);
-
-        // Se o preço não for detectado (null ou <= 0), vincula o estado do usuário ao ID desta revisão
-        if (!review.preco || review.preco <= 0) {
-          await telegramRepo.setUserState(senderId, { action: "awaiting_price", reviewId });
-        }
-
         const cardText = buildReviewCardText(review);
         const keyboard = buildMainReviewKeyboard(reviewId);
 
@@ -1473,7 +826,6 @@ function logAndValidateReviewCallback(
           } else {
             sentMsg = await sendTelegramMessage(chatId, cardText, keyboard);
           }
-
           if (sentMsg?.result?.message_id) {
             review.cardMessageId = sentMsg.result.message_id;
             await telegramRepo.savePendingReview(review);
@@ -1483,92 +835,88 @@ function logAndValidateReviewCallback(
       return;
     }
 
-    // Se NÃO for comando e NÃO for link, processa como entrada de preço para a revisão pendente existente!
-    let targetReview: PendingReview | null = null;
+    // --- ESTADOS DE USUÁRIO / MÁQUINAS DE ESTADO ---
     const userState = await telegramRepo.getUserState(senderId);
 
-    // Lidar com entradas de texto para estados administrativos
     if (userState && userState.action.startsWith("edit_field:")) {
       const field = userState.action.split(":")[1];
       const prodId = userState.productId;
       const update: any = {};
-      
       if (field === "preco") {
         const p = parseAndNormalizePrice(text);
         if (p === null) {
-          if (chatId) await sendTelegramMessage(chatId, "❌ Preço inválido. Tente novamente.");
+          if (chatId) await sendTelegramMessage(chatId, "❌ Preço inválido.");
           return;
         }
         update[field] = p;
       } else {
         update[field] = text;
       }
-      
       try {
         await productsRepository.updateProduct(prodId, update);
         await telegramRepo.deleteUserState(senderId);
-        if (chatId) await sendTelegramMessage(chatId, `✅ Campo <b>${field}</b> atualizado com sucesso!`);
+        if (chatId) await sendTelegramMessage(chatId, `✅ Campo <b>${field}</b> atualizado com sucesso no Supabase e no site!`);
       } catch (err: any) {
-        if (chatId) await sendTelegramMessage(chatId, `❌ <b>ERRO NA ATUALIZAÇÃO:</b>\n\n${err.message}`);
+        if (chatId) await sendTelegramMessage(chatId, `❌ Erro ao atualizar: ${err.message}`);
       }
       return;
     }
 
-    // Lidar com adição de categoria por texto
+    if (userState && userState.action === "products_search") {
+      await telegramRepo.deleteUserState(senderId);
+      const query = text.toLowerCase();
+      const products = await productsRepository.getProducts();
+      const matched = products.filter(p => p.produto.toLowerCase().includes(query) || p.ref.toLowerCase().includes(query) || p.categoria.toLowerCase().includes(query));
+      
+      let textResp = `🔎 <b>RESULTADOS DA BUSCA: "${text}"</b>\nEncontradas: ${matched.length} peças\n\n`;
+      const buttons = [];
+      for (const p of matched.slice(0, 10)) {
+        textResp += `• <code>${p.ref}</code> - ${p.produto}\n`;
+        buttons.push([{ text: `👁️ ${p.ref}`, callback_data: `product_view:${p.id}` }]);
+      }
+      buttons.push([{ text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
+      if (chatId) await sendTelegramMessage(chatId, textResp, { inline_keyboard: buttons });
+      return;
+    }
+
     if (userState && userState.action === "add_cat_name") {
       try {
-        const cat = await categoriesRepository.addCategory(text);
+        await categoriesRepository.addCategory(text);
         await telegramRepo.deleteUserState(senderId);
         if (chatId) await sendTelegramMessage(chatId, `✅ Categoria <b>${text}</b> adicionada com sucesso!`);
       } catch (err: any) {
-        if (chatId) await sendTelegramMessage(chatId, `❌ <b>ERRO AO ADICIONAR CATEGORIA:</b>\n\n${err.message}`);
+        if (chatId) await sendTelegramMessage(chatId, `❌ Erro: ${err.message}`);
       }
       return;
     }
 
-    // Lidar com renomeação de categoria por texto
     if (userState && userState.action.startsWith("rename_cat_name:")) {
       const oldName = userState.action.split(":")[1];
       try {
-        const success = await categoriesRepository.renameCategory(oldName, text);
+        await categoriesRepository.renameCategory(oldName, text);
         await telegramRepo.deleteUserState(senderId);
-        if (success) {
-          if (chatId) await sendTelegramMessage(chatId, `✅ Categoria renomeada de <b>${oldName}</b> para <b>${text}</b> com sucesso!`);
-        } else {
-          throw new Error("Falha ao renomear categoria no banco.");
-        }
+        if (chatId) await sendTelegramMessage(chatId, `✅ Categoria renomeada de ${oldName} para ${text}!`);
       } catch (err: any) {
-        if (chatId) await sendTelegramMessage(chatId, `❌ <b>ERRO AO RENOMEAR CATEGORIA:</b>\n\n${err.message}`);
+        if (chatId) await sendTelegramMessage(chatId, `❌ Erro: ${err.message}`);
       }
       return;
     }
 
+    // Fallback de preço para revisão pendente
+    let targetReview: PendingReview | null = null;
     if (userState && userState.action === "awaiting_price") {
       targetReview = await telegramRepo.getPendingReview(userState.reviewId);
     }
-
     if (!targetReview) {
-      // Busca a revisão pendente existente vinculada ao usuário/chat ID
       targetReview = await telegramRepo.getLatestPendingReviewForUser(senderId, chatId);
     }
 
     const normPrice = parseAndNormalizePrice(text);
-
     if (!targetReview) {
-      console.log(`
-[TELEGRAM PRICE]
-Chat/User: ${chatId || senderId} / ${username} (${firstName})
-Preço recebido: "${text}"
-Preço normalizado: ${normPrice !== null ? `R$ ${normPrice.toFixed(2)}` : "N/A"}
-Revisão atualizada: Nenhuma
-Resultado: Nenhuma revisão pendente encontrada
-`);
-
       if (chatId) {
         await sendTelegramMessage(
           chatId,
-          `⚠️ <b>Nenhuma revisão pendente encontrada.</b>\n\n` +
-          `Envie primeiro o link de um produto (Shopee, Mercado Livre, etc.) para cadastrar e revisar.`
+          "⚠️ <b>Comando ou mensagem não reconhecida.</b>\n\nEnvie o link de um produto para cadastrar ou digite /start para abrir o painel administrativo."
         );
       }
       return;
@@ -1579,155 +927,25 @@ Resultado: Nenhuma revisão pendente encontrada
       await telegramRepo.savePendingReview(targetReview);
       await telegramRepo.deleteUserState(senderId);
 
-      console.log(`
-[TELEGRAM PRICE]
-Chat/User: ${chatId || senderId} / ${username} (${firstName})
-Preço recebido: "${text}"
-Preço normalizado: R$ ${normPrice.toFixed(2)}
-Revisão atualizada: ${targetReview.id}
-Resultado: Preço atualizado com sucesso
-`);
-
       const updatedCardText = buildReviewCardText(targetReview);
       const keyboard = buildMainReviewKeyboard(targetReview.id);
 
       if (chatId) {
-        // Envia mensagem simples informando o preço salvo
-        await sendTelegramMessage(
-          chatId,
-          `✅ <b>Preço atualizado para R$ ${normPrice.toFixed(2).replace(".", ",")}!</b>`
-        );
-
-        // Atualiza a legenda/texto do card de revisão existente
-        let updatedOnCard = false;
+        await sendTelegramMessage(chatId, `✅ Preço atualizado para R$ ${normPrice.toFixed(2).replace(".", ",")}:`);
         if (targetReview.cardMessageId) {
-          const editRes = await editTelegramMessageCaption(
-            chatId,
-            targetReview.cardMessageId,
-            updatedCardText,
-            keyboard
-          );
-          if (editRes && editRes.ok) {
-            updatedOnCard = true;
-          }
-        }
-
-        // Se não conseguiu editar o card anterior, envia o card atualizado
-        if (!updatedOnCard) {
-          let sentMsg: any = null;
-          if (targetReview.imagens && targetReview.imagens.length > 0) {
-            sentMsg = await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
-          } else {
-            sentMsg = await sendTelegramMessage(chatId, updatedCardText, keyboard);
-          }
-          if (sentMsg?.result?.message_id) {
-            targetReview.cardMessageId = sentMsg.result.message_id;
-            await telegramRepo.savePendingReview(targetReview);
-          }
-        }
-      }
-      return;
-    } else {
-      console.log(`
-[TELEGRAM PRICE]
-Chat/User: ${chatId || senderId} / ${username} (${firstName})
-Preço recebido: "${text}"
-Preço normalizado: N/A
-Revisão atualizada: ${targetReview.id}
-Resultado: Preço inválido (deve ser maior que zero)
-`);
-
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `❌ <b>Preço inválido.</b>\n\n` +
-          `Digite o preço de venda numérico desejado (Exemplo: <code>72</code>, <code>72,90</code> ou <code>R$ 72,90</code>).`
-        );
-      }
-      return;
-    }
-  }
-}
-
-let isPolling = false;
-let lastUpdateOffset = 0;
-
-/**
- * Inicia o Long Polling do Telegram para garantir que o Bot responda instantaneamente
- * mesmo em ambientes sem suporte a Webhook direto (como containers com proxy/auth de preview).
- */
-export function startTelegramPolling(): void {
-  if (isPolling) {
-    console.log("ℹ️ [Telegram Polling] Long Polling já está ativo.");
-    return;
-  }
-
-  isPolling = true;
-  console.log("🚀 [Telegram Polling] Iniciando serviço de Long Polling do Bot...");
-
-  (async () => {
-    while (isPolling) {
-      const token = getBotToken();
-      if (!token) {
-        await new Promise((res) => setTimeout(res, 5000));
-        continue;
-      }
-
-      try {
-        const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${lastUpdateOffset}&timeout=15`;
-        const res = await fetch(url);
-        const data = await res.json();
-
-        if (data.ok && Array.isArray(data.result)) {
-          for (const update of data.result) {
-            lastUpdateOffset = Math.max(lastUpdateOffset, update.update_id + 1);
-            try {
-              await handleTelegramWebhookUpdate(update);
-            } catch (err) {
-              console.error("[Telegram Polling] Erro ao processar update:", err);
-            }
-          }
-        } else if (data.error_code === 409) {
-          // Conflito: Webhook está ativo. Aguarda 20s antes de tentar novamente
-          await new Promise((res) => setTimeout(res, 20000));
+          await editTelegramMessageCaption(chatId, targetReview.cardMessageId, updatedCardText, keyboard);
         } else {
-          await new Promise((res) => setTimeout(res, 3000));
+          await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
         }
-      } catch (err: any) {
-        console.warn("[Telegram Polling Warning] Falha na conexão do polling:", err?.message);
-        await new Promise((res) => setTimeout(res, 5000));
+      }
+    } else {
+      if (chatId) {
+        await sendTelegramMessage(chatId, "❌ Valor de preço inválido. Envie um número válido (ex: 89,90).");
       }
     }
-  })();
+  }
 }
 
-
-/**
- * Registra os comandos oficiais do bot na API do Telegram
- */
-export async function registerBotCommands(): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return;
-
-  const commands = [
-    { command: "start", description: "Abrir painel administrativo principal" },
-    { command: "admin", description: "Abrir menu administrativo" },
-    { command: "listar", description: "Listar e gerenciar produtos do catálogo" },
-    { command: "analytics", description: "Painel de analytics e cliques do Supabase" },
-    { command: "categorias", description: "Gerenciar categorias do catálogo" },
-    { command: "help", description: "Exibir ajuda e comandos disponíveis" }
-  ];
-
-  try {
-    const url = `https://api.telegram.org/bot${token}/setMyCommands`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ commands })
-    });
-    const data = await res.json();
-    console.log("[Telegram] Comandos registrados na API:", data.ok);
-  } catch (err) {
-    console.warn("[Telegram] Erro ao registrar comandos na API:", err);
-  }
+export async function startTelegramPolling(): Promise<void> {
+  console.log("🤖 [Telegram Bot] Polling desativado em favor do Webhook do Render.");
 }
