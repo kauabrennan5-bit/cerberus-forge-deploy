@@ -1305,19 +1305,24 @@ function logAndValidateReviewCallback(
     }
 
     // Comandos básicos (/start e /help)
-    if (text.startsWith("/start") || text.startsWith("/help")) {
+    if (text.startsWith("/start") || text.startsWith("/admin") || text.startsWith("/help")) {
       if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `🏴 <b>BOT CERBERUS FINDS ARCHIVE</b>\n\n` +
-          `Modo de Revisão e Curadoria Ativo!\n\n` +
-          `👤 <b>Seu ID Telegram:</b> <code>${senderId}</code>\n` +
-          `✅ <b>Status Whitelist:</b> Autorizado\n\n` +
-          `<b>COMANDOS ADMINISTRATIVOS:</b>\n` +
-          `/listar - Ver e editar todos os produtos\n` +
-          `/categorias - Gerenciar categorias\n\n` +
-          `Ou envie um link de produto para cadastrar novo.`
-        );
+        const welcomeText = 
+          "🏴 <b>CERBERUS FINDS</b>\n" +
+          "<b>Painel Administrativo</b>\n\n" +
+          "👤 <b>ID Telegram:</b> <code>" + senderId + "</code>\n" +
+          "✅ <b>Administrador autorizado</b>\n\n" +
+          "📊 <b>MENU PRINCIPAL</b>\n\n" +
+          "Selecione uma opção abaixo para gerenciar o catálogo, analytics ou sistema:";
+
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "📦 Produtos", callback_data: "admin_products" }, { text: "➕ Adicionar Produto", callback_data: "admin_add" }],
+            [{ text: "📊 Analytics", callback_data: "admin_analytics" }, { text: "🏷️ Categorias", callback_data: "admin_categories" }],
+            [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "🔧 Sistema", callback_data: "admin_system" }]
+          ]
+        };
+        await sendTelegramMessage(chatId, welcomeText, keyboard);
       }
       return;
     }
@@ -1693,3 +1698,33 @@ export function startTelegramPolling(): void {
   })();
 }
 
+
+/**
+ * Registra os comandos oficiais do bot na API do Telegram
+ */
+export async function registerBotCommands(): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+
+  const commands = [
+    { command: "start", description: "Abrir painel administrativo principal" },
+    { command: "admin", description: "Abrir menu administrativo" },
+    { command: "listar", description: "Listar e gerenciar produtos do catálogo" },
+    { command: "analytics", description: "Painel de analytics e cliques do Supabase" },
+    { command: "categorias", description: "Gerenciar categorias do catálogo" },
+    { command: "help", description: "Exibir ajuda e comandos disponíveis" }
+  ];
+
+  try {
+    const url = `https://api.telegram.org/bot${token}/setMyCommands`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands })
+    });
+    const data = await res.json();
+    console.log("[Telegram] Comandos registrados na API:", data.ok);
+  } catch (err) {
+    console.warn("[Telegram] Erro ao registrar comandos na API:", err);
+  }
+}
