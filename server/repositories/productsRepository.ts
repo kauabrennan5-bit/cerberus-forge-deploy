@@ -531,3 +531,100 @@ export async function getProductAnalytics(identifier: string, period: string = '
     lastClickTime: lastClickTime ? new Date(lastClickTime).toLocaleString("pt-BR") : "Nunca"
   };
 }
+
+/**
+ * Retorna o ranking de produtos por cliques para um período específico ('today', '7d', '30d', 'total')
+ */
+export async function getProductAnalyticsRanking(period: string = '7d'): Promise<Array<{ product: Product; count: number }>> {
+  const products = await getProducts();
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para analytics operacionais.");
+  }
+
+  const { data, error } = await supabase.from("product_clicks").select("*");
+  if (error) {
+    throw new Error("Falha ao consultar public.product_clicks no Supabase: " + error.message);
+  }
+
+  const clicks = data || [];
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  const countsMap: Record<string, number> = {};
+
+  for (const c of clicks) {
+    const createdAt = c.created_at ? new Date(c.created_at) : new Date();
+    const dateStr = createdAt.toISOString().slice(0, 10);
+
+    let match = false;
+    if (period === 'today') {
+      if (dateStr === todayStr) match = true;
+    } else if (period === '7d') {
+      if (createdAt >= sevenDaysAgo) match = true;
+    } else if (period === '30d') {
+      if (createdAt >= thirtyDaysAgo) match = true;
+    } else {
+      match = true; // total
+    }
+
+    if (match && c.product_id) {
+      countsMap[c.product_id] = (countsMap[c.product_id] || 0) + 1;
+    }
+  }
+
+  const ranking = products.map(product => ({
+    product,
+    count: countsMap[product.id] || 0
+  })).sort((a, b) => b.count - a.count);
+
+  return ranking;
+}
+
+/**
+ * Retorna produtos com contagem de cliques para listagem analítica
+ */
+export async function getProductsForAnalytics(): Promise<Array<{ product: Product; totalClicks: number; todayClicks: number; clicks7d: number }>> {
+  const products = await getProducts();
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para analytics operacionais.");
+  }
+
+  const { data, error } = await supabase.from("product_clicks").select("*");
+  if (error) {
+    throw new Error("Falha ao consultar public.product_clicks no Supabase: " + error.message);
+  }
+
+  const clicks = data || [];
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  const statsMap: Record<string, { total: number; today: number; d7: number }> = {};
+
+  for (const c of clicks) {
+    if (!c.product_id) continue;
+    if (!statsMap[c.product_id]) {
+      statsMap[c.product_id] = { total: 0, today: 0, d7: 0 };
+    }
+    statsMap[c.product_id].total++;
+    const createdAt = c.created_at ? new Date(c.created_at) : new Date();
+    if (createdAt.toISOString().slice(0, 10) === todayStr) {
+      statsMap[c.product_id].today++;
+    }
+    if (createdAt >= sevenDaysAgo) {
+      statsMap[c.product_id].d7++;
+    }
+  }
+
+  return products.map(product => {
+    const st = statsMap[product.id] || { total: 0, today: 0, d7: 0 };
+    return {
+      product,
+      totalClicks: st.total,
+      todayClicks: st.today,
+      clicks7d: st.d7
+    };
+  }).sort((a, b) => b.clicks7d - a.clicks7d || b.totalClicks - a.totalClicks);
+}

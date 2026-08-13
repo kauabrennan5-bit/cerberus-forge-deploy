@@ -241,17 +241,36 @@ function logAndValidateReviewCallback(
  * Renderizador do Menu Principal /start e /admin
  */
 async function renderMainMenu(chatId: number | string, messageId?: number, isEdit: boolean = false): Promise<void> {
+  let statsSummary = { totalProducts: 0, activeProducts: 0, todayClicks: 0, clicks7d: 0, topProductName: "Nenhum" };
+  try {
+    const summary = await productsRepository.getAnalyticsSummary();
+    const ranking = await productsRepository.getProductAnalyticsRanking("7d");
+    statsSummary.totalProducts = summary.totalProducts;
+    statsSummary.activeProducts = summary.activeProducts;
+    statsSummary.todayClicks = summary.todayClicks;
+    statsSummary.clicks7d = summary.clicks7d;
+    if (ranking.length > 0 && ranking[0].count > 0) {
+      statsSummary.topProductName = ranking[0].product.produto;
+    }
+  } catch {}
+
   const text = 
-    "🏛️ <b>CERBERUS FINDS</b>\n" +
-    "<b>Painel Administrativo</b>\n\n" +
-    "Selecione uma opção abaixo:";
+    "🏴 <b>CERBERUS FINDS</b>\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    "🛠 <b>PAINEL ADMINISTRATIVO</b>\n\n" +
+    `📦 Produtos: <b>${statsSummary.totalProducts}</b>\n` +
+    `🟢 Ativos: <b>${statsSummary.activeProducts}</b>\n` +
+    `⏸ Pausados: <b>${statsSummary.totalProducts - statsSummary.activeProducts}</b>\n\n` +
+    `👆 Cliques hoje: <b>${statsSummary.todayClicks}</b>\n` +
+    `📈 Cliques 7 dias: <b>${statsSummary.clicks7d}</b>\n\n` +
+    `🏆 Mais acessado:\n<i>${statsSummary.topProductName}</i>\n` +
+    "━━━━━━━━━━━━━━━━━━";
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "➕ Adicionar produto", callback_data: "admin_add" }, { text: "📋 Produtos", callback_data: "products_list:0" }],
-      [{ text: "🔎 Buscar produto", callback_data: "products_search_init" }, { text: "📊 Visão geral", callback_data: "analytics_overview" }],
-      [{ text: "🎯 Analytics por produto", callback_data: "analytics_products:0" }, { text: "🏷️ Categorias", callback_data: "admin_categories" }],
-      [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "🩺 Status do sistema", callback_data: "admin_system" }]
+      [{ text: "📊 Analytics", callback_data: "analytics_overview" }, { text: "📦 Produtos", callback_data: "products_list:0" }],
+      [{ text: "➕ Adicionar produto", callback_data: "admin_add" }, { text: "🏷 Categorias", callback_data: "admin_categories" }],
+      [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "⚙️ Sistema", callback_data: "admin_system" }]
     ]
   };
 
@@ -532,29 +551,30 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         opError = err.message;
       }
 
-      let text = "📊 <b>CERBERUS ANALYTICS</b>\n\n";
+      let text = "📊 <b>CERBERUS ANALYTICS</b>\n━━━━━━━━━━━━━━━━━━\n\n";
       if (opError) {
-        text += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
+        text += "⚠️ <b>ANALYTICS INDISPONÍVEL</b>\n\nNão foi possível consultar os dados de produção.\nTente novamente em alguns instantes.\n\n<code>" + opError + "</code>";
       } else if (opSummary) {
         text += "📦 <b>CATÁLOGO</b>\n" +
-                "• Total: <b>" + opSummary.totalProducts + "</b>\n" +
-                "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
-                "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
+                "• Produtos cadastrados: <b>" + opSummary.totalProducts + "</b>\n" +
+                "• Produtos ativos: <b>" + opSummary.activeProducts + "</b>\n\n" +
                 "🖱️ <b>CLIQUES</b>\n" +
-                "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
-                "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
-                "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n" +
-                "• Total: <b>" + opSummary.totalClicks + "</b>\n\n" +
+                "• Cliques hoje: <b>" + opSummary.todayClicks + "</b>\n" +
+                "• Cliques 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
+                "• Cliques 30 dias: <b>" + opSummary.clicks30d + "</b>\n" +
+                "• Cliques totais: <b>" + opSummary.totalClicks + "</b>\n\n" +
                 "🛒 <b>MARKETPLACES</b>\n" +
                 "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
                 "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
-                "🔥 <b>TOP PRODUTOS</b>\n" +
-                (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda");
+                "🏆 <b>PRODUTO MAIS ACESSADO</b>\n" +
+                (opSummary.topProducts.length > 0 ? `<i>${opSummary.topProducts[0].name}</i> (${opSummary.topProducts[0].count} cliques)` : "Nenhum clique registrado") + "\n" +
+                "━━━━━━━━━━━━━━━━━━";
       }
 
       const keyboard = {
         inline_keyboard: [
           [{ text: "🎯 Analytics por produto", callback_data: "analytics_products:0" }],
+          [{ text: "🏆 Ranking de produtos", callback_data: "analytics_ranking:7d" }],
           [{ text: "🔄 Atualizar", callback_data: "analytics_overview" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
         ]
       };
@@ -565,18 +585,24 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data.startsWith("analytics_products:")) {
       const page = parseInt(data.split(":")[1]) || 0;
       await answerCallbackQuery(callbackId);
-      const products = await productsRepository.getProducts();
+      let list;
+      try {
+        list = await productsRepository.getProductsForAnalytics();
+      } catch {
+        list = [];
+      }
+
       const pageSize = 5;
       const start = page * pageSize;
       const end = start + pageSize;
-      const paged = products.slice(start, end);
-      const total = products.length;
+      const paged = list.slice(start, end);
+      const total = list.length;
 
-      let text = `🎯 <b>ESCOLHER PRODUTO (Pág ${page + 1}/${Math.ceil(total / pageSize) || 1})</b>\n\nSelecione um produto abaixo para ver o analytics detalhado:\n\n`;
+      let text = `🎯 <b>ANALYTICS POR PRODUTO (Pág ${page + 1}/${Math.ceil(total / pageSize) || 1})</b>\n━━━━━━━━━━━━━━━━━━\nSelecione um produto abaixo:\n\n`;
       const buttons = [];
 
-      for (const p of paged) {
-        buttons.push([{ text: `[${p.ref}] ${p.produto.slice(0, 30)}`, callback_data: `analytics_product:${p.id}:7d` }]);
+      for (const item of paged) {
+        buttons.push([{ text: `📦 ${item.product.produto.slice(0, 26)} — 👆 ${item.totalClicks} cliques`, callback_data: `analytics_product:${item.product.id}:7d` }]);
       }
 
       const navRow = [];
@@ -584,9 +610,50 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (end < total) navRow.push({ text: "Próxima ▶️", callback_data: `analytics_products:${page + 1}` });
       if (navRow.length > 0) buttons.push(navRow);
 
-      buttons.push([{ text: "📈 Visão Geral", callback_data: "analytics_overview" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
+      buttons.push([{ text: "📊 Visão Geral", callback_data: "analytics_overview" }, { text: "⬅️ Voltar", callback_data: "analytics_overview" }]);
 
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+      return;
+    }
+
+    if (data.startsWith("analytics_ranking:")) {
+      const period = data.split(":")[1] || "7d";
+      await answerCallbackQuery(callbackId);
+      let ranking;
+      try {
+        ranking = await productsRepository.getProductAnalyticsRanking(period);
+      } catch {
+        ranking = [];
+      }
+
+      const periodLabels: Record<string, string> = { today: "HOJE", "7d": "7 DIAS", "30d": "30 DIAS", total: "TOTAL" };
+      let text = `🏆 <b>RANKING DE PRODUTOS — ${periodLabels[period] || "7 DIAS"}</b>\n━━━━━━━━━━━━━━━━━━\n\n`;
+      const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+
+      const top10 = ranking.slice(0, 10);
+      if (top10.length === 0 || top10.every(r => r.count === 0)) {
+        text += "Nenhum clique registrado no período.\n";
+      } else {
+        top10.forEach((item, idx) => {
+          const medal = medals[idx] || `${idx + 1}️⃣`;
+          text += `${medal} <b>${item.product.produto.slice(0, 30)}</b> — <b>${item.count}</b>\n`;
+        });
+      }
+      text += "\n━━━━━━━━━━━━━━━━━━";
+
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: period === "today" ? "• Hoje •" : "Hoje", callback_data: "analytics_ranking:today" },
+            { text: period === "7d" ? "• 7d •" : "7d", callback_data: "analytics_ranking:7d" },
+            { text: period === "30d" ? "• 30d •" : "30d", callback_data: "analytics_ranking:30d" },
+            { text: period === "total" ? "• Total •" : "Total", callback_data: "analytics_ranking:total" }
+          ],
+          [{ text: "📊 Visão Geral", callback_data: "analytics_overview" }, { text: "⬅️ Voltar", callback_data: "analytics_overview" }]
+        ]
+      };
+
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 
@@ -609,19 +676,23 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       else if (period === "30d") { periodClicks = stats.clicks30d; periodLabel = "30 dias"; }
       else if (period === "total") { periodClicks = stats.totalClicks; periodLabel = "Total"; }
 
-      const text = `📊 <b>ANALYTICS DO PRODUTO</b>\n\n` +
-                   `<b>Nome:</b> ${p.produto}\n` +
-                   `<b>REF:</b> <code>${p.ref}</code>\n` +
-                   `<b>Categoria:</b> ${p.categoria}\n` +
-                   `<b>Status:</b> ${p.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"}\n\n` +
-                   `🖱️ <b>CLIQUES (${periodLabel})</b>\n` +
+      const text = `📊 <b>ANALYTICS DO PRODUTO</b>\n` +
+                   `━━━━━━━━━━━━━━━━━━\n\n` +
+                   `📦 <b>${p.produto}</b>\n` +
+                   `${p.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"} (REF: <code>${p.ref}</code>)\n\n` +
+                   `👆 <b>Cliques</b>\n\n` +
                    `• Hoje: <b>${stats.todayClicks}</b>\n` +
                    `• 7 dias: <b>${stats.clicks7d}</b>\n` +
                    `• 30 dias: <b>${stats.clicks30d}</b>\n` +
                    `• Total: <b>${stats.totalClicks}</b>\n\n` +
-                   `🛒 <b>MARKETPLACE</b>\n` +
+                   `━━━━━━━━━━━━━━━━━━\n` +
+                   `🛒 <b>MARKETPLACES</b>\n\n` +
                    `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
-                   `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n`;
+                   `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n\n` +
+                   `━━━━━━━━━━━━━━━━━━\n` +
+                   `🕐 <b>Último clique:</b>\n${stats.lastClickTime}\n\n` +
+                   `🔗 <b>Última origem:</b>\nDisponível no sistema\n` +
+                   `━━━━━━━━━━━━━━━━━━`;
 
       const keyboard = {
         inline_keyboard: [
