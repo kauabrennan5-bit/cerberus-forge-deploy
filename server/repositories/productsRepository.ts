@@ -418,26 +418,14 @@ export async function recordProductClick(clickData: ProductClickData): Promise<b
 
 export async function getAnalyticsSummary(): Promise<any> {
   let clicks: any[] = [];
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from("product_clicks").select("*");
-      if (!error && data) {
-        clicks = data;
-      }
-    } catch (e) {
-      // ignore
-    }
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para analytics operacionais.");
   }
-  if (clicks.length === 0) {
-    try {
-      const clicksFile = path.join(DATA_DIR, "clicks.json");
-      if (fs.existsSync(clicksFile)) {
-        clicks = JSON.parse(fs.readFileSync(clicksFile, "utf-8"));
-      }
-    } catch {
-      clicks = [];
-    }
+  const { data, error } = await supabase.from("product_clicks").select("*");
+  if (error) {
+    throw new Error("Falha ao consultar public.product_clicks no Supabase: " + error.message);
   }
+  clicks = data || [];
 
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
