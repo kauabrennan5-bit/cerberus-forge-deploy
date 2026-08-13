@@ -467,6 +467,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     // Ação: Submenu Analytics Operacional
         // Ação: Submenu Analytics Operacional
     if (data === "admin_analytics") {
+      console.log("[ANALYTICS_CALLBACK_V3] entrando em admin_analytics");
       console.log("[ANALYTICS_ROUTER_V2] callback admin_analytics acionado, commit d34e4f7+");
       await answerCallbackQuery(callbackId);
       let opSummary;
@@ -584,6 +585,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     // Ação: Seleção Paginada de Produtos para Analytics
     if (data.startsWith("analytics_select_page:")) {
+      console.log("[ANALYTICS_CALLBACK_V3] entrando em analytics_select_page:", data);
       const page = parseInt(data.split(":")[1]);
       await answerCallbackQuery(callbackId);
       const products = await productsRepository.getProducts();
@@ -614,6 +616,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     // Ação: Analytics de Produto Específico com Período
     if (data.startsWith("analytics_prod:")) {
+      console.log("[ANALYTICS_CALLBACK_V3] entrando em analytics_prod:", data);
       const parts = data.split(":");
       const prodIdentifier = parts[1];
       const period = parts[2] || "7d";
