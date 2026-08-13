@@ -372,23 +372,38 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
     // Ação: Submenu Analytics Operacional
+        // Ação: Submenu Analytics Operacional
     if (data === "admin_analytics") {
       await answerCallbackQuery(callbackId);
-      const summary = await productsRepository.getAnalyticsSummary();
-      let topText = "Nenhum clique registrado ainda";
-      if (summary.topProducts && summary.topProducts.length > 0) {
-        topText = summary.topProducts.map((p, i) => (i + 1) + ". " + p.name + " — " + p.count).join("\n");
+      let opSummary;
+      let opError = null;
+      try {
+        opSummary = await productsRepository.getAnalyticsSummary();
+      } catch (err: any) {
+        opError = err.message;
       }
-      const text = "📊 <b>CERBERUS ANALYTICS</b>\n\n" +
-                   "📦 Produtos: <b>" + summary.totalProducts + "</b>\n" +
-                   "🟢 Ativos: <b>" + summary.activeProducts + "</b>\n\n" +
-                   "🖱️ Cliques hoje: <b>" + summary.todayClicks + "</b>\n" +
-                   "📅 7 dias: <b>" + summary.clicks7d + "</b>\n" +
-                   "📆 30 dias: <b>" + summary.clicks30d + "</b>\n\n" +
-                   "🛒 Shopee: <b>" + (summary.marketplaceCounts.Shopee || 0) + "</b>\n" +
-                   "🛍️ Mercado Livre: <b>" + (summary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
-                   "🔥 <b>TOP PRODUTOS</b>\n" + topText + "\n\n" +
-                   "<i>⚠️ Nota: Dados operacionais do Supabase. GA4 Measurement ID: G-KQT4GLD14X.</i>";
+
+      let text = "📊 <b>CERBERUS FINDS — ANALYTICS</b>\n\n";
+
+      if (opError) {
+        text += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
+      } else if (opSummary) {
+        text += "📦 <b>PRODUTOS</b>\n" +
+                "• Cadastrados: <b>" + opSummary.totalProducts + "</b>\n" +
+                "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
+                "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
+                "🖱️ <b>CLIQUES</b>\n" +
+                "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
+                "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
+                "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n\n" +
+                "🛍️ <b>MARKETPLACES</b>\n" +
+                "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
+                "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
+                "🏆 <b>TOP PRODUTOS</b>\n" +
+                (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda") + "\n\n" +
+                "<i>Fonte: Supabase (product_clicks)</i>";
+      }
+
       const keyboard = {
         inline_keyboard: [
           [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
@@ -399,36 +414,24 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       return;
     }
-    // Ação: Submenu Categorias
-    if (data === "admin_categories") {
-      await answerCallbackQuery(callbackId);
-      const prods = await productsRepository.getProducts();
-      const categories = Array.from(new Set(prods.map(p => p.categoria)));
-      const text = "⚙️ <b>GERENCIAMENTO DE CATEGORIAS</b>\n\n" +
-                   "Categorias ativas:\n" + categories.map(c => "• " + c).join("\n") + "\n\n" +
-                   "<i>Use o comando /categorias no chat para gerenciar.</i>";
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
-        ]
-      };
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, keyboard);
-      }
-      return;
-    }
-    // Ação: Submenu Sistema
+
+        // Ação: Submenu Sistema
     if (data === "admin_system") {
       await answerCallbackQuery(callbackId);
       const products = await productsRepository.getProducts();
+      const gaStatus = googleAnalytics.getGA4Status();
+      const gaApiStr = gaStatus.isConfigured ? "🟢 Configurada" : "⚪ Não configurada";
       const text = "🔧 <b>STATUS DO SISTEMA</b>\n\n" +
-                   "🟢 Backend Render: <b>Online</b>\n" +
-                   "🟢 Supabase: <b>Conectado</b>\n" +
-                   "🟢 Telegram Bot: <b>Ativo</b>\n" +
-                   "🟢 API (/api/products): <b>200 OK</b>\n" +
-                   "🟢 Site (cerberusfinds.com): <b>No ar</b>\n\n" +
+                   "Backend 🟢\n" +
+                   "Supabase 🟢\n" +
+                   "Telegram 🟢\n" +
+                   "API 🟢\n" +
+                   "Site 🟢\n" +
+                   "Analytics operacional 🟢\n" +
+                   "GA4 coleta frontend 🟢\n" +
+                   "GA4 Data API " + gaApiStr + "\n\n" +
                    "📦 Produtos cadastrados: <b>" + products.length + "</b>\n" +
-                   "🕒 Timestamp: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
+                   "🕒 Atualizado: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
       const keyboard = {
         inline_keyboard: [
           [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
@@ -439,7 +442,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       return;
     }
-    // Ação: Adicionar Produto
+
     if (data === "admin_add") {
       await answerCallbackQuery(callbackId);
       if (chatId) {
