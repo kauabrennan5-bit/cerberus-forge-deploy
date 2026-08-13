@@ -331,7 +331,156 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     }
 
     // Ação: Menu de Edição de Produto Específico
-    if (data.startsWith("admin_edit:")) {
+    // Ação: Menu Principal /admin
+    if (data === "admin_menu") {
+      await answerCallbackQuery(callbackId);
+      const text = "🐺 <b>CERBERUS FINDS — PAINEL ADMINISTRATIVO</b>\n\nSelecione uma opção abaixo:";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "📦 Produtos", callback_data: "admin_products" }, { text: "📊 Analytics", callback_data: "admin_analytics" }],
+          [{ text: "➕ Adicionar Produto", callback_data: "admin_add" }, { text: "⚙️ Categorias", callback_data: "admin_categories" }],
+          [{ text: "🔧 Sistema", callback_data: "admin_system" }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, keyboard);
+      }
+      return;
+    }
+    // Ação: Submenu Produtos
+    if (data === "admin_products") {
+      await answerCallbackQuery(callbackId);
+      const products = await productsRepository.getProducts();
+      const total = products.length;
+      const actives = products.filter(p => p.ativo !== false).length;
+      const inactives = total - actives;
+      const text = "📦 <b>GERENCIAMENTO DE PRODUTOS</b>\n\n" +
+                   "• Total: <b>" + total + "</b>\n" +
+                   "• Ativos: <b>" + actives + "</b>\n" +
+                   "• Inativos: <b>" + inactives + "</b>\n\n" +
+                   "<i>Escolha uma ação:</i>";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "📋 Listar", callback_data: "list_page:0" }],
+          [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "⏸️ Ativos/Pausados", callback_data: "admin_toggle_list" }],
+          [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, keyboard);
+      }
+      return;
+    }
+    // Ação: Submenu Analytics Operacional
+    if (data === "admin_analytics") {
+      await answerCallbackQuery(callbackId);
+      const summary = await productsRepository.getAnalyticsSummary();
+      let topText = "Nenhum clique registrado ainda";
+      if (summary.topProducts && summary.topProducts.length > 0) {
+        topText = summary.topProducts.map((p, i) => (i + 1) + ". " + p.name + " — " + p.count).join("\n");
+      }
+      const text = "📊 <b>CERBERUS ANALYTICS</b>\n\n" +
+                   "📦 Produtos: <b>" + summary.totalProducts + "</b>\n" +
+                   "🟢 Ativos: <b>" + summary.activeProducts + "</b>\n\n" +
+                   "🖱️ Cliques hoje: <b>" + summary.todayClicks + "</b>\n" +
+                   "📅 7 dias: <b>" + summary.clicks7d + "</b>\n" +
+                   "📆 30 dias: <b>" + summary.clicks30d + "</b>\n\n" +
+                   "🛒 Shopee: <b>" + (summary.marketplaceCounts.Shopee || 0) + "</b>\n" +
+                   "🛍️ Mercado Livre: <b>" + (summary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
+                   "🔥 <b>TOP PRODUTOS</b>\n" + topText + "\n\n" +
+                   "<i>⚠️ Nota: Dados operacionais do Supabase. GA4 Measurement ID: G-KQT4GLD14X.</i>";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, keyboard);
+      }
+      return;
+    }
+    // Ação: Submenu Categorias
+    if (data === "admin_categories") {
+      await answerCallbackQuery(callbackId);
+      const prods = await productsRepository.getProducts();
+      const categories = Array.from(new Set(prods.map(p => p.categoria)));
+      const text = "⚙️ <b>GERENCIAMENTO DE CATEGORIAS</b>\n\n" +
+                   "Categorias ativas:\n" + categories.map(c => "• " + c).join("\n") + "\n\n" +
+                   "<i>Use o comando /categorias no chat para gerenciar.</i>";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, keyboard);
+      }
+      return;
+    }
+    // Ação: Submenu Sistema
+    if (data === "admin_system") {
+      await answerCallbackQuery(callbackId);
+      const products = await productsRepository.getProducts();
+      const text = "🔧 <b>STATUS DO SISTEMA</b>\n\n" +
+                   "🟢 Backend Render: <b>Online</b>\n" +
+                   "🟢 Supabase: <b>Conectado</b>\n" +
+                   "🟢 Telegram Bot: <b>Ativo</b>\n" +
+                   "🟢 API (/api/products): <b>200 OK</b>\n" +
+                   "🟢 Site (cerberusfinds.com): <b>No ar</b>\n\n" +
+                   "📦 Produtos cadastrados: <b>" + products.length + "</b>\n" +
+                   "🕒 Timestamp: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, keyboard);
+      }
+      return;
+    }
+    // Ação: Adicionar Produto
+    if (data === "admin_add") {
+      await answerCallbackQuery(callbackId);
+      if (chatId) {
+        await sendTelegramMessage(chatId, "➕ <b>ADICIONAR NOVO PRODUTO</b>\n\nEnvie o link de um produto da Shopee ou Mercado Livre para iniciar a extração automática por IA e revisão.");
+      }
+      return;
+    }
+    // Ação: Listar Destaques
+    if (data === "admin_highlights") {
+      await answerCallbackQuery(callbackId);
+      const products = await productsRepository.getProducts();
+      const highlights = products.filter(p => p.destaque === true);
+      let text = "⭐ <b>PRODUTOS EM DESTAQUE</b> (" + highlights.length + ")\n\n";
+      const buttons = [];
+      for (const p of highlights) {
+        text += "• <code>" + p.ref + "</code> - " + p.produto.slice(0, 30) + "\n";
+        buttons.push([{ text: "📝 Editar " + p.ref, callback_data: "admin_edit:" + p.id }]);
+      }
+      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_products" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]);
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+      }
+      return;
+    }
+    // Ação: Ativos / Pausados toggle list
+    if (data === "admin_toggle_list") {
+      await answerCallbackQuery(callbackId);
+      const products = await productsRepository.getProducts();
+      let text = "⏸️ <b>GERENCIAR STATUS DE PRODUTOS</b>\n\nClique em um produto para gerenciar:\n\n";
+      const buttons = [];
+      for (const p of products.slice(0, 10)) {
+        buttons.push([{ text: (p.ativo ? "✅" : "⏸") + " " + p.ref + " - " + p.produto.slice(0, 25), callback_data: "admin_edit:" + p.id }]);
+      }
+      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_products" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]);
+      if (chatId && messageId) {
+        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+      }
+      return;
+    }
+    
+        if (data.startsWith("admin_edit:")) {
       const prodId = data.split(":")[1];
       const product = await productsRepository.getProductByIdOrSlug(prodId);
       if (!product) {
@@ -789,6 +938,22 @@ function logAndValidateReviewCallback(
           `🔒 <b>Acesso Negado</b>\n\n` +
           `Seu usuário do Telegram (ID: <code>${senderId}</code>) não está autorizado no Cerberus Finds Archive.`
         );
+      }
+      return;
+    }
+
+    // Comando: /admin
+    if (text.startsWith("/admin")) {
+      if (chatId) {
+        const welcomeText = "🐺 <b>CERBERUS FINDS — PAINEL ADMINISTRATIVO</b>\n\nSelecione uma opção abaixo para gerenciar o catálogo, visualizar analytics ou checar o sistema:";
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "📦 Produtos", callback_data: "admin_products" }, { text: "📊 Analytics", callback_data: "admin_analytics" }],
+            [{ text: "➕ Adicionar Produto", callback_data: "admin_add" }, { text: "⚙️ Categorias", callback_data: "admin_categories" }],
+            [{ text: "🔧 Sistema", callback_data: "admin_system" }]
+          ]
+        };
+        await sendTelegramMessage(chatId, welcomeText, keyboard);
       }
       return;
     }

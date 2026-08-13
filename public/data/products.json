@@ -1,5 +1,138 @@
 [
   {
+    "id": "prod-1786652564373",
+    "slug": "luminaria-de-mesa-abajur-bancone-cogumelo-led-110-220v-branco-127-220v",
+    "produto": "Luminária De Mesa Abajur Bancone Cogumelo Led 110/220v Branco 127/220v",
+    "preco": 69.99,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_605270-MLB112218913161_052026-O.webp"
+    ],
+    "link": "https://meli.la/1YzPeaj",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1786651006479",
+    "slug": "luminaria-de-mesa-rustico-abajur-madeira-para-quarto-white",
+    "produto": "Luminária De Mesa Rústico Abajur Madeira Para Quarto White",
+    "preco": 64,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_753359-MLB102461861951_122025-O.webp"
+    ],
+    "link": "https://meli.la/2XvS7t4",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1786553076814",
+    "slug": "espelho-lopazzi-organico-70-e-90-polido-design-moderno-luxo-moldura-magnus-90x40cm-suporte",
+    "produto": "Espelho Lopazzi Orgânico 70 E 90 Polido Design Moderno Luxo Moldura Magnus 90x40cm Suporte",
+    "preco": 61,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_917979-MLA105468548713_012026-O.webp"
+    ],
+    "link": "https://meli.la/2NCvH5p",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1786548596720",
+    "slug": "espelho-100x50-organico-corpo-inteiro-grande-moldura-caramelo",
+    "produto": "Espelho 100x50 Orgânico Corpo Inteiro Grande Moldura Caramelo",
+    "preco": 91,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_936790-MLA96100703939_102025-O.webp"
+    ],
+    "link": "https://meli.la/2boFqKR",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1786493200195",
+    "slug": "luminaria-de-piso-atlas-para-sala-quarto-escritorio-luxo-branco-imbuia",
+    "produto": "Luminária De Piso Atlas Para Sala Quarto Escritório Luxo Branco Imbuia",
+    "preco": 70,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_872855-MLB114965964599_072026-O.webp"
+    ],
+    "link": "https://meli.la/2witVPw",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1786489168833",
+    "slug": "abajur-de-mesa-luminaria-luz-quarto-cabeceira-sala-decoracao-marrom-bege-bivolt-110v-220v",
+    "produto": "Abajur De Mesa Luminária Luz Quarto Cabeceira Sala Decoração Marrom Bege Bivolt 110v/220v",
+    "preco": 28,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_802417-MLB111037454085_042026-O.webp"
+    ],
+    "link": "https://meli.la/1Yb4mXY",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1786482694672",
+    "slug": "espelho-com-touch-e-led-3-cores-40x60-jateado-retangular-para-presente",
+    "produto": "Espelho com Touch e Led 3 Cores 40x60 Jateado Retangular Para Presente",
+    "preco": 139.9,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-8261p-ml3st3ofqdxg9b",
+      "https://down-br.img.susercontent.com/file/sg-11134201-82621-ml3st37vq58ibd",
+      "https://down-br.img.susercontent.com/file/sg-11134201-82613-ml3st38tmr5t94",
+      "https://down-br.img.susercontent.com/file/sg-11134201-82602-ml3st31lj9j407",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8262u-ml3st3jtqwhv78",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8260a-ml3st3cvhfk118",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8262r-ml3st3cldkw3e5",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825zt-ml3st3hmnnd03f"
+    ],
+    "link": "https://shopee.com.br/product/924089620/58255730410?lang=pt-BR",
+    "categoria": "Acessórios",
+    "marketplace": "Shopee",
+    "cupom": "",
+    "freteGratis": false,
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1785953676108",
     "slug": "cama-cabana-pet-formato-de-gato-toca-com-bolinha-interativa",
     "produto": "￼Cama Cabana Pet Formato de Gato Toca com Bolinha Interativa",

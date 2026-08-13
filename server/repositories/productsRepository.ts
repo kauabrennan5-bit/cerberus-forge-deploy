@@ -414,3 +414,78 @@ export async function recordProductClick(clickData: ProductClickData): Promise<b
   return true;
 }
 
+
+
+export async function getAnalyticsSummary(): Promise<any> {
+  let clicks: any[] = [];
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from("product_clicks").select("*");
+      if (!error && data) {
+        clicks = data;
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  if (clicks.length === 0) {
+    try {
+      const clicksFile = path.join(DATA_DIR, "clicks.json");
+      if (fs.existsSync(clicksFile)) {
+        clicks = JSON.parse(fs.readFileSync(clicksFile, "utf-8"));
+      }
+    } catch {
+      clicks = [];
+    }
+  }
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+  let todayClicks = 0;
+  let clicks7d = 0;
+  let clicks30d = 0;
+  const productCounts: Record<string, { name: string; count: number }> = {};
+  const marketplaceCounts: Record<string, number> = { Shopee: 0, "Mercado Livre": 0 };
+
+  for (const c of clicks) {
+    const createdAt = c.created_at ? new Date(c.created_at) : new Date();
+    const dateStr = createdAt.toISOString().slice(0, 10);
+    if (dateStr === todayStr) todayClicks++;
+    if (createdAt >= sevenDaysAgo) clicks7d++;
+    if (createdAt >= thirtyDaysAgo) clicks30d++;
+
+    const pName = c.product_name || c.product_id || "Desconhecido";
+    if (!productCounts[pName]) {
+      productCounts[pName] = { name: pName, count: 0 };
+    }
+    productCounts[pName].count++;
+
+    const lowerName = pName.toLowerCase();
+    if (lowerName.includes("mercadolivre") || lowerName.includes("meli") || lowerName.includes("mercado livre")) {
+      marketplaceCounts["Mercado Livre"] = (marketplaceCounts["Mercado Livre"] || 0) + 1;
+    } else {
+      marketplaceCounts["Shopee"] = (marketplaceCounts["Shopee"] || 0) + 1;
+    }
+  }
+
+  const topProducts = Object.values(productCounts).sort((a, b) => b.count - a.count).slice(0, 5);
+
+  const products = await getProducts();
+  const totalProducts = products.length;
+  const activeProducts = products.filter(p => p.ativo !== false).length;
+
+  return {
+    totalProducts,
+    activeProducts,
+    inactiveProducts: totalProducts - activeProducts,
+    totalClicks: clicks.length,
+    todayClicks,
+    clicks7d,
+    clicks30d,
+    marketplaceCounts,
+    topProducts
+  };
+}
