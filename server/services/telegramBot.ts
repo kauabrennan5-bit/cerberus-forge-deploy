@@ -299,6 +299,99 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
+    // INTERCEPTAÇÃO ABSOLUTA DE /analytics — ANTES DE QUALQUER ESTADO OU PENDING REVIEW
+    if (text.startsWith("/analytics") || text.toLowerCase() === "analytics") {
+      const parts = text.split(" ");
+      const arg = parts[1] ? parts[1].trim() : "";
+
+      if (arg) {
+        const stats = await productsRepository.getProductAnalytics(arg, "7d");
+        if (!stats) {
+          if (chatId) {
+            await sendTelegramMessage(chatId, `⚠️ Produto <code>${arg}</code> não encontrado no catálogo do Supabase.`);
+          }
+          return;
+        }
+
+        const p = stats.product;
+        const textResp = `📊 <b>ANALYTICS DO PRODUTO</b>\n\n` +
+                         `🛍️ <b>Nome:</b> ${p.produto}\n` +
+                         `🔖 <b>REF:</b> <code>${p.ref}</code>\n` +
+                         `🆔 <b>ID:</b> <code>${p.id}</code>\n` +
+                         `💰 <b>Preço:</b> R$ ${p.preco.toFixed(2).replace(".", ",")}\n` +
+                         `📂 <b>Categoria:</b> ${p.categoria}\n` +
+                         `🟢 <b>Status:</b> ${p.ativo ? "Ativo" : "Pausado"}\n\n` +
+                         `────────────────\n` +
+                         `🖱️ <b>CLIQUES (Últimos 7 dias)</b>\n` +
+                         `• Hoje: <b>${stats.todayClicks}</b> | Ontem: <b>${stats.yesterdayClicks}</b>\n` +
+                         `• 7 dias: <b>${stats.clicks7d}</b>\n` +
+                         `• 30 dias: <b>${stats.clicks30d}</b>\n` +
+                         `• Total: <b>${stats.totalClicks}</b>\n\n` +
+                         `🛒 <b>MARKETPLACE</b>\n` +
+                         `• Shopee: <b>${stats.marketplaceCounts.Shopee || 0}</b>\n` +
+                         `• Mercado Livre: <b>${stats.marketplaceCounts["Mercado Livre"] || 0}</b>\n\n` +
+                         `🕐 Último clique: <b>${stats.lastClickTime}</b>`;
+
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: "Hoje", callback_data: `analytics_prod:${p.id}:today` },
+              { text: "7d", callback_data: `analytics_prod:${p.id}:7d` },
+              { text: "30d", callback_data: `analytics_prod:${p.id}:30d` },
+              { text: "Total", callback_data: `analytics_prod:${p.id}:total` }
+            ],
+            [{ text: "📊 Analytics Geral", callback_data: "admin_analytics" }, { text: "🔗 Abrir produto", url: p.link }]
+          ]
+        };
+
+        if (chatId) {
+          await sendTelegramMessage(chatId, textResp, keyboard);
+        }
+        return;
+      } else {
+        let opSummary;
+        let opError = null;
+        try {
+          opSummary = await productsRepository.getAnalyticsSummary();
+        } catch (err: any) {
+          opError = err.message;
+        }
+
+        let textResp = "📊 <b>CERBERUS FINDS — ANALYTICS</b>\n\n";
+
+        if (opError) {
+          textResp += "⚠️ <i>Analytics temporariamente indisponível.</i>\n<code>" + opError + "</code>";
+        } else if (opSummary) {
+          textResp += "📦 <b>PRODUTOS</b>\n" +
+                      "• Total: <b>" + opSummary.totalProducts + "</b>\n" +
+                      "• Ativos: <b>" + opSummary.activeProducts + "</b>\n" +
+                      "• Pausados: <b>" + (opSummary.totalProducts - opSummary.activeProducts) + "</b>\n\n" +
+                      "🖱️ <b>CLIQUES</b>\n" +
+                      "• Hoje: <b>" + opSummary.todayClicks + "</b>\n" +
+                      "• Últimos 7 dias: <b>" + opSummary.clicks7d + "</b>\n" +
+                      "• Últimos 30 dias: <b>" + opSummary.clicks30d + "</b>\n\n" +
+                      "🛍️ <b>MARKETPLACES</b>\n" +
+                      "• Shopee: <b>" + (opSummary.marketplaceCounts.Shopee || 0) + "</b>\n" +
+                      "• Mercado Livre: <b>" + (opSummary.marketplaceCounts["Mercado Livre"] || 0) + "</b>\n\n" +
+                      "🏆 <b>TOP PRODUTOS — 7 DIAS</b>\n" +
+                      (opSummary.topProducts.length > 0 ? opSummary.topProducts.map((p, i) => `${i+1}. ${p.name} — ${p.count} cliques`).join("\n") : "Nenhum clique registrado ainda") + "\n\n" +
+                      "🕐 Dados atualizados em: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
+        }
+
+        const keyboard = {
+          inline_keyboard: [
+            [{ text: "🔎 Escolher Produto", callback_data: "analytics_select_page:0" }],
+            [{ text: "🔄 Atualizar", callback_data: "admin_analytics" }, { text: "🏠 Menu Principal", callback_data: "admin_menu" }]
+          ]
+        };
+
+        if (chatId) {
+          await sendTelegramMessage(chatId, textResp, keyboard);
+        }
+        return;
+      }
+    }
+
     // --- NOVOS COMANDOS ADMINISTRATIVOS (CALLBACKS) ---
 
     // Ação: Paginação de Produtos
