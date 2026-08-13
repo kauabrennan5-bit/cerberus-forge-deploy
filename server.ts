@@ -432,8 +432,20 @@ async function startServer() {
 
       return res.json({ success: true, message: "Clique de produto registrado com sucesso" });
     } catch (err: any) {
-      console.error("Erro no POST /api/track-click:", err);
-      return res.status(500).json({ success: false, error: err?.message || "Erro ao registrar clique" });
+      const errorMessage = err?.message || "Erro ao registrar clique";
+      const isPersistenceFailure = /supabase|product_clicks/i.test(errorMessage);
+
+      console.error("Erro no POST /api/track-click:", errorMessage);
+
+      if (isPersistenceFailure) {
+        return res.status(503).json({
+          success: false,
+          code: "ANALYTICS_PERSISTENCE_ERROR",
+          error: "Não foi possível registrar o clique no Supabase."
+        });
+      }
+
+      return res.status(500).json({ success: false, error: "Erro interno ao registrar clique" });
     }
   });
 

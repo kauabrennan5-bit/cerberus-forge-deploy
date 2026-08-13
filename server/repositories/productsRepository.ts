@@ -348,8 +348,9 @@ export interface ProductClickData {
 }
 
 /**
- * Registra o clique de um produto no Supabase (tabela product_clicks)
- * com fallback gracioso em arquivo local (data/clicks.json).
+ * Registra um clique exclusivamente em public.product_clicks no Supabase.
+ * Falhas de configuração, schema ou persistência são propagadas ao chamador;
+ * nenhum dado de analytics é gravado em arquivo local.
  */
 export async function recordProductClick(clickData: ProductClickData): Promise<boolean> {
   const clickRecord = {
@@ -372,45 +373,15 @@ export async function recordProductClick(clickData: ProductClickData): Promise<b
     created_at: new Date().toISOString()
   };
 
-  // 1. Grava no Supabase se disponível
-  if (supabase) {
-    try {
-      const { error } = await supabase.from("product_clicks").insert([clickRecord]);
-      if (error) {
-        if (error.code === "PGRST205" || error.message?.includes("does not exist")) {
-          console.warn("⚠️ A tabela 'public.product_clicks' ainda não existe no Supabase. Gravando no fallback local.");
-        } else {
-          console.error("❌ Erro ao registrar clique no Supabase:", error.message);
-        }
-      } else {
-        console.log(`📊 Clique no produto registrado no Supabase: ${clickData.productName || clickData.productId}`);
-      }
-    } catch (e: any) {
-      console.warn("Exceção ao gravar clique no Supabase:", e?.message);
-    }
+  const client = requireSupabase();
+  const { error } = await client.from("product_clicks").insert([clickRecord]);
+
+  if (error) {
+    console.error("❌ Erro ao registrar clique no Supabase public.product_clicks:", error.message);
+    throw new Error(`Falha ao registrar clique no Supabase (public.product_clicks): ${error.message}`);
   }
 
-  // 2. Grava no fallback local em data/clicks.json
-  try {
-    const clicksFile = path.join(DATA_DIR, "clicks.json");
-    let existingClicks: any[] = [];
-    if (fs.existsSync(clicksFile)) {
-      try {
-        existingClicks = JSON.parse(fs.readFileSync(clicksFile, "utf-8"));
-        if (!Array.isArray(existingClicks)) existingClicks = [];
-      } catch {
-        existingClicks = [];
-      }
-    }
-    existingClicks.push(clickRecord);
-    if (existingClicks.length > 10000) {
-      existingClicks = existingClicks.slice(-10000);
-    }
-    fs.writeFileSync(clicksFile, JSON.stringify(existingClicks, null, 2), "utf-8");
-  } catch (err) {
-    console.error("Erro ao gravar clique no fallback local (clicks.json):", err);
-  }
-
+  console.log(`📊 Clique no produto registrado no Supabase: ${clickData.productName || clickData.productId}`);
   return true;
 }
 
