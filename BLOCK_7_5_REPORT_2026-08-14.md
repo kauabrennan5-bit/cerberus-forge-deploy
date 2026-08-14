@@ -176,3 +176,16 @@ Chamadas Gemini possuem orçamento horário configurável por `GEMINI_HOURLY_BUD
 Bloco 7.5 local: IMPLEMENTADO E VALIDADO TECNICAMENTE.
 Bloco 7.5 em produção: PENDENTE DE DEPLOY E MIGRATION.
 Bloco 8: NÃO INICIADO.
+
+
+## ATUALIZAÇÃO PÓS-PUBLICAÇÃO
+
+O Render detectou e concluiu o deploy automático `dep-d9vl2fnavr4c739abgeg` do commit `c68b8be`, deixando-o como **Live** em 14/08/2026 às 17:32:46 UTC, com duração de 39,9 segundos.
+
+A validação HTTP pós-deploy confirmou `GET /health` com HTTP 200, `Content-Type: application/json; charset=utf-8`, `status: ok`, `service: cerberus-forge-deploy` e versão `c68b8bea9c5c25cebe60d8fe9520d0edc3105293`.
+
+O workflow manual do GitHub Actions foi executado no run [31824673269](https://github.com/kauabrennan5-bit/cerberus-forge-deploy/actions/runs/31824673269), associado ao SHA `c68b8bea9c5c25cebe60d8fe9520d0edc3105293`, e terminou com `success`. O log confirmou `status=HEALTHY`, `http=200`, `reason=HTTP 200`, `transition=HEALTHY->HEALTHY` e `alert=no`. Os secrets Telegram apareceram mascarados no log (`***`) e nenhum valor foi exposto.
+
+Como era o primeiro ciclo do watchdog, o workflow persistiu seu snapshot inicial e criou o commit automático `f51629d` na branch `main`. Esse comportamento é esperado e não representa alteração de catálogo, produto, clique ou schema.
+
+Status atualizado: watchdog externo e `/health` validados em produção; migration `operator_state` ainda não aplicada no Supabase canônico; auto-heal permanece corretamente em SAFE_MODE/OBSERVE até a confirmação da migration.

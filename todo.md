@@ -122,5 +122,5 @@
 - [x] Aplicar controles de custo, cache e confirmação explícita antes de chamadas externas pagas quando tecnicamente adequado.
 - [x] Criar testes, migration versionada quando justificada, documentação e runbook operacional do Bloco 7.5.
 - [x] Executar lint, testes, build, revisão de segurança e validação de produção sem criar dados artificiais.
-- [ ] Versionar e enviar o Bloco 7.5 para main, sem iniciar o Bloco 8.
+- [x] Versionar e enviar o Bloco 7.5 para main, sem iniciar o Bloco 8.
 - [ ] Entregar relatório final com evidências, limitações e requisitos administrativos residuais.
