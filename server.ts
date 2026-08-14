@@ -19,6 +19,16 @@ async function startServer() {
   const app = express();
   const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 
+  const fetchWithTimeout = async (url: string | URL, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   app.use(express.json({ limit: "25mb" }));
 
   // Initialize Gemini AI client
@@ -158,8 +168,6 @@ async function startServer() {
       return res.json({
         success: result.success,
         message: result.success ? "Catálogo estático reconstruído e sincronizado com sucesso!" : "Falha na sincronização do catálogo estático.",
-        hookUrlConfigured: !!process.env.RENDER_STATIC_DEPLOY_HOOK_URL,
-        hookUrlPrefix: process.env.RENDER_STATIC_DEPLOY_HOOK_URL ? process.env.RENDER_STATIC_DEPLOY_HOOK_URL.substring(0, 30) + "..." : "none",
         data: result
       });
     } catch (err: any) {
@@ -179,11 +187,10 @@ async function startServer() {
       return res.json({ success: true, products, data: products });
     } catch (err: any) {
       console.error("❌ [/api/products] Erro de repositório:", err.message);
-      return res.status(500).json({
+      return res.status(503).json({
         success: false,
-        error: err.message || "Erro interno ao carregar produtos.",
-        products: [],
-        data: []
+        code: "SUPABASE_PERSISTENCE_ERROR",
+        error: "Não foi possível carregar o catálogo canônico no momento."
       });
     }
   });
@@ -356,7 +363,7 @@ async function startServer() {
           ]
         };
 
-        const capiRes = await fetch(`https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`, {
+        const capiRes = await fetchWithTimeout(`https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -406,6 +413,13 @@ async function startServer() {
 
       // Valida o produto no repositório oficial antes de registrar
       const realProduct = await productsRepository.getProductByIdOrSlug(productId);
+      if (!realProduct) {
+        return res.status(404).json({
+          success: false,
+          code: "PRODUCT_NOT_FOUND",
+          error: "Produto não localizado na fonte canônica."
+        });
+      }
       const verifiedName = realProduct?.produto || productName || productId;
       const verifiedPrice = realProduct?.preco ?? Number(productPrice) ?? 0;
       const verifiedSlug = realProduct?.slug || productSlug || productId;
@@ -568,7 +582,7 @@ async function startServer() {
         destaque: Boolean(destaque)
       };
 
-      const googleRes = await fetch(appsScriptUrl, {
+      const googleRes = await fetchWithTimeout(appsScriptUrl, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify(payload)
@@ -756,7 +770,7 @@ NUNCA modifique ou invente preços ou imagens.`,
     return res.json({
       configured: Boolean(token),
       hasToken: Boolean(token),
-      allowedUsers: allowed.split(",").map((u) => u.trim()).filter(Boolean),
+      hasAllowedUsers: allowed.split(",").map((u) => u.trim()).filter(Boolean).length > 0,
       webhookUrl: webhookUrl,
       phase: "Fase 2 - Automação Completa de Ingestão de Produtos"
     });
@@ -764,7 +778,7 @@ NUNCA modifique ou invente preços ou imagens.`,
 
   // POST /api/telegram-set-webhook - Configuração automática do Webhook via API oficial
   app.post(["/api/telegram-set-webhook", "/api/telegram/set-webhook"], requireAdminAuth, async (req, res) => {
-    const token = process.env.TELEGRAM_BOT_TOKEN || req.body.token;
+    const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
       return res.status(400).json({ success: false, error: "TELEGRAM_BOT_TOKEN é necessário para configurar o Webhook." });
     }
@@ -772,9 +786,16 @@ NUNCA modifique ou invente preços ou imagens.`,
     const host = req.headers.host || "localhost:3000";
     const protocol = req.headers["x-forwarded-proto"] || "https";
     const webhookUrl = req.body.webhookUrl || `${protocol}://${host}/api/telegram/webhook`;
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
     try {
-      const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
+      const target = new URL(`https://api.telegram.org/bot${token}/setWebhook`);
+      target.searchParams.set("url", webhookUrl);
+      if (webhookSecret) target.searchParams.set("secret_token", webhookSecret);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+      const tgRes = await fetch(target, { signal: controller.signal });
+      clearTimeout(timeout);
       const tgData = await tgRes.json();
       return res.json({ success: tgData.ok, telegramResult: tgData, webhookUrl });
     } catch (err: any) {
@@ -787,6 +808,11 @@ NUNCA modifique ou invente preços ou imagens.`,
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
       console.warn("⚠️ [Telegram Webhook Warning] Requisição recebida, mas TELEGRAM_BOT_TOKEN não está definido nas variáveis de ambiente.");
+    }
+
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    if (webhookSecret && req.headers["x-telegram-bot-api-secret-token"] !== webhookSecret) {
+      return res.status(403).json({ ok: false, error: "Webhook Telegram não autorizado." });
     }
 
     // 1. Resposta HTTP 200 imediata ao Telegram para evitar timeout de 5 segundos
@@ -815,7 +841,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       }
 
       // Requisita com redirect: "manual" para inspecionar redirecionamentos e evitar SSRF via 301/302
-      let fetchRes = await fetch(csvUrl, {
+      let fetchRes = await fetchWithTimeout(csvUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         },
@@ -829,7 +855,7 @@ NUNCA modifique ou invente preços ou imagens.`,
             error: "Acesso negado: O redirecionamento aponta para um destino não autorizado."
           });
         }
-        fetchRes = await fetch(redirectUrl, {
+        fetchRes = await fetchWithTimeout(redirectUrl, {
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
           },
@@ -862,8 +888,12 @@ NUNCA modifique ou invente preços ou imagens.`,
     
     // 1. Explicit route for static data (Highest Priority)
     app.get("/data/*", (req, res) => {
-      const filePath = path.join(distPath, req.path);
-      res.sendFile(filePath);
+      const dataRoot = path.resolve(distPath, "data");
+      const filePath = path.resolve(distPath, `.${req.path}`);
+      if (!filePath.startsWith(`${dataRoot}${path.sep}`)) {
+        return res.status(400).json({ error: "Caminho de arquivo inválido." });
+      }
+      return res.sendFile(filePath);
     });
 
     // 2. Serve static assets

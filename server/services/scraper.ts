@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { detectMarketplace } from "./marketplace";
 
 dotenv.config();
 
@@ -20,6 +21,31 @@ function isSafeMarketplaceUrl(url: URL): boolean {
   if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return false;
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
   return true;
+}
+
+async function fetchAllowedMarketplaceDocument(initialUrl: string, signal: AbortSignal): Promise<{ response: Response; finalUrl: string }> {
+  let currentUrl = initialUrl;
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    const parsed = new URL(currentUrl);
+    if (!isSafeMarketplaceUrl(parsed) || detectMarketplace(parsed.href) === "Outros") {
+      throw new Error("URL não pertence a um marketplace permitido.");
+    }
+    const response = await fetch(currentUrl, {
+      headers: {
+        "User-Agent": "CerberusCatalogBot/1.0 (+catalog-validation)",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Cache-Control": "no-cache"
+      },
+      redirect: "manual",
+      signal,
+    });
+    if (response.status < 300 || response.status >= 400) return { response, finalUrl: currentUrl };
+    const location = response.headers.get("location");
+    if (!location) throw new Error("Redirecionamento do marketplace sem destino.");
+    currentUrl = new URL(location, currentUrl).href;
+  }
+  throw new Error("Limite de redirecionamentos do marketplace excedido.");
 }
 
 async function readHtmlWithLimit(response: Response): Promise<string> {
@@ -56,7 +82,7 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
   if (targetUrl) {
     try {
       const parsedUrl = new URL(targetUrl);
-      if (!isSafeMarketplaceUrl(parsedUrl)) throw new Error("URL de rede privada ou protocolo não permitido.");
+      if (!isSafeMarketplaceUrl(parsedUrl) || detectMarketplace(parsedUrl.href) === "Outros") throw new Error("URL de rede privada, protocolo não permitido ou marketplace não autorizado.");
       targetUrl = parsedUrl.href;
       finalUrl = targetUrl;
     } catch (e) {
@@ -76,18 +102,9 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), SCRAPER_TIMEOUT_MS);
-      const response = await fetch(targetUrl, {
-        headers: {
-          "User-Agent": "CerberusCatalogBot/1.0 (+catalog-validation)",
-          "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-          "Cache-Control": "no-cache"
-        },
-        redirect: "follow",
-        signal: controller.signal
-      });
+      const { response, finalUrl: redirectedUrl } = await fetchAllowedMarketplaceDocument(targetUrl, controller.signal);
       try {
-        finalUrl = response.url || targetUrl;
+        finalUrl = redirectedUrl;
         httpStatus = response.status;
         contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) throw new Error("Tipo de conteúdo não é HTML.");

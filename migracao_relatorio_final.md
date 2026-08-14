@@ -21,7 +21,7 @@ A nova arquitetura implementada resolve definitivamente os problemas de *cold st
 1. **Auditoria Inicial e Mapeamento:** Verificação completa do repositório GitHub (`kauabrennan5-bit/cerberus-forge-deploy`), estrutura de pastas, dependências e configurações de build no Render.
 2. **Correção Crítica do Frontend:** Eliminação definitiva de qualquer dependência do fluxo público em relação a rotas dinâmicas (`/api/products`), removendo mensagens de erro de conexão com o backend e garantindo consumo direto de `/data/products.json`.
 3. **Configuração do Novo Web Service:** Provisionamento e configuração das variáveis de ambiente essenciais (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, etc.) no painel do Render.
-4. **Atualização do Webhook do Telegram:** Apontamento oficial do bot (`@8819631444:AAHaMTgMardKa9ZlRi4T2QEkEqmUck3tTeA`) para o endpoint de produção `https://cerberus-forge-deploy.onrender.com/api/telegram/webhook`.
+4. **Atualização do Webhook do Telegram:** Apontamento oficial do bot para o endpoint de produção do Web Service. O token é mantido exclusivamente como secret protegido no ambiente de execução e não é documentado neste repositório.
 5. **Validação e Testes (A-I):** Confirmação de que o fluxo de publicação via Telegram aciona corretamente a persistência no Supabase, regenera o arquivo estático e dispara o gatilho de *rebuild* no Static Site [3].
 
 ---

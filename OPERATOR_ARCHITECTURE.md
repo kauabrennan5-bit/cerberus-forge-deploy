@@ -22,16 +22,18 @@ O subsistema de saúde monitora os seguintes componentes:
 - **Backend**: Disponibilidade do servidor Node.js/Express.
 - **Supabase**: Conectividade PostgreSQL e acesso às tabelas `public.products` e `public.product_clicks`.
 - **Catálogo**: Consistência entre a fonte canônica e a projeção pública.
-- **Tracking**: Verificação do endpoint `/api/track-click`.
+- **Tracking**: Consulta somente leitura à tabela `public.product_clicks`, sem gerar clique artificial.
 - **Analytics**: Disponibilidade de consultas agregadas em `public.product_clicks`.
 - **Telegram**: Operacionalidade dos manipuladores de webhook e callbacks.
-- **Site & Deploy**: Verificação HEAD do Static Site (`https://cerberus-static-catalog.onrender.com/data/products.json`).
+- **Site**: Verificação HTTP independente da página pública.
+- **Deploy**: Registrado como `UNKNOWN` quando não existe uma API autenticada do Render configurada. A disponibilidade do site ou de `products.json` não é tratada como prova de que um deploy específico terminou.
 
-Cada componente retorna `HEALTHY`, `DEGRADED`, `DOWN` ou `UNKNOWN`, juntamente com latência e timestamp.
+Cada componente retorna `HEALTHY`, `DEGRADED`, `DOWN` ou `UNKNOWN`, juntamente com latência, timestamp, operation ID e, em caso de falha, diagnóstico estruturado.
 
 ## 4. Sistema de Incidentes e Severidade
-Qualquer anomalia detectada gera um registro interno de incidente com os seguintes atributos:
-- `id`, `type`, `severity` (`INFO`, `WARNING`, `ERROR`, `CRITICAL`), `component`, `detection`, `diagnosis`, `status` (`OPEN`, `INVESTIGATING`, `AUTO_FIXING`, `RESOLVED`, `FAILED`, `REQUIRES_APPROVAL`), `actionTaken`, `result` e `timestamp`.
+Qualquer anomalia detectada gera um registro interno com `id`, `fingerprint`, severidade, componente, status, operation ID, operação, etapa, dependência, HTTP status quando houver, causa provável, impacto, recuperabilidade, ação tomada, resultado e timestamps. O Operator não usa o diagnóstico genérico “degradação ou indisponibilidade de conexão”.
+
+Uma ação de recovery não encerra um incidente apenas porque retornou `SUCCESS`. O Operator executa um health check posterior e só marca `RESOLVED` quando o componente afetado volta a `HEALTHY`; caso contrário, o incidente é escalado.
 
 ## 5. Ações Permitidas e Segurança
 - **Seguras (Safe)**: Reexecução de health checks, revalidação de catálogo e limpeza de estado transitório de sessões do bot.

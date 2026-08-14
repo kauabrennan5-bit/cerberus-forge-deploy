@@ -80,3 +80,32 @@
 - [ ] Adicionar logs sanitizados de update, autorização, comando, handler, paginação e resultado Telegram.
 - [ ] Criar testes de regressão para /listar direto, callbacks reais, paginação, meli.la e detector único.
 - [ ] Validar lint, testes, build, dist/server.cjs, segurança, commit e push para main.
+
+# Recuperação Operacional — Credencial GitHub e REF-009
+
+- [x] Auditar a variável GITHUB_TOKEN do Web Service sem expor seu valor e confirmar a falha de autenticação.
+- [x] Substituir exclusivamente a credencial GitHub inválida por um token fine-grained com acesso mínimo ao repositório Cerberus.
+- [x] Reiniciar apenas o Web Service para carregar a nova credencial e validar leitura/escrita em GitHub/main.
+- [x] Sincronizar o catálogo canônico já existente sem recadastrar ou duplicar REF-009.
+- [x] Validar commit, deploy automático, products.json público e card de REF-009, preservando os produtos anteriores.
+
+# Bloqueio Operacional — Aprovação de Sincronização
+
+- [x] Diagnosticar por que a aprovação administrativa de sincronização não foi efetivada no Cerberus Operator, sem disparar nova ação automaticamente.
+- [x] Verificar e substituir a credencial GitHub ainda rejeitada após reinício, confirmando o token fine-grained e o campo GITHUB_TOKEN sem expor valores.
+- [x] Aplicar diretamente a credencial de recuperação no Render e comprovar seu primeiro uso no GitHub antes de sincronizar o catálogo.
+- [x] Recuperar a colagem do token no campo GITHUB_TOKEN sem salvar valor parcial ou incorreto.
+- [x] Transferir a credencial exclusivamente por área de transferência/campo protegido; nunca receber o token em mensagem.
+
+# Auditoria Operacional Profunda — Consolidação dos Blocos 1–7
+
+- [x] Preservar o estado inicial do repositório, branch main e integrações de produção antes da auditoria.
+- [x] Inventariar documentação, arquitetura e contratos contra a implementação real.
+- [x] Auditar lifecycle, persistência, exportação e cadeia Supabase → GitHub → Render → catálogo público.
+- [x] Auditar Cerberus Operator, health checks, incidentes, autonomia, auto-heal e recovery.
+- [x] Auditar segurança, autorização Telegram, secrets, SSRF, chamadas externas, logs e observabilidade.
+- [x] Implementar somente correções seguras comprovadas e diagnósticos estruturados.
+- [x] Fortalecer testes críticos e atualizar documentação correspondente à implementação validada.
+- [x] Executar lint, testes, build, inspeção do diff e validações seguras de produção.
+- [x] Versionar as alterações auditadas na branch main e validar o deploy automático.
+- [ ] Entregar relatório técnico completo com evidências, limitações e riscos residuais.

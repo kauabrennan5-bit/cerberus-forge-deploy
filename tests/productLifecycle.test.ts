@@ -85,6 +85,38 @@ test("falha de publicação não declara published e mantém erro auditável", a
   assert.equal(record.audit[0].type, "PRODUCT_PUBLICATION_FAILED");
 });
 
+test("falha estruturada de sincronização preserva operação e código específico para o administrador", async () => {
+  const pipeline = new ProductPipeline({
+    getProducts: async () => [],
+    createCanonicalProduct: async candidate => ({ id: "prod-structured", produto: candidate.produto, categoria: candidate.categoria, preco: candidate.preco!, imagens: candidate.imagens, link: candidate.normalizedUrl, ativo: true, destaque: false, status: "approved" }),
+    syncAndValidatePublication: async (_product, operationId) => ({
+      success: false,
+      operationId,
+      diagnostic: {
+        operationId,
+        operation: "CATALOG_SYNC",
+        stage: "GITHUB_AUTH",
+        dependency: "GitHub",
+        code: "GITHUB_AUTH_ERROR",
+        message: "Autenticação recusada.",
+        likelyCause: "Token inválido.",
+        impact: "Catálogo não publicado.",
+        recoverability: "ADMIN_APPROVAL",
+        retryable: false,
+        occurredAt: new Date().toISOString(),
+      },
+    }),
+    pauseCanonicalProduct: async () => undefined,
+  });
+  const record = await pipeline.evaluate({ ...validInput, normalizedUrl: "https://shopee.com.br/produto-i.123.777" });
+  pipeline.approve(record);
+  await pipeline.publish(record);
+  assert.equal(record.state, "APPROVED");
+  assert.equal(record.error, "GITHUB_AUTH_ERROR");
+  assert.match(record.operationId || "", /^PUB-/);
+  assert.equal(record.diagnostic?.stage, "GITHUB_AUTH");
+});
+
 test("pausa preserva produto e altera somente o lifecycle operacional", async () => {
   let paused = false;
   const pipeline = new ProductPipeline({

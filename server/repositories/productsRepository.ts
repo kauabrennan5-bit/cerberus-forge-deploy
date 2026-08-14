@@ -2,8 +2,6 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
 import { Product, ProductStatus } from "../../src/types";
-import { exportStaticProductsJson } from "../services/exportProductsJson";
-import { syncCatalogToGitHub } from "../services/githubCatalogSync";
 
 dotenv.config();
 
@@ -87,13 +85,13 @@ async function saveProducts(products: Product[], syncCatalog = true): Promise<vo
   }
   console.log("✅ [Supabase] Gravação em public.products concluída com sucesso!");
 
-  // A projeção pública e o commit no GitHub fazem parte do contrato de publicação.
-  // O pipeline E2E pode desabilitar esta etapa temporariamente para executar uma única sincronização validada.
+  // A projeção pública e a validação E2E fazem parte do contrato de uma mutação publicada.
+  // O pipeline de publicação pode desabilitar esta etapa para controlar uma única sincronização transacional.
   if (syncCatalog) {
-    const exportedCount = await exportStaticProductsJson();
-    const syncOk = await syncCatalogToGitHub("update: catalog products updated via repository");
-    if (!syncOk) {
-      throw new Error(`Falha ao sincronizar o catálogo derivado com o GitHub após persistência em public.products (exportados: ${exportedCount}).`);
+    const { syncCatalogAndDeploy } = await import("../services/catalogSync");
+    const sync = await syncCatalogAndDeploy("mutação de produto");
+    if (!sync.success) {
+      throw new Error(`CATALOG_SYNC:${sync.diagnostic?.code || "PUBLICATION_ERROR"}:${sync.operationId}`);
     }
   }
 }
@@ -289,7 +287,7 @@ export async function pauseProduct(id: string): Promise<Product | null> {
 }
 
 export async function reactivateProduct(id: string): Promise<Product | null> {
-  return updateProduct(id, { ativo: true, status: "approved" });
+  return updateProduct(id, { ativo: true, status: "published" });
 }
 
 export interface ProductClickData {

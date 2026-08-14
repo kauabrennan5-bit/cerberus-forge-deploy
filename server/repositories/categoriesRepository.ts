@@ -1,7 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { exportStaticProductsJson } from "../services/exportProductsJson";
-import { syncCatalogToGitHub } from "../services/githubCatalogSync";
+import { syncCatalogAndDeploy } from "../services/catalogSync";
 
 dotenv.config();
 
@@ -56,10 +55,9 @@ export async function addCategory(name: string): Promise<Category> {
     throw new Error(`Falha ao adicionar categoria no Supabase: ${error.message}`);
   }
 
-  await exportStaticProductsJson();
-  const syncOk = await syncCatalogToGitHub(`update: add category ${name}`);
-  if (!syncOk) {
-    throw new Error("Categoria criada no Supabase, mas a projeção do catálogo não foi sincronizada no GitHub/main.");
+  const sync = await syncCatalogAndDeploy(`categoria adicionada: ${name}`);
+  if (!sync.success) {
+    throw new Error(`CATALOG_SYNC:${sync.diagnostic?.code || "PUBLICATION_ERROR"}:${sync.operationId}`);
   }
 
   return data;
@@ -92,10 +90,9 @@ export async function renameCategory(oldName: string, newName: string): Promise<
       throw new Error(`Categoria atualizada, mas os produtos não foram atualizados: ${prodError.message}`);
     }
 
-    await exportStaticProductsJson();
-    const syncOk = await syncCatalogToGitHub(`update: rename category ${oldName} to ${newName}`);
-    if (!syncOk) {
-      throw new Error("Categoria renomeada no Supabase, mas a projeção do catálogo não foi sincronizada no GitHub/main.");
+    const sync = await syncCatalogAndDeploy(`categoria renomeada: ${oldName} → ${newName}`);
+    if (!sync.success) {
+      throw new Error(`CATALOG_SYNC:${sync.diagnostic?.code || "PUBLICATION_ERROR"}:${sync.operationId}`);
     }
 
     return true;

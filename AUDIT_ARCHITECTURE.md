@@ -2,7 +2,7 @@
 
 ## 1. Arquitetura Atual
 O sistema **Cerberus Finds Archive** é composto por três pilares principais:
-1. **Frontend (Vitrine Pública / SPA)**: Desenvolvido em React 19, Vite e Tailwind CSS v4, servido de forma estática (ou via Render Static Site) e conectado dinamicamente à API REST do backend para carregar o catálogo de produtos e registrar cliques de afiliado.
+1. **Frontend (Vitrine Pública / SPA)**: Desenvolvido em React 19, Vite e Tailwind CSS v4, servido de forma estática pelo Render Static Site. A vitrine carrega exclusivamente a projeção relativa `/data/products.json`; o backend é utilizado por operações administrativas e registro de cliques de afiliado.
 2. **Backend (Servidor de Automação, API e Bot do Telegram)**: Desenvolvido em Node.js com Express e TypeScript (compilado via `esbuild`), responsável por:
    - Executar o bot do Telegram (webhooks/polling) para curadoria, publicação, listagem, edição, remoção e relatórios de analytics.
    - Fornecer endpoints REST (`/api/products`, `/api/track-click`, `/api/meta-capi`, `/api/admin/*`).
@@ -60,6 +60,6 @@ O sistema **Cerberus Finds Archive** é composto por três pilares principais:
 ---
 
 ## 6. Mapa de Riscos (Classificação)
-- 🟢 **BAIXO**: Fallback de build em `generate-static-catalog.js` tenta API do backend se o Supabase falhar diretamente no ambiente de build estático.
+- 🟢 **BAIXO**: O build pode consultar a API do backend somente como leitura alternativa da mesma fonte canônica quando não possui credenciais do Supabase; nunca lê JSON local como fonte concorrente.
 - 🟡 **MÉDIO**: Dependência de conectividade com a API do GitHub e estabilidade do Render Web Service no plano gratuito (possibilidade de cold start de até 60s se inativo).
-- 🔴 **CRÍTICO**: Nenhum risco crítico de perda de dados ou exposição de secrets detectado nesta auditoria; falhas de configuração de variáveis críticas (`ADMIN_PASSWORD`, chaves do Supabase) aplicam corretamente o comportamento *Fail-Closed*.
+- 🔴 **CRÍTICO**: A referência histórica de token Telegram foi removida da documentação versionada e o token foi rotacionado administrativamente. Segredos permanecem exclusivamente no ambiente server-side.

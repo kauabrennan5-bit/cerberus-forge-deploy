@@ -1,6 +1,7 @@
 import type { Product } from "../../src/types";
 import * as productsRepository from "../repositories/productsRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
+import { createOperationId, type OperationalDiagnostic, type OperationalFailureCode } from "./operationalDiagnostics";
 import {
   curateCandidate,
   event,
@@ -9,6 +10,7 @@ import {
   validateCandidate,
   type ProductCandidate,
   type ProductCuration,
+  type ProductPipelineError,
   type ProductLifecycleEvent,
   type ProductLifecycleState,
   type ProductValidation,
@@ -22,13 +24,22 @@ export interface LifecycleRecord {
   curation: ProductCuration;
   audit: ProductLifecycleEvent[];
   publishedProductId?: string;
+  operationId?: string;
+  error?: ProductPipelineError | OperationalFailureCode;
+  diagnostic?: OperationalDiagnostic;
+}
+
+export interface PublicationVerification {
+  success: boolean;
+  operationId?: string;
   error?: string;
+  diagnostic?: OperationalDiagnostic;
 }
 
 export interface ProductPipelineAdapters {
   getProducts: () => Promise<Product[]>;
   createCanonicalProduct: (candidate: ProductCandidate) => Promise<Product>;
-  syncAndValidatePublication: (product: Product) => Promise<{ success: boolean; error?: string }>;
+  syncAndValidatePublication: (product: Product, operationId: string) => Promise<PublicationVerification>;
   pauseCanonicalProduct: (productId: string) => Promise<void>;
 }
 
@@ -129,12 +140,22 @@ export class ProductPipeline {
     if (record.validation.outcome === "FAIL") throw new Error("VALIDATION_ERROR");
 
     try {
+      const operationId = createOperationId("PUB");
+      record.operationId = operationId;
       const product = await this.adapters.createCanonicalProduct(record.candidate);
       record.publishedProductId = product.id;
-      const verification = await this.adapters.syncAndValidatePublication(product);
+      const verification = await this.adapters.syncAndValidatePublication(product, operationId);
       if (!verification.success) {
-        record.error = "PUBLICATION_ERROR";
-        record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", verification.error || "Validação pública não confirmou a publicação."));
+        const verificationOperationId = verification.operationId || operationId;
+        record.error = verification.diagnostic?.code || (verification.error as ProductPipelineError | undefined) || "PUBLICATION_ERROR";
+        record.diagnostic = verification.diagnostic;
+        record.audit.unshift(event(
+          "PRODUCT_PUBLICATION_FAILED",
+          "APPROVED",
+          verification.diagnostic
+            ? `${verification.diagnostic.code} na etapa ${verification.diagnostic.stage}; operação ${verificationOperationId}.`
+            : verification.error || "Validação pública não confirmou a publicação.",
+        ));
         rememberLifecycleRecord(record);
         return record;
       }
@@ -142,7 +163,7 @@ export class ProductPipeline {
       return record;
     } catch (error: any) {
       record.error = "PERSISTENCE_ERROR";
-      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", error?.message || "Falha de persistência/publicação."));
+      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PERSISTENCE_ERROR: ${error?.message || "Falha de persistência/publicação."}`));
       rememberLifecycleRecord(record);
       return record;
     }
@@ -181,12 +202,37 @@ export function createProductionProductPipeline(): ProductPipeline {
       imagens: candidate.imagens,
       link: candidate.normalizedUrl,
       descricao: candidate.descricao,
-      status: "published",
+      status: "approved",
       ref: candidate.ref,
     }, { syncCatalog: false }),
-    syncAndValidatePublication: async product => {
-      const result = await syncCatalogAndDeploy(product.produto, product.id);
-      return { success: result.success, error: result.error };
+    syncAndValidatePublication: async (product, operationId) => {
+      const promoted = await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
+      if (!promoted) {
+        return { success: false, operationId, error: "PERSISTENCE_ERROR" };
+      }
+      const result = await syncCatalogAndDeploy(product.produto, product.id, operationId);
+      if (result.success) {
+        return { success: true, operationId, diagnostic: undefined };
+      }
+
+      // A fonte canônica não deve apresentar um produto como publicado se a validação
+      // pública falhou. A compensação é não destrutiva e nunca apaga o registro.
+      await productsRepository.updateProduct(product.id, { ativo: false, status: "error" }, { syncCatalog: false });
+      const rollback = await syncCatalogAndDeploy(`rollback de publicação ${product.id}`, undefined, operationId);
+      if (!rollback.success) {
+        return {
+          success: false,
+          operationId,
+          error: "PUBLICATION_ERROR",
+          diagnostic: rollback.diagnostic || result.diagnostic,
+        };
+      }
+      return {
+        success: false,
+        operationId,
+        error: result.error,
+        diagnostic: result.diagnostic,
+      };
     },
     pauseCanonicalProduct: async productId => {
       const product = await productsRepository.pauseProduct(productId);

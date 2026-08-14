@@ -1,11 +1,16 @@
-import fs from "fs";
-import path from "path";
 import { exportStaticProductsJson } from "./exportProductsJson";
 import { getProducts } from "../repositories/productsRepository";
 import { syncCatalogToGitHub } from "./githubCatalogSync";
+import {
+  createOperationId,
+  createOperationalDiagnostic,
+  sanitizeOperationalText,
+  type OperationalDiagnostic,
+} from "./operationalDiagnostics";
 
-interface SyncLogResult {
+export interface SyncLogResult {
   success: boolean;
+  operationId: string;
   product?: string;
   productId?: string;
   supabaseCount: number;
@@ -13,110 +18,179 @@ interface SyncLogResult {
   publicJsonCount?: number;
   productFoundPublic?: boolean;
   staticSiteUrl: string;
+  commitSha?: string;
+  diagnostic?: OperationalDiagnostic;
   error?: string;
 }
 
-/**
- * Serviço de Sincronização do Catálogo Estático com Verificação Rigorosa de Ponta a Ponta
- */
-export async function syncCatalogAndDeploy(productTitle?: string, productId?: string): Promise<SyncLogResult> {
-  const staticSiteUrl = "https://cerberus-static-catalog.onrender.com";
-  console.log("\n==========================================");
-  console.log("[STATIC CATALOG SYNC] Iniciando sincronização e verificação E2E...");
-  console.log(`Produto: ${productTitle || "Rebuild Manual / Geral"}`);
-  console.log(`Product ID: ${productId || "N/A"}`);
+let queuedSync: Promise<void> = Promise.resolve();
 
+async function acquireCatalogSyncLock(): Promise<() => void> {
+  let release!: () => void;
+  const previous = queuedSync;
+  queuedSync = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  return release;
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ status: number; body: unknown }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "cerberus-catalog-sync" } });
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
+    return { status: response.status, body: await response.json() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function diagnosticForFailure(
+  operationId: string,
+  stage: OperationalDiagnostic["stage"],
+  dependency: OperationalDiagnostic["dependency"],
+  error: unknown,
+  overrides: Partial<Pick<OperationalDiagnostic, "code" | "message" | "likelyCause" | "impact" | "recoverability" | "retryable">> = {},
+): OperationalDiagnostic {
+  const candidate = error as { status?: number };
+  const defaults: Record<string, Pick<OperationalDiagnostic, "code" | "message" | "likelyCause" | "impact" | "recoverability" | "retryable">> = {
+    SUPABASE_READ: {
+      code: "SUPABASE_PERSISTENCE_ERROR",
+      message: "Não foi possível ler produtos da fonte canônica.",
+      likelyCause: "Supabase indisponível, credencial inválida, RLS inesperada ou schema incompatível.",
+      impact: "A projeção do catálogo não pode ser gerada com segurança.",
+      recoverability: "MANUAL",
+      retryable: true,
+    },
+    CATALOG_EXPORT: {
+      code: "CATALOG_GENERATION_ERROR",
+      message: "A projeção local do catálogo não foi gerada.",
+      likelyCause: "Filtro de publicação, serialização ou gravação de products.json falhou.",
+      impact: "Não existe artefato consistente para versionar no GitHub.",
+      recoverability: "AUTO",
+      retryable: true,
+    },
+    PUBLIC_CATALOG_VALIDATION: {
+      code: "PUBLIC_CATALOG_VALIDATION_ERROR",
+      message: "O catálogo público não confirmou a projeção versionada dentro do prazo.",
+      likelyCause: "Build pendente/falho no Static Site, propagação de CDN ou divergência entre o artefato público e o commit gerado.",
+      impact: "A publicação não pode ser declarada concluída para o administrador.",
+      recoverability: "ADMIN_APPROVAL",
+      retryable: true,
+    },
+  };
+  const fallback = defaults[stage] || defaults.PUBLIC_CATALOG_VALIDATION;
+  return createOperationalDiagnostic({
+    operationId,
+    operation: "CATALOG_SYNC",
+    stage,
+    dependency,
+    ...fallback,
+    ...overrides,
+    httpStatus: candidate?.status,
+    cause: error,
+  });
+}
+
+/**
+ * Pipeline canônico: public.products → products.json local → GitHub/main → Static Site público.
+ * Uma operação só retorna sucesso após identidade e contagem compatíveis no catálogo público.
+ */
+export async function syncCatalogAndDeploy(productTitle?: string, productId?: string, operationId = createOperationId("SYNC")): Promise<SyncLogResult> {
+  const release = await acquireCatalogSyncLock();
+  const staticSiteUrl = (process.env.STATIC_CATALOG_URL || "https://cerberus-static-catalog.onrender.com").replace(/\/+$/, "");
   let supabaseCount = 0;
   let jsonCount = 0;
   let publicJsonCount = 0;
   let productFoundPublic = false;
-  let syncSuccess = false;
-  let errorMsg: string | undefined;
 
   try {
-    // 1. Busca produtos do Supabase (Fonte de verdade)
-    const rawProducts = await getProducts();
-    supabaseCount = rawProducts.length;
-    console.log(`[Supabase] ${supabaseCount} produtos carregados.`);
-
-    // 2. Gera o /public/data/products.json atualizado e sanitizado localmente
-    jsonCount = await exportStaticProductsJson();
-    console.log(`[Local Export] products.json gerado. Válidos: ${jsonCount}`);
-
-    // 3. Sincroniza com GitHub (Dispara Rebuild Automático no Render)
-    console.log(`[Sync] Sincronizando catálogo com GitHub...`);
-    const githubSyncSuccess = await syncCatalogToGitHub(productTitle ? `update: add/edit product ${productTitle}` : "update: manual catalog sync");
-    if (!githubSyncSuccess) {
-      throw new Error("Falha ao sincronizar public/data/products.json com o GitHub/main; nenhum fallback de deploy pode substituir o commit canônico.");
+    let canonicalProducts;
+    try {
+      canonicalProducts = await getProducts();
+      supabaseCount = canonicalProducts.length;
+    } catch (error) {
+      const diagnostic = diagnosticForFailure(operationId, "SUPABASE_READ", "Supabase", error);
+      return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, diagnostic, error: diagnostic.code };
     }
 
-    // 4. Verificação rigorosa de ponta a ponta (Polling E2E no Static Site público)
-    // Conforme regra de sucesso: Supabase contém produto -> products.json gerado -> deploy concluído -> GET público contém produto
-    const maxAttempts = 18; // 18 tentativas * 5 segundos = 90 segundos de timeout máx
-    const delayMs = 5000;
+    try {
+      jsonCount = await exportStaticProductsJson();
+    } catch (error) {
+      const diagnostic = diagnosticForFailure(operationId, "CATALOG_EXPORT", "Exportador", error);
+      return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, diagnostic, error: diagnostic.code };
+    }
+
+    const github = await syncCatalogToGitHub(
+      productTitle ? `update: catalog ${productTitle}` : "update: manual catalog sync",
+      { operationId },
+    );
+    if (!github.success) {
+      return {
+        success: false,
+        operationId,
+        product: productTitle,
+        productId,
+        supabaseCount,
+        jsonCount,
+        publicJsonCount,
+        productFoundPublic,
+        staticSiteUrl,
+        diagnostic: github.diagnostic,
+        error: github.diagnostic?.code || "GITHUB_SYNC_ERROR",
+      };
+    }
+
+    const expectedPublicIds = new Set(
+      canonicalProducts
+        .filter(product => product.ativo !== false && product.status === "published")
+        .map(product => product.id),
+    );
+    let lastFailure: unknown = new Error("O Static Site ainda não forneceu a projeção esperada.");
+    const maxAttempts = 18;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      console.log(`[E2E Verification] Tentativa ${attempt}/${maxAttempts}: Verificando ${staticSiteUrl}/data/products.json...`);
       try {
-        const cacheBusterUrl = `${staticSiteUrl}/data/products.json?t=${Date.now()}`;
-        const pubRes = await fetch(cacheBusterUrl);
-        if (pubRes.ok) {
-          const pubData = await pubRes.json();
-          if (Array.isArray(pubData)) {
-            publicJsonCount = pubData.length;
-            
-            // Verifica se o produto específico (ou contagem) está presente
-            if (productId) {
-              const found = pubData.find((p: any) => p.id === productId || (productTitle && p.produto.toLowerCase().includes(productTitle.toLowerCase().slice(0, 15))));
-              if (found) {
-                productFoundPublic = true;
-                console.log(`✅ [E2E Verification] Produto ID ${productId} encontrado com sucesso na vitrine pública!`);
-                break;
-              }
-            } else if (publicJsonCount >= supabaseCount) {
-              productFoundPublic = true;
-              console.log(`✅ [E2E Verification] Contagem pública (${publicJsonCount}) compatível com Supabase (${supabaseCount})!`);
-              break;
-            }
-          }
+        const { body } = await fetchJsonWithTimeout(`${staticSiteUrl}/data/products.json?t=${Date.now()}`, 10_000);
+        if (!Array.isArray(body)) throw new Error("products.json público não contém uma lista.");
+        publicJsonCount = body.length;
+        const publicIds = new Set(body.map((product: any) => product?.id).filter(Boolean));
+        const missingIds = [...expectedPublicIds].filter(id => !publicIds.has(id));
+        const unexpectedIds = [...publicIds].filter(id => !expectedPublicIds.has(id));
+        const hasInvalidIdentity = body.some((product: any) => !product?.id || !product?.slug || !product?.produto || !product?.link);
+        productFoundPublic = productId ? publicIds.has(productId) : missingIds.length === 0;
+
+        if (missingIds.length === 0 && unexpectedIds.length === 0 && !hasInvalidIdentity && productFoundPublic) {
+          console.info(`[Catalog Sync] operation=${operationId} commit=${github.commitSha?.slice(0, 7)} public=${publicJsonCount}/${expectedPublicIds.size}`);
+          return {
+            success: true,
+            operationId,
+            product: productTitle,
+            productId,
+            supabaseCount,
+            jsonCount,
+            publicJsonCount,
+            productFoundPublic,
+            staticSiteUrl,
+            commitSha: github.commitSha,
+          };
         }
-      } catch (pollErr) {
-        console.warn(`⚠️ [E2E Polling Warning] Tentativa ${attempt} falhou:`, pollErr);
+        lastFailure = new Error(`Divergência de catálogo: ${missingIds.length} ID(s) ausente(s), ${unexpectedIds.length} ID(s) órfão(s), identidade inválida=${hasInvalidIdentity}.`);
+      } catch (error) {
+        lastFailure = error;
       }
-
-      if (attempt < maxAttempts) {
-        await new Promise(res => setTimeout(res, delayMs));
-      }
+      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, 5_000));
     }
 
-    if (productFoundPublic) {
-      syncSuccess = true;
-      console.log(`🎉 [Static Catalog Sync] Sincronização e verificação E2E concluídas com SUCESSO! Peças na vitrine: ${publicJsonCount}`);
-    } else {
-      errorMsg = productId 
-        ? `O deploy do Static Site foi acionado, mas o produto ID ${productId} ainda não apareceu na vitrine pública após 90s. Verifique o status do build no Render.`
-        : "O deploy do Static Site foi acionado, mas a contagem de produtos não aumentou conforme o esperado após 90s.";
-      console.warn(`⚠️ [Static Catalog Sync] ${errorMsg}`);
-      // NÃO marcamos como sucesso se a verificação E2E falhou, para que o bot informe o estado real
-      syncSuccess = false; 
-    }
-
-    return {
-      success: syncSuccess,
-      product: productTitle,
-      productId,
-      supabaseCount,
-      jsonCount,
-      publicJsonCount,
-      productFoundPublic,
-      staticSiteUrl,
-      error: errorMsg
-    };
-  } catch (err: any) {
-    errorMsg = err.message || String(err);
-    console.error("❌ [STATIC CATALOG SYNC] Erro crítico:", err);
+    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", lastFailure);
+    console.warn(`[Catalog Sync] operation=${operationId} code=${diagnostic.code} cause=${sanitizeOperationalText(lastFailure)}`);
     return {
       success: false,
+      operationId,
       product: productTitle,
       productId,
       supabaseCount,
@@ -124,7 +198,11 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       publicJsonCount,
       productFoundPublic,
       staticSiteUrl,
-      error: errorMsg
+      commitSha: github.commitSha,
+      diagnostic,
+      error: diagnostic.code,
     };
+  } finally {
+    release();
   }
 }

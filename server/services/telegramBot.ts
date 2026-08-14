@@ -9,9 +9,26 @@ import * as cerberusOperator from "./cerberusOperator";
 import { createProductionProductPipeline, restoreLifecycleRecord, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { detectMarketplace } from "./marketplace";
+import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_API_BASE = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
+
+async function telegramApiFetch(method: string, payload: Record<string, unknown>): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(`${TELEGRAM_API_BASE}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 function sanitizeTelegramApiError(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
@@ -46,11 +63,7 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    const res = await fetch(`${TELEGRAM_API_BASE}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    const res = await telegramApiFetch("sendMessage", payload);
     const result = await res.json();
     logTelegramEvent("response", {
       chat_id: chatId,
@@ -77,11 +90,7 @@ export async function sendTelegramPhoto(chatId: number | string, photoUrl: strin
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    const res = await fetch(`${TELEGRAM_API_BASE}/sendPhoto`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    const res = await telegramApiFetch("sendPhoto", payload);
     return await res.json();
   } catch (err) {
     console.error("Erro ao enviar foto Telegram:", err);
@@ -100,11 +109,7 @@ export async function editTelegramMessageText(chatId: number | string, messageId
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    const res = await fetch(`${TELEGRAM_API_BASE}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    const res = await telegramApiFetch("editMessageText", payload);
     const result = await res.json();
     logTelegramEvent("response", {
       chat_id: chatId,
@@ -131,11 +136,7 @@ export async function editTelegramMessageCaption(chatId: number | string, messag
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
     }
-    const res = await fetch(`${TELEGRAM_API_BASE}/editMessageCaption`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    const res = await telegramApiFetch("editMessageCaption", payload);
     return await res.json();
   } catch (err) {
     console.error("Erro ao editar legenda Telegram:", err);
@@ -150,11 +151,7 @@ export async function answerCallbackQuery(callbackQueryId: string, text?: string
       show_alert: showAlert
     };
     if (text) payload.text = text;
-    await fetch(`${TELEGRAM_API_BASE}/answerCallbackQuery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    await telegramApiFetch("answerCallbackQuery", payload);
   } catch (err) {
     console.error("Erro ao responder callback query:", err);
   }
@@ -674,19 +671,17 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (data === "admin_system") {
       await answerCallbackQuery(callbackId);
-      const products = await productsRepository.getProducts();
+      const report = await cerberusOperator.runSystemHealthCheck();
       const gaStatus = googleAnalytics.getGA4Status();
       const gaApiStr = gaStatus.isConfigured ? "🟢 Configurada" : "⚪ Não configurada";
+      const health = ["Backend", "Supabase", "Produtos", "Catálogo", "Tracking", "Analytics", "Telegram", "Site", "Deploy", "GitHub"]
+        .map(name => `${name} ${report.components[name]?.status === "HEALTHY" ? "🟢" : report.components[name]?.status === "UNKNOWN" ? "⚪" : "🟡"}`)
+        .join("\n");
       const text = "🩺 <b>STATUS DO SISTEMA</b>\n\n" +
-                   "Backend 🟢\n" +
-                   "Supabase 🟢\n" +
-                   "Telegram 🟢\n" +
-                   "API 🟢\n" +
-                   "Site 🟢\n" +
-                   "Analytics operacional 🟢\n" +
+                   health + "\n" +
                    "GA4 Data API " + gaApiStr + "\n\n" +
-                   "📦 Produtos cadastrados: <b>" + products.length + "</b>\n" +
-                   "🕒 Atualizado: <b>" + new Date().toLocaleString("pt-BR") + "</b>";
+                   "📦 Produtos canônicos: <b>" + (report.components["Produtos"]?.details || "não confirmado") + "</b>\n" +
+                   "🕒 Operation ID: <code>" + (report.components["Backend"]?.operationId || "não disponível") + "</code>";
       const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar", callback_data: "admin_menu" }]] };
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
@@ -1110,7 +1105,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         if (lifecycle.state !== "PUBLISHED" || !lifecycle.publishedProductId) {
           review.status = "error";
           await telegramRepo.savePendingReview(review);
-          throw new Error(lifecycle.error || "PUBLICATION_ERROR");
+          const diagnosticText = lifecycle.diagnostic
+            ? formatDiagnosticForAdmin(lifecycle.diagnostic)
+            : `<b>${lifecycle.error || "PUBLICATION_ERROR"}</b> · <code>${lifecycle.operationId || "sem-operation-id"}</code>\nA publicação não foi confirmada pela cadeia canônica.`;
+          if (chatId) await sendTelegramMessage(chatId, `❌ <b>PUBLICAÇÃO NÃO CONCLUÍDA</b>\n\n${diagnosticText}`);
+          return;
         }
         const publishedProduct = await productsRepository.getProductByIdOrSlug(lifecycle.publishedProductId);
         if (!publishedProduct) throw new Error("PERSISTENCE_ERROR");
@@ -1122,7 +1121,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, successText);
         else if (chatId) await sendTelegramMessage(chatId, successText);
       } catch (err: any) {
-        if (chatId) await sendTelegramMessage(chatId, `❌ Falha ao publicar: ${err.message}`);
+        if (chatId) await sendTelegramMessage(chatId, "❌ <b>PERSISTENCE_ERROR</b>\n\nNão foi possível concluir a persistência canônica. Consulte o Operator para diagnóstico e operation ID.");
       }
       return;
     }

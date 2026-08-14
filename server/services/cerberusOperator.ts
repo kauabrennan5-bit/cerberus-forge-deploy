@@ -19,6 +19,13 @@ import {
   type OperationalStateSnapshot,
   type StateTransition,
 } from "./operatorAutonomy";
+import {
+  createOperationId,
+  createOperationalDiagnostic,
+  sanitizeOperationalText,
+  type DependencyName,
+  type OperationalDiagnostic,
+} from "./operationalDiagnostics";
 
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "DOWN" | "UNKNOWN";
 export type IncidentSeverity = "INFO" | "WARNING" | "ERROR" | "CRITICAL";
@@ -33,6 +40,9 @@ export interface ComponentHealth {
   details?: string;
   version?: string;
   error?: string;
+  httpStatus?: number;
+  operationId?: string;
+  diagnostic?: OperationalDiagnostic;
 }
 
 export interface OperatorSystemReport {
@@ -60,6 +70,14 @@ export interface Incident {
   actionTaken: string;
   result: string;
   timestamp: string;
+  operationId: string;
+  operation: "HEALTH_CHECK" | "AUTO_HEAL";
+  stage: OperationalDiagnostic["stage"];
+  dependency: DependencyName;
+  likelyCause: string;
+  impact: string;
+  recoverability: OperationalDiagnostic["recoverability"];
+  httpStatus?: number;
   recoveredAt?: string;
   durationMs?: number;
 }
@@ -119,11 +137,73 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<an
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "cerberus-operator" } });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
     return await response.json();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function fetchResponseWithTimeout(url: string, timeoutMs = 15_000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { method: "HEAD", signal: controller.signal, headers: { "User-Agent": "cerberus-operator" } });
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
+    return response;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function diagnosticForComponent(component: string, operationId: string, error?: unknown, httpStatus?: number): OperationalDiagnostic {
+  const dependencyMap: Record<string, DependencyName> = {
+    Backend: "Backend", Supabase: "Supabase", Produtos: "Supabase", "Catálogo": "Render Static Site",
+    Tracking: "Supabase", Analytics: "Supabase", Telegram: "Telegram", Site: "Render Static Site",
+    Deploy: "Render Static Site", GitHub: "GitHub",
+  };
+  const dependency = dependencyMap[component] || "Backend";
+  const code = dependency === "Supabase"
+    ? "SUPABASE_PERSISTENCE_ERROR"
+    : dependency === "Render Static Site"
+      ? "PUBLIC_CATALOG_VALIDATION_ERROR"
+      : "UNKNOWN_OPERATION_ERROR";
+  const likelyCause = dependency === "Supabase"
+    ? "Conexão, credencial, RLS ou schema do Supabase não confirmou a operação de leitura."
+    : dependency === "Render Static Site"
+      ? "Artefato público, deploy do Static Site ou propagação CDN não confirmou o estado esperado."
+      : dependency === "Telegram"
+        ? "Token, conectividade ou API do Telegram não confirmou a verificação."
+        : dependency === "GitHub"
+          ? "A branch main ou a API pública do GitHub não respondeu como esperado."
+          : "A dependência não confirmou a operação de health check.";
+  return createOperationalDiagnostic({
+    operationId,
+    operation: "HEALTH_CHECK",
+    stage: "HEALTH_CHECK",
+    dependency,
+    code,
+    message: error ? sanitizeOperationalText(error) : `A verificação de ${component} não confirmou saúde operacional.`,
+    likelyCause,
+    impact: `O componente ${component} não pode ser considerado operacional até nova validação.`,
+    recoverability: component === "Catálogo" ? "ADMIN_APPROVAL" : "AUTO",
+    retryable: true,
+    httpStatus,
+    cause: error,
+  });
+}
+
+function operationalReportIsHealthy(report: OperatorSystemReport): boolean {
+  const critical = ["Backend", "Supabase", "Produtos", "Catálogo", "Tracking", "Analytics", "Telegram", "Site"];
+  return critical.every(name => report.components[name]?.status === "HEALTHY");
 }
 
 export function setOperatorMode(mode: OperatorMode): void {
@@ -210,8 +290,8 @@ const SAFE_ACTIONS: SafeAction<any, any>[] = [
     preconditions: async () => ({ ok: true, details: "Diagnóstico não invasivo permitido." }),
     execute: async () => runSystemHealthCheck(),
     validate: async report => ({
-      ok: report.overallStatus !== "UNKNOWN",
-      details: `Health check retornou ${report.overallStatus}.`,
+      ok: operationalReportIsHealthy(report),
+      details: `Health check crítico retornou ${report.overallStatus}.`,
     }),
   },
   {
@@ -239,14 +319,15 @@ const SAFE_ACTIONS: SafeAction<any, any>[] = [
       if (result.exportedCount !== result.json.length) {
         return { ok: false, details: "Contagem exportada difere do arquivo gerado." };
       }
-      const canonicalValid = result.canonical.filter(product => product.ativo !== false && product.status !== "pending");
+      const canonicalValid = result.canonical.filter(product => product.ativo !== false && product.status === "published");
       const jsonIds = new Set(result.json.map((product: any) => product.id));
       const missing = canonicalValid.filter(product => !jsonIds.has(product.id));
+      const unexpected = result.json.filter((product: any) => !canonicalValid.some(item => item.id === product.id));
       const invalidIdentity = result.json.some((product: any) => !product.id || !product.slug || !product.produto || !product.link);
       return {
-        ok: missing.length === 0 && !invalidIdentity,
-        details: missing.length > 0
-          ? `Projeção incompleta: ${missing.length} produtos canônicos não encontrados.`
+        ok: missing.length === 0 && unexpected.length === 0 && !invalidIdentity,
+        details: missing.length > 0 || unexpected.length > 0
+          ? `Projeção divergente: ${missing.length} produto(s) ausente(s) e ${unexpected.length} órfão(s).`
           : `${result.json.length}/${canonicalValid.length} produtos, IDs e slugs validados.`,
       };
     },
@@ -321,7 +402,7 @@ const autoHealEngine = new SafeAutoHealEngine(SAFE_ACTIONS);
 
 function suggestedActionFor(component: string): string | null {
   const map: Record<string, string> = {
-    "Catálogo": "REGENERATE_STATIC_CATALOG",
+    "Catálogo": "REVALIDATE_GITHUB_SYNC",
     "Tracking": "REVALIDATE_TRACKING",
     "Analytics": "REVALIDATE_ANALYTICS",
     "Site": "REVALIDATE_SERVICES",
@@ -385,10 +466,20 @@ export async function runSafeAutoHeal(actionId: string, context: AutoHealContext
     incident.result = result.message;
     if (result.status === "SUCCESS") {
       moveOperatorState("VALIDATING", `Validação pós-ação: ${actionId}.`);
-      moveOperatorState("RECOVERING", `Recuperação confirmada: ${actionId}.`);
-      incident.status = "RESOLVED";
-      incident.recoveredAt = new Date().toLocaleTimeString("pt-BR");
-      moveOperatorState("RESOLVED", `Incidente ${incident.id} validado como recuperado.`);
+      const postActionReport = await runSystemHealthCheck();
+      const component = postActionReport.components[incident.component];
+      if (component?.status === "HEALTHY") {
+        moveOperatorState("RECOVERING", `Recuperação confirmada: ${actionId}.`);
+        incident.status = "RESOLVED";
+        incident.recoveredAt = new Date().toISOString();
+        incident.result = `Recuperado após health check pós-ação. ${result.message}`;
+        moveOperatorState("RESOLVED", `Incidente ${incident.id} validado como recuperado.`);
+      } else {
+        incident.status = "ESCALATED";
+        incident.result = `Ação terminou, mas ${incident.component} permanece ${component?.status || "UNKNOWN"} após validação pós-ação.`;
+        operationalStateStore.markEscalated();
+        moveOperatorState("ESCALATED", `Recuperação não confirmada para incidente ${incident.id}.`);
+      }
     }
     if (result.status === "FAILED" || result.status === "TIMEOUT" || result.status === "CIRCUIT_OPEN") {
       incident.status = "ESCALATED";
@@ -416,6 +507,7 @@ export async function runSafeAutoHeal(actionId: string, context: AutoHealContext
  */
 export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   moveOperatorState("CHECKING", "Início de health check periódico ou manual.");
+  const operationId = createOperationId("HC");
   const now = new Date().toISOString();
   const timeStr = new Date().toLocaleTimeString("pt-BR");
   lastCheckTimestamp = timeStr;
@@ -437,6 +529,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       latencyMs: Date.now() - t0Backend,
       timestamp: now,
       details: `API respondeu ${backendProducts.length} produtos.`,
+      operationId,
     };
   } catch (err: any) {
     components["Backend"] = {
@@ -445,6 +538,9 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       latencyMs: Date.now() - t0Backend,
       timestamp: now,
       error: err?.message || "Endpoint de backend indisponível.",
+      httpStatus: err?.status,
+      operationId,
+      diagnostic: diagnosticForComponent("Backend", operationId, err, err?.status),
     };
   }
 
@@ -459,7 +555,8 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       name: "Supabase",
       status: latency > 4000 ? "DEGRADED" : "HEALTHY",
       latencyMs: latency,
-      timestamp: now
+      timestamp: now,
+      operationId,
     };
   } catch (err: any) {
     components["Supabase"] = {
@@ -467,7 +564,9 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       status: "DOWN",
       latencyMs: Date.now() - t0Supabase,
       timestamp: now,
-      error: err?.message || String(err)
+      error: err?.message || String(err),
+      operationId,
+      diagnostic: diagnosticForComponent("Supabase", operationId, err),
     };
   }
 
@@ -483,6 +582,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       latencyMs: Date.now() - t0Products,
       timestamp: now,
       details: `${canonicalProducts.length} produtos canônicos; ${invalidProducts.length} inválidos.`,
+      operationId,
     };
   } catch (err: any) {
     components["Produtos"] = {
@@ -491,6 +591,8 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       latencyMs: Date.now() - t0Products,
       timestamp: now,
       error: err?.message || "Consulta de produtos falhou.",
+      operationId,
+      diagnostic: diagnosticForComponent("Produtos", operationId, err),
     };
   }
 
@@ -499,16 +601,18 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   try {
     const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
     if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("products.json ausente, vazio ou inválido.");
-    const canonicalActive = canonicalProducts.filter(product => product.ativo !== false && product.status !== "pending");
+    const canonicalActive = canonicalProducts.filter(product => product.ativo !== false && product.status === "published");
     const jsonIds = new Set(staticCatalog.map((product: any) => product.id));
     const missing = canonicalActive.filter(product => !jsonIds.has(product.id));
+    const unexpected = staticCatalog.filter((product: any) => !canonicalActive.some(item => item.id === product.id));
     const invalidIdentity = staticCatalog.some((product: any) => !product.id || !product.slug || !product.produto || !product.link);
     components["Catálogo"] = {
       name: "Catálogo",
-      status: missing.length === 0 && !invalidIdentity ? "HEALTHY" : "DEGRADED",
+      status: missing.length === 0 && unexpected.length === 0 && !invalidIdentity ? "HEALTHY" : "DEGRADED",
       latencyMs: Date.now() - t0Catalog,
       timestamp: now,
-      details: `${staticCatalog.length}/${canonicalActive.length} produtos projetados; ${missing.length} ausentes.`,
+      details: `${staticCatalog.length}/${canonicalActive.length} produtos projetados; ${missing.length} ausentes; ${unexpected.length} órfãos.`,
+      operationId,
     };
   } catch (err: any) {
     components["Catálogo"] = {
@@ -516,7 +620,10 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       status: "DOWN",
       latencyMs: Date.now() - t0Catalog,
       timestamp: now,
-      error: err?.message || String(err)
+      error: err?.message || String(err),
+      httpStatus: err?.status,
+      operationId,
+      diagnostic: diagnosticForComponent("Catálogo", operationId, err, err?.status),
     };
   }
 
@@ -529,15 +636,19 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     latencyMs: Date.now() - t0Lifecycle,
     timestamp: now,
     details: `${lifecycle.pendingApproval} aguardando aprovação; ${lifecycle.errors} com erro; ${lifecycle.published} publicados no ciclo atual.`,
+    operationId,
   };
 
-  // 5. Tracking
-  components["Tracking"] = {
-    name: "Tracking",
-    status: "HEALTHY",
-    latencyMs: 4,
-    timestamp: now
-  };
+  // 5. Tracking: confirma persistência sem gerar clique artificial.
+  const t0Tracking = Date.now();
+  try {
+    if (!supabase) throw new Error("Cliente Supabase não inicializado.");
+    const { error } = await supabase.from("product_clicks").select("id").limit(1);
+    if (error) throw error;
+    components["Tracking"] = { name: "Tracking", status: "HEALTHY", latencyMs: Date.now() - t0Tracking, timestamp: now, details: "public.product_clicks acessível sem inserção.", operationId };
+  } catch (err: any) {
+    components["Tracking"] = { name: "Tracking", status: "DOWN", latencyMs: Date.now() - t0Tracking, timestamp: now, error: err?.message || "Tracking não confirmou acesso à persistência.", operationId, diagnostic: diagnosticForComponent("Tracking", operationId, err) };
+  }
 
   // 6. Analytics
   const t0Analytics = Date.now();
@@ -550,15 +661,18 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       name: "Analytics",
       status: "HEALTHY",
       latencyMs: latency,
-      timestamp: now
+      timestamp: now,
+      operationId,
     };
   } catch (err: any) {
     components["Analytics"] = {
       name: "Analytics",
-      status: "DEGRADED",
+      status: "DOWN",
       latencyMs: Date.now() - t0Analytics,
       timestamp: now,
-      error: err?.message
+      error: err?.message,
+      operationId,
+      diagnostic: diagnosticForComponent("Analytics", operationId, err),
     };
   }
 
@@ -575,36 +689,33 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       latencyMs: Date.now() - t0Telegram,
       timestamp: now,
       details: "API do bot respondeu ao health check.",
+      operationId,
     };
-  } catch {
+  } catch (err: any) {
     components["Telegram"] = {
       name: "Telegram",
       status: "DEGRADED",
       latencyMs: Date.now() - t0Telegram,
       timestamp: now,
       error: "API Telegram indisponível ou não configurada.",
+      httpStatus: err?.status,
+      operationId,
+      diagnostic: diagnosticForComponent("Telegram", operationId, err, err?.status),
     };
   }
 
-  // 8. Site e deploy: conteúdo público mínimo disponível.
+  // 8. Site: disponibilidade HTTP independente da projeção JSON já validada acima.
   const t0Site = Date.now();
   try {
-    const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
-    const healthyPublicCatalog = Array.isArray(staticCatalog) && staticCatalog.length > 0;
+    await fetchResponseWithTimeout((process.env.PUBLIC_SITE_URL || "https://cerberusfinds.com").replace(/\/+$/, ""));
     const latency = Date.now() - t0Site;
     components["Site"] = {
       name: "Site",
-      status: healthyPublicCatalog ? "HEALTHY" : "DEGRADED",
+      status: "HEALTHY",
       latencyMs: latency,
       timestamp: now,
-      details: healthyPublicCatalog ? `${staticCatalog.length} produtos públicos.` : "Catálogo público inválido.",
-    };
-    components["Deploy"] = {
-      name: "Deploy",
-      status: healthyPublicCatalog ? "HEALTHY" : "DEGRADED",
-      latencyMs: latency,
-      timestamp: now,
-      details: "Projeção pública do Static Site disponível.",
+      details: "Página pública respondeu ao health check HTTP.",
+      operationId,
     };
   } catch (err: any) {
     components["Site"] = {
@@ -612,15 +723,21 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       status: "DEGRADED",
       latencyMs: Date.now() - t0Site,
       timestamp: now,
-      error: "Falha ao alcançar site estático"
-    };
-    components["Deploy"] = {
-      name: "Deploy",
-      status: "UNKNOWN",
-      latencyMs: Date.now() - t0Site,
-      timestamp: now
+      error: "Falha ao alcançar site público",
+      httpStatus: err?.status,
+      operationId,
+      diagnostic: diagnosticForComponent("Site", operationId, err, err?.status),
     };
   }
+
+  components["Deploy"] = {
+    name: "Deploy",
+    status: "UNKNOWN",
+    latencyMs: 0,
+    timestamp: now,
+    details: "Não verificável diretamente: nenhuma API autenticada do Render foi configurada; site e catálogo são verificados separadamente.",
+    operationId,
+  };
 
   // 9. GitHub: branch main acessível e versão conhecida, sem escrita remota.
   const t0GitHub = Date.now();
@@ -635,14 +752,18 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       timestamp: now,
       version: sha.slice(0, 7),
       details: "Branch main acessível.",
+      operationId,
     };
-  } catch {
+  } catch (err: any) {
     components["GitHub"] = {
       name: "GitHub",
       status: "UNKNOWN",
       latencyMs: Date.now() - t0GitHub,
       timestamp: now,
       error: "Não foi possível verificar a branch main.",
+      httpStatus: err?.status,
+      operationId,
+      diagnostic: diagnosticForComponent("GitHub", operationId, err, err?.status),
     };
   }
 
@@ -696,7 +817,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     const severity: IncidentSeverity = isPersistent ? "ERROR" : "WARNING";
     const fingerprint = `${compName}_${comp.status}_${comp.error || 'general'}`;
 
-    const existingOpen = incidents.find(i => i.fingerprint === fingerprint && (i.status === "OPEN" || i.status === "INVESTIGATING"));
+    const existingOpen = incidents.find(i => i.fingerprint === fingerprint && ["OPEN", "INVESTIGATING", "AUTO_FIXING", "REQUIRES_APPROVAL", "ESCALATED"].includes(i.status));
     if (!existingOpen) {
       const newInc: Incident = {
         id: `INC-${Date.now().toString().slice(-4)}`,
@@ -705,11 +826,19 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
         severity,
         component: compName,
         detection: `Health check detectou status ${comp.status} (${consecutiveFailures[compName]}ª falha consecutiva)`,
-        diagnosis: comp.error || "Degradação ou indisponibilidade de conexão",
+        diagnosis: comp.diagnostic?.message || comp.error || `A operação de health check não confirmou ${compName}.`,
         status: "OPEN",
         actionTaken: "Nenhuma (Monitorando falha)",
         result: "Pendente",
-        timestamp: timeStr
+        timestamp: new Date().toISOString(),
+        operationId,
+        operation: "HEALTH_CHECK",
+        stage: comp.diagnostic?.stage || "HEALTH_CHECK",
+        dependency: comp.diagnostic?.dependency || "Backend",
+        likelyCause: comp.diagnostic?.likelyCause || "A causa não pôde ser classificada sem evidência adicional.",
+        impact: comp.diagnostic?.impact || `O estado de ${compName} permanece não confirmado.`,
+        recoverability: comp.diagnostic?.recoverability || "MANUAL",
+        httpStatus: comp.httpStatus,
       };
       incidents.unshift(newInc);
       if (incidents.length > CONFIG.maxIncidents) {

@@ -108,10 +108,11 @@ async function generateStaticCatalog() {
   // Filtragem e sanitização da projeção pública.
   const validProducts = rawProducts.filter((p) => {
     if (!p.produto || typeof p.produto !== 'string' || p.produto.trim() === '') return false;
-    if (!p.link || typeof p.link !== 'string' || p.link.trim() === '' || p.link.includes('exemplo.com')) return false;
+    const productLink = p.link || p.affiliate_url;
+    if (!productLink || typeof productLink !== 'string' || productLink.trim() === '' || productLink.includes('exemplo.com')) return false;
     const price = Number(p.preco);
     if (Number.isNaN(price) || price <= 0) return false;
-    if (p.ativo === false || p.status === 'pending') return false;
+    if (p.ativo === false || p.status !== 'published') return false;
     return true;
   }).map((p) => ({
     id: p.id,
