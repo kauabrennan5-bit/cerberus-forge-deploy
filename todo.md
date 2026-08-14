@@ -63,3 +63,11 @@
 - [x] Integrar métricas do pipeline ao Cerberus Operator sem publicar produtos automaticamente.
 - [x] Criar documentação e testes; validar lint, build, segurança, catálogo e analytics canônicos.
 - [x] Revisar o diff e enviar exclusivamente o Bloco 7 para a branch main.
+
+# Correções Bloco 7 — /listar Direto e Marketplace Mercado Livre (meli.la)
+
+- [ ] Corrigir comando direto /listar no Telegram para enviar nova mensagem com a listagem paginada (sem exigir message_id pré-existente).
+- [ ] Centralizar e robustecer a detecção de marketplace com allowlist explícita (Shopee, Mercado Livre, meli.la).
+- [ ] Implementar resolução segura de links curtos (meli.la) com proteções SSRF, timeout, limite de redirecionamentos e validação de domínio permitido.
+- [ ] Criar testes automatizados para /listar direto, resolução de meli.la e falhas de redirect.
+- [ ] Validar lint, testes, build, diff de segurança e enviar para main.
