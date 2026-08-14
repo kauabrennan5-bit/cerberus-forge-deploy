@@ -1,6 +1,6 @@
 import path from "path";
 import fs from "fs";
-import { fetchProductDataFromUrl } from "./scraper";
+import { extractProductForReview as extractProductForReviewShared } from "./productAutomation";
 import * as productsRepository from "../repositories/productsRepository";
 import * as categoriesRepository from "../repositories/categoriesRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
@@ -232,30 +232,9 @@ function buildMainReviewKeyboard(reviewId: string) {
 }
 
 async function extractProductForReview(url: string): Promise<{ success: boolean; data?: any; error?: string }> {
-  try {
-    const scraped = await fetchProductDataFromUrl(url);
-    // Título e imagem são indispensáveis para evitar proposta incompleta. O
-    // preço pode ser corrigido manualmente no cartão de revisão antes de publicar.
-    const hasExtractedData = Boolean(scraped?.title && scraped?.images?.length);
-    if (!scraped || !hasExtractedData) {
-      return { success: false, error: "Falha ao extrair título ou imagens válidas do link. Tente novamente ou use o painel administrativo com preenchimento manual." };
-    }
-
-    const marketplace = detectMarketplace(url);
-    return {
-      success: true,
-      data: {
-        produto: scraped.title,
-        categoria: marketplace === "Outros" ? "Acessórios" : marketplace,
-        preco: typeof scraped.price === "number" && scraped.price > 0 ? scraped.price : 0,
-        imagens: scraped.images,
-        normalizedUrl: url,
-        descricao: scraped.rawContent || ""
-      }
-    };
-  } catch (err: any) {
-    return { success: false, error: err?.message || "Erro interno no scraper." };
-  }
+  // A extração editorial compartilhada usa rawContent somente como contexto
+  // técnico para a curadoria; a descricao retornada é sempre editorial.
+  return extractProductForReviewShared(url);
 }
 
 async function refreshReviewLifecycle(review: PendingReview): Promise<LifecycleRecord> {

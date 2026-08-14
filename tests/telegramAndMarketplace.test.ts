@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
-import { detectMarketplace, resolveShortUrlIfNeeded } from "../server/services/marketplace";
+import { detectMarketplace, isIntermediateMarketplaceUrl, resolveShortUrlIfNeeded } from "../server/services/marketplace";
 import { ProductPipeline } from "../server/services/productPipeline";
+import { containsRawPayloadMarkers, normalizeCandidate, validateCandidate } from "../server/services/productLifecycle";
 import { buildProductListView } from "../server/services/telegramBot";
 
 test("detectMarketplace reconhece Shopee diretamente", () => {
@@ -127,14 +128,80 @@ test("Telegram, automação e lifecycle usam somente o detector canônico", () =
 });
 
 
-test("revisão do Telegram aceita preço ausente e permite corrigir preço e categoria antes de publicar", () => {
+test("revisão do Telegram usa a extração editorial compartilhada e não publica rawContent como descricao", () => {
   const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
 
-  assert.match(source, /const hasExtractedData = Boolean\(scraped\?\.title && scraped\?\.images\?\.length\)/);
+  assert.match(source, /extractProductForReview as extractProductForReviewShared/);
+  assert.match(source, /return extractProductForReviewShared\(url\)/);
+  assert.doesNotMatch(source, /descricao:\s*scraped\.rawContent/);
   assert.match(source, /recoverableMissingPrice/);
   assert.match(source, /if \(data\.startsWith\("edit_price:"\)\)/);
   assert.match(source, /if \(data\.startsWith\("edit_cat:"\)\)/);
   assert.match(source, /action: "awaiting_category"/);
   assert.match(source, /if \(userState && userState\.action === "awaiting_category"\)/);
   assert.match(source, /await refreshReviewLifecycle\(targetReview\)/);
+});
+
+test("rawContent técnico em descricao é detectado e limpo na normalização", () => {
+  const rawDescription = "[URL Final]: https://meli.la/demo\\n[Título Identificado]: Produto\\n[Preço Identificado]: R$ 10,00";
+  assert.equal(containsRawPayloadMarkers(rawDescription), true);
+
+  const candidate = normalizeCandidate({
+    normalizedUrl: "https://www.mercadolivre.com.br/p/MLB123456",
+    marketplace: "Mercado Livre",
+    produto: "Produto editorial",
+    categoria: "Acessórios",
+    preco: 10,
+    imagens: ["https://cdn.example.com/product.jpg"],
+    descricao: rawDescription,
+  });
+
+  assert.equal(candidate.descricao, "");
+  assert.equal(validateCandidate({ ...candidate, descricao: rawDescription }, []).outcome, "FAIL");
+});
+
+test("resolveShortUrlIfNeeded rejeita destino intermediário do Mercado Livre", async () => {
+  const target = "https://meli.la/abc123";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ url: "https://www.mercadolivre.com.br/social/abc123" })) as unknown as typeof fetch;
+
+  try {
+    assert.equal(isIntermediateMarketplaceUrl("https://www.mercadolivre.com.br/social/abc123"), true);
+    assert.equal(isIntermediateMarketplaceUrl("https://www.mercadolivre.com.br/MLB-123456789-produto"), false);
+    const result = await resolveShortUrlIfNeeded(target);
+    assert.equal(result.resolvedUrl, target);
+    assert.equal(result.marketplace, "Mercado Livre");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("publicação é bloqueada se descricao contaminada atravessar a revisão", async () => {
+  let creates = 0;
+  const pipeline = new ProductPipeline({
+    getProducts: async () => [],
+    createCanonicalProduct: async candidate => {
+      creates += 1;
+      return { id: "contaminated", produto: candidate.produto, categoria: candidate.categoria, preco: candidate.preco!, imagens: candidate.imagens, link: candidate.normalizedUrl, ativo: true, destaque: false };
+    },
+    syncAndValidatePublication: async () => ({ success: true }),
+    pauseCanonicalProduct: async () => undefined,
+  });
+
+  const record = await pipeline.evaluate({
+    normalizedUrl: "https://shopee.com.br/produto-i.123.456",
+    marketplace: "Shopee",
+    produto: "Produto editorial",
+    categoria: "Acessórios",
+    preco: 10,
+    imagens: ["https://cdn.example.com/product.jpg"],
+    descricao: "Descrição editorial limpa.",
+  });
+  pipeline.approve(record);
+  record.candidate.descricao = "[Conteúdo da Página]: payload técnico";
+
+  const result = await pipeline.publish(record);
+  assert.equal(result.error, "VALIDATION_ERROR");
+  assert.equal(result.state, "APPROVED");
+  assert.equal(creates, 0);
 });

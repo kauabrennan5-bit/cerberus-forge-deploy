@@ -8,6 +8,7 @@ import {
   normalizeCandidate,
   transitionProductState,
   validateCandidate,
+  containsRawPayloadMarkers,
   type ProductCandidate,
   type ProductCuration,
   type ProductPipelineError,
@@ -138,6 +139,12 @@ export class ProductPipeline {
     if (record.state === "PUBLISHED") return record;
     if (record.state !== "APPROVED") throw new Error("APPROVAL_REQUIRED");
     if (record.validation.outcome === "FAIL") throw new Error("VALIDATION_ERROR");
+    if (containsRawPayloadMarkers(record.candidate.descricao)) {
+      record.error = "VALIDATION_ERROR";
+      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", "VALIDATION_ERROR: descrição contém payload técnico do scraper; publicação bloqueada."));
+      rememberLifecycleRecord(record);
+      return record;
+    }
 
     try {
       const operationId = createOperationId("PUB");

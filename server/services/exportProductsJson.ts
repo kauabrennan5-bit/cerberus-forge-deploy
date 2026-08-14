@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { getProducts } from "../repositories/productsRepository";
 import { Product } from "../../src/types";
+import { containsRawPayloadMarkers } from "./productLifecycle";
 
 /**
  * Script de exportação do catálogo público para formato estático (/public/data/products.json).
@@ -60,7 +61,7 @@ export async function exportStaticProductsJson(): Promise<number> {
       marketplace: (p as any).marketplace || 'Shopee',
       cupom: (p as any).cupom || '',
       freteGratis: Boolean((p as any).freteGratis),
-      descricao: p.descricao || '',
+      descricao: containsRawPayloadMarkers(p.descricao) ? '' : p.descricao || '',
       paginaPonteUrl: p.paginaPonteUrl || '',
       ativo: true,
       status: 'published'

@@ -48,6 +48,15 @@ export function detectMarketplace(urlStr: string): string {
   return "Outros";
 }
 
+export function isIntermediateMarketplaceUrl(urlStr: string): boolean {
+  try {
+    const pathname = new URL(urlStr).pathname.toLowerCase();
+    return /^\/(?:social(?:\/|$)|search(?:\/|$)|home(?:\/|$)|deals(?:\/|$)|offers(?:\/|$))/.test(pathname);
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveShortUrlIfNeeded(urlStr: string): Promise<{ resolvedUrl: string; marketplace: string }> {
   let target = urlStr.trim();
   if (!target.startsWith("http://") && !target.startsWith("https://")) {
@@ -76,12 +85,14 @@ export async function resolveShortUrlIfNeeded(urlStr: string): Promise<{ resolve
         });
         const finalUrl = response.url || target;
         const parsedFinal = new URL(finalUrl);
-        if (isSafeUrl(parsedFinal)) {
+        if (isSafeUrl(parsedFinal) && !isIntermediateMarketplaceUrl(finalUrl)) {
           resolvedUrl = finalUrl;
           const finalMarketplace = detectMarketplace(resolvedUrl);
           if (finalMarketplace !== "Outros") {
             marketplace = finalMarketplace;
           }
+        } else if (isIntermediateMarketplaceUrl(finalUrl)) {
+          console.warn(`[Marketplace Resolver] Destino intermediário rejeitado para ${target}: ${parsedFinal.pathname}`);
         }
       } catch (err) {
         console.warn(`[Marketplace Resolver] Aviso ao resolver redirect de ${target}: ${err instanceof Error ? err.message : String(err)}`);

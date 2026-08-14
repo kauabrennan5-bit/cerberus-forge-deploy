@@ -76,6 +76,21 @@ export function transitionProductState(from: ProductLifecycleState, to: ProductL
   if (!TRANSITIONS[from].includes(to)) throw new Error(`INVALID_PRODUCT_TRANSITION:${from}->${to}`);
 }
 
+const RAW_PAYLOAD_MARKERS = [
+  "[url final]",
+  "[titulo identificado]",
+  "[preco identificado]",
+  "[total imagens oficiais]",
+  "[imagens extraidas]",
+  "[conteudo da pagina]",
+] as const;
+
+export function containsRawPayloadMarkers(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return RAW_PAYLOAD_MARKERS.some(marker => normalized.includes(marker));
+}
+
 export function normalizeCandidate(input: Partial<ProductCandidate> & { normalizedUrl?: string; link?: string }): ProductCandidate {
   const rawUrl = (input.normalizedUrl || input.link || "").trim();
   let normalizedUrl = rawUrl;
@@ -90,13 +105,14 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
   }
 
   const produto = (input.produto || "").replace(/\s+/g, " ").trim();
+  const rawDescription = (input.descricao || "").trim();
   const marketplace = (input.marketplace || detectMarketplace(normalizedUrl)).trim();
   return {
     normalizedUrl,
     externalId: input.externalId || extractExternalId(normalizedUrl),
     marketplace,
     produto,
-    descricao: (input.descricao || "").trim(),
+    descricao: containsRawPayloadMarkers(rawDescription) ? "" : rawDescription,
     categoria: (input.categoria || "").trim(),
     preco: typeof input.preco === "number" && Number.isFinite(input.preco) ? input.preco : null,
     precoAntigo: typeof input.precoAntigo === "number" ? input.precoAntigo : null,
@@ -150,6 +166,7 @@ export function validateCandidate(candidate: ProductCandidate, existingProducts:
   const warnings: string[] = [];
   try { new URL(candidate.normalizedUrl); } catch { errors.push("URL inválida."); }
   if (!candidate.produto || candidate.produto.length < 3 || /produto sem título|produto cerberus/i.test(candidate.produto)) errors.push("Nome do produto ausente ou genérico.");
+  if (containsRawPayloadMarkers(candidate.descricao)) errors.push("Descrição contém payload técnico do scraper; publicação bloqueada.");
   if (!candidate.preco || candidate.preco <= 0) errors.push("Preço válido é obrigatório.");
   if (candidate.imagens.length === 0) errors.push("Ao menos uma imagem HTTP(S) é obrigatória.");
   if (!["Shopee", "Mercado Livre"].includes(candidate.marketplace)) errors.push("Marketplace não reconhecido.");
