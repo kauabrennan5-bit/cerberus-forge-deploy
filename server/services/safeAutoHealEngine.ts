@@ -1,0 +1,246 @@
+export type AutoHealRisk = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+export type AutoHealMode = "OBSERVE" | "SAFE_AUTO_HEAL" | "ADMIN_APPROVAL" | "DRY_RUN";
+
+export type ActionResultStatus =
+  | "SUCCESS"
+  | "FAILED"
+  | "SKIPPED"
+  | "DRY_RUN"
+  | "APPROVAL_REQUIRED"
+  | "TIMEOUT"
+  | "COOLDOWN"
+  | "CIRCUIT_OPEN"
+  | "FORBIDDEN";
+
+export interface AutoHealContext {
+  incidentId?: string;
+  incidentFingerprint?: string;
+  actor: "CERBERUS" | "ADMIN";
+  adminId?: string;
+}
+
+export interface AutoHealCheck {
+  ok: boolean;
+  details?: string;
+}
+
+export interface SafeAction<TSnapshot = unknown, TResult = unknown> {
+  id: string;
+  name: string;
+  description: string;
+  risk: AutoHealRisk;
+  allowed: boolean;
+  timeoutMs: number;
+  cooldownMs: number;
+  maxRetries: number;
+  retryable: boolean;
+  requiresApproval?: boolean;
+  preconditions: (context: AutoHealContext) => Promise<AutoHealCheck>;
+  snapshot?: (context: AutoHealContext) => Promise<TSnapshot>;
+  execute: (context: AutoHealContext) => Promise<TResult>;
+  validate: (result: TResult, context: AutoHealContext) => Promise<AutoHealCheck>;
+  rollback?: (snapshot: TSnapshot | undefined, context: AutoHealContext) => Promise<void>;
+}
+
+export interface AutoHealAuditLog {
+  actionId: string;
+  incidentId?: string;
+  timestamp: string;
+  actor: "CERBERUS" | "ADMIN";
+  risk: AutoHealRisk;
+  status: ActionResultStatus;
+  preconditions: string;
+  result: string;
+  durationMs: number;
+  validation?: string;
+  rollback: boolean;
+  error?: string;
+}
+
+export interface AutoHealActionResult {
+  status: ActionResultStatus;
+  message: string;
+  actionId: string;
+  durationMs: number;
+  audit: AutoHealAuditLog;
+}
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(new Error("ACTION_TIMEOUT")), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }) as Promise<T>;
+}
+
+/**
+ * Motor puramente determinístico para ações seguras previamente registradas.
+ * Não aceita comandos arbitrários, shell, SQL, secrets ou caminhos externos.
+ */
+export class SafeAutoHealEngine {
+  private readonly actions = new Map<string, SafeAction>();
+  private readonly lastExecutedAt = new Map<string, number>();
+  private readonly failureCounts = new Map<string, number>();
+  private readonly circuitOpenUntil = new Map<string, number>();
+  private readonly auditLog: AutoHealAuditLog[] = [];
+
+  constructor(
+    actions: SafeAction[],
+    private readonly now: () => number = () => Date.now(),
+    private readonly circuitCooldownMs = 30 * 60 * 1000,
+    private readonly maxCircuitFailures = 3,
+  ) {
+    for (const action of actions) this.actions.set(action.id, action);
+  }
+
+  getActions(): SafeAction[] {
+    return [...this.actions.values()];
+  }
+
+  getAuditLog(): AutoHealAuditLog[] {
+    return [...this.auditLog];
+  }
+
+  private keyFor(actionId: string, context: AutoHealContext): string {
+    return `${actionId}:${context.incidentFingerprint || context.incidentId || "system"}`;
+  }
+
+  private record(entry: AutoHealAuditLog): AutoHealAuditLog {
+    this.auditLog.unshift(entry);
+    if (this.auditLog.length > 100) this.auditLog.length = 100;
+    return entry;
+  }
+
+  private result(
+    action: SafeAction | { id: string; risk: AutoHealRisk },
+    context: AutoHealContext,
+    status: ActionResultStatus,
+    message: string,
+    startedAt: number,
+    extra: Partial<AutoHealAuditLog> = {},
+  ): AutoHealActionResult {
+    const audit = this.record({
+      actionId: action.id,
+      incidentId: context.incidentId,
+      timestamp: new Date(this.now()).toISOString(),
+      actor: context.actor,
+      risk: action.risk,
+      status,
+      preconditions: extra.preconditions || "Não avaliadas",
+      result: message,
+      durationMs: this.now() - startedAt,
+      validation: extra.validation,
+      rollback: extra.rollback || false,
+      error: extra.error,
+    });
+
+    return { status, message, actionId: action.id, durationMs: audit.durationMs, audit };
+  }
+
+  async run(actionId: string, mode: AutoHealMode, context: AutoHealContext): Promise<AutoHealActionResult> {
+    const startedAt = this.now();
+    const action = this.actions.get(actionId);
+    if (!action || !action.allowed) {
+      return this.result({ id: actionId, risk: "CRITICAL" }, context, "FORBIDDEN", "Ação não registrada ou não autorizada.", startedAt);
+    }
+
+    if (action.risk === "CRITICAL") {
+      return this.result(action, context, "FORBIDDEN", "Ações críticas nunca podem ser executadas automaticamente.", startedAt);
+    }
+
+    if (mode === "OBSERVE") {
+      return this.result(action, context, "SKIPPED", "Modo OBSERVE: ação apenas diagnosticada, sem execução.", startedAt);
+    }
+
+    if (action.requiresApproval || action.risk === "HIGH" || (action.risk === "MEDIUM" && mode === "ADMIN_APPROVAL" && !context.adminId)) {
+      if (!context.adminId) {
+        return this.result(action, context, "APPROVAL_REQUIRED", "Ação requer aprovação administrativa explícita.", startedAt);
+      }
+    }
+
+    if (mode === "DRY_RUN") {
+      return this.result(action, context, "DRY_RUN", `DRY RUN: ${action.name} seria executada após pré-condições válidas; nenhuma alteração foi feita.`, startedAt);
+    }
+
+    const key = this.keyFor(actionId, context);
+    const openUntil = this.circuitOpenUntil.get(key) || 0;
+    if (openUntil > this.now()) {
+      return this.result(action, context, "CIRCUIT_OPEN", "Circuit breaker ativo para esta ação/incidente. Intervenção administrativa necessária.", startedAt);
+    }
+
+    const lastExecution = this.lastExecutedAt.get(key);
+    if (lastExecution !== undefined && this.now() - lastExecution < action.cooldownMs) {
+      return this.result(action, context, "COOLDOWN", "Ação em cooldown para prevenir loop de autocorreção.", startedAt);
+    }
+
+    const precondition = await action.preconditions(context);
+    if (!precondition.ok) {
+      return this.result(action, context, "SKIPPED", "Pré-condições não atendidas; ação não executada.", startedAt, { preconditions: precondition.details || "Falhou" });
+    }
+
+    let snapshot: unknown;
+    let rollbackExecuted = false;
+    let lastError = "";
+
+    try {
+      snapshot = action.snapshot ? await action.snapshot(context) : undefined;
+      const attempts = action.retryable ? Math.max(1, action.maxRetries + 1) : 1;
+
+      for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+          this.lastExecutedAt.set(key, this.now());
+          const executionResult = await withTimeout(action.execute(context), action.timeoutMs);
+          const validation = await withTimeout(action.validate(executionResult, context), action.timeoutMs);
+
+          if (!validation.ok) {
+            throw new Error(`VALIDATION_FAILED:${validation.details || "sem detalhes"}`);
+          }
+
+          this.failureCounts.set(key, 0);
+          return this.result(action, context, "SUCCESS", "Ação concluída e validada com sucesso.", startedAt, {
+            preconditions: precondition.details || "OK",
+            validation: validation.details || "OK",
+          });
+        } catch (error: any) {
+          lastError = error?.message || String(error);
+          const isTimeout = lastError === "ACTION_TIMEOUT";
+          const canRetry = action.retryable && attempt < attempts && !isTimeout;
+          if (canRetry) await sleep(100 * 2 ** (attempt - 1));
+          else break;
+        }
+      }
+
+      if (action.rollback) {
+        try {
+          await withTimeout(action.rollback(snapshot, context), action.timeoutMs);
+          rollbackExecuted = true;
+        } catch (rollbackError: any) {
+          lastError += ` | ROLLBACK_FAILED:${rollbackError?.message || rollbackError}`;
+        }
+      }
+
+      const failures = (this.failureCounts.get(key) || 0) + 1;
+      this.failureCounts.set(key, failures);
+      if (failures >= this.maxCircuitFailures) {
+        this.circuitOpenUntil.set(key, this.now() + this.circuitCooldownMs);
+      }
+
+      return this.result(action, context, lastError === "ACTION_TIMEOUT" ? "TIMEOUT" : "FAILED", "Ação não foi validada; rollback aplicado quando disponível e escalonamento necessário.", startedAt, {
+        preconditions: precondition.details || "OK",
+        rollback: rollbackExecuted,
+        error: lastError,
+      });
+    } catch (error: any) {
+      return this.result(action, context, "FAILED", "Falha inesperada antes da execução segura.", startedAt, {
+        preconditions: precondition.details || "OK",
+        rollback: rollbackExecuted,
+        error: error?.message || String(error),
+      });
+    }
+  }
+}

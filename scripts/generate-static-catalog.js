@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import fs from 'fs';
+import https from 'https';
 import path from 'path';
 import dotenv from 'dotenv';
 
@@ -8,6 +9,49 @@ dotenv.config();
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const backendUrl = process.env.CATALOG_API_URL || 'https://cerberus-forge-deploy-backend.onrender.com/api/products';
+
+function requestCanonicalJson(url, attempts = 3) {
+  return new Promise((resolve, reject) => {
+    let attempt = 0;
+
+    const run = () => {
+      attempt += 1;
+      const request = https.get(url, { headers: { 'User-Agent': 'cerberus-catalog-builder' } }, (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { body += chunk; });
+        response.on('end', () => {
+          if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
+            try {
+              resolve(JSON.parse(body));
+            } catch {
+              reject(new Error('Resposta da API canônica não contém JSON válido.'));
+            }
+            return;
+          }
+
+          const error = new Error(`API retornou HTTP ${response.statusCode || 'desconhecido'}`);
+          if (attempt < attempts) {
+            setTimeout(run, 500 * attempt);
+          } else {
+            reject(error);
+          }
+        });
+      });
+
+      request.setTimeout(20_000, () => request.destroy(new Error('Timeout ao buscar API canônica.')));
+      request.on('error', error => {
+        if (attempt < attempts) {
+          setTimeout(run, 500 * attempt);
+        } else {
+          reject(error);
+        }
+      });
+    };
+
+    run();
+  });
+}
 
 async function generateStaticCatalog() {
   console.log('[Build Catalog] Iniciando geração do catálogo estático a partir da fonte canônica...');
@@ -42,12 +86,7 @@ async function generateStaticCatalog() {
   if (!sourceLoaded) {
     console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela API do backend: ${backendUrl}`);
     try {
-      const response = await fetch(backendUrl);
-      if (!response.ok) {
-        throw new Error(`API retornou HTTP ${response.status}`);
-      }
-
-      const json = await response.json();
+      const json = await requestCanonicalJson(backendUrl);
       const products = json.products || json.data;
       if (!Array.isArray(products)) {
         throw new Error('Resposta da API não contém uma lista de produtos.');

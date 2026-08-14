@@ -1,9 +1,21 @@
+import fs from "fs";
+import path from "path";
 import { supabase, getProducts } from "../repositories/productsRepository";
+import { exportStaticProductsJson } from "./exportProductsJson";
+import { syncCatalogAndDeploy } from "./catalogSync";
+import {
+  type AutoHealActionResult,
+  type AutoHealMode,
+  type AutoHealContext,
+  type AutoHealRisk,
+  type SafeAction,
+  SafeAutoHealEngine,
+} from "./safeAutoHealEngine";
 
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "DOWN" | "UNKNOWN";
 export type IncidentSeverity = "INFO" | "WARNING" | "ERROR" | "CRITICAL";
 export type IncidentStatus = "OPEN" | "INVESTIGATING" | "AUTO_FIXING" | "RESOLVED" | "FAILED" | "REQUIRES_APPROVAL";
-export type OperatorMode = "OBSERVE" | "SAFE_AUTO_HEAL" | "ADMIN_APPROVAL";
+export type OperatorMode = AutoHealMode;
 
 export interface ComponentHealth {
   name: string;
@@ -47,18 +59,25 @@ export interface HistoryRecord {
   error?: string;
 }
 
-export interface OperatorAction {
+export interface OperatorActionView {
   id: string;
   name: string;
   description: string;
-  riskLevel: "SAFE" | "ADMIN_APPROVAL";
-  preconditions: () => Promise<boolean>;
-  execute: () => Promise<boolean>;
-  validate: () => Promise<boolean>;
+  risk: AutoHealRisk;
+  requiresApproval: boolean;
+}
+
+export interface PendingApproval {
+  id: string;
+  actionId: string;
+  incidentId?: string;
+  requestedBy: string;
+  createdAt: string;
+  expiresAt: number;
 }
 
 // Estado em memória e configuração do Operator (Bloco 4)
-let currentMode: OperatorMode = "SAFE_AUTO_HEAL";
+let currentMode: OperatorMode = "OBSERVE";
 let incidents: Incident[] = [];
 let healthHistory: HistoryRecord[] = [];
 let recentCorrectionsLog: Array<{ timestamp: string; action: string; result: string }> = [];
@@ -67,6 +86,7 @@ let lastCheckTimestamp: string = "Nunca executado";
 let nextCheckTimestamp: string = "Agendado";
 let schedulerTimer: NodeJS.Timeout | null = null;
 let consecutiveFailures: Record<string, number> = {};
+let pendingApprovals: PendingApproval[] = [];
 
 const CONFIG = {
   checkIntervalMs: 10 * 60 * 1000, // 10 minutos (conservador para evitar cold start excessivo no Render)
@@ -94,6 +114,232 @@ export function getHealthHistory(): HistoryRecord[] {
 
 export function getRecentCorrections(): Array<{ timestamp: string; action: string; result: string }> {
   return recentCorrectionsLog;
+}
+
+function catalogOutputPath(): string {
+  return path.join(process.cwd(), "public", "data", "products.json");
+}
+
+async function readCatalogSnapshot(): Promise<string | null> {
+  try {
+    return await fs.promises.readFile(catalogOutputPath(), "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+async function restoreCatalogSnapshot(snapshot: string | null | undefined): Promise<void> {
+  if (typeof snapshot !== "string") return;
+  await fs.promises.mkdir(path.dirname(catalogOutputPath()), { recursive: true });
+  await fs.promises.writeFile(catalogOutputPath(), snapshot, "utf-8");
+}
+
+async function canonicalProductsAvailable(): Promise<{ ok: boolean; details: string }> {
+  if (!supabase) return { ok: false, details: "Supabase não inicializado." };
+  const products = await getProducts();
+  if (!Array.isArray(products) || products.length === 0) {
+    return { ok: false, details: "Fonte canônica não retornou produtos válidos." };
+  }
+  return { ok: true, details: `${products.length} produtos canônicos disponíveis.` };
+}
+
+const SAFE_ACTIONS: SafeAction<any, any>[] = [
+  {
+    id: "REVALIDATE_SERVICES",
+    name: "🔄 Revalidar serviços",
+    description: "Repete os health checks sem alterar infraestrutura ou dados.",
+    risk: "LOW",
+    allowed: true,
+    timeoutMs: 30_000,
+    cooldownMs: 60_000,
+    maxRetries: 1,
+    retryable: true,
+    preconditions: async () => ({ ok: true, details: "Diagnóstico não invasivo permitido." }),
+    execute: async () => runSystemHealthCheck(),
+    validate: async report => ({
+      ok: report.overallStatus !== "UNKNOWN",
+      details: `Health check retornou ${report.overallStatus}.`,
+    }),
+  },
+  {
+    id: "REGENERATE_STATIC_CATALOG",
+    name: "📦 Regenerar catálogo estático",
+    description: "Regenera a projeção local a partir de public.products e valida IDs, slugs e quantidade.",
+    risk: "LOW",
+    allowed: true,
+    timeoutMs: 30_000,
+    cooldownMs: 10 * 60_000,
+    maxRetries: 0,
+    retryable: false,
+    preconditions: async () => canonicalProductsAvailable(),
+    snapshot: async () => readCatalogSnapshot(),
+    execute: async () => {
+      const canonical = await getProducts();
+      const exportedCount = await exportStaticProductsJson();
+      const json = JSON.parse(await fs.promises.readFile(catalogOutputPath(), "utf-8"));
+      return { canonical, exportedCount, json };
+    },
+    validate: async result => {
+      if (!Array.isArray(result.json) || result.json.length === 0) {
+        return { ok: false, details: "A projeção gerada está vazia." };
+      }
+      if (result.exportedCount !== result.json.length) {
+        return { ok: false, details: "Contagem exportada difere do arquivo gerado." };
+      }
+      const canonicalValid = result.canonical.filter(product => product.ativo !== false && product.status !== "pending");
+      const jsonIds = new Set(result.json.map((product: any) => product.id));
+      const missing = canonicalValid.filter(product => !jsonIds.has(product.id));
+      const invalidIdentity = result.json.some((product: any) => !product.id || !product.slug || !product.produto || !product.link);
+      return {
+        ok: missing.length === 0 && !invalidIdentity,
+        details: missing.length > 0
+          ? `Projeção incompleta: ${missing.length} produtos canônicos não encontrados.`
+          : `${result.json.length}/${canonicalValid.length} produtos, IDs e slugs validados.`,
+      };
+    },
+    rollback: async snapshot => restoreCatalogSnapshot(snapshot as string | null | undefined),
+  },
+  {
+    id: "REVALIDATE_TRACKING",
+    name: "🔎 Revalidar tracking",
+    description: "Valida acesso a products e product_clicks sem gerar clique artificial.",
+    risk: "LOW",
+    allowed: true,
+    timeoutMs: 15_000,
+    cooldownMs: 5 * 60_000,
+    maxRetries: 1,
+    retryable: true,
+    preconditions: async () => ({ ok: Boolean(supabase), details: "Cliente Supabase disponível." }),
+    execute: async () => {
+      if (!supabase) throw new Error("Supabase indisponível.");
+      const [productsResult, clicksResult] = await Promise.all([
+        supabase.from("products").select("id").limit(1),
+        supabase.from("product_clicks").select("id").limit(1),
+      ]);
+      if (productsResult.error || clicksResult.error) {
+        throw new Error(productsResult.error?.message || clicksResult.error?.message || "Falha de diagnóstico do tracking.");
+      }
+      return true;
+    },
+    validate: async ok => ({ ok, details: "Tabelas products e product_clicks acessíveis sem inserir dados." }),
+  },
+  {
+    id: "REVALIDATE_ANALYTICS",
+    name: "📊 Revalidar analytics",
+    description: "Executa consulta de diagnóstico em public.product_clicks sem alterar registros.",
+    risk: "LOW",
+    allowed: true,
+    timeoutMs: 15_000,
+    cooldownMs: 5 * 60_000,
+    maxRetries: 1,
+    retryable: true,
+    preconditions: async () => ({ ok: Boolean(supabase), details: "Cliente Supabase disponível." }),
+    execute: async () => {
+      if (!supabase) throw new Error("Supabase indisponível.");
+      const { error } = await supabase.from("product_clicks").select("id, product_id, created_at").limit(1);
+      if (error) throw error;
+      return true;
+    },
+    validate: async ok => ({ ok, details: "Consulta de analytics validada sem alterar dados." }),
+  },
+  {
+    id: "REVALIDATE_GITHUB_SYNC",
+    name: "🔐 Sincronizar catálogo com GitHub",
+    description: "Executa o fluxo canônico versionado de sincronização e valida a projeção pública.",
+    risk: "MEDIUM",
+    allowed: true,
+    requiresApproval: true,
+    timeoutMs: 120_000,
+    cooldownMs: 30 * 60_000,
+    maxRetries: 0,
+    retryable: false,
+    preconditions: async () => canonicalProductsAvailable(),
+    execute: async () => syncCatalogAndDeploy(),
+    validate: async result => ({
+      ok: result.success && result.publicJsonCount >= result.supabaseCount,
+      details: result.success
+        ? `Sincronização validada: ${result.publicJsonCount}/${result.supabaseCount} produtos públicos.`
+        : result.error || "A sincronização não foi validada.",
+    }),
+  },
+];
+
+const autoHealEngine = new SafeAutoHealEngine(SAFE_ACTIONS);
+
+function suggestedActionFor(component: string): string | null {
+  const map: Record<string, string> = {
+    "Catálogo": "REGENERATE_STATIC_CATALOG",
+    "Tracking": "REVALIDATE_TRACKING",
+    "Analytics": "REVALIDATE_ANALYTICS",
+    "Site": "REVALIDATE_SERVICES",
+    "Deploy": "REVALIDATE_SERVICES",
+  };
+  return map[component] || null;
+}
+
+export const AVAILABLE_OPERATOR_ACTIONS: OperatorActionView[] = SAFE_ACTIONS.map(action => ({
+  id: action.id,
+  name: action.name,
+  description: action.description,
+  risk: action.risk,
+  requiresApproval: Boolean(action.requiresApproval),
+}));
+
+export function getAutoHealAuditLog() {
+  return autoHealEngine.getAuditLog();
+}
+
+export function getPendingApprovals(): PendingApproval[] {
+  const now = Date.now();
+  pendingApprovals = pendingApprovals.filter(approval => approval.expiresAt > now);
+  return pendingApprovals;
+}
+
+export function requestOperatorApproval(actionId: string, incidentId: string | undefined, requestedBy: string): PendingApproval | null {
+  const action = SAFE_ACTIONS.find(item => item.id === actionId);
+  if (!action || !action.allowed) return null;
+  const approval: PendingApproval = {
+    id: `APR-${Date.now().toString(36)}`,
+    actionId,
+    incidentId,
+    requestedBy,
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + 15 * 60_000,
+  };
+  pendingApprovals.unshift(approval);
+  return approval;
+}
+
+export async function approveOperatorAction(approvalId: string, adminId: string): Promise<AutoHealActionResult | null> {
+  const approval = getPendingApprovals().find(item => item.id === approvalId);
+  if (!approval) return null;
+  pendingApprovals = pendingApprovals.filter(item => item.id !== approvalId);
+  const previousMode = currentMode;
+  currentMode = "ADMIN_APPROVAL";
+  try {
+    return await runSafeAutoHeal(approval.actionId, { incidentId: approval.incidentId, actor: "ADMIN", adminId });
+  } finally {
+    currentMode = previousMode;
+  }
+}
+
+export async function runSafeAutoHeal(actionId: string, context: AutoHealContext): Promise<AutoHealActionResult> {
+  const result = await autoHealEngine.run(actionId, currentMode, context);
+  const incident = context.incidentId ? incidents.find(item => item.id === context.incidentId) : undefined;
+  if (incident) {
+    incident.actionTaken = actionId;
+    incident.result = result.message;
+    if (result.status === "SUCCESS") incident.status = "RESOLVED";
+    if (result.status === "FAILED" || result.status === "TIMEOUT") incident.status = "REQUIRES_APPROVAL";
+  }
+  recentCorrectionsLog.unshift({
+    timestamp: new Date().toLocaleTimeString("pt-BR"),
+    action: actionId,
+    result: `${result.status}: ${result.message}`,
+  });
+  if (recentCorrectionsLog.length > 50) recentCorrectionsLog.length = 50;
+  console.log(`[ACTION] ${actionId} => ${result.status}`);
+  return result;
 }
 
 /**
@@ -301,6 +547,15 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
         incidents = incidents.slice(0, CONFIG.maxIncidents);
       }
       console.warn(`[INCIDENT] Novo incidente aberto: ${newInc.id} em ${compName} [${severity}]`);
+      const suggestedAction = suggestedActionFor(compName);
+      if (currentMode === "SAFE_AUTO_HEAL" && suggestedAction) {
+        newInc.status = "AUTO_FIXING";
+        void runSafeAutoHeal(suggestedAction, {
+          incidentId: newInc.id,
+          incidentFingerprint: newInc.fingerprint,
+          actor: "CERBERUS",
+        });
+      }
     }
   }
 
@@ -351,73 +606,5 @@ export function stopOperatorScheduler(): void {
   if (schedulerTimer) {
     clearInterval(schedulerTimer);
     schedulerTimer = null;
-  }
-}
-
-// Catálogo de ações seguras
-export const AVAILABLE_OPERATOR_ACTIONS: OperatorAction[] = [
-  {
-    id: "action_recheck",
-    name: "🔄 Reexecutar Health Check",
-    description: "Executa nova varredura E2E imediata em todos os componentes.",
-    riskLevel: "SAFE",
-    preconditions: async () => true,
-    execute: async () => {
-      await runSystemHealthCheck();
-      return true;
-    },
-    validate: async () => true
-  },
-  {
-    id: "action_revalidate_catalog",
-    name: "📦 Revalidar Catálogo Canônico",
-    description: "Consulta public.products e valida contagem e integridade da projeção.",
-    riskLevel: "SAFE",
-    preconditions: async () => Boolean(supabase),
-    execute: async () => {
-      const prods = await getProducts();
-      return Array.isArray(prods);
-    },
-    validate: async () => true
-  },
-  {
-    id: "action_purge_transient",
-    name: "🧹 Limpar Estado Transitório",
-    description: "Remove sessões e revisões temporárias órfãs do Telegram.",
-    riskLevel: "SAFE",
-    preconditions: async () => true,
-    execute: async () => {
-      recentCorrectionsLog.unshift({
-        timestamp: new Date().toLocaleTimeString("pt-BR"),
-        action: "Limpeza de estado transitório",
-        result: "Sucesso"
-      });
-      return true;
-    },
-    validate: async () => true
-  }
-];
-
-export async function executeOperatorAction(actionId: string): Promise<{ success: boolean; message: string }> {
-  const action = AVAILABLE_OPERATOR_ACTIONS.find(a => a.id === actionId);
-  if (!action) {
-    return { success: false, message: `Ação ${actionId} não encontrada.` };
-  }
-
-  try {
-    const executed = await action.execute();
-    if (!executed) {
-      return { success: false, message: `Falha na execução de ${action.name}.` };
-    }
-
-    recentCorrectionsLog.unshift({
-      timestamp: new Date().toLocaleTimeString("pt-BR"),
-      action: action.name,
-      result: "Executado e validado com sucesso"
-    });
-
-    return { success: true, message: `Ação ${action.name} executada com sucesso!` };
-  } catch (err: any) {
-    return { success: false, message: `Erro ao executar ${action.name}: ${err?.message || err}` };
   }
 }

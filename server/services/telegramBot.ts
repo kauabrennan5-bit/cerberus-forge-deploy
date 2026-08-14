@@ -341,7 +341,8 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         inline_keyboard: [
           [{ text: "🏥 Status Detalhado", callback_data: "operator_health" }, { text: "🚨 Incidentes", callback_data: "operator_incidents" }],
           [{ text: "📊 Histórico", callback_data: "operator_history" }, { text: "🔧 Ações", callback_data: "operator_actions" }],
-          [{ text: "📜 Logs", callback_data: "operator_logs" }, { text: "🔄 Verificar Agora", callback_data: "operator_refresh" }],
+          [{ text: "⚙️ Modo", callback_data: "operator_config" }, { text: "📜 Logs", callback_data: "operator_logs" }],
+          [{ text: "🔄 Verificar Agora", callback_data: "operator_refresh" }],
           [{ text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
         ]
       };
@@ -399,9 +400,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (data === "operator_actions") {
       await answerCallbackQuery(callbackId);
-      let text = "🔧 <b>AÇÕES OPERACIONAIS SEGURAS</b>\n\nEscolha uma ação para executar no modo Safe Auto-Heal:\n\n";
+      let text = "🔧 <b>AÇÕES DE SAFE AUTO-HEAL</b>\n\nApenas ações previamente registradas podem ser executadas. Não há shell, SQL, alteração de secrets ou operações destrutivas.\n\n";
       const actions = cerberusOperator.AVAILABLE_OPERATOR_ACTIONS;
-      const buttons = actions.map(a => [{ text: a.name, callback_data: `operator_run:${a.id}` }]);
+      const buttons = actions.map(a => [{ text: `${a.name} · ${a.risk}`, callback_data: `operator_run:${a.id}` }]);
       buttons.push([{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]);
       const keyboard = { inline_keyboard: buttons };
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
@@ -410,23 +411,101 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (data.startsWith("operator_run:")) {
       const actionId = data.split(":")[1];
-      await answerCallbackQuery(callbackId, "Executando ação...");
-      const res = await cerberusOperator.executeOperatorAction(actionId);
-      const text = (res.success ? "✅ <b>AÇÃO EXECUTADA COM SUCESSO</b>\n\n" : "❌ <b>FALHA NA AÇÃO</b>\n\n") + res.message;
+      const action = cerberusOperator.AVAILABLE_OPERATOR_ACTIONS.find(item => item.id === actionId);
+      if (!action) {
+        await answerCallbackQuery(callbackId, "Ação não autorizada.", true);
+        return;
+      }
+
+      if (action.requiresApproval) {
+        const approval = cerberusOperator.requestOperatorApproval(actionId, undefined, String(senderId));
+        if (!approval) {
+          await answerCallbackQuery(callbackId, "Não foi possível criar aprovação.", true);
+          return;
+        }
+        const text = "🔐 <b>AÇÃO REQUER APROVAÇÃO</b>\n\n" +
+          `Ação proposta: <code>${action.id}</code>\n` +
+          `Risco: <b>${action.risk}</b>\n` +
+          "Motivo: esta ação pode sincronizar a projeção versionada com GitHub/Render.\n\n" +
+          "A aprovação é explícita, temporária e vinculada ao administrador autorizado.";
+        const keyboard = { inline_keyboard: [
+          [{ text: "✅ Aprovar", callback_data: `operator_approve:${approval.id}` }, { text: "❌ Recusar", callback_data: `operator_reject:${approval.id}` }],
+          [{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]
+        ] };
+        if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+        return;
+      }
+
+      await answerCallbackQuery(callbackId, "Executando ação autorizada...");
+      const res = await cerberusOperator.runSafeAutoHeal(actionId, { actor: "ADMIN", adminId: String(senderId) });
+      const title = res.status === "SUCCESS" ? "✅ <b>AUTO-HEAL CONCLUÍDO</b>" : res.status === "DRY_RUN" ? "🧪 <b>DRY RUN</b>" : "⚠️ <b>AÇÃO NÃO CONCLUÍDA</b>";
+      const text = `${title}\n\nAção: <code>${actionId}</code>\nStatus: <b>${res.status}</b>\nValidação: ${res.audit.validation || "Não aplicável"}\n\n${res.message}`;
       const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 
+    if (data.startsWith("operator_approve:")) {
+      const approvalId = data.split(":")[1];
+      await answerCallbackQuery(callbackId, "Executando ação aprovada...");
+      const res = await cerberusOperator.approveOperatorAction(approvalId, String(senderId));
+      const text = !res
+        ? "⚠️ <b>APROVAÇÃO EXPIRADA OU INVÁLIDA</b>\n\nNenhuma ação foi executada."
+        : `${res.status === "SUCCESS" ? "✅" : "⚠️"} <b>RESULTADO DA AÇÃO APROVADA</b>\n\nAção: <code>${res.actionId}</code>\nStatus: <b>${res.status}</b>\n\n${res.message}`;
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data.startsWith("operator_reject:")) {
+      await answerCallbackQuery(callbackId, "Ação recusada.");
+      const text = "❌ <b>AÇÃO RECUSADA PELO ADMINISTRADOR</b>\n\nNenhuma alteração foi executada.";
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_config") {
+      await answerCallbackQuery(callbackId);
+      const mode = cerberusOperator.getOperatorMode();
+      const text = "⚙️ <b>CONFIGURAÇÃO DO OPERATOR</b>\n\n" +
+        `Modo atual: <code>${mode}</code>\n\n` +
+        "OBSERVE: apenas diagnostica.\n" +
+        "SAFE_AUTO_HEAL: executa somente ações LOW registradas.\n" +
+        "DRY_RUN: mostra a ação segura sem modificar nada.\n" +
+        "ADMIN_APPROVAL: ações sensíveis ficam pendentes de aprovação.";
+      const keyboard = { inline_keyboard: [
+        [{ text: "👁 OBSERVE", callback_data: "operator_mode:OBSERVE" }, { text: "🧪 DRY RUN", callback_data: "operator_mode:DRY_RUN" }],
+        [{ text: "🔧 SAFE AUTO-HEAL", callback_data: "operator_mode:SAFE_AUTO_HEAL" }],
+        [{ text: "🔐 ADMIN APPROVAL", callback_data: "operator_mode:ADMIN_APPROVAL" }],
+        [{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]
+      ] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data.startsWith("operator_mode:")) {
+      const mode = data.split(":")[1] as "OBSERVE" | "SAFE_AUTO_HEAL" | "DRY_RUN" | "ADMIN_APPROVAL";
+      const allowedModes = ["OBSERVE", "SAFE_AUTO_HEAL", "DRY_RUN", "ADMIN_APPROVAL"];
+      if (!allowedModes.includes(mode)) {
+        await answerCallbackQuery(callbackId, "Modo inválido.", true);
+        return;
+      }
+      cerberusOperator.setOperatorMode(mode);
+      await answerCallbackQuery(callbackId, `Modo alterado para ${mode}.`);
+      if (chatId && messageId) await renderMainMenu(chatId, messageId, true);
+      return;
+    }
+
     if (data === "operator_logs") {
       await answerCallbackQuery(callbackId);
-      const logs = cerberusOperator.getRecentCorrections();
-      let text = "📜 <b>LOGS DE CORREÇÕES RECENTES</b>\n\n";
+      const logs = cerberusOperator.getAutoHealAuditLog();
+      let text = "📜 <b>AUDIT LOG DE SAFE AUTO-HEAL</b>\n\n";
       if (logs.length === 0) {
-        text += "Nenhuma correção ou ação registrada recentemente.";
+        text += "Nenhuma ação de autocorreção registrada recentemente.";
       } else {
         for (const l of logs.slice(0, 10)) {
-          text += `• [${l.timestamp}] <b>${l.action}</b>\n  Resultado: ${l.result}\n\n`;
+          text += `• <code>${l.actionId}</code> · <b>${l.status}</b>\n  Resultado: ${l.result}\n  Duração: ${l.durationMs}ms${l.rollback ? " · rollback" : ""}\n\n`;
         }
       }
       const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };

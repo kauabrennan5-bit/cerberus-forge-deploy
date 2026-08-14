@@ -34,3 +34,12 @@
 - [x] Auditar e corrigir apenas fallbacks perigosos que possam mascarar indisponibilidade da fonte canônica.
 - [x] Validar criação/leitura/listagem de produtos, tracking, analytics, exportação, paginação, Telegram e build sem implementar o Cerberus Operator.
 - [x] Executar npm install, npm run build, lint/typecheck e testes existentes; revisar diff e enviar somente alterações necessárias para main.
+
+# Bloco 5 — Autocorreção Segura / Safe Auto-Heal
+
+- [x] Criar registro central de ações autorizadas com risco, pré-condições, execução, validação, rollback, timeout e cooldown.
+- [x] Implementar ações seguras e idempotentes para revalidar serviços, catálogo, tracking, analytics e sincronização autorizada.
+- [x] Implementar proteção contra loops com cooldown e circuit breaker, sem executar comandos arbitrários ou ações destrutivas.
+- [x] Integrar o fluxo de autocorreção e o audit log ao painel do Telegram com aprovação obrigatória para ações de risco alto.
+- [x] Criar SAFE_AUTO_HEAL_ARCHITECTURE.md e validar build, lint, testes existentes e ausência de exposição de segredos.
+- [x] Revisar o diff e enviar somente o Bloco 5 para a branch main.
