@@ -213,3 +213,11 @@ test("gerador de build sanitiza descricao contaminada antes de escrever o catál
   assert.match(source, /descricao: containsRawPayloadMarkers\(p\.descricao \|\| p\.description \|\| ''\)/);
   assert.match(source, /\[conteudo da pagina\]/);
 });
+
+test("API pública sanitiza descricao contaminada sem alterar o registro canônico", () => {
+  const source = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
+
+  assert.match(source, /const publicProducts = products\.map\(product => containsRawPayloadMarkers\(product\.descricao\)/);
+  assert.match(source, /\{ \.\.\.product, descricao: "" \}/);
+  assert.match(source, /products: publicProducts, data: publicProducts/);
+});

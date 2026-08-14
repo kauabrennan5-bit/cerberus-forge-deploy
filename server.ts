@@ -14,6 +14,7 @@ import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./server/services/telegramDiagnostics";
+import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
 
 dotenv.config();
 
@@ -222,7 +223,10 @@ async function startServer() {
     if (!enforceRateLimit(catalogRateLimiter, req, res)) return;
     try {
       const products = await productsRepository.getProducts();
-      return res.json({ success: true, products, data: products });
+      const publicProducts = products.map(product => containsRawPayloadMarkers(product.descricao)
+        ? { ...product, descricao: "" }
+        : product);
+      return res.json({ success: true, products: publicProducts, data: publicProducts });
     } catch (err: any) {
       console.error("❌ [/api/products] Erro de repositório:", err.message);
       return res.status(503).json({
