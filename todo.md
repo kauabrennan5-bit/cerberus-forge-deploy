@@ -71,3 +71,12 @@
 - [ ] Implementar resolução segura de links curtos (meli.la) com proteções SSRF, timeout, limite de redirecionamentos e validação de domínio permitido.
 - [ ] Criar testes automatizados para /listar direto, resolução de meli.la e falhas de redirect.
 - [ ] Validar lint, testes, build, diff de segurança e enviar para main.
+
+# Correção Definitiva — /listar, Detector Canônico e Observabilidade
+
+- [ ] Substituir o callback artificial de /listar por sendTelegramMessage com renderer paginado compartilhado.
+- [ ] Preservar a edição de páginas products_list:<page> somente para callbacks com message_id real.
+- [ ] Remover detectores locais e integrar server/services/marketplace.ts ao Telegram, automação e lifecycle.
+- [ ] Adicionar logs sanitizados de update, autorização, comando, handler, paginação e resultado Telegram.
+- [ ] Criar testes de regressão para /listar direto, callbacks reais, paginação, meli.la e detector único.
+- [ ] Validar lint, testes, build, dist/server.cjs, segurança, commit e push para main.

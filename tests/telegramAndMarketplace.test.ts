@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
 import { detectMarketplace, resolveShortUrlIfNeeded } from "../server/services/marketplace";
 import { ProductPipeline } from "../server/services/productPipeline";
+import { buildProductListView } from "../server/services/telegramBot";
 
 test("detectMarketplace reconhece Shopee diretamente", () => {
   assert.equal(detectMarketplace("https://shopee.com.br/produto-i.123.456"), "Shopee");
@@ -59,4 +61,67 @@ test("Pipeline avalia meli.la corretamente sem erro de marketplace não reconhec
   assert.notEqual(evaluation.state, "ERROR");
   assert.equal(evaluation.candidate.marketplace, "Mercado Livre");
   assert.equal(evaluation.validation.outcome, "PASS");
+});
+
+test("/listar constrói a primeira página com cinco produtos e botão de próxima", () => {
+  const products = Array.from({ length: 6 }, (_, index) => ({
+    id: `prod-${index + 1}`,
+    ref: `REF-${String(index + 1).padStart(3, "0")}`,
+    produto: `Produto de teste ${index + 1}`,
+    preco: 10 + index,
+    ativo: true
+  }));
+
+  const view = buildProductListView(products, 0);
+  assert.equal(view.total, 6);
+  assert.equal(view.totalPages, 2);
+  assert.equal(view.page, 0);
+  assert.match(view.text, /Página 1 de 2/);
+  assert.match(view.text, /Produto de teste 1/);
+  assert.match(view.text, /Produto de teste 5/);
+  assert.doesNotMatch(view.text, /Produto de teste 6/);
+  assert.deepEqual(view.keyboard.inline_keyboard.at(-2), [{ text: "Próxima ▶️", callback_data: "products_list:1" }]);
+});
+
+test("products_list em página posterior preserva edição e navegação com message_id real", () => {
+  const products = Array.from({ length: 6 }, (_, index) => ({
+    id: `prod-${index + 1}`,
+    ref: `REF-${String(index + 1).padStart(3, "0")}`,
+    produto: `Produto de teste ${index + 1}`,
+    preco: 10 + index,
+    ativo: index !== 5
+  }));
+
+  const view = buildProductListView(products, 1);
+  assert.equal(view.page, 1);
+  assert.match(view.text, /Página 2 de 2/);
+  assert.match(view.text, /Produto de teste 6/);
+  assert.deepEqual(view.keyboard.inline_keyboard.at(-2), [{ text: "◀️ Anterior", callback_data: "products_list:0" }]);
+});
+
+test("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", () => {
+  const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  const directStart = source.indexOf('if (text.startsWith("/listar") || text.startsWith("/produtos"))');
+  const directEnd = source.indexOf('if (text.startsWith("/categorias"))', directStart);
+  const directHandler = source.slice(directStart, directEnd);
+
+  assert.ok(directStart >= 0 && directEnd > directStart);
+  assert.match(directHandler, /renderProductList\(0\)/);
+  assert.match(directHandler, /sendTelegramMessage\(chatId, listView\.text, listView\.keyboard\)/);
+  assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
+  assert.match(source, /if \(data\.startsWith\("products_list:"\)\)[\s\S]{0,700}editTelegramMessageText/);
+});
+
+test("Telegram, automação e lifecycle usam somente o detector canônico", () => {
+  const files = [
+    "../server/services/telegramBot.ts",
+    "../server/services/productAutomation.ts",
+    "../server/services/productLifecycle.ts"
+  ];
+
+  for (const relativePath of files) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    assert.match(source, /from "\.\/marketplace"/);
+    assert.doesNotMatch(source, /function detectMarketplace/);
+  }
 });

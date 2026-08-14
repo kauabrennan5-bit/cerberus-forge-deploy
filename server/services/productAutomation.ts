@@ -4,6 +4,9 @@ import { Product } from "../../src/types";
 import { generateSlug } from "../../src/data/initialProducts";
 import * as productsRepository from "../repositories/productsRepository";
 import { fetchProductDataFromUrl, extractTitleFromUrl } from "./scraper";
+import { detectMarketplace } from "./marketplace";
+
+export { detectMarketplace } from "./marketplace";
 
 dotenv.config();
 
@@ -198,25 +201,6 @@ export function isGenericTitle(title?: string | null): boolean {
     return true;
   }
   return false;
-}
-
-/**
- * Detecta o marketplace pelo domínio ou URL
- */
-export function detectMarketplace(url: string): string {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    if (hostname.includes("shopee.com.br") || hostname.includes("shope.ee")) return "Shopee";
-    if (hostname.includes("mercadolivre.com.br") || hostname.includes("mercadolibre.com")) return "Mercado Livre";
-    if (hostname.includes("amazon.com")) return "Amazon";
-    if (hostname.includes("shein.com")) return "Shein";
-    if (hostname.includes("aliexpress.com")) return "AliExpress";
-    return "E-Commerce";
-  } catch {
-    if (url.includes("shopee") || url.includes("shope.ee")) return "Shopee";
-    if (url.includes("mercadolivre") || url.includes("mercadolibre")) return "Mercado Livre";
-    return "E-Commerce";
-  }
 }
 
 /**

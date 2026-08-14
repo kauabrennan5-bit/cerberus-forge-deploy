@@ -8,9 +8,26 @@ import * as googleAnalytics from "./googleAnalytics";
 import * as cerberusOperator from "./cerberusOperator";
 import { createProductionProductPipeline, restoreLifecycleRecord, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
+import { detectMarketplace } from "./marketplace";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_API_BASE = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
+
+function sanitizeTelegramApiError(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value) return undefined;
+  return value
+    .replace(/\b\d{6,}:[A-Za-z0-9_-]{20,}\b/g, "[REDACTED]")
+    .replace(/https?:\/\/[^\s]+/g, "[URL_REDACTED]")
+    .slice(0, 220);
+}
+
+function logTelegramEvent(event: string, details: Record<string, string | number | boolean | undefined>): void {
+  const sanitized = Object.entries(details)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" ");
+  console.info(`[Telegram] ${event}${sanitized ? ` ${sanitized}` : ""}`);
+}
 
 export function isUserAllowed(userId: string | number): boolean {
   const allowedEnv = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "1976526372";
@@ -34,8 +51,16 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    return await res.json();
+    const result = await res.json();
+    logTelegramEvent("response", {
+      chat_id: chatId,
+      response_method: "sendMessage",
+      response_success: Boolean(result?.ok),
+      error: result?.ok ? undefined : sanitizeTelegramApiError(result?.description)
+    });
+    return result;
   } catch (err) {
+    logTelegramEvent("response", { chat_id: chatId, response_method: "sendMessage", response_success: false, error: sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) });
     console.error("Erro ao enviar mensagem Telegram:", err);
   }
 }
@@ -80,8 +105,16 @@ export async function editTelegramMessageText(chatId: number | string, messageId
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    return await res.json();
+    const result = await res.json();
+    logTelegramEvent("response", {
+      chat_id: chatId,
+      response_method: "editMessageText",
+      response_success: Boolean(result?.ok),
+      error: result?.ok ? undefined : sanitizeTelegramApiError(result?.description)
+    });
+    return result;
   } catch (err) {
+    logTelegramEvent("response", { chat_id: chatId, response_method: "editMessageText", response_success: false, error: sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) });
     console.error("Erro ao editar texto Telegram:", err);
   }
 }
@@ -125,13 +158,6 @@ export async function answerCallbackQuery(callbackQueryId: string, text?: string
   } catch (err) {
     console.error("Erro ao responder callback query:", err);
   }
-}
-
-function detectMarketplace(url: string): string {
-  const lower = url.toLowerCase();
-  if (lower.includes("shopee")) return "Shopee";
-  if (lower.includes("mercadolivre") || lower.includes("mercadolado") || lower.includes("mercadol")) return "Mercado Livre";
-  return "Outros";
 }
 
 function parseAndNormalizePrice(input: string): number | null {
@@ -248,6 +274,60 @@ function logAndValidateReviewCallback(
   return { valid, reason };
 }
 
+type ProductListView = {
+  text: string;
+  keyboard: { inline_keyboard: any[][] };
+  page: number;
+  total: number;
+  totalPages: number;
+};
+
+type ProductListItem = {
+  id: string;
+  ref?: string;
+  produto: string;
+  preco: number;
+  ativo?: boolean;
+};
+
+export function buildProductListView(products: ProductListItem[], pageInput: number): ProductListView {
+  const pageSize = 5;
+  const total = products.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(0, pageInput), totalPages - 1);
+  const start = page * pageSize;
+  const end = start + pageSize;
+  const paged = products.slice(start, end);
+  let text = `📦 <b>PRODUTOS — ${total} cadastrados</b>\n\n` +
+             `Página ${page + 1} de ${totalPages}\n\n`;
+  const buttons: any[][] = [];
+
+  for (const product of paged) {
+    const statusEmoji = product.ativo !== false ? "🟢" : "⏸️";
+    const ref = product.ref || "SEM-REF";
+    text += `${statusEmoji} <b>${product.produto.slice(0, 32)}</b>\n` +
+            `REF: <code>${ref}</code> | R$ ${product.preco.toFixed(2).replace(".", ",")}\n\n`;
+    buttons.push([
+      { text: `👁️ ${ref}`, callback_data: `product_view:${product.id}` },
+      { text: "✏️ Editar", callback_data: `product_edit:${product.id}` },
+      { text: product.ativo !== false ? "⏸️ Pausar" : "🟢 Ativar", callback_data: `product_toggle:${product.id}` }
+    ]);
+  }
+
+  const navRow: any[] = [];
+  if (page > 0) navRow.push({ text: "◀️ Anterior", callback_data: `products_list:${page - 1}` });
+  if (end < total) navRow.push({ text: "Próxima ▶️", callback_data: `products_list:${page + 1}` });
+  if (navRow.length > 0) buttons.push(navRow);
+  buttons.push([{ text: "🔎 Buscar", callback_data: "products_search_init" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
+
+  return { text, keyboard: { inline_keyboard: buttons }, page, total, totalPages };
+}
+
+async function renderProductList(pageInput: number): Promise<ProductListView> {
+  const products = await productsRepository.getProducts();
+  return buildProductListView(products, pageInput);
+}
+
 /**
  * Renderizador do Menu Principal /start e /admin
  */
@@ -298,6 +378,9 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
  */
 export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
   if (!update) return;
+  logTelegramEvent("update_received", {
+    update_type: update.callback_query ? "callback_query" : update.message?.text ? "message" : "other"
+  });
 
   // 1. CALLBACK QUERIES
   if (update.callback_query) {
@@ -310,9 +393,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     const messageId = msg?.message_id;
 
     if (!isUserAllowed(senderId)) {
+      logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: false });
       await answerCallbackQuery(callbackId, "🔒 Acesso não autorizado.", true);
       return;
     }
+    logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: true });
 
     // --- NAMESPACE: ADMIN / MENU ---
     if (data === "admin_menu" || data === "admin_back") {
@@ -647,50 +732,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     // --- NAMESPACE: PRODUCTS ---
     if (data.startsWith("products_list:")) {
-      const page = parseInt(data.split(":")[1]) || 0;
+      const page = Number.parseInt(data.split(":")[1] || "0", 10) || 0;
       await answerCallbackQuery(callbackId);
-      const products = await productsRepository.getProducts();
-      const pageSize = 5;
-      const start = page * pageSize;
-      const end = start + pageSize;
-      const paged = products.slice(start, end);
-      const total = products.length;
-      const actives = products.filter(p => p.ativo !== false).length;
-      const inactives = total - actives;
-
-      const totalPages = Math.ceil(total / pageSize) || 1;
-      let text = `📦 <b>PRODUTOS — ${total} cadastrados</b>\n\n` +
-                 `Página ${page + 1} de ${totalPages}\n\n`;
-
-      const buttons = [];
-      for (const p of paged) {
-        const statusEmoji = p.ativo !== false ? "🟢" : "⏸️";
-        text += `${statusEmoji} <b>${p.produto.slice(0, 32)}</b>\n` +
-                `REF: <code>${p.ref}</code> | R$ ${p.preco.toFixed(2).replace(".", ",")}\n\n`;
-        
-        buttons.push([
-          { text: `👁️ ${p.ref}`, callback_data: `product_view:${p.id}` },
-          { text: `✏️ Editar`, callback_data: `product_edit:${p.id}` },
-          { text: p.ativo !== false ? "⏸️ Pausar" : "🟢 Ativar", callback_data: `product_toggle:${p.id}` }
-        ]);
-      }
-
-      const navRow = [];
-      if (page > 0) {
-        navRow.push({ text: "◀️ Anterior", callback_data: `products_list:${page - 1}` });
-      }
-      if (end < total) {
-        navRow.push({ text: "Próxima ▶️", callback_data: `products_list:${page + 1}` });
-      }
-      if (navRow.length > 0) {
-        buttons.push(navRow);
-      }
-
-      buttons.push([{ text: "🔎 Buscar", callback_data: "products_search_init" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
-
-      if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
-      }
+      const listView = await renderProductList(page);
+      logTelegramEvent("handler", { chat_id: chatId, handler: "product_list", products_count: listView.total, page: listView.page, response_method: "editMessageText" });
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, listView.text, listView.keyboard);
       return;
     }
 
@@ -742,12 +788,10 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           }
         }
       }
-      // Retorna para a lista
-      const products = await productsRepository.getProducts();
-      // ... redirecionar para products_list:0 reusando o callback
-      const callbackDataCopy = "products_list:0";
-      // Executa o handler de listagem
-      return handleTelegramWebhookUpdate({ callback_query: { ...cb, data: callbackDataCopy } });
+      const listView = await renderProductList(0);
+      logTelegramEvent("handler", { chat_id: chatId, handler: "product_list", products_count: listView.total, page: listView.page, response_method: "editMessageText" });
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, listView.text, listView.keyboard);
+      return;
     }
 
     if (data.startsWith("product_edit:")) {
@@ -1138,9 +1182,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     const chatId = msg.chat?.id;
 
     if (!isUserAllowed(senderId)) {
+      logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: false });
       if (chatId) await sendTelegramMessage(chatId, `🔒 <b>Acesso Negado</b> (ID: <code>${senderId}</code>)`);
       return;
     }
+
+    logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: true });
+    if (text.startsWith("/")) logTelegramEvent("command", { chat_id: chatId, command: text.split(/\s+/, 1)[0].toLowerCase() });
 
     // --- INTERCEPTAÇÃO ABSOLUTA DE /analytics ---
     if (text.startsWith("/analytics")) {
@@ -1192,9 +1240,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (text.startsWith("/listar") || text.startsWith("/produtos")) {
       if (chatId) {
-        // Redireciona para o callback list_page:0 via simulação de mensagem ou chamada direta
-        const fakeCb = { callback_query: { id: "fake", from: { id: senderId }, message: { chat: { id: chatId }, message_id: 0 }, data: "products_list:0" } };
-        await handleTelegramWebhookUpdate(fakeCb);
+        const listView = await renderProductList(0);
+        logTelegramEvent("handler", { chat_id: chatId, handler: "product_list", products_count: listView.total, page: listView.page, response_method: "sendMessage" });
+        await sendTelegramMessage(chatId, listView.text, listView.keyboard);
       }
       return;
     }

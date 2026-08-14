@@ -1,5 +1,7 @@
 import { generateSlug } from "../../src/data/initialProducts";
 
+import { detectMarketplace } from "./marketplace";
+
 export type ProductLifecycleState =
   | "DISCOVERED" | "COLLECTING" | "COLLECTED" | "VALIDATING" | "ANALYZING" | "CURATING"
   | "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "PUBLISHED" | "PAUSED" | "ARCHIVED" | "ERROR";
@@ -88,7 +90,7 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
   }
 
   const produto = (input.produto || "").replace(/\s+/g, " ").trim();
-  const marketplace = (input.marketplace || marketplaceFromUrl(normalizedUrl)).trim();
+  const marketplace = (input.marketplace || detectMarketplace(normalizedUrl)).trim();
   return {
     normalizedUrl,
     externalId: input.externalId || extractExternalId(normalizedUrl),
@@ -107,14 +109,7 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
   };
 }
 
-export function marketplaceFromUrl(url: string): string {
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    if (host.includes("shopee")) return "Shopee";
-    if (host.includes("mercadolivre") || host.includes("mercadolibre")) return "Mercado Livre";
-  } catch {}
-  return "Unknown";
-}
+export const marketplaceFromUrl = detectMarketplace;
 
 export function extractExternalId(url: string): string | undefined {
   const ml = url.match(/(ML[A-Z])[-]?(\d+)/i);
