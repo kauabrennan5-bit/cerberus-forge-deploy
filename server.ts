@@ -13,6 +13,7 @@ import { processProductUrl } from "./server/services/productAutomation";
 import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
+import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./server/services/telegramDiagnostics";
 
 dotenv.config();
 
@@ -800,21 +801,46 @@ NUNCA modifique ou invente preços ou imagens.`,
   // 3. TELEGRAM BOT INTEGRATION (FASE 2)
   // ==========================================
 
-  // GET /api/telegram-status - Status da configuração e healthcheck do Telegram Bot
-  app.get(["/api/telegram-status", "/api/telegram/status"], (req, res) => {
-    const token = process.env.TELEGRAM_BOT_TOKEN || "";
-    const allowed = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "";
-    const host = req.headers.host || "localhost:3000";
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const webhookUrl = `${protocol}://${host}/api/telegram/webhook`;
-
-    return res.json({
-      configured: Boolean(token),
-      hasToken: Boolean(token),
-      hasAllowedUsers: allowed.split(",").map((u) => u.trim()).filter(Boolean).length > 0,
-      webhookUrl: webhookUrl,
-      phase: "Fase 2 - Automação Completa de Ingestão de Produtos"
-    });
+  // GET /api/telegram-status - Diagnóstico seguro do bot, webhook e Operator.
+  app.get(["/api/telegram-status", "/api/telegram/status"], async (_req, res) => {
+    try {
+      const telegram = await getTelegramWebhookDiagnostics();
+      const operatorState = cerberusOperator.getOperatorPersistenceState();
+      const backendSha = process.env.RENDER_GIT_COMMIT || process.env.RENDER_GIT_COMMIT_SHA || undefined;
+      return res.json({
+        configured: telegram.configured,
+        tokenConfigured: telegram.tokenConfigured,
+        whitelistConfigured: telegram.whitelistConfigured,
+        effectiveWhitelistConfigured: telegram.effectiveWhitelistConfigured,
+        webhookConfigured: telegram.webhookConfigured,
+        webhookMatchesExpectedUrl: telegram.webhookMatchesExpectedUrl,
+        webhookUrl: telegram.webhookUrl,
+        expectedWebhookUrl: telegram.expectedWebhookUrl,
+        webhookLastError: telegram.webhookLastError,
+        pendingUpdates: telegram.pendingUpdates,
+        allowedUpdates: telegram.allowedUpdates,
+        apiHealthy: telegram.apiHealthy,
+        backendReady: telegram.backendReady,
+        secretConfigured: telegram.secretConfigured,
+        lastWebhookCheck: telegram.lastWebhookCheck,
+        operatorState: operatorState.status,
+        operatorStateReason: operatorState.reason,
+        backendSha,
+      });
+    } catch (error: any) {
+      return res.status(200).json({
+        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        tokenConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+        webhookConfigured: false,
+        webhookMatchesExpectedUrl: null,
+        apiHealthy: false,
+        backendReady: false,
+        operatorState: cerberusOperator.getOperatorPersistenceState().status,
+        webhookLastError: "Falha ao consultar diagnóstico do Telegram: " + (error?.message || "erro desconhecido"),
+        lastWebhookCheck: new Date().toISOString(),
+        backendSha: process.env.RENDER_GIT_COMMIT || process.env.RENDER_GIT_COMMIT_SHA || undefined,
+      });
+    }
   });
 
   // POST /api/telegram-set-webhook - Configuração automática do Webhook via API oficial
@@ -824,23 +850,33 @@ NUNCA modifique ou invente preços ou imagens.`,
       return res.status(400).json({ success: false, error: "TELEGRAM_BOT_TOKEN é necessário para configurar o Webhook." });
     }
 
-    const host = req.headers.host || "localhost:3000";
-    const protocol = req.headers["x-forwarded-proto"] || "https";
-    const webhookUrl = req.body.webhookUrl || `${protocol}://${host}/api/telegram/webhook`;
-    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const webhookUrl = getExpectedTelegramWebhookUrl();
+    const requestedUrl = typeof req.body?.webhookUrl === "string" ? req.body.webhookUrl.replace(/\/+$/, "") : undefined;
+    if (requestedUrl && requestedUrl !== webhookUrl) {
+      return res.status(400).json({ success: false, error: "A URL enviada diverge da URL canônica do backend; nenhuma alteração foi feita.", expectedWebhookUrl: webhookUrl });
+    }
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
 
     try {
-      const target = new URL(`https://api.telegram.org/bot${token}/setWebhook`);
-      target.searchParams.set("url", webhookUrl);
-      if (webhookSecret) target.searchParams.set("secret_token", webhookSecret);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15_000);
-      const tgRes = await fetch(target, { signal: controller.signal });
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webhookUrl, ...(webhookSecret ? { secret_token: webhookSecret } : {}) }),
+        signal: controller.signal,
+      });
       clearTimeout(timeout);
-      const tgData = await tgRes.json();
-      return res.json({ success: tgData.ok, telegramResult: tgData, webhookUrl });
+      const tgData = await tgRes.json().catch(() => ({}));
+      const diagnostics = tgData?.ok ? await getTelegramWebhookDiagnostics() : undefined;
+      return res.status(tgData?.ok ? 200 : 502).json({
+        success: Boolean(tgData?.ok),
+        description: typeof tgData?.description === "string" ? tgData.description.slice(0, 240) : undefined,
+        webhookUrl,
+        diagnostics,
+      });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message });
+      return res.status(502).json({ success: false, error: "Falha ao comunicar com a API do Telegram: " + (err?.message || "erro desconhecido") });
     }
   });
 
@@ -951,14 +987,27 @@ NUNCA modifique ou invente preços ou imagens.`,
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
-    void (async () => {
-      const boot = await cerberusOperator.initializeOperatorState();
-      console.log(`[OPERATOR] Boot recovery: ${boot.ready ? "READY" : "SAFE_MODE"} — ${boot.reason}`);
-      startTelegramPolling();
-      cerberusOperator.startOperatorScheduler();
-    })().catch((error) => {
-      console.error("[OPERATOR] Falha não tratada no boot recovery; scheduler mantido desativado:", error?.message || error);
+
+    // O Telegram é um caminho crítico de entrada e não pode depender do Operator, Supabase ou scheduler.
+    void startTelegramPolling().catch((error) => {
+      console.error("[Telegram] Falha não tratada na inicialização independente:", error?.message || error);
     });
+
+    // A recuperação do Operator é isolada: falhas entram em SAFE_MODE e não derrubam HTTP/Telegram.
+    void cerberusOperator.initializeOperatorState()
+      .then((boot) => {
+        console.log(`[OPERATOR] Boot recovery: ${boot.ready ? "READY" : "SAFE_MODE"} — ${boot.reason}`);
+      })
+      .catch((error) => {
+        console.error("[OPERATOR] Falha não tratada no boot recovery; processo mantido operacional em SAFE_MODE:", error?.message || error);
+      });
+
+    // O scheduler é secundário e inicia independentemente da recuperação persistida.
+    try {
+      cerberusOperator.startOperatorScheduler();
+    } catch (error: any) {
+      console.error("[OPERATOR SCHEDULER] Falha ao iniciar scheduler; HTTP e Telegram continuam disponíveis:", error?.message || error);
+    }
   });
 }
 

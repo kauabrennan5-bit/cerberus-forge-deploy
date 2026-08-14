@@ -10,16 +10,23 @@ import { createProductionProductPipeline, restoreLifecycleRecord, type Lifecycle
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { detectMarketplace } from "./marketplace";
 import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
+import { markTelegramBackendReady } from "./telegramDiagnostics";
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const TELEGRAM_API_BASE = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
+
+function getTelegramBotToken(): string {
+  return process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
+}
+
+function getTelegramApiBase(): string {
+  return `https://api.telegram.org/bot${getTelegramBotToken()}`;
+}
 
 async function telegramApiFetch(method: string, payload: Record<string, unknown>): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(`${TELEGRAM_API_BASE}/${method}`, {
+    return await fetch(`${getTelegramApiBase()}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -53,7 +60,7 @@ export function isUserAllowed(userId: string | number): boolean {
 }
 
 export async function sendTelegramMessage(chatId: number | string, text: string, replyMarkup?: any): Promise<any> {
-  if (!TELEGRAM_BOT_TOKEN) return;
+  if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
       chat_id: chatId,
@@ -79,7 +86,7 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
 }
 
 export async function sendTelegramPhoto(chatId: number | string, photoUrl: string, caption: string, replyMarkup?: any): Promise<any> {
-  if (!TELEGRAM_BOT_TOKEN) return;
+  if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
       chat_id: chatId,
@@ -98,7 +105,7 @@ export async function sendTelegramPhoto(chatId: number | string, photoUrl: strin
 }
 
 export async function editTelegramMessageText(chatId: number | string, messageId: number, text: string, replyMarkup?: any): Promise<any> {
-  if (!TELEGRAM_BOT_TOKEN) return;
+  if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
       chat_id: chatId,
@@ -125,7 +132,7 @@ export async function editTelegramMessageText(chatId: number | string, messageId
 }
 
 export async function editTelegramMessageCaption(chatId: number | string, messageId: number, caption: string, replyMarkup?: any): Promise<any> {
-  if (!TELEGRAM_BOT_TOKEN) return;
+  if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
       chat_id: chatId,
@@ -144,7 +151,7 @@ export async function editTelegramMessageCaption(chatId: number | string, messag
 }
 
 export async function answerCallbackQuery(callbackQueryId: string, text?: string, showAlert: boolean = false): Promise<any> {
-  if (!TELEGRAM_BOT_TOKEN) return;
+  if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
       callback_query_id: callbackQueryId,
@@ -1497,5 +1504,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 }
 
 export async function startTelegramPolling(): Promise<void> {
-  console.log("🤖 [Telegram Bot] Polling desativado em favor do Webhook do Render.");
+  if (!getTelegramBotToken()) {
+    console.warn("⚠️ [Telegram Bot] Backend iniciado sem TELEGRAM_BOT_TOKEN; webhook permanecerá indisponível.");
+    return;
+  }
+  // O nome histórico da função é preservado para compatibilidade, mas o sistema usa somente webhook.
+  markTelegramBackendReady();
+  console.log("🤖 [Telegram Bot] Componente inicializado independentemente do Operator; polling permanece desativado em favor do Webhook do Render.");
 }

@@ -31,6 +31,7 @@ import {
   type DependencyName,
   type OperationalDiagnostic,
 } from "./operationalDiagnostics";
+import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
 
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "DOWN" | "UNKNOWN";
 export type IncidentSeverity = "INFO" | "WARNING" | "ERROR" | "CRITICAL";
@@ -741,20 +742,29 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 7. Telegram: API acessível, mantendo o token estritamente no servidor.
+  // 7. Telegram: diferenciar token, API, webhook, URL, erros recentes e prontidão do backend.
   const t0Telegram = Date.now();
   try {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) throw new Error("Token não configurado.");
-    const telegramInfo = await fetchJsonWithTimeout(`https://api.telegram.org/bot${token}/getMe`);
-    if (!telegramInfo.ok) throw new Error("API do bot recusou a verificação.");
+    const telegram = await getTelegramWebhookDiagnostics();
+    const webhookValid = telegram.webhookConfigured && telegram.webhookMatchesExpectedUrl === true;
+    const healthy = telegram.apiHealthy && webhookValid && telegram.backendReady && !telegram.webhookLastError;
+    const status: HealthStatus = healthy ? "HEALTHY" : telegram.apiHealthy ? "DEGRADED" : "DOWN";
+    const detail = [
+      telegram.tokenConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+      telegram.apiHealthy ? "API_OK" : "API_UNAVAILABLE",
+      telegram.webhookConfigured ? (webhookValid ? "WEBHOOK_VALID" : "WEBHOOK_INVALID") : "WEBHOOK_MISSING",
+      telegram.backendReady ? "BACKEND_READY" : "BACKEND_NOT_READY",
+      telegram.webhookLastError ? `LAST_ERROR: ${telegram.webhookLastError}` : undefined,
+    ].filter(Boolean).join(" | ");
     components["Telegram"] = {
       name: "Telegram",
-      status: "HEALTHY",
+      status,
       latencyMs: Date.now() - t0Telegram,
       timestamp: now,
-      details: "API do bot respondeu ao health check.",
+      details: detail,
+      error: status === "HEALTHY" ? undefined : telegram.webhookLastError || (webhookValid ? undefined : "Webhook ausente ou divergente da URL canônica."),
       operationId,
+      diagnostic: status === "HEALTHY" ? undefined : diagnosticForComponent("Telegram", operationId, telegram.webhookLastError || "Webhook/API do Telegram não confirmou saúde operacional."),
     };
   } catch (err: any) {
     components["Telegram"] = {
@@ -762,8 +772,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       status: "DEGRADED",
       latencyMs: Date.now() - t0Telegram,
       timestamp: now,
-      error: "API Telegram indisponível ou não configurada.",
-      httpStatus: err?.status,
+      error: "Falha ao obter diagnóstico seguro do Telegram.",
       operationId,
       diagnostic: diagnosticForComponent("Telegram", operationId, err, err?.status),
     };

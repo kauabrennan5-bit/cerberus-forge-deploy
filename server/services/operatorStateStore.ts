@@ -25,6 +25,24 @@ export interface OperatorStateLoadResult {
 let persistenceStatus: "UNKNOWN" | "READY" | "SAFE_MODE" = "UNKNOWN";
 let persistenceReason = "Ainda não inicializado.";
 
+export const OPERATOR_STATE_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: PromiseLike<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function finiteNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -62,43 +80,56 @@ function toPersistedState(row: any): PersistedOperatorState | null {
   return isValidPersistedOperatorState(state) ? state : null;
 }
 
-export async function loadPersistedOperatorState(): Promise<OperatorStateLoadResult> {
+export async function loadPersistedOperatorState(timeoutMs = OPERATOR_STATE_TIMEOUT_MS): Promise<OperatorStateLoadResult> {
   if (!supabase) {
     persistenceStatus = "SAFE_MODE";
     persistenceReason = "Cliente Supabase não configurado; auto-heal permanece bloqueado em modo seguro.";
     return { ok: false, states: [], reason: persistenceReason };
   }
 
-  const { data, error } = await supabase
-    .from("operator_state")
-    .select("state_key, action_id, incident_id, circuit_state, failure_count, retry_count, last_execution_at, cooldown_until, circuit_open_until, last_transition_at, metadata")
-    .limit(500);
+  try {
+    const query = supabase
+      .from("operator_state")
+      .select("state_key, action_id, incident_id, circuit_state, failure_count, retry_count, last_execution_at, cooldown_until, circuit_open_until, last_transition_at, metadata")
+      .limit(500);
+    const { data, error } = await withTimeout(
+      query,
+      timeoutMs,
+      `Timeout de ${timeoutMs}ms ao carregar operator_state; auto-heal permanece bloqueado em SAFE_MODE.`,
+    );
 
-  if (error) {
-    if (error.code === "PGRST204" || error.message?.includes("Could not find the table") || error.message?.includes("schema cache")) {
+    if (error) {
+      if (error.code === "PGRST204" || error.message?.includes("Could not find the table") || error.message?.includes("schema cache")) {
+        persistenceStatus = "SAFE_MODE";
+        persistenceReason = `Tabela operator_state aguardando reload do cache do Supabase/PostgREST (${error.message}).`;
+        console.warn(`[OPERATOR STATE] ${persistenceReason}`);
+        return { ok: true, states: [] };
+      }
       persistenceStatus = "SAFE_MODE";
-      persistenceReason = `Tabela operator_state aguardando reload do cache do Supabase/PostgREST (${error.message}).`;
+      persistenceReason = `Não foi possível carregar operator_state: ${error.message}`;
       console.warn(`[OPERATOR STATE] ${persistenceReason}`);
-      return { ok: true, states: [] };
+      return { ok: false, states: [], reason: persistenceReason };
     }
+
+    const states = (Array.isArray(data) ? data : [])
+      .map(toPersistedState)
+      .filter((state): state is PersistedOperatorState => Boolean(state));
+
+    if (Array.isArray(data) && states.length !== data.length) {
+      persistenceStatus = "SAFE_MODE";
+      persistenceReason = "operator_state contém registro inválido; auto-heal permanece bloqueado até revisão administrativa.";
+      return { ok: false, states: [], reason: persistenceReason };
+    }
+
+    persistenceStatus = "READY";
+    persistenceReason = `${states.length} estado(s) crítico(s) carregado(s).`;
+    return { ok: true, states };
+  } catch (error: any) {
     persistenceStatus = "SAFE_MODE";
-    persistenceReason = `Não foi possível carregar operator_state: ${error.message}`;
+    persistenceReason = error?.message || "Falha desconhecida ao carregar operator_state.";
+    console.warn(`[OPERATOR STATE] ${persistenceReason}`);
     return { ok: false, states: [], reason: persistenceReason };
   }
-
-  const states = (Array.isArray(data) ? data : [])
-    .map(toPersistedState)
-    .filter((state): state is PersistedOperatorState => Boolean(state));
-
-  if (Array.isArray(data) && states.length !== data.length) {
-    persistenceStatus = "SAFE_MODE";
-    persistenceReason = "operator_state contém registro inválido; auto-heal permanece bloqueado até revisão administrativa.";
-    return { ok: false, states: [], reason: persistenceReason };
-  }
-
-  persistenceStatus = "READY";
-  persistenceReason = `${states.length} estado(s) crítico(s) carregado(s).`;
-  return { ok: true, states };
 }
 
 export async function persistOperatorState(state: PersistedOperatorState): Promise<boolean> {
