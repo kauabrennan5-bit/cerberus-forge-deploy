@@ -21,3 +21,9 @@
 - [x] Adicionar botões inline (🔎 Trocar produto, 📊 Ranking, ⬅️ Voltar, 🏠 Painel).
 - [x] Mostrar percentual por marketplace e tratar origem não identificada sem inventar dados.
 - [x] Executar build de produção, validar e enviar para main.
+
+# Melhoria de UX — Paginação do Catálogo Telegram
+
+- [x] Atualizar cabeçalho e navegação de /listar para exibir total, página atual de total e botões condicionais de anterior/próxima.
+- [x] Atualizar cabeçalho e navegação de Analytics -> Escolher Produto para o mesmo padrão.
+- [x] Executar build de produção, validar e enviar commit para a branch main.

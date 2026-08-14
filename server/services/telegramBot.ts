@@ -380,11 +380,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       const actives = products.filter(p => p.ativo !== false).length;
       const inactives = total - actives;
 
-      let text = `📋 <b>CATÁLOGO DE PRODUTOS</b>\n\n` +
-                 `• Total: <b>${total}</b>\n` +
-                 `• Ativos: <b>${actives}</b>\n` +
-                 `• Pausados: <b>${inactives}</b>\n\n` +
-                 `Exibindo pág ${page + 1} de ${Math.ceil(total / pageSize) || 1}:\n\n`;
+      const totalPages = Math.ceil(total / pageSize) || 1;
+      let text = `📦 <b>PRODUTOS — ${total} cadastrados</b>\n\n` +
+                 `Página ${page + 1} de ${totalPages}\n\n`;
 
       const buttons = [];
       for (const p of paged) {
@@ -400,9 +398,15 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
 
       const navRow = [];
-      if (page > 0) navRow.push({ text: "◀️ Anterior", callback_data: `products_list:${page - 1}` });
-      if (end < total) navRow.push({ text: "Próxima ▶️", callback_data: `products_list:${page + 1}` });
-      if (navRow.length > 0) buttons.push(navRow);
+      if (page > 0) {
+        navRow.push({ text: "◀️ Anterior", callback_data: `products_list:${page - 1}` });
+      }
+      if (end < total) {
+        navRow.push({ text: "Próxima ▶️", callback_data: `products_list:${page + 1}` });
+      }
+      if (navRow.length > 0) {
+        buttons.push(navRow);
+      }
 
       buttons.push([{ text: "🔎 Buscar", callback_data: "products_search_init" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
 
@@ -598,7 +602,12 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       const paged = list.slice(start, end);
       const total = list.length;
 
-      let text = `🎯 <b>ANALYTICS POR PRODUTO (Pág ${page + 1}/${Math.ceil(total / pageSize) || 1})</b>\n━━━━━━━━━━━━━━━━━━\nSelecione um produto abaixo:\n\n`;
+      const totalPages = Math.ceil(total / pageSize) || 1;
+      let text = `🎯 <b>ANALYTICS POR PRODUTO</b>\n\n` +
+                 `${total} produtos cadastrados\n` +
+                 `Página ${page + 1} de ${totalPages}\n` +
+                 `━━━━━━━━━━━━━━━━━━\n` +
+                 `Selecione um produto abaixo:\n\n`;
       const buttons = [];
 
       for (const item of paged) {
@@ -606,9 +615,15 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
 
       const navRow = [];
-      if (page > 0) navRow.push({ text: "◀️ Anterior", callback_data: `analytics_products:${page - 1}` });
-      if (end < total) navRow.push({ text: "Próxima ▶️", callback_data: `analytics_products:${page + 1}` });
-      if (navRow.length > 0) buttons.push(navRow);
+      if (page > 0) {
+        navRow.push({ text: "◀️ Anterior", callback_data: `analytics_products:${page - 1}` });
+      }
+      if (end < total) {
+        navRow.push({ text: "Próxima ▶️", callback_data: `analytics_products:${page + 1}` });
+      }
+      if (navRow.length > 0) {
+        buttons.push(navRow);
+      }
 
       buttons.push([{ text: "📊 Visão Geral", callback_data: "analytics_overview" }, { text: "⬅️ Voltar", callback_data: "analytics_overview" }]);
 
