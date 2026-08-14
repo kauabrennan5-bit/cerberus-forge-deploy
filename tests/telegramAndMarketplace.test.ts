@@ -205,3 +205,11 @@ test("publicação é bloqueada se descricao contaminada atravessar a revisão",
   assert.equal(result.state, "APPROVED");
   assert.equal(creates, 0);
 });
+
+test("gerador de build sanitiza descricao contaminada antes de escrever o catálogo público", () => {
+  const source = readFileSync(new URL("../scripts/generate-static-catalog.js", import.meta.url), "utf8");
+
+  assert.match(source, /function containsRawPayloadMarkers\(value\)/);
+  assert.match(source, /descricao: containsRawPayloadMarkers\(p\.descricao \|\| p\.description \|\| ''\)/);
+  assert.match(source, /\[conteudo da pagina\]/);
+});

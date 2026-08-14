@@ -10,6 +10,21 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const backendUrl = process.env.CATALOG_API_URL || 'https://cerberus-forge-deploy-backend.onrender.com/api/products';
 
+const RAW_PAYLOAD_MARKERS = [
+  '[url final]',
+  '[titulo identificado]',
+  '[preco identificado]',
+  '[total imagens oficiais]',
+  '[imagens extraidas]',
+  '[conteudo da pagina]'
+];
+
+function containsRawPayloadMarkers(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return RAW_PAYLOAD_MARKERS.some(marker => normalized.includes(marker));
+}
+
 function requestCanonicalJson(url, attempts = 3) {
   return new Promise((resolve, reject) => {
     let attempt = 0;
@@ -127,7 +142,7 @@ async function generateStaticCatalog() {
     marketplace: p.marketplace,
     cupom: p.cupom || '',
     freteGratis: Boolean(p.freteGratis || p.frete_gratis),
-    descricao: p.descricao || p.description || '',
+    descricao: containsRawPayloadMarkers(p.descricao || p.description || '') ? '' : (p.descricao || p.description || ''),
     paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',
     ativo: true,
     status: 'published'
