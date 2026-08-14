@@ -125,3 +125,16 @@ test("Telegram, automação e lifecycle usam somente o detector canônico", () =
     assert.doesNotMatch(source, /function detectMarketplace/);
   }
 });
+
+
+test("revisão do Telegram aceita preço ausente e permite corrigir preço e categoria antes de publicar", () => {
+  const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+
+  assert.match(source, /const hasExtractedData = Boolean\(scraped\?\.title && scraped\?\.images\?\.length\)/);
+  assert.match(source, /recoverableMissingPrice/);
+  assert.match(source, /if \(data\.startsWith\("edit_price:"\)\)/);
+  assert.match(source, /if \(data\.startsWith\("edit_cat:"\)\)/);
+  assert.match(source, /action: "awaiting_category"/);
+  assert.match(source, /if \(userState && userState\.action === "awaiting_category"\)/);
+  assert.match(source, /await refreshReviewLifecycle\(targetReview\)/);
+});

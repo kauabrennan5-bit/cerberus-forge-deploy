@@ -227,9 +227,11 @@ function buildMainReviewKeyboard(reviewId: string) {
 async function extractProductForReview(url: string): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
     const scraped = await fetchProductDataFromUrl(url);
-    const hasExtractedData = Boolean(scraped?.title && scraped?.price !== null && scraped?.images?.length);
+    // Título e imagem são indispensáveis para evitar proposta incompleta. O
+    // preço pode ser corrigido manualmente no cartão de revisão antes de publicar.
+    const hasExtractedData = Boolean(scraped?.title && scraped?.images?.length);
     if (!scraped || !hasExtractedData) {
-      return { success: false, error: "Falha ao extrair dados do link." };
+      return { success: false, error: "Falha ao extrair título ou imagens válidas do link. Tente novamente ou use o painel administrativo com preenchimento manual." };
     }
 
     const marketplace = detectMarketplace(url);
@@ -238,7 +240,7 @@ async function extractProductForReview(url: string): Promise<{ success: boolean;
       data: {
         produto: scraped.title,
         categoria: marketplace === "Outros" ? "Acessórios" : marketplace,
-        preco: Number(scraped.price) || 0,
+        preco: typeof scraped.price === "number" && scraped.price > 0 ? scraped.price : 0,
         imagens: scraped.images,
         normalizedUrl: url,
         descricao: scraped.rawContent || ""
@@ -247,6 +249,20 @@ async function extractProductForReview(url: string): Promise<{ success: boolean;
   } catch (err: any) {
     return { success: false, error: err?.message || "Erro interno no scraper." };
   }
+}
+
+async function refreshReviewLifecycle(review: PendingReview): Promise<LifecycleRecord> {
+  const lifecycle = await createProductionProductPipeline().evaluate({
+    produto: review.produto,
+    categoria: review.categoria,
+    preco: review.preco > 0 ? review.preco : null,
+    imagens: review.imagens,
+    normalizedUrl: review.normalizedUrl,
+    descricao: review.descricao || "",
+    marketplace: detectMarketplace(review.normalizedUrl),
+  });
+  review.lifecycle = lifecycle;
+  return lifecycle;
 }
 
 function logAndValidateReviewCallback(
@@ -1148,9 +1164,29 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (data.startsWith("edit_price:")) {
       const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("edit_price", reviewId, chatId, review);
+      if (!validation.valid) {
+        await answerCallbackQuery(callbackId, validation.reason, true);
+        return;
+      }
       await telegramRepo.setUserState(senderId, { action: "awaiting_price", reviewId });
       await answerCallbackQuery(callbackId, "Digite o novo preço:");
-      if (chatId) await sendTelegramMessage(chatId, "💰 <b>DIGITE O NOVO PREÇO EM REAIS:</b>");
+      if (chatId) await sendTelegramMessage(chatId, "💰 <b>DIGITE O NOVO PREÇO EM REAIS:</b>\nExemplo: <code>189,90</code>");
+      return;
+    }
+
+    if (data.startsWith("edit_cat:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("edit_cat", reviewId, chatId, review);
+      if (!validation.valid) {
+        await answerCallbackQuery(callbackId, validation.reason, true);
+        return;
+      }
+      await telegramRepo.setUserState(senderId, { action: "awaiting_category", reviewId });
+      await answerCallbackQuery(callbackId, "Digite a nova categoria:");
+      if (chatId) await sendTelegramMessage(chatId, "📁 <b>DIGITE A NOVA CATEGORIA:</b>\nExemplos: <code>Camisetas</code>, <code>Calças</code>, <code>Acessórios</code>, <code>Calçados</code>, <code>Jaquetas</code> ou <code>Moletons</code>.");
       return;
     }
 
@@ -1281,7 +1317,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           normalizedUrl: extResult.data.normalizedUrl,
           marketplace: detectMarketplace(extResult.data.normalizedUrl),
         });
-        if (lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
+        // A ausência exclusiva de preço é recuperável: a prévia é mantida para
+        // correção humana. Outros erros ainda bloqueiam a criação da proposta.
+        const recoverableMissingPrice = lifecycle.validation.errors.length > 0 &&
+          lifecycle.validation.errors.every(error => error === "Preço válido é obrigatório.");
+        if ((lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") && !recoverableMissingPrice) {
           if (chatId) await sendTelegramMessage(chatId, `⚠️ <b>VALIDATION_ERROR</b>\n\n${lifecycle.validation.errors.join(" ") || "Produto não pode seguir para aprovação."}`);
           continue;
         }
@@ -1383,6 +1423,34 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
+    if (userState && userState.action === "awaiting_category") {
+      const targetReview = await telegramRepo.getPendingReview(userState.reviewId);
+      const category = text.replace(/\s+/g, " ").trim();
+      if (!targetReview) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ A revisão não está mais disponível. Envie o link novamente para criar uma nova prévia.");
+        return;
+      }
+      if (category.length < 2 || category.length > 60) {
+        if (chatId) await sendTelegramMessage(chatId, "❌ Categoria inválida. Digite um nome entre 2 e 60 caracteres.");
+        return;
+      }
+
+      targetReview.categoria = category;
+      await refreshReviewLifecycle(targetReview);
+      await telegramRepo.savePendingReview(targetReview);
+      await telegramRepo.deleteUserState(senderId);
+      const updatedCardText = buildReviewCardText(targetReview);
+      const keyboard = buildMainReviewKeyboard(targetReview.id);
+      if (chatId) {
+        await sendTelegramMessage(chatId, `✅ Categoria atualizada para <b>${category}</b>.`);
+        if (targetReview.cardMessageId) await editTelegramMessageCaption(chatId, targetReview.cardMessageId, updatedCardText, keyboard);
+        else if (targetReview.imagens[0]) await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
+        else await sendTelegramMessage(chatId, updatedCardText, keyboard);
+      }
+      return;
+    }
+
     // Fallback de preço para revisão pendente
     let targetReview: PendingReview | null = null;
     if (userState && userState.action === "awaiting_price") {
@@ -1405,6 +1473,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (normPrice !== null && normPrice > 0) {
       targetReview.preco = normPrice;
+      await refreshReviewLifecycle(targetReview);
       await telegramRepo.savePendingReview(targetReview);
       await telegramRepo.deleteUserState(senderId);
 
