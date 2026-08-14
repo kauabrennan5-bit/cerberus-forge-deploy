@@ -232,6 +232,27 @@ export async function getLatestPendingReviewForUser(
   return userReviews[0];
 }
 
+/** Lista propostas pendentes da fila humana; não representa catálogo nem fonte canônica de produtos. */
+export async function listPendingReviews(limit = 20): Promise<PendingReview[]> {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from("telegram_pending_reviews")
+        .select("data, created_at")
+        .eq("status", "pending")
+        .order("created_at", { ascending: true })
+        .limit(limit);
+      if (!error && data) return data.map(row => row.data as PendingReview).filter(Boolean);
+    } catch {
+      // A fila local de sessões continua disponível quando a tabela operacional não existir.
+    }
+  }
+  return Object.values(readReviewsFromFile())
+    .filter(review => review.status === "pending" && Date.now() < (review.expiresAt || review.createdAt + SESSION_EXPIRATION_MS))
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(0, limit);
+}
+
 /**
  * Remove uma revisão pendente (após publicação ou cancelamento)
  */

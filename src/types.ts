@@ -1,3 +1,5 @@
+export type ProductStatus = "pending" | "approved" | "published" | "paused" | "archived" | "error";
+
 export interface Product {
   id: string;
   ref?: string;
@@ -8,12 +10,14 @@ export interface Product {
   link: string;
   ativo: boolean;
   destaque: boolean;
-  status?: 'pending' | 'published';
+  status?: ProductStatus;
   createdBy?: string;
   slug?: string;
   descricao?: string;
   paginaPonteUrl?: string;
   rawRowIndex?: number;
+  lifecycleState?: string;
+  lifecycleUpdatedAt?: string;
 }
 
 export interface AppConfig {

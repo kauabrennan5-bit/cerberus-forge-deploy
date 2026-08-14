@@ -41,8 +41,9 @@ export async function exportStaticProductsJson(): Promise<number> {
         return false;
       }
 
-      // 5. Somente produtos ativos e publicados
-      if (p.ativo === false || p.status === 'pending') {
+      // 5. Somente produtos ativos efetivamente publicados. Estados de workflow
+      // (approved, paused, archived, error) nunca são expostos como catálogo.
+      if (p.ativo === false || (p.status !== undefined && p.status !== 'published')) {
         return false;
       }
 

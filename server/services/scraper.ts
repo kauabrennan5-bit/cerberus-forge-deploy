@@ -9,6 +9,38 @@ export interface ExtractedProductData {
   rawContent: string;
 }
 
+const SCRAPER_TIMEOUT_MS = 15_000;
+const SCRAPER_MAX_HTML_BYTES = 750_000;
+const SCRAPER_MAX_OVERRIDE_CHARS = 10_000;
+
+function isSafeMarketplaceUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  if (!["http:", "https:"].includes(url.protocol)) return false;
+  if (host === "localhost" || host.endsWith(".local") || host === "0.0.0.0" || host === "::1") return false;
+  if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return false;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return false;
+  return true;
+}
+
+async function readHtmlWithLimit(response: Response): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let html = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > SCRAPER_MAX_HTML_BYTES) {
+      await reader.cancel();
+      throw new Error("Resposta do marketplace excedeu o limite de tamanho.");
+    }
+    html += decoder.decode(value, { stream: true });
+  }
+  return html + decoder.decode();
+}
+
 /**
  * Extrator confiável para Shopee, Mercado Livre e E-commerce
  */
@@ -24,52 +56,52 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
   if (targetUrl) {
     try {
       const parsedUrl = new URL(targetUrl);
+      if (!isSafeMarketplaceUrl(parsedUrl)) throw new Error("URL de rede privada ou protocolo não permitido.");
       targetUrl = parsedUrl.href;
       finalUrl = targetUrl;
     } catch (e) {
       console.warn(`[Scraper] URL inválida informada: "${urlStr}"`);
+      targetUrl = "";
+      finalUrl = "";
     }
   }
 
   const isShopee = targetUrl.includes("shopee") || targetUrl.includes("shope.ee");
   const isMercadoLivre = targetUrl.includes("mercadolivre") || targetUrl.includes("mercadolibre");
 
-  // User-Agents variados para evasão de bloqueio em marketplaces
-  const userAgents = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "WhatsApp/2.21.12.21 i",
-    "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-    "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)"
-  ];
-
   let httpStatus = 0;
   let contentType = "";
 
   if (targetUrl) {
-    const selectedUa = userAgents[0];
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), SCRAPER_TIMEOUT_MS);
       const response = await fetch(targetUrl, {
         headers: {
-          "User-Agent": selectedUa,
+          "User-Agent": "CerberusCatalogBot/1.0 (+catalog-validation)",
           "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
           "Cache-Control": "no-cache"
         },
-        redirect: "follow"
+        redirect: "follow",
+        signal: controller.signal
       });
-
-      finalUrl = response.url || targetUrl;
-      httpStatus = response.status;
-      contentType = response.headers.get("content-type") || "";
-      html = await response.text();
+      try {
+        finalUrl = response.url || targetUrl;
+        httpStatus = response.status;
+        contentType = response.headers.get("content-type") || "";
+        if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) throw new Error("Tipo de conteúdo não é HTML.");
+        html = await readHtmlWithLimit(response);
+      } finally {
+        clearTimeout(timeout);
+      }
     } catch (err: any) {
       console.warn(`[Scraper Fetch Warning] Falha ao efetuar fetch em ${targetUrl}: ${err.message}`);
     }
   }
 
   // Se o usuário passou texto copiado adicional, concatena ao HTML
-  const combinedContent = `${html}\n\n${rawTextOverride || ""}`;
+  const combinedContent = `${html}\n\n${(rawTextOverride || "").slice(0, SCRAPER_MAX_OVERRIDE_CHARS)}`;
 
   // 1. EXTRAÇÃO DE JSON-LD
   const jsonLdResult = parseJsonLd(combinedContent);

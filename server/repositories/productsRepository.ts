@@ -1,7 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
-import { Product } from "../../src/types";
+import { Product, ProductStatus } from "../../src/types";
 import { exportStaticProductsJson } from "../services/exportProductsJson";
 import { syncCatalogToGitHub } from "../services/githubCatalogSync";
 
@@ -59,7 +59,7 @@ export function isValidProductLink(link?: string): boolean {
 /**
  * Salva a lista de produtos diretamente na tabela public.products do Supabase
  */
-async function saveProducts(products: Product[]): Promise<void> {
+async function saveProducts(products: Product[], syncCatalog = true): Promise<void> {
   const client = requireSupabase();
 
   const formatted = products.map((p) => ({
@@ -88,10 +88,13 @@ async function saveProducts(products: Product[]): Promise<void> {
   console.log("✅ [Supabase] Gravação em public.products concluída com sucesso!");
 
   // A projeção pública e o commit no GitHub fazem parte do contrato de publicação.
-  const exportedCount = await exportStaticProductsJson();
-  const syncOk = await syncCatalogToGitHub("update: catalog products updated via repository");
-  if (!syncOk) {
-    throw new Error(`Falha ao sincronizar o catálogo derivado com o GitHub após persistência em public.products (exportados: ${exportedCount}).`);
+  // O pipeline E2E pode desabilitar esta etapa temporariamente para executar uma única sincronização validada.
+  if (syncCatalog) {
+    const exportedCount = await exportStaticProductsJson();
+    const syncOk = await syncCatalogToGitHub("update: catalog products updated via repository");
+    if (!syncOk) {
+      throw new Error(`Falha ao sincronizar o catálogo derivado com o GitHub após persistência em public.products (exportados: ${exportedCount}).`);
+    }
   }
 }
 
@@ -162,9 +165,9 @@ export async function createProduct(input: {
   destaque?: boolean;
   descricao?: string;
   paginaPonteUrl?: string;
-  status?: "pending" | "published";
+  status?: ProductStatus;
   ref?: string;
-}): Promise<Product> {
+}, options: { syncCatalog?: boolean } = {}): Promise<Product> {
   const products = await getProducts();
   const inputLink = input.link.trim();
 
@@ -198,13 +201,16 @@ export async function createProduct(input: {
       link: inputLink,
       descricao: (input.descricao || "").trim() || existingProduct.descricao,
       status: input.status || "published"
-    });
+    }, options);
 
     if (updated) return updated;
   }
 
   const id = `prod-${Date.now()}`;
-  const slug = generateSlug(input.produto);
+  const baseSlug = generateSlug(input.produto);
+  const slug = products.some(product => product.slug === baseSlug)
+    ? `${baseSlug}-${Date.now().toString(36).slice(-4)}`
+    : baseSlug;
   const ref = input.ref || `REF-${(products.length + 1).toString().padStart(3, "0")}`;
 
   const imagesArray = Array.isArray(input.imagens)
@@ -219,7 +225,7 @@ export async function createProduct(input: {
     produto: input.produto.trim(),
     categoria: input.categoria.trim(),
     preco: Number(input.preco) || 0,
-    imagens: imagesArray.length > 0 ? imagesArray : ["https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&w=800&q=80"],
+    imagens: imagesArray,
     link: inputLink,
     ativo: true,
     destaque: Boolean(input.destaque),
@@ -230,7 +236,7 @@ export async function createProduct(input: {
   };
 
   products.unshift(newProduct);
-  await saveProducts(products);
+  await saveProducts(products, options.syncCatalog !== false);
   return newProduct;
 }
 
@@ -239,7 +245,8 @@ export async function createProduct(input: {
  */
 export async function updateProduct(
   id: string,
-  updateData: Partial<Product>
+  updateData: Partial<Product>,
+  options: { syncCatalog?: boolean } = {}
 ): Promise<Product | null> {
   const products = await getProducts();
   const index = products.findIndex((p) => p.id === id);
@@ -252,7 +259,7 @@ export async function updateProduct(
   };
 
   products[index] = updatedProduct;
-  await saveProducts(products);
+  await saveProducts(products, options.syncCatalog !== false);
   return updatedProduct;
 }
 
@@ -260,7 +267,7 @@ export async function updateProduct(
  * Exclui produto por ID
  */
 export async function deleteProduct(id: string): Promise<boolean> {
-  console.log('[DELETE] Entrada na função deleteProduct(); identificador recebido:', id);
+  console.log('[ARCHIVE] Entrada na função deleteProduct(); identificador recebido:', id);
   const products = await getProducts();
   const target = products.find(
     (p) => p.id === id || p.slug === id || generateSlug(p.produto) === id || p.ref === id
@@ -271,19 +278,18 @@ export async function deleteProduct(id: string): Promise<boolean> {
     return false;
   }
 
-  const client = requireSupabase();
-  const { error } = await client.from("products").delete().eq("id", target.id);
-  if (error) {
-    throw new Error(`Falha de persistência no banco Supabase ao remover public.products: ${error.message}`);
-  }
-
-  console.log(`[Supabase] Produto "${target.produto}" removido de public.products.`);
-  const syncOk = await syncCatalogToGitHub(`update: remove product ${target.ref} - ${target.produto}`);
-  if (!syncOk) {
-    throw new Error(`Produto removido do Supabase, mas a projeção do catálogo não foi sincronizada no GitHub (id: ${target.id}).`);
-  }
-
+  const archived = await updateProduct(target.id, { ativo: false, status: "archived" });
+  if (!archived) throw new Error(`Falha ao arquivar produto ${target.id}.`);
+  console.log(`[Supabase] Produto "${target.produto}" arquivado em public.products; nenhum dado foi apagado.`);
   return true;
+}
+
+export async function pauseProduct(id: string): Promise<Product | null> {
+  return updateProduct(id, { ativo: false, status: "paused" });
+}
+
+export async function reactivateProduct(id: string): Promise<Product | null> {
+  return updateProduct(id, { ativo: true, status: "approved" });
 }
 
 export interface ProductClickData {

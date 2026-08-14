@@ -53,3 +53,13 @@
 - [x] Atualizar painel Telegram com estado, nível, pendências, escalonamentos e audit log operacional.
 - [x] Criar documentação e testes do Bloco 6; validar lint, testes, build e segurança.
 - [x] Revisar o diff e enviar exclusivamente o Bloco 6 para a branch main.
+
+# Bloco 7 — Automação Completa do Ciclo de Produtos
+
+- [x] Auditar e reutilizar o pipeline atual de automação, scraper, curadoria, repositório, sincronização e Telegram.
+- [x] Formalizar lifecycle, normalização, validação comercial, duplicidade, curadoria estruturada e audit log sem criar fontes concorrentes.
+- [x] Implementar fila de aprovação humana e operações administrativas de pausar, reativar e arquivar sem exclusão física.
+- [x] Validar publicação somente após Supabase, projeção estática, sincronização canônica e verificação pós-publicação.
+- [x] Integrar métricas do pipeline ao Cerberus Operator sem publicar produtos automaticamente.
+- [x] Criar documentação e testes; validar lint, build, segurança, catálogo e analytics canônicos.
+- [x] Revisar o diff e enviar exclusivamente o Bloco 7 para a branch main.

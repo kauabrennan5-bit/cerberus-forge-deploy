@@ -6,6 +6,8 @@ import * as categoriesRepository from "../repositories/categoriesRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
 import * as googleAnalytics from "./googleAnalytics";
 import * as cerberusOperator from "./cerberusOperator";
+import { createProductionProductPipeline, restoreLifecycleRecord, type LifecycleRecord } from "./productPipeline";
+import { syncCatalogAndDeploy } from "./catalogSync";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_API_BASE = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -163,19 +165,27 @@ export interface PendingReview {
   imagens: string[];
   normalizedUrl: string;
   descricao?: string;
-  status?: "pending" | "published" | "cancelled" | "expired";
+  status?: "pending" | "published" | "cancelled" | "expired" | "rejected" | "error";
   cardMessageId?: number;
   existingProduct?: any;
+  lifecycle?: LifecycleRecord;
 }
 
 function buildReviewCardText(review: PendingReview): string {
   const precoStr = review.preco && review.preco > 0 ? `R$ ${review.preco.toFixed(2).replace(".", ",")}` : "⚠️ <i>Não detectado (Definir abaixo)</i>";
+  const lifecycle = review.lifecycle;
+  const validation = lifecycle?.validation;
+  const curation = lifecycle?.curation;
   return `🛡️ <b>CERBERUS FINDS — PAINEL DE REVISÃO</b>\n\n` +
          `🏷️ <b>Produto:</b> ${review.produto}\n` +
          `📁 <b>Categoria:</b> ${review.categoria}\n` +
          `💰 <b>Preço:</b> ${precoStr}\n` +
+         `🛒 <b>Marketplace:</b> ${lifecycle?.candidate.marketplace || detectMarketplace(review.normalizedUrl)}\n` +
          `🔗 <b>Link:</b> <code>${review.normalizedUrl}</code>\n\n` +
-         `<i>Revise os dados abaixo antes de confirmar a publicação:</i>`;
+         `Estado: <b>${lifecycle?.state || "PENDING_APPROVAL"}</b>\n` +
+         `Validação: <b>${validation?.outcome || "PENDING"}</b>\n` +
+         `Curadoria: <b>${curation?.recommendation || "REVIEW"}</b> · Score ${curation?.score ?? 0} · ${curation?.confidence || "LOW"}\n\n` +
+         `<i>Publicação exige aprovação humana e validação E2E da vitrine.</i>`;
 }
 
 function buildMainReviewKeyboard(reviewId: string) {
@@ -186,7 +196,7 @@ function buildMainReviewKeyboard(reviewId: string) {
         { text: "💰 Alterar Preço", callback_data: `edit_price:${reviewId}` },
         { text: "📁 Alterar Categoria", callback_data: `edit_cat:${reviewId}` }
       ],
-      [{ text: "❌ Cancelar", callback_data: `cancel_rev:${reviewId}` }]
+      [{ text: "🔎 Ver detalhes", callback_data: `review_details:${reviewId}` }, { text: "❌ Rejeitar", callback_data: `cancel_rev:${reviewId}` }]
     ]
   };
 }
@@ -194,7 +204,7 @@ function buildMainReviewKeyboard(reviewId: string) {
 async function extractProductForReview(url: string): Promise<{ success: boolean; data?: any; error?: string }> {
   try {
     const scraped = await fetchProductDataFromUrl(url);
-    const hasExtractedData = Boolean(scraped?.title || scraped?.price !== null || scraped?.images?.length);
+    const hasExtractedData = Boolean(scraped?.title && scraped?.price !== null && scraped?.images?.length);
     if (!scraped || !hasExtractedData) {
       return { success: false, error: "Falha ao extrair dados do link." };
     }
@@ -203,10 +213,10 @@ async function extractProductForReview(url: string): Promise<{ success: boolean;
     return {
       success: true,
       data: {
-        produto: scraped.title || "Produto Cerberus",
+        produto: scraped.title,
         categoria: marketplace === "Outros" ? "Acessórios" : marketplace,
         preco: Number(scraped.price) || 0,
-        imagens: scraped.images && scraped.images.length > 0 ? scraped.images : ["https://images.unsplash.com/photo-1591047139829-d91aecb6caea?auto=format&fit=crop&w=800&q=80"],
+        imagens: scraped.images,
         normalizedUrl: url,
         descricao: scraped.rawContent || ""
       }
@@ -269,10 +279,10 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "🧠 Cerberus Operator", callback_data: "operator_home" }, { text: "📊 Analytics", callback_data: "analytics_overview" }],
-      [{ text: "📦 Produtos", callback_data: "products_list:0" }, { text: "➕ Adicionar", callback_data: "admin_add" }],
-      [{ text: "🏷 Categorias", callback_data: "admin_categories" }, { text: "⭐ Destaques", callback_data: "admin_highlights" }],
-      [{ text: "⚙️ Sistema", callback_data: "admin_system" }]
+      [{ text: "📦 Produtos", callback_data: "products_list:0" }, { text: "🔎 Descobrir", callback_data: "admin_add" }],
+      [{ text: "🧠 Curadoria", callback_data: "product_approvals:0" }, { text: "⏳ Aprovações", callback_data: "product_approvals:0" }],
+      [{ text: "🚀 Publicações", callback_data: "products_list:0" }, { text: "📊 Analytics", callback_data: "analytics_overview" }],
+      [{ text: "🧠 Operator", callback_data: "operator_home" }, { text: "⚙️ Configurações", callback_data: "admin_system" }]
     ]
   };
 
@@ -308,6 +318,39 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data === "admin_menu" || data === "admin_back") {
       await answerCallbackQuery(callbackId);
       if (chatId && messageId) await renderMainMenu(chatId, messageId, true);
+      return;
+    }
+
+    if (data.startsWith("product_approvals:")) {
+      const page = Math.max(0, Number.parseInt(data.split(":")[1] || "0", 10) || 0);
+      const reviews = await telegramRepo.listPendingReviews(50);
+      const pageSize = 5;
+      const pageCount = Math.max(1, Math.ceil(reviews.length / pageSize));
+      const safePage = Math.min(page, pageCount - 1);
+      const visible = reviews.slice(safePage * pageSize, safePage * pageSize + pageSize);
+      let text = `⏳ <b>FILA DE APROVAÇÃO</b>\n\n${reviews.length} proposta(s) pendente(s)\nPágina ${safePage + 1} de ${pageCount}\n\n`;
+      text += visible.length === 0 ? "Nenhuma proposta aguarda aprovação." : visible.map((review, index) => {
+        const lifecycle = review.lifecycle;
+        const curation = lifecycle?.curation;
+        const issues = [...(lifecycle?.validation.errors || []), ...(lifecycle?.validation.warnings || [])];
+        return `<b>${safePage * pageSize + index + 1}. ${review.produto}</b>\n` +
+          `🛒 ${lifecycle?.candidate.marketplace || detectMarketplace(review.normalizedUrl)} · 💰 R$ ${review.preco.toFixed(2).replace(".", ",")}\n` +
+          `🧠 ${curation?.recommendation || "REVIEW"} · Score ${curation?.score ?? 0} · ${curation?.confidence || "LOW"}\n` +
+          `⚠️ ${issues.join("; ") || "Sem problemas críticos identificados."}\n` +
+          `📅 ${new Date(review.createdAt).toLocaleString("pt-BR")}\n`;
+      }).join("\n");
+      const keyboardRows: any[] = visible.map(review => ([
+        { text: `🔎 ${review.produto.slice(0, 24)}`, callback_data: `review_details:${review.id}` },
+        { text: "✅ Aprovar", callback_data: `confirm_pub:${review.id}` },
+        { text: "❌ Rejeitar", callback_data: `cancel_rev:${review.id}` },
+      ]));
+      const nav: any[] = [];
+      if (safePage > 0) nav.push({ text: "◀️ Anterior", callback_data: `product_approvals:${safePage - 1}` });
+      if (safePage + 1 < pageCount) nav.push({ text: "Próxima ▶️", callback_data: `product_approvals:${safePage + 1}` });
+      if (nav.length) keyboardRows.push(nav);
+      keyboardRows.push([{ text: "⬅️ Painel", callback_data: "admin_menu" }]);
+      await answerCallbackQuery(callbackId);
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: keyboardRows });
       return;
     }
 
@@ -671,7 +714,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       const keyboard = {
         inline_keyboard: [
           [{ text: "🎯 Ver Analytics", callback_data: `analytics_product:${product.id}:7d` }],
-          [{ text: "✏️ Editar", callback_data: `product_edit:${product.id}` }, { text: "🗑️ Remover", callback_data: `product_del_confirm:${product.id}` }],
+          [{ text: "✏️ Editar", callback_data: `product_edit:${product.id}` }, { text: "🗄️ Arquivar", callback_data: `product_del_confirm:${product.id}` }],
           [{ text: "🔗 Abrir no Site", url: `https://cerberusfinds.com/produto/${product.slug || product.id}` }],
           [{ text: "⬅️ Voltar", callback_data: "products_list:0" }]
         ]
@@ -688,8 +731,16 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       await answerCallbackQuery(callbackId);
       const product = await productsRepository.getProductByIdOrSlug(prodId);
       if (product) {
-        const newStatus = product.ativo === false ? true : false;
-        await productsRepository.updateProduct(product.id, { ativo: newStatus });
+        if (product.ativo !== false) {
+          await productsRepository.pauseProduct(product.id);
+        } else {
+          await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
+          const publication = await syncCatalogAndDeploy(product.produto, product.id);
+          if (!publication.success) {
+            await productsRepository.pauseProduct(product.id);
+            throw new Error(publication.error || "PUBLICATION_ERROR");
+          }
+        }
       }
       // Retorna para a lista
       const products = await productsRepository.getProducts();
@@ -717,7 +768,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         inline_keyboard: [
           [{ text: "📝 Título", callback_data: `field_edit:${product.id}:produto` }, { text: "💰 Preço", callback_data: `field_edit:${product.id}:preco` }],
           [{ text: "📁 Categoria", callback_data: `field_edit:${product.id}:categoria` }, { text: "📝 Descrição", callback_data: `field_edit:${product.id}:descricao` }],
-          [{ text: product.ativo !== false ? "⏸ Pausar" : "🟢 Ativar", callback_data: `product_toggle:${product.id}` }, { text: "🗑️ REMOVER", callback_data: `product_del_confirm:${product.id}` }],
+          [{ text: product.ativo !== false ? "⏸ Pausar" : "🟢 Reativar", callback_data: `product_toggle:${product.id}` }, { text: "🗄️ ARQUIVAR", callback_data: `product_del_confirm:${product.id}` }],
           [{ text: "⬅️ Voltar", callback_data: `product_view:${product.id}` }]
         ]
       };
@@ -745,23 +796,23 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
       const keyboard = {
         inline_keyboard: [
-          [{ text: "🔥 CONFIRMAR REMOÇÃO", callback_data: `product_del_exec:${product.id}` }],
+          [{ text: "🗄️ CONFIRMAR ARQUIVAMENTO", callback_data: `product_del_exec:${product.id}` }],
           [{ text: "❌ Cancelar", callback_data: `product_edit:${product.id}` }]
         ]
       };
       if (chatId && messageId) {
-        await editTelegramMessageText(chatId, messageId, `🚨 <b>CONFIRMAR REMOÇÃO</b>\n\nProduto: <b>${product.produto}</b>\nREF: <code>${product.ref}</code>\n\nEsta ação removerá o produto do Supabase, gerará commit no GitHub e rebuild estático.`, keyboard);
+        await editTelegramMessageText(chatId, messageId, `🚨 <b>CONFIRMAR ARQUIVAMENTO</b>\n\nProduto: <b>${product.produto}</b>\nREF: <code>${product.ref}</code>\n\nO produto permanecerá no Supabase para histórico e sairá da projeção pública.`, keyboard);
       }
       return;
     }
 
     if (data.startsWith("product_del_exec:")) {
       const prodId = data.split(":")[1];
-      await answerCallbackQuery(callbackId, "Removendo produto...");
+      await answerCallbackQuery(callbackId, "Arquivando produto...");
       const success = await productsRepository.deleteProduct(prodId);
       if (chatId) {
         if (success) {
-          await sendTelegramMessage(chatId, "✅ <b>Produto removido com sucesso do Supabase e do site estático!</b>");
+          await sendTelegramMessage(chatId, "✅ <b>Produto arquivado com histórico preservado no Supabase e projeção pública sincronizada.</b>");
           await renderMainMenu(chatId);
         } else {
           await sendTelegramMessage(chatId, "❌ Falha ao remover produto.");
@@ -993,15 +1044,32 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         return;
       }
       try {
-        const publishedProduct = await productsRepository.createProduct({
+        const pipeline = createProductionProductPipeline();
+        let lifecycle = review.lifecycle ? restoreLifecycleRecord(review.lifecycle) : await pipeline.evaluate({
           produto: review.produto,
           categoria: review.categoria,
           preco: review.preco,
           imagens: review.imagens,
-          link: review.normalizedUrl,
+          normalizedUrl: review.normalizedUrl,
           descricao: review.descricao,
-          status: "published"
+          marketplace: detectMarketplace(review.normalizedUrl),
         });
+        if (lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
+          review.lifecycle = lifecycle;
+          review.status = "error";
+          await telegramRepo.savePendingReview(review);
+          throw new Error(lifecycle.validation.errors.join(" ") || "VALIDATION_ERROR");
+        }
+        lifecycle = pipeline.approve(lifecycle);
+        lifecycle = await pipeline.publish(lifecycle);
+        review.lifecycle = lifecycle;
+        if (lifecycle.state !== "PUBLISHED" || !lifecycle.publishedProductId) {
+          review.status = "error";
+          await telegramRepo.savePendingReview(review);
+          throw new Error(lifecycle.error || "PUBLICATION_ERROR");
+        }
+        const publishedProduct = await productsRepository.getProductByIdOrSlug(lifecycle.publishedProductId);
+        if (!publishedProduct) throw new Error("PERSISTENCE_ERROR");
         review.status = "published";
         await telegramRepo.savePendingReview(review);
         await telegramRepo.deleteUserState(senderId);
@@ -1012,6 +1080,26 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       } catch (err: any) {
         if (chatId) await sendTelegramMessage(chatId, `❌ Falha ao publicar: ${err.message}`);
       }
+      return;
+    }
+
+    if (data.startsWith("review_details:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      await answerCallbackQuery(callbackId);
+      if (!review) {
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ Revisão não localizada.");
+        return;
+      }
+      const lifecycle = review.lifecycle;
+      const text = "🔎 <b>DETALHES DA REVISÃO</b>\n\n" +
+        `Estado: <b>${lifecycle?.state || "PENDING_APPROVAL"}</b>\n` +
+        `Validação: <b>${lifecycle?.validation.outcome || "PENDING"}</b>\n` +
+        `Erros: ${lifecycle?.validation.errors.join("; ") || "Nenhum"}\n` +
+        `Warnings: ${lifecycle?.validation.warnings.join("; ") || "Nenhum"}\n` +
+        `Recomendação: <b>${lifecycle?.curation.recommendation || "REVIEW"}</b>\n` +
+        `Score: ${lifecycle?.curation.score ?? 0} · Confiança: ${lifecycle?.curation.confidence || "LOW"}`;
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, buildMainReviewKeyboard(reviewId));
       return;
     }
 
@@ -1026,7 +1114,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data.startsWith("cancel_rev:")) {
       const reviewId = data.split(":")[1];
       const review = await telegramRepo.getPendingReview(reviewId);
-      if (review) { review.status = "cancelled"; await telegramRepo.savePendingReview(review); }
+      if (review) {
+        review.status = "rejected";
+        if (review.lifecycle?.state === "PENDING_APPROVAL") {
+          review.lifecycle = createProductionProductPipeline().reject(restoreLifecycleRecord(review.lifecycle), "Administrador rejeitou a proposta.");
+        }
+        await telegramRepo.savePendingReview(review);
+      }
       await telegramRepo.deleteUserState(senderId);
       await answerCallbackQuery(callbackId, "❌ Cancelado.");
       if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, "❌ Cadastro cancelado.");
@@ -1135,6 +1229,15 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           if (chatId) await sendTelegramMessage(chatId, `❌ Falha ao extrair: ${extResult.error || "Erro desconhecido"}`);
           continue;
         }
+        const lifecycle = await createProductionProductPipeline().evaluate({
+          ...extResult.data,
+          normalizedUrl: extResult.data.normalizedUrl,
+          marketplace: detectMarketplace(extResult.data.normalizedUrl),
+        });
+        if (lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
+          if (chatId) await sendTelegramMessage(chatId, `⚠️ <b>VALIDATION_ERROR</b>\n\n${lifecycle.validation.errors.join(" ") || "Produto não pode seguir para aprovação."}`);
+          continue;
+        }
         const reviewId = `rev_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
         const review: PendingReview = {
           id: reviewId,
@@ -1143,6 +1246,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           firstName,
           username,
           createdAt: Date.now(),
+          lifecycle,
           ...extResult.data
         };
         await telegramRepo.savePendingReview(review);

@@ -11,6 +11,7 @@ import { fetchProductDataFromUrl } from "./server/services/scraper";
 import { handleTelegramWebhookUpdate, startTelegramPolling } from "./server/services/telegramBot";
 import { processProductUrl } from "./server/services/productAutomation";
 import * as cerberusOperator from "./server/services/cerberusOperator";
+import { createProductionProductPipeline } from "./server/services/productPipeline";
 
 dotenv.config();
 
@@ -211,21 +212,21 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "Nome, categoria, preço e link são obrigatórios." });
       }
 
-      const newProduct = await productsRepository.createProduct({
+      const lifecycle = await createProductionProductPipeline().evaluate({
         produto,
         categoria,
-        preco,
-        imagens,
-        link,
-        destaque,
+        preco: Number(preco),
+        imagens: Array.isArray(imagens) ? imagens : [],
+        normalizedUrl: link,
         descricao,
-        paginaPonteUrl
       });
-
-      return res.status(201).json({
+      if (lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
+        return res.status(400).json({ success: false, error: lifecycle.error || "VALIDATION_ERROR", lifecycle });
+      }
+      return res.status(202).json({
         success: true,
-        message: "Produto criado com sucesso no banco de dados!",
-        product: newProduct
+        message: "Produto avaliado e aguardando aprovação humana no Telegram; nenhuma publicação foi executada por este endpoint.",
+        lifecycle,
       });
     } catch (err: any) {
       console.error("Erro ao criar produto:", err);

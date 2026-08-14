@@ -19,7 +19,7 @@ const ai = new GoogleGenAI({
 
 export interface ProcessProductResult {
   success: boolean;
-  action: "created" | "updated" | "unchanged" | "failed";
+  action: "created" | "updated" | "unchanged" | "review" | "failed";
   product?: Product;
   oldPrice?: number;
   newPrice?: number;
@@ -499,6 +499,25 @@ export async function processProductUrl(rawUrl: string, sourceInfo?: any): Promi
       reason: "URL de produto inválida ou não fornecida."
     };
   }
+
+  // Bloco 7: esta entrada de automação não cria nem publica produtos. A extração
+  // apenas prepara uma proposta para a fila humana controlada no Telegram.
+  const review = await extractProductForReview(normalizedUrl);
+  if (!review.success || !review.data) {
+    return {
+      success: false,
+      action: "failed",
+      reason: review.error || "EXTERNAL_SERVICE_ERROR",
+      normalizedUrl,
+    };
+  }
+  return {
+    success: true,
+    action: "review",
+    reason: "Produto preparado para validação e aprovação humana; nenhuma publicação foi executada.",
+    marketplace: review.data.marketplace,
+    normalizedUrl,
+  };
 
   // Se já houver um processamento em andamento para esta mesma URL, aguarda a promessa existente
   if (inFlightRequests.has(normalizedUrl)) {

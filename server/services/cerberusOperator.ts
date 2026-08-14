@@ -3,6 +3,7 @@ import path from "path";
 import { supabase, getProducts } from "../repositories/productsRepository";
 import { exportStaticProductsJson } from "./exportProductsJson";
 import { syncCatalogAndDeploy } from "./catalogSync";
+import { getProductPipelineTelemetry } from "./productPipeline";
 import {
   type AutoHealActionResult,
   type AutoHealMode,
@@ -519,7 +520,18 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 4. Tracking
+  // 4. Lifecycle: observação das propostas processadas nesta instância, sem atuar sobre produtos.
+  const t0Lifecycle = Date.now();
+  const lifecycle = getProductPipelineTelemetry();
+  components["Lifecycle"] = {
+    name: "Lifecycle",
+    status: lifecycle.errors > 0 || lifecycle.pendingApproval > 25 ? "DEGRADED" : "HEALTHY",
+    latencyMs: Date.now() - t0Lifecycle,
+    timestamp: now,
+    details: `${lifecycle.pendingApproval} aguardando aprovação; ${lifecycle.errors} com erro; ${lifecycle.published} publicados no ciclo atual.`,
+  };
+
+  // 5. Tracking
   components["Tracking"] = {
     name: "Tracking",
     status: "HEALTHY",
@@ -527,7 +539,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     timestamp: now
   };
 
-  // 5. Analytics
+  // 6. Analytics
   const t0Analytics = Date.now();
   try {
     if (!supabase) throw new Error("Supabase inativo");
@@ -550,7 +562,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 6. Telegram: API acessível, mantendo o token estritamente no servidor.
+  // 7. Telegram: API acessível, mantendo o token estritamente no servidor.
   const t0Telegram = Date.now();
   try {
     const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -574,7 +586,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 7. Site e deploy: conteúdo público mínimo disponível.
+  // 8. Site e deploy: conteúdo público mínimo disponível.
   const t0Site = Date.now();
   try {
     const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
@@ -610,7 +622,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 8. GitHub: branch main acessível e versão conhecida, sem escrita remota.
+  // 9. GitHub: branch main acessível e versão conhecida, sem escrita remota.
   const t0GitHub = Date.now();
   try {
     const branch = await fetchJsonWithTimeout(GITHUB_MAIN_URL);
