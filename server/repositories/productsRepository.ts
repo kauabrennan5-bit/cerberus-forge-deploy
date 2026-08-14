@@ -1,5 +1,3 @@
-import fs from "fs";
-import path from "path";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
@@ -8,14 +6,6 @@ import { exportStaticProductsJson } from "../services/exportProductsJson";
 import { syncCatalogToGitHub } from "../services/githubCatalogSync";
 
 dotenv.config();
-
-// Ensure data directory exists for file persistence fallback
-const DATA_DIR = path.join(process.cwd(), "data");
-const PRODUCTS_FILE = path.join(DATA_DIR, "products.json");
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
 
 // Initialize Supabase Client prioritizing Service Role Key for server-side administrative access (bypassing RLS)
 const supabaseUrl = process.env.SUPABASE_URL || "";
@@ -66,21 +56,11 @@ export function isValidProductLink(link?: string): boolean {
   }
 }
 
-function saveStoredProductsToFile(products: Product[]) {
-  try {
-    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(products, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Aviso ao salvar cópia de backup local:", err);
-  }
-}
-
 /**
  * Salva a lista de produtos diretamente na tabela public.products do Supabase
  */
 async function saveProducts(products: Product[]): Promise<void> {
   const client = requireSupabase();
-
-  saveStoredProductsToFile(products);
 
   const formatted = products.map((p) => ({
     id: p.id,
@@ -107,12 +87,11 @@ async function saveProducts(products: Product[]): Promise<void> {
   }
   console.log("✅ [Supabase] Gravação em public.products concluída com sucesso!");
 
-  // Sincronização automática auxiliar (não-bloqueante se falhar)
-  try {
-    await exportStaticProductsJson();
-    await syncCatalogToGitHub("update: catalog products updated via repository");
-  } catch (syncErr: any) {
-    console.warn("⚠️ [Sync Info] Aviso na sincronização estática/GitHub:", syncErr?.message);
+  // A projeção pública e o commit no GitHub fazem parte do contrato de publicação.
+  const exportedCount = await exportStaticProductsJson();
+  const syncOk = await syncCatalogToGitHub("update: catalog products updated via repository");
+  if (!syncOk) {
+    throw new Error(`Falha ao sincronizar o catálogo derivado com o GitHub após persistência em public.products (exportados: ${exportedCount}).`);
   }
 }
 
@@ -120,12 +99,9 @@ async function saveProducts(products: Product[]): Promise<void> {
  * Busca todos os produtos diretamente da tabela public.products do Supabase
  */
 export async function getProducts(): Promise<Product[]> {
-  if (!supabase) {
-    console.warn("⚠️ [Supabase Warning] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente. Retornando lista vazia.");
-    return [];
-  }
+  const client = requireSupabase();
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from("products")
     .select("*")
     .order("created_at", { ascending: false });
@@ -174,7 +150,7 @@ export async function getProductByIdOrSlug(idOrSlug: string): Promise<Product | 
 }
 
 /**
- * Cria um novo produto no repositório (Supabase + local fallback)
+ * Cria um novo produto no repositório canônico (Supabase + projeção sincronizada).
  * Com deduplicação inteligente por URL e ID de Marketplace.
  */
 export async function createProduct(input: {
@@ -284,45 +260,27 @@ export async function updateProduct(
  * Exclui produto por ID
  */
 export async function deleteProduct(id: string): Promise<boolean> {
-  console.log('[DELETE LOG 8] Entrada na função deleteProduct() do Repository. ID/Slug procurado:', id);
-  let products = await getProducts();
+  console.log('[DELETE] Entrada na função deleteProduct(); identificador recebido:', id);
+  const products = await getProducts();
   const target = products.find(
     (p) => p.id === id || p.slug === id || generateSlug(p.produto) === id || p.ref === id
   );
 
   if (!target) {
-    console.log('[DELETE LOG 8] Nenhum produto correspondente encontrado na lista local.');
+    console.log('[DELETE] Nenhum produto correspondente encontrado em public.products.');
     return false;
   }
 
-  const targetId = target.id;
-  console.log(`[DELETE LOG 8] Produto localizado: "${target.produto}" (ID Real: ${targetId}).`);
-  products = products.filter((p) => p.id !== targetId);
-
-  await saveProducts(products);
-  console.log(`[DELETE LOG 10] Resultado da exclusão no fallback local (products.json). Produtos restantes: ${products.length}.`);
-
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from("products").delete().eq("id", targetId);
-      if (error) {
-        console.error('[DELETE LOG 9] Erro de exclusão no Supabase:', error);
-      } else {
-        console.log('[DELETE LOG 9] Resultado da exclusão no Supabase: Sucesso. Supabase data:', data);
-      }
-    } catch (e) {
-      console.error('[DELETE LOG 9] Exceção ao excluir no Supabase:', e);
-    }
-  } else {
-    console.log('[DELETE LOG 9] Supabase não configurado/desativado. Exclusão operando no armazenamento persistente local.');
+  const client = requireSupabase();
+  const { error } = await client.from("products").delete().eq("id", target.id);
+  if (error) {
+    throw new Error(`Falha de persistência no banco Supabase ao remover public.products: ${error.message}`);
   }
 
-  // Sincroniza com GitHub (Dispara Rebuild Automático no Render) após remoção
-  try {
-    console.log(`[Sync] Sincronizando remoção de "${target.produto}" com GitHub...`);
-    await syncCatalogToGitHub(`update: remove product ${target.ref} - ${target.produto}`);
-  } catch (syncErr) {
-    console.error("❌ [GitHub Sync Error] Falha ao sincronizar remoção no GitHub:", syncErr);
+  console.log(`[Supabase] Produto "${target.produto}" removido de public.products.`);
+  const syncOk = await syncCatalogToGitHub(`update: remove product ${target.ref} - ${target.produto}`);
+  if (!syncOk) {
+    throw new Error(`Produto removido do Supabase, mas a projeção do catálogo não foi sincronizada no GitHub (id: ${target.id}).`);
   }
 
   return true;

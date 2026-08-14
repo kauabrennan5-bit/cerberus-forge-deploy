@@ -22,7 +22,9 @@ export interface Category {
  * Lista todas as categorias cadastradas no Supabase
  */
 export async function getCategories(): Promise<Category[]> {
-  if (!supabase) return [];
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para categorias.");
+  }
   
   const { data, error } = await supabase
     .from("catalog_categories")
@@ -30,8 +32,7 @@ export async function getCategories(): Promise<Category[]> {
     .order("name", { ascending: true });
     
   if (error) {
-    console.error("❌ [Categories Repo] Erro ao buscar categorias:", error.message);
-    return [];
+    throw new Error(`Falha ao consultar categorias no Supabase: ${error.message}`);
   }
   
   return data || [];
@@ -40,8 +41,10 @@ export async function getCategories(): Promise<Category[]> {
 /**
  * Adiciona uma nova categoria
  */
-export async function addCategory(name: string): Promise<Category | null> {
-  if (!supabase) return null;
+export async function addCategory(name: string): Promise<Category> {
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para categorias.");
+  }
   
   const { data, error } = await supabase
     .from("catalog_categories")
@@ -50,17 +53,15 @@ export async function addCategory(name: string): Promise<Category | null> {
     .single();
     
   if (error) {
-    console.error("❌ [Categories Repo] Erro ao adicionar categoria:", error.message);
-    return null;
+    throw new Error(`Falha ao adicionar categoria no Supabase: ${error.message}`);
   }
 
-  try {
-    await exportStaticProductsJson();
-    await syncCatalogToGitHub(`update: add category ${name}`);
-  } catch (err) {
-    console.error("❌ [GitHub Sync Error] Falha ao sincronizar nova categoria com GitHub:", err);
+  await exportStaticProductsJson();
+  const syncOk = await syncCatalogToGitHub(`update: add category ${name}`);
+  if (!syncOk) {
+    throw new Error("Categoria criada no Supabase, mas a projeção do catálogo não foi sincronizada no GitHub/main.");
   }
-  
+
   return data;
 }
 
@@ -68,7 +69,9 @@ export async function addCategory(name: string): Promise<Category | null> {
  * Renomeia uma categoria e atualiza todos os produtos vinculados (Cascata manual)
  */
 export async function renameCategory(oldName: string, newName: string): Promise<boolean> {
-  if (!supabase) return false;
+  if (!supabase) {
+    throw new Error("Supabase não está configurado para categorias.");
+  }
   
   try {
     // 1. Atualiza a categoria na tabela de categorias
@@ -86,19 +89,18 @@ export async function renameCategory(oldName: string, newName: string): Promise<
       .eq("categoria", oldName);
       
     if (prodError) {
-      console.warn("⚠️ [Categories Repo] Categoria renomeada, mas falha ao atualizar produtos:", prodError.message);
+      throw new Error(`Categoria atualizada, mas os produtos não foram atualizados: ${prodError.message}`);
     }
 
-    try {
-      await exportStaticProductsJson();
-      await syncCatalogToGitHub(`update: rename category ${oldName} to ${newName}`);
-    } catch (err) {
-      console.error("❌ [GitHub Sync Error] Falha ao sincronizar renomeação de categoria com GitHub:", err);
+    await exportStaticProductsJson();
+    const syncOk = await syncCatalogToGitHub(`update: rename category ${oldName} to ${newName}`);
+    if (!syncOk) {
+      throw new Error("Categoria renomeada no Supabase, mas a projeção do catálogo não foi sincronizada no GitHub/main.");
     }
-    
+
     return true;
   } catch (err: any) {
     console.error("❌ [Categories Repo] Erro ao renomear categoria:", err.message);
-    return false;
+    throw err;
   }
 }

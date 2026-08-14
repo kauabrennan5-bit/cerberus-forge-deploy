@@ -7,11 +7,14 @@ dotenv.config();
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const backendUrl = process.env.CATALOG_API_URL || 'https://cerberus-forge-deploy-backend.onrender.com/api/products';
 
 async function generateStaticCatalog() {
-  console.log('[Build Catalog] Iniciando geração do catálogo estático a partir do Supabase...');
+  console.log('[Build Catalog] Iniciando geração do catálogo estático a partir da fonte canônica...');
 
   let rawProducts = [];
+  let sourceLoaded = false;
+  let sourceName = '';
 
   if (supabaseUrl && supabaseKey) {
     try {
@@ -22,59 +25,58 @@ async function generateStaticCatalog() {
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.warn('⚠️ [Build Catalog] Erro ao buscar produtos do Supabase no build:', error.message);
+        console.warn('⚠️ [Build Catalog] Erro ao buscar produtos do Supabase:', error.message);
       } else if (Array.isArray(data)) {
         rawProducts = data;
+        sourceLoaded = true;
+        sourceName = 'Supabase public.products';
         console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos diretamente do Supabase.`);
       }
     } catch (err) {
-      console.warn('⚠️ [Build Catalog] Exceção ao conectar ao Supabase no build:', err);
+      console.warn('⚠️ [Build Catalog] Exceção ao conectar ao Supabase:', err?.message || err);
     }
-  } else {
-    console.log('ℹ️ [Build Catalog] Credenciais do Supabase não encontradas no build. Tentando fallback local.');
   }
 
-  // Fallback para API do Backend se Supabase falhou ou retornou vazio
-  if (rawProducts.length === 0) {
-    console.log('ℹ️ [Build Catalog] Supabase falhou ou retornou vazio. Tentando buscar da API do Backend...');
+  // O backend é apenas o caminho operacional alternativo para o mesmo Supabase;
+  // nunca é permitido usar um arquivo local como fonte concorrente do catálogo.
+  if (!sourceLoaded) {
+    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela API do backend: ${backendUrl}`);
     try {
-      const backendUrl = 'https://cerberus-forge-deploy-backend.onrender.com/api/products';
       const response = await fetch(backendUrl);
-      if (response.ok) {
-        const json = await response.json();
-        if (json.success && Array.isArray(json.products)) {
-          rawProducts = json.products;
-          console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via API do Backend.`);
-        }
+      if (!response.ok) {
+        throw new Error(`API retornou HTTP ${response.status}`);
       }
+
+      const json = await response.json();
+      const products = json.products || json.data;
+      if (!Array.isArray(products)) {
+        throw new Error('Resposta da API não contém uma lista de produtos.');
+      }
+
+      rawProducts = products;
+      sourceLoaded = true;
+      sourceName = 'backend /api/products (projeção de public.products)';
+      console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via API do backend.`);
     } catch (apiErr) {
-      console.warn('⚠️ [Build Catalog] Falha ao buscar da API do Backend:', apiErr.message);
+      throw new Error(`Nenhuma fonte canônica disponível: Supabase indisponível e API do backend falhou (${apiErr?.message || apiErr}).`);
     }
   }
 
-  // Fallback para arquivo local se tudo mais falhou
-  if (rawProducts.length === 0) {
-    const localFile = path.join(process.cwd(), 'data', 'products.json');
-    if (fs.existsSync(localFile)) {
-      try {
-        rawProducts = JSON.parse(fs.readFileSync(localFile, 'utf-8'));
-        console.log(`📁 [Build Catalog] ${rawProducts.length} produtos carregados do fallback local (data/products.json).`);
-      } catch (e) {
-        console.warn('⚠️ [Build Catalog] Erro ao ler fallback local:', e);
-      }
-    }
+  if (!sourceLoaded) {
+    throw new Error('Nenhuma fonte canônica carregada; products.json não será gerado a partir de dados locais.');
   }
 
-  // Filtragem e sanitização rigorosa
+  // Filtragem e sanitização da projeção pública.
   const validProducts = rawProducts.filter((p) => {
     if (!p.produto || typeof p.produto !== 'string' || p.produto.trim() === '') return false;
     if (!p.link || typeof p.link !== 'string' || p.link.trim() === '' || p.link.includes('exemplo.com')) return false;
     const price = Number(p.preco);
-    if (isNaN(price) || price <= 0) return false;
+    if (Number.isNaN(price) || price <= 0) return false;
     if (p.ativo === false || p.status === 'pending') return false;
     return true;
   }).map((p) => ({
     id: p.id,
+    ref: p.ref,
     slug: p.slug || p.id,
     produto: p.produto.trim(),
     preco: Number(p.preco),
@@ -82,7 +84,7 @@ async function generateStaticCatalog() {
     imagens: Array.isArray(p.imagens) ? p.imagens : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : []),
     link: p.link || p.affiliate_url,
     categoria: p.categoria || 'Geral',
-    marketplace: p.marketplace || 'Shopee',
+    marketplace: p.marketplace,
     cupom: p.cupom || '',
     freteGratis: Boolean(p.freteGratis || p.frete_gratis),
     descricao: p.descricao || p.description || '',
@@ -98,10 +100,10 @@ async function generateStaticCatalog() {
 
   const outputPath = path.join(publicDataDir, 'products.json');
   fs.writeFileSync(outputPath, JSON.stringify(validProducts, null, 2), 'utf-8');
-  console.log(`✅ [Build Catalog] ${validProducts.length} produtos salvos com sucesso em ${outputPath}`);
+  console.log(`✅ [Build Catalog] ${validProducts.length} produtos salvos em ${outputPath} a partir de ${sourceName}.`);
 }
 
 generateStaticCatalog().catch((err) => {
-  console.error('❌ [Build Catalog] Erro fatal:', err);
+  console.error('❌ [Build Catalog] Erro fatal:', err?.message || err);
   process.exit(1);
 });

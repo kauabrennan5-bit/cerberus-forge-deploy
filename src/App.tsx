@@ -93,7 +93,7 @@ export default function App() {
     }
   }, [currentView, selectedProduct]);
 
-  // Load Products from Backend REST API (/api/products)
+  // Load Products from the canonical static projection (/data/products.json)
   const loadProducts = useCallback(async () => {
     setIsLoadingProducts(true);
     setFetchError(null);

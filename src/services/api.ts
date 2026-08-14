@@ -40,44 +40,40 @@ function getApiUrl(path: string): string {
 }
 
 /**
- * Cliente de API para o Cerberus Finds
- * Consome o endpoint backend /api/products que reflete diretamente a tabela public.products do Supabase.
+ * Carrega a projeção pública do catálogo.
+ *
+ * public/data/products.json é derivado de public.products durante a sincronização
+ * e é a única fonte usada pela vitrine para renderizar produtos. Operações
+ * administrativas continuam usando os endpoints do backend abaixo.
  */
 export async function getProducts(): Promise<any[]> {
-  try {
-    const apiUrl = getApiUrl('/api/products');
-    console.log('[Catalog API] Buscando catálogo dinâmico em:', apiUrl);
-    const response = await fetch(apiUrl);
-    
-    if (!response.ok) {
-      console.error(`[Catalog API Error] ${apiUrl} retornou HTTP ${response.status}.`);
-      return [];
-    }
+  const catalogUrl = `/data/products.json?v=${Date.now()}`;
+  const response = await fetch(catalogUrl, { cache: 'no-store' });
 
-    const resData = await response.json();
-    const list = resData.products || resData.data || (Array.isArray(resData) ? resData : []);
-    
-    if (Array.isArray(list)) {
-      console.log(`[Catalog API] ${list.length} produtos carregados.`);
-      return list.map((p: any) => ({
-        ...p,
-        id: String(p.id || ''),
-        produto: p.produto || '',
-        preco: Number(p.preco) || 0,
-        imagens: Array.isArray(p.imagens) ? p.imagens : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
-        link: p.link || p.url || '',
-        categoria: p.categoria || 'Geral',
-        marketplace: p.marketplace || 'Shopee',
-        ativo: p.ativo !== false,
-        status: p.status || 'published'
-      }));
-    }
-    
-    return [];
-  } catch (err: any) {
-    console.error('[Catalog API Error] Erro ao carregar catálogo:', err?.message || err);
-    return [];
+  if (!response.ok) {
+    throw new Error(`Catálogo indisponível: /data/products.json retornou HTTP ${response.status}.`);
   }
+
+  const list = await response.json();
+  if (!Array.isArray(list)) {
+    throw new Error('Catálogo indisponível: /data/products.json não contém uma lista válida.');
+  }
+
+  console.log(`[Catalog] ${list.length} produtos carregados de /data/products.json.`);
+  return list.map((p: any) => ({
+    ...p,
+    id: String(p.id || ''),
+    produto: p.produto || '',
+    preco: Number(p.preco) || 0,
+    imagens: Array.isArray(p.imagens)
+      ? p.imagens
+      : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
+    link: p.link || p.url || '',
+    categoria: p.categoria || 'Geral',
+    marketplace: p.marketplace,
+    ativo: p.ativo !== false,
+    status: p.status || 'published'
+  }));
 }
 
 export async function verifyAdminPassword(password: string): Promise<{ success: boolean; error?: string }> {

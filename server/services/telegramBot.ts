@@ -5,6 +5,7 @@ import * as productsRepository from "../repositories/productsRepository";
 import * as categoriesRepository from "../repositories/categoriesRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
 import * as googleAnalytics from "./googleAnalytics";
+import * as cerberusOperator from "./cerberusOperator";
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const TELEGRAM_API_BASE = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -268,9 +269,10 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "📊 Analytics", callback_data: "analytics_overview" }, { text: "📦 Produtos", callback_data: "products_list:0" }],
-      [{ text: "➕ Adicionar produto", callback_data: "admin_add" }, { text: "🏷 Categorias", callback_data: "admin_categories" }],
-      [{ text: "⭐ Destaques", callback_data: "admin_highlights" }, { text: "⚙️ Sistema", callback_data: "admin_system" }]
+      [{ text: "🧠 Cerberus Operator", callback_data: "operator_home" }, { text: "📊 Analytics", callback_data: "analytics_overview" }],
+      [{ text: "📦 Produtos", callback_data: "products_list:0" }, { text: "➕ Adicionar", callback_data: "admin_add" }],
+      [{ text: "🏷 Categorias", callback_data: "admin_categories" }, { text: "⭐ Destaques", callback_data: "admin_highlights" }],
+      [{ text: "⚙️ Sistema", callback_data: "admin_system" }]
     ]
   };
 
@@ -306,6 +308,108 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data === "admin_menu" || data === "admin_back") {
       await answerCallbackQuery(callbackId);
       if (chatId && messageId) await renderMainMenu(chatId, messageId, true);
+      return;
+    }
+
+    // --- NAMESPACE: CERBERUS OPERATOR ---
+    if (data === "operator_home" || data === "operator_refresh") {
+      await answerCallbackQuery(callbackId, "Verificando saúde do sistema...");
+      const report = await cerberusOperator.runSystemHealthCheck();
+      const statusEmoji = report.overallStatus === "HEALTHY" ? "🟢" : report.overallStatus === "DEGRADED" ? "🟡" : "🔴";
+      
+      const text = 
+        "🧠 <b>CERBERUS OPERATOR</b>\n" +
+        "━━━━━━━━━━━━━━━━━━\n" +
+        `Estado geral: ${statusEmoji} <b>${report.overallStatus}</b>\n` +
+        `Modo: <code>${report.mode}</code>\n\n` +
+        `• Backend: ${report.components["Backend"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
+        `• Supabase: ${report.components["Supabase"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
+        `• Catálogo: ${report.components["Catálogo"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
+        `• Tracking: ${report.components["Tracking"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
+        `• Analytics: ${report.components["Analytics"]?.status === "HEALTHY" ? "🟢" : "🟡"}\n` +
+        `• Telegram: ${report.components["Telegram"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
+        `• Site / Deploy: ${report.components["Site"]?.status === "HEALTHY" ? "🟢" : "🟡"}\n\n` +
+        `🚨 Incidentes abertos: <b>${report.activeIncidentsCount}</b>\n` +
+        `🔧 Correções recentes: <b>${report.recentCorrectionsCount}</b>\n` +
+        `🕐 Última verificação: ${report.lastCheckAt}\n` +
+        "━━━━━━━━━━━━━━━━━━";
+
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "🏥 Health Check E2E", callback_data: "operator_health" }, { text: "🚨 Incidentes", callback_data: "operator_incidents" }],
+          [{ text: "🔧 Ações de Correção", callback_data: "operator_actions" }, { text: "📜 Logs Operacionais", callback_data: "operator_logs" }],
+          [{ text: "🔄 Atualizar Status", callback_data: "operator_refresh" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
+        ]
+      };
+
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_health") {
+      await answerCallbackQuery(callbackId);
+      const report = await cerberusOperator.runSystemHealthCheck();
+      let text = "🏥 <b>RELATÓRIO DE HEALTH CHECK</b>\n\n";
+      for (const [name, comp] of Object.entries(report.components)) {
+        const em = comp.status === "HEALTHY" ? "🟢" : comp.status === "DEGRADED" ? "🟡" : "🔴";
+        text += `${em} <b>${name}</b>: ${comp.status} (${comp.latencyMs}ms)${comp.error ? `\n   └ <i>${comp.error}</i>` : ""}\n`;
+      }
+      text += `\n🕒 Verificado em: ${report.lastCheckAt}`;
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_incidents") {
+      await answerCallbackQuery(callbackId);
+      const list = cerberusOperator.getIncidents();
+      let text = "🚨 <b>INCIDENTES REGISTRADOS</b>\n\n";
+      if (list.length === 0) {
+        text += "Nenhum incidente ativo ou recente registrado. O sistema opera normalmente.";
+      } else {
+        for (const inc of list.slice(0, 5)) {
+          text += `• <code>${inc.id}</code> [${inc.severity}] <b>${inc.component}</b>\n  Status: ${inc.status} | ${inc.timestamp}\n  Diag: ${inc.diagnosis}\n\n`;
+        }
+      }
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_actions") {
+      await answerCallbackQuery(callbackId);
+      let text = "🔧 <b>AÇÕES OPERACIONAIS SEGURAS</b>\n\nEscolha uma ação para executar no modo Safe Auto-Heal:\n\n";
+      const actions = cerberusOperator.AVAILABLE_OPERATOR_ACTIONS;
+      const buttons = actions.map(a => [{ text: a.name, callback_data: `operator_run:${a.id}` }]);
+      buttons.push([{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]);
+      const keyboard = { inline_keyboard: buttons };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data.startsWith("operator_run:")) {
+      const actionId = data.split(":")[1];
+      await answerCallbackQuery(callbackId, "Executando ação...");
+      const res = await cerberusOperator.executeOperatorAction(actionId);
+      const text = (res.success ? "✅ <b>AÇÃO EXECUTADA COM SUCESSO</b>\n\n" : "❌ <b>FALHA NA AÇÃO</b>\n\n") + res.message;
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_logs") {
+      await answerCallbackQuery(callbackId);
+      const logs = cerberusOperator.getRecentCorrections();
+      let text = "📜 <b>LOGS DE CORREÇÕES RECENTES</b>\n\n";
+      if (logs.length === 0) {
+        text += "Nenhuma correção ou ação registrada recentemente.";
+      } else {
+        for (const l of logs.slice(0, 10)) {
+          text += `• [${l.timestamp}] <b>${l.action}</b>\n  Resultado: ${l.result}\n\n`;
+        }
+      }
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 

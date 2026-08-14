@@ -21,8 +21,6 @@ interface SyncLogResult {
  */
 export async function syncCatalogAndDeploy(productTitle?: string, productId?: string): Promise<SyncLogResult> {
   const staticSiteUrl = "https://cerberus-static-catalog.onrender.com";
-  const deployHookUrl = process.env.RENDER_STATIC_DEPLOY_HOOK_URL || "";
-
   console.log("\n==========================================");
   console.log("[STATIC CATALOG SYNC] Iniciando sincronização e verificação E2E...");
   console.log(`Produto: ${productTitle || "Rebuild Manual / Geral"}`);
@@ -48,13 +46,8 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
     // 3. Sincroniza com GitHub (Dispara Rebuild Automático no Render)
     console.log(`[Sync] Sincronizando catálogo com GitHub...`);
     const githubSyncSuccess = await syncCatalogToGitHub(productTitle ? `update: add/edit product ${productTitle}` : "update: manual catalog sync");
-    
-    if (!githubSyncSuccess && deployHookUrl) {
-      console.log(`[Fallback] GitHub Sync falhou. Tentando acionar via Deploy Hook direto...`);
-      const response = await fetch(deployHookUrl, { method: "POST" });
-      if (!response.ok) {
-        console.warn(`⚠️ [Deploy Hook Warning] HTTP ${response.status} ao acionar deploy hook.`);
-      }
+    if (!githubSyncSuccess) {
+      throw new Error("Falha ao sincronizar public/data/products.json com o GitHub/main; nenhum fallback de deploy pode substituir o commit canônico.");
     }
 
     // 4. Verificação rigorosa de ponta a ponta (Polling E2E no Static Site público)

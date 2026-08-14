@@ -27,3 +27,10 @@
 - [x] Atualizar cabeçalho e navegação de /listar para exibir total, página atual de total e botões condicionais de anterior/próxima.
 - [x] Atualizar cabeçalho e navegação de Analytics -> Escolher Produto para o mesmo padrão.
 - [x] Executar build de produção, validar e enviar commit para a branch main.
+
+# Bloco 2 — Arquitetura e Fonte Única de Verdade
+
+- [x] Criar ARCHITECTURE_CONTRACT.md com fontes de verdade, contratos, identidade, fluxos, erros, fallbacks, segurança, invariantes e detecção de divergência.
+- [x] Auditar e corrigir apenas fallbacks perigosos que possam mascarar indisponibilidade da fonte canônica.
+- [x] Validar criação/leitura/listagem de produtos, tracking, analytics, exportação, paginação, Telegram e build sem implementar o Cerberus Operator.
+- [x] Executar npm install, npm run build, lint/typecheck e testes existentes; revisar diff e enviar somente alterações necessárias para main.

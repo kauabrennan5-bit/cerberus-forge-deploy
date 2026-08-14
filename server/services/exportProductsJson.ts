@@ -79,12 +79,7 @@ export async function exportStaticProductsJson(): Promise<number> {
     return validProducts.length;
   } catch (error) {
     console.error("[Static Export] Erro ao exportar products.json:", error);
-    // Se houver falha, garante array vazio conforme regra de produtos fantasmas
-    const publicDataDir = path.join(process.cwd(), "public", "data");
-    if (!fs.existsSync(publicDataDir)) {
-      fs.mkdirSync(publicDataDir, { recursive: true });
-    }
-    fs.writeFileSync(path.join(publicDataDir, "products.json"), JSON.stringify([], null, 2), "utf-8");
-    return 0;
+    // Uma falha de leitura não pode substituir o catálogo canônico por um array vazio.
+    throw error;
   }
 }
