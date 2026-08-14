@@ -316,11 +316,14 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       await answerCallbackQuery(callbackId, "Verificando saúde do sistema...");
       const report = await cerberusOperator.runSystemHealthCheck();
       const statusEmoji = report.overallStatus === "HEALTHY" ? "🟢" : report.overallStatus === "DEGRADED" ? "🟡" : "🔴";
+      const healthyCount = Object.values(report.components).filter(c => c.status === "HEALTHY").length;
+      const totalCount = Object.keys(report.components).length;
       
       const text = 
-        "🧠 <b>CERBERUS OPERATOR</b>\n" +
+        "🧠 <b>CERBERUS HEARTBEAT & OPERATOR</b>\n" +
         "━━━━━━━━━━━━━━━━━━\n" +
-        `Estado geral: ${statusEmoji} <b>${report.overallStatus}</b>\n` +
+        `Status do Sistema: ${statusEmoji} <b>${report.overallStatus}</b>\n` +
+        `Componentes OK: <b>${healthyCount}/${totalCount}</b>\n` +
         `Modo: <code>${report.mode}</code>\n\n` +
         `• Backend: ${report.components["Backend"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
         `• Supabase: ${report.components["Supabase"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
@@ -329,19 +332,37 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         `• Analytics: ${report.components["Analytics"]?.status === "HEALTHY" ? "🟢" : "🟡"}\n` +
         `• Telegram: ${report.components["Telegram"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
         `• Site / Deploy: ${report.components["Site"]?.status === "HEALTHY" ? "🟢" : "🟡"}\n\n` +
-        `🚨 Incidentes abertos: <b>${report.activeIncidentsCount}</b>\n` +
-        `🔧 Correções recentes: <b>${report.recentCorrectionsCount}</b>\n` +
+        `🚨 Incidentes ativos: <b>${report.activeIncidentsCount}</b>\n` +
         `🕐 Última verificação: ${report.lastCheckAt}\n` +
+        `⏰ Próxima agendada: ${report.nextCheckAt || "Em breve"}\n` +
         "━━━━━━━━━━━━━━━━━━";
 
       const keyboard = {
         inline_keyboard: [
-          [{ text: "🏥 Health Check E2E", callback_data: "operator_health" }, { text: "🚨 Incidentes", callback_data: "operator_incidents" }],
-          [{ text: "🔧 Ações de Correção", callback_data: "operator_actions" }, { text: "📜 Logs Operacionais", callback_data: "operator_logs" }],
-          [{ text: "🔄 Atualizar Status", callback_data: "operator_refresh" }, { text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
+          [{ text: "🏥 Status Detalhado", callback_data: "operator_health" }, { text: "🚨 Incidentes", callback_data: "operator_incidents" }],
+          [{ text: "📊 Histórico", callback_data: "operator_history" }, { text: "🔧 Ações", callback_data: "operator_actions" }],
+          [{ text: "📜 Logs", callback_data: "operator_logs" }, { text: "🔄 Verificar Agora", callback_data: "operator_refresh" }],
+          [{ text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
         ]
       };
 
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_history") {
+      await answerCallbackQuery(callbackId);
+      const history = cerberusOperator.getHealthHistory();
+      let text = "📊 <b>HISTÓRICO RECENTE DE HEALTH CHECKS</b>\n\n";
+      if (history.length === 0) {
+        text += "Nenhum histórico registrado ainda.";
+      } else {
+        for (const h of history.slice(0, 8)) {
+          const em = h.status === "HEALTHY" ? "🟢" : h.status === "DEGRADED" ? "🟡" : "🔴";
+          text += `${em} [${h.timestamp}] <b>${h.component}</b> (${h.latencyMs}ms)${h.error ? ` - <i>${h.error}</i>` : ""}\n`;
+        }
+      }
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }

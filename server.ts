@@ -10,6 +10,7 @@ import * as productsRepository from "./server/repositories/productsRepository";
 import { fetchProductDataFromUrl } from "./server/services/scraper";
 import { handleTelegramWebhookUpdate, startTelegramPolling } from "./server/services/telegramBot";
 import { processProductUrl } from "./server/services/productAutomation";
+import * as cerberusOperator from "./server/services/cerberusOperator";
 
 dotenv.config();
 
@@ -879,6 +880,7 @@ NUNCA modifique ou invente preços ou imagens.`,
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
     startTelegramPolling();
+    cerberusOperator.startOperatorScheduler();
   });
 }
 
