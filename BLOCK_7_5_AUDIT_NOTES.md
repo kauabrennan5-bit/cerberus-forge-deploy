@@ -50,3 +50,13 @@ Em 14/08/2026 às 17:34:56 UTC, uma consulta HTTP somente leitura a `https://cer
 - timestamp público `2026-08-14T17:34:56.312Z`.
 
 O endpoint público de liveness está confirmado no artefato servido pelo Render.
+
+## Verificação pós-migration nos logs do Render
+
+Os logs do Web Service após o deploy c68b8be e o deploy automático subsequente mostram conexão com o Supabase, mas também registram:
+
+`[OPERATOR] Boot recovery em SAFE_MODE: Não foi possível carregar operator_state: Could not find the table 'public.operator_state' in the schema cache`
+
+A mesma condição aparece na mensagem seguinte de boot recovery. Portanto, a migration **não está visível para o projeto Supabase usado pelo Render** neste momento, ou foi aplicada em outro projeto/schema e ainda não foi recarregada no cache do PostgREST. O Operator continua corretamente em SAFE_MODE/OBSERVE; não é seguro declarar persistência READY.
+
+Não há evidência de que o catálogo, produtos ou analytics tenham sido alterados por essa falha.

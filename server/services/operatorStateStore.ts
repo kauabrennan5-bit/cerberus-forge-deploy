@@ -75,6 +75,12 @@ export async function loadPersistedOperatorState(): Promise<OperatorStateLoadRes
     .limit(500);
 
   if (error) {
+    if (error.code === "PGRST204" || error.message?.includes("Could not find the table") || error.message?.includes("schema cache")) {
+      persistenceStatus = "SAFE_MODE";
+      persistenceReason = `Tabela operator_state aguardando reload do cache do Supabase/PostgREST (${error.message}).`;
+      console.warn(`[OPERATOR STATE] ${persistenceReason}`);
+      return { ok: true, states: [] };
+    }
     persistenceStatus = "SAFE_MODE";
     persistenceReason = `Não foi possível carregar operator_state: ${error.message}`;
     return { ok: false, states: [], reason: persistenceReason };
