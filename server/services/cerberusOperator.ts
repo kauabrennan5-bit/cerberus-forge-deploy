@@ -20,6 +20,11 @@ import {
   type StateTransition,
 } from "./operatorAutonomy";
 import {
+  getOperatorPersistenceStatus,
+  loadPersistedOperatorState,
+  persistOperatorState,
+} from "./operatorStateStore";
+import {
   createOperationId,
   createOperationalDiagnostic,
   sanitizeOperationalText,
@@ -56,6 +61,8 @@ export interface OperatorSystemReport {
   autonomyLevel?: 0 | 1 | 2 | 3;
   operatorState?: string;
   escalationCount?: number;
+  persistenceStatus?: "UNKNOWN" | "READY" | "SAFE_MODE";
+  persistenceReason?: string;
 }
 
 export interface Incident {
@@ -118,6 +125,8 @@ let nextCheckTimestamp: string = "Agendado";
 let schedulerTimer: NodeJS.Timeout | null = null;
 let consecutiveFailures: Record<string, number> = {};
 let pendingApprovals: PendingApproval[] = [];
+let operatorPersistenceReady = false;
+let operatorPersistenceReason = "Persistência ainda não inicializada.";
 const operatorStateMachine = new OperatorStateMachine();
 const operationalStateStore = new OperationalStateStore();
 
@@ -207,6 +216,11 @@ function operationalReportIsHealthy(report: OperatorSystemReport): boolean {
 }
 
 export function setOperatorMode(mode: OperatorMode): void {
+  if (mode !== "OBSERVE" && !operatorPersistenceReady) {
+    currentMode = "OBSERVE";
+    console.warn(`[OPERATOR] ${mode} bloqueado: estado crítico não persistido. Motivo: ${operatorPersistenceReason}`);
+    return;
+  }
   currentMode = mode;
   console.log(`[OPERATOR] Modo operacional alterado para: ${mode}`);
 }
@@ -229,6 +243,11 @@ export function getRecentCorrections(): Array<{ timestamp: string; action: strin
 
 export function getOperationalState(): OperationalStateSnapshot {
   return operationalStateStore.snapshot(currentMode, operatorStateMachine);
+}
+
+export function getOperatorPersistenceState(): { ready: boolean; status: "UNKNOWN" | "READY" | "SAFE_MODE"; reason: string } {
+  const status = getOperatorPersistenceStatus();
+  return { ready: operatorPersistenceReady, status: status.status, reason: operatorPersistenceReason || status.reason };
 }
 
 export function getOperatorStateHistory(): StateTransition[] {
@@ -398,7 +417,53 @@ const SAFE_ACTIONS: SafeAction<any, any>[] = [
   },
 ];
 
-const autoHealEngine = new SafeAutoHealEngine(SAFE_ACTIONS);
+async function persistCriticalAutoHealState(state: import("./safeAutoHealEngine").PersistedAutoHealState): Promise<void> {
+  const persisted = await persistOperatorState({
+    stateKey: state.stateKey,
+    actionId: state.actionId,
+    incidentId: state.incidentId,
+    circuitState: state.circuitOpenUntil && state.circuitOpenUntil > Date.now() ? "OPEN" : "CLOSED",
+    failureCount: state.failureCount,
+    retryCount: state.retryCount,
+    lastExecutionAt: state.lastExecutionAt,
+    cooldownUntil: state.cooldownUntil,
+    circuitOpenUntil: state.circuitOpenUntil,
+    lastTransitionAt: Date.now(),
+  });
+  if (!persisted) {
+    operatorPersistenceReady = false;
+    operatorPersistenceReason = "Falha ao persistir o estado de auto-heal; modo OBSERVE imposto por segurança.";
+    currentMode = "OBSERVE";
+    throw new Error("OPERATOR_STATE_PERSISTENCE_ERROR");
+  }
+}
+
+const autoHealEngine = new SafeAutoHealEngine(
+  SAFE_ACTIONS,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  persistCriticalAutoHealState,
+);
+
+export async function initializeOperatorState(): Promise<{ ready: boolean; reason: string }> {
+  const loaded = await loadPersistedOperatorState();
+  if (!loaded.ok) {
+    operatorPersistenceReady = false;
+    operatorPersistenceReason = loaded.reason || "Persistência não confirmada.";
+    currentMode = "OBSERVE";
+    console.warn(`[OPERATOR] Boot recovery em SAFE_MODE: ${operatorPersistenceReason}`);
+    return { ready: false, reason: operatorPersistenceReason };
+  }
+
+  autoHealEngine.hydrate(loaded.states);
+  operatorPersistenceReady = true;
+  operatorPersistenceReason = `${loaded.states.length} estados críticos restaurados.`;
+  currentMode = "OBSERVE";
+  console.log(`[OPERATOR] Boot recovery concluído: ${operatorPersistenceReason}`);
+  return { ready: true, reason: operatorPersistenceReason };
+}
 
 function suggestedActionFor(component: string): string | null {
   const map: Record<string, string> = {
@@ -913,6 +978,8 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     autonomyLevel: operationalState.autonomyLevel,
     operatorState: operationalState.operatorState,
     escalationCount: operationalState.escalations,
+    persistenceStatus: getOperatorPersistenceState().status,
+    persistenceReason: getOperatorPersistenceState().reason,
   };
 
   lastReportCache = report;

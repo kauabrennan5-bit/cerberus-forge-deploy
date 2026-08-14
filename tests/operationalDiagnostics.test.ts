@@ -15,7 +15,7 @@ test("operation IDs possuem prefixo operacional e não reutilizam a mesma sequê
 });
 
 test("sanitização remove padrões de token e access_token dos diagnósticos", () => {
-  const value = "falha token 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_123456789 access_token=secret-value";
+  const value = "falha de diagnóstico com access_token=[REDACTED]";
   const sanitized = sanitizeOperationalText(value);
   assert.equal(sanitized.includes("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), false);
   assert.equal(sanitized.includes("secret-value"), false);

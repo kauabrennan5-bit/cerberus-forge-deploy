@@ -12,11 +12,13 @@ import { handleTelegramWebhookUpdate, startTelegramPolling } from "./server/serv
 import { processProductUrl } from "./server/services/productAutomation";
 import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
+import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 
 dotenv.config();
 
 async function startServer() {
   const app = express();
+  app.set("trust proxy", 1);
   const PORT = Number.parseInt(process.env.PORT || "3000", 10);
 
   const fetchWithTimeout = async (url: string | URL, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> => {
@@ -30,6 +32,39 @@ async function startServer() {
   };
 
   app.use(express.json({ limit: "25mb" }));
+
+  const requestKey = (req: express.Request): string => req.ip || req.socket.remoteAddress || "unknown";
+  const rateLimit = (name: string, fallback: number): number => Math.max(1, Number.parseInt(process.env[name] || String(fallback), 10));
+  const adminRateLimiter = new InMemoryRateLimiter(rateLimit("ADMIN_RATE_LIMIT_PER_MINUTE", 30), 60_000);
+  const catalogRateLimiter = new InMemoryRateLimiter(rateLimit("CATALOG_RATE_LIMIT_PER_MINUTE", 120), 60_000);
+  const analyticsRateLimiter = new InMemoryRateLimiter(rateLimit("ANALYTICS_RATE_LIMIT_PER_MINUTE", 30), 60_000);
+  const expensiveOperationRateLimiter = new InMemoryRateLimiter(rateLimit("EXPENSIVE_RATE_LIMIT_PER_MINUTE", 10), 60_000);
+
+  const enforceRateLimit = (limiter: InMemoryRateLimiter, req: express.Request, res: express.Response): boolean => {
+    const decision = limiter.check(requestKey(req));
+    res.setHeader("X-RateLimit-Remaining", String(decision.remaining));
+    if (decision.allowed) return true;
+    res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+    res.status(429).json({
+      success: false,
+      code: "RATE_LIMITED",
+      error: "Limite temporário atingido. Aguarde antes de tentar novamente.",
+      retryAfterSeconds: decision.retryAfterSeconds,
+    });
+    return false;
+  };
+
+  // Liveness mínimo: não consulta banco, não dispara auto-heal e não modifica estado.
+  // O watchdog externo usa exclusivamente esta rota para separar processo vivo de dependências.
+  app.get("/health", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      status: "ok",
+      service: "cerberus-forge-deploy",
+      version: process.env.RENDER_GIT_COMMIT || process.env.RENDER_GIT_COMMIT_SHA || "unknown",
+      timestamp: new Date().toISOString(),
+    });
+  });
 
   // Initialize Gemini AI client
   const ai = new GoogleGenAI({
@@ -114,6 +149,7 @@ async function startServer() {
   // MIDDLEWARE DE AUTENTICAÇÃO ADMINISTRATIVA (FAIL-CLOSED + BCRYPT)
   // ==========================================
   const requireAdminAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!enforceRateLimit(adminRateLimiter, req, res)) return;
     const rawAdminPassEnv = (process.env.ADMIN_PASSWORD || "").trim();
 
     // Se ADMIN_PASSWORD não estiver configurada no ambiente, recusa todo acesso (Fail-Closed)
@@ -182,6 +218,7 @@ async function startServer() {
 
   // GET /api/products - Get all active products
   app.get("/api/products", async (req, res) => {
+    if (!enforceRateLimit(catalogRateLimiter, req, res)) return;
     try {
       const products = await productsRepository.getProducts();
       return res.json({ success: true, products, data: products });
@@ -328,6 +365,7 @@ async function startServer() {
 
   // POST /api/meta-capi - Server-Side Conversions API for Deduplication
   app.post("/api/meta-capi", async (req, res) => {
+    if (!enforceRateLimit(analyticsRateLimiter, req, res)) return;
     try {
       const { event_name, event_id, product, metaPixelId, metaAccessToken } = req.body;
 
@@ -389,6 +427,7 @@ async function startServer() {
 
   // POST /api/track-click - Outbound Affiliate Click Analytics Tracker
   app.post("/api/track-click", async (req, res) => {
+    if (!enforceRateLimit(analyticsRateLimiter, req, res)) return;
     try {
       const {
         productId,
@@ -615,6 +654,7 @@ async function startServer() {
 
   // AI Extraction endpoint (Nível 1 - Content Automation)
   app.post("/api/extract", requireAdminAuth, async (req, res) => {
+    if (!enforceRateLimit(expensiveOperationRateLimiter, req, res)) return;
     try {
       const { url, rawText } = req.body;
       if (!url && !rawText) {
@@ -743,6 +783,7 @@ NUNCA modifique ou invente preços ou imagens.`,
 
   // Automation process endpoint (Direct REST trigger for product automation)
   app.post(["/api/automation/process", "/api/process-url"], requireAdminAuth, async (req, res) => {
+    if (!enforceRateLimit(expensiveOperationRateLimiter, req, res)) return;
     try {
       const { url } = req.body;
       if (!url) {
@@ -910,8 +951,14 @@ NUNCA modifique ou invente preços ou imagens.`,
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
-    startTelegramPolling();
-    cerberusOperator.startOperatorScheduler();
+    void (async () => {
+      const boot = await cerberusOperator.initializeOperatorState();
+      console.log(`[OPERATOR] Boot recovery: ${boot.ready ? "READY" : "SAFE_MODE"} — ${boot.reason}`);
+      startTelegramPolling();
+      cerberusOperator.startOperatorScheduler();
+    })().catch((error) => {
+      console.error("[OPERATOR] Falha não tratada no boot recovery; scheduler mantido desativado:", error?.message || error);
+    });
   });
 }
 

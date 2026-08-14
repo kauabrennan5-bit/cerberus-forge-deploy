@@ -5,6 +5,7 @@ import { generateSlug } from "../../src/data/initialProducts";
 import * as productsRepository from "../repositories/productsRepository";
 import { fetchProductDataFromUrl, extractTitleFromUrl } from "./scraper";
 import { detectMarketplace } from "./marketplace";
+import { ExternalCallBudget } from "./operationalGuards";
 
 export { detectMarketplace } from "./marketplace";
 
@@ -19,6 +20,10 @@ const ai = new GoogleGenAI({
     }
   }
 });
+const geminiBudget = new ExternalCallBudget(
+  { gemini: Number.parseInt(process.env.GEMINI_HOURLY_BUDGET || "20", 10) },
+  60 * 60 * 1000,
+);
 
 export interface ProcessProductResult {
   success: boolean;
@@ -347,7 +352,10 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     let curatedCategory = inferCategoryFromTitle(curatedTitle || "Acessórios");
 
     if (process.env.GEMINI_API_KEY) {
-      try {
+      const budget = geminiBudget.reserve("gemini");
+      if (!budget.allowed) {
+        console.warn(`[Product Review Extraction] Orçamento Gemini atingido (${budget.used}/${budget.limit}); mantendo dados do scraper.`);
+      } else try {
         const prompt = `DADOS EXTRAÍDOS DO SCRAPER:
 - Título Bruto: "${scrapedTitle || 'Extrair do texto abaixo'}"
 - Preço Real Detectado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : 'NÃO ENCONTRADO'}

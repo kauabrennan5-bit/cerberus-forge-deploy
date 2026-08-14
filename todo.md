@@ -109,3 +109,18 @@
 - [x] Executar lint, testes, build, inspeção do diff e validações seguras de produção.
 - [x] Versionar as alterações auditadas na branch main e validar o deploy automático.
 - [x] Entregar relatório técnico completo com evidências, limitações e riscos residuais.
+
+# Bloco 7.5 — Hardening Estrutural de Produção
+
+- [x] Auditar a implementação atual, histórico, infraestrutura Render, Supabase e serviços externos sem duplicar funcionalidades existentes.
+- [x] Selecionar e documentar um watchdog externo independente do Web Service com health check, timeout, status HTTP e alerta próprio.
+- [x] Auditar e fortalecer o endpoint público GET /health para liveness mínimo, rápido e não mutante.
+- [x] Projetar e aplicar somente a persistência mínima de circuit breaker, cooldown, retries e timestamps críticos no Supabase.
+- [x] Implementar boot recovery fail-safe, idempotência e proteção contra concorrência para o estado crítico do Operator.
+- [x] Auditar e aplicar rate limiting configurável a endpoints públicos e operações de custo, preservando tracking legítimo.
+- [x] Padronizar retries determinísticos, timeouts, backoff e circuit breakers em integrações externas elegíveis.
+- [x] Aplicar controles de custo, cache e confirmação explícita antes de chamadas externas pagas quando tecnicamente adequado.
+- [x] Criar testes, migration versionada quando justificada, documentação e runbook operacional do Bloco 7.5.
+- [x] Executar lint, testes, build, revisão de segurança e validação de produção sem criar dados artificiais.
+- [ ] Versionar e enviar o Bloco 7.5 para main, sem iniciar o Bloco 8.
+- [ ] Entregar relatório final com evidências, limitações e requisitos administrativos residuais.

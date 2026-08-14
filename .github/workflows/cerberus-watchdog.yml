@@ -1,0 +1,45 @@
+name: Cerberus external watchdog
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cerberus-watchdog
+  cancel-in-progress: true
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      WATCHDOG_TIMEOUT_MS: "10000"
+      WATCHDOG_STATE_PATH: state/watchdog-state.json
+    steps:
+      - name: Checkout watchdog state
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run external health check
+        run: node scripts/watchdog.mjs
+
+      - name: Persist watchdog transition state
+        if: always()
+        run: |
+          if ! git status --porcelain -- state/watchdog-state.json | grep -q .; then
+            echo "No watchdog state transition to commit."
+            exit 0
+          fi
+          git config user.name "cerberus-watchdog"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/watchdog-state.json
+          git commit -m "chore(watchdog): persist health transition state"
+          git push
