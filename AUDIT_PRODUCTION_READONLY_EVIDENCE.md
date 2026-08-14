@@ -43,4 +43,13 @@
 | HTTP HTTPS | `000` dentro de 15 segundos |
 | Conclusão | A validação foi realizada no Static Site canônico do Render. O domínio personalizado não pode ser declarado operacional a partir deste ambiente e não foi alterado. |
 
+## Revalidação após push do commit auditado
+
+| Verificação | Resultado observado |
+|---|---|
+| URL aberta | `https://cerberus-static-catalog.onrender.com/?audit=138e135` |
+| Carregamento final | `ACERVO (10)` e os itens 001 a 010 renderizados após a carga inicial |
+| Interações destrutivas | Nenhuma |
+| Escopo da evidência | Confirma a disponibilidade atual da vitrine; a identificação exata do deploy do Render permanece fora de alcance sem API autenticada do provedor. |
+
 Esta evidência confirma somente o estado da API no instante da consulta. Ela não constitui prova de deploy, sincronização GitHub ou catálogo estático até que esses componentes sejam verificados separadamente.
