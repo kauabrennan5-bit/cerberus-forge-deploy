@@ -427,40 +427,59 @@ function dedupeAndCleanImages(candidates: string[]): string[] {
  * NUNCA inventa preços. Retorna null se todas falharem.
  */
 export function extractCorrectPrice(content: string, jsonLdPrice: number | null, ogPrice: number | null): number | null {
-  // ESTRATÉGIA 1: JSON-LD
-  const p1 = tryStrategy1JsonLd(content, jsonLdPrice);
-  if (p1 !== null) return p1;
+  const strategies: Array<{ name: string; find: () => number | null }> = [
+    { name: "ESTRATÉGIA_1_JSON_LD", find: () => tryStrategy1JsonLd(content, jsonLdPrice) },
+    { name: "ESTRATÉGIA_2_DADOS_INTERNOS", find: () => tryStrategy2InternalData(content) },
+    { name: "ESTRATÉGIA_3_OPENGRAPH", find: () => tryStrategy3OpenGraph(content, ogPrice) },
+    { name: "ESTRATÉGIA_4_META_TAGS", find: () => tryStrategy4MetaTags(content) },
+    { name: "ESTRATÉGIA_5_HTML_SELECTORS", find: () => tryStrategy5HtmlSelectors(content) },
+    { name: "ESTRATÉGIA_6_SHOPEE_SPECIFIC", find: () => tryStrategy6ShopeeSpecific(content) },
+    { name: "ESTRATÉGIA_7_MERCADOLIVRE_SPECIFIC", find: () => tryStrategy7MercadoLivreSpecific(content) },
+    { name: "ESTRATÉGIA_8_REGEX", find: () => tryStrategy8RegexFallback(content) },
+  ];
 
-  // ESTRATÉGIA 2: Dados internos da página (Script tags, window state, JSON Objects)
-  const p2 = tryStrategy2InternalData(content);
-  if (p2 !== null) return p2;
-
-  // ESTRATÉGIA 3: OpenGraph & Twitter Cards
-  const p3 = tryStrategy3OpenGraph(content, ogPrice);
-  if (p3 !== null) return p3;
-
-  // ESTRATÉGIA 4: Meta Tags (itemprop="price", name="price", etc.)
-  const p4 = tryStrategy4MetaTags(content);
-  if (p4 !== null) return p4;
-
-  // ESTRATÉGIA 5: HTML Renderizado & Atributos DOM genéricos (itemprop="price", class="price")
-  const p5 = tryStrategy5HtmlSelectors(content);
-  if (p5 !== null) return p5;
-
-  // ESTRATÉGIA 6: Seletores específicos da Shopee
-  const p6 = tryStrategy6ShopeeSpecific(content);
-  if (p6 !== null) return p6;
-
-  // ESTRATÉGIA 7: Seletores específicos do Mercado Livre
-  const p7 = tryStrategy7MercadoLivreSpecific(content);
-  if (p7 !== null) return p7;
-
-  // ESTRATÉGIA 8: Regex como último recurso
-  const p8 = tryStrategy8RegexFallback(content);
-  if (p8 !== null) return p8;
+  for (const strategy of strategies) {
+    const candidate = strategy.find();
+    if (candidate === null) continue;
+    if (isContextuallyValidSalePrice(candidate, content)) return candidate;
+    console.warn(`[Scraper Price Log] Valor R$ ${candidate.toFixed(2)} descartado após ${strategy.name}: associado a parcela ou preço original.`);
+  }
 
   console.warn(`[Scraper Price Log] Nenhuma estratégia conseguiu identificar um preço válido no anúncio. Retornando null (Preço não encontrado automaticamente).`);
   return null;
+}
+
+/**
+ * Evita o "preço fantasma": valores de parcelas (por exemplo, "3x de R$ 71"),
+ * preços riscados/originais e valores anteriores não podem alimentar o catálogo.
+ * O mesmo número é aceito somente se também ocorrer fora desses contextos. Para
+ * JSON sem representação textual, não há evidência contextual para rejeição.
+ */
+function isContextuallyValidSalePrice(value: number, content: string): boolean {
+  if (!Number.isFinite(value) || value <= 0 || value >= 100000) return false;
+
+  const matches = Array.from(content.matchAll(/R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/gi))
+    .filter((match) => Math.abs(parseBrlNumber(match[1]) - value) < 0.005);
+
+  if (matches.length === 0) return true;
+
+  return matches.some((match) => {
+    // As marcas de parcela e preço original antecedem o valor. Não olhamos o
+    // conteúdo seguinte para não invalidar o preço à vista por uma parcela que
+    // aparece logo abaixo na página do Mercado Livre.
+    const priceIndex = match.index || 0;
+    const genericStart = Math.max(0, priceIndex - 180);
+    // Se o preço está em uma tag, restringe a verificação à própria tag e ao
+    // respectivo texto. Assim um preço antigo em uma tag irmã não invalida o
+    // preço atual que vem depois.
+    const currentElementStart = content.lastIndexOf("<", priceIndex);
+    const start = currentElementStart >= genericStart ? currentElementStart : genericStart;
+    return !hasBlockedPriceContext(content.slice(start, priceIndex + match[0].length));
+  });
+}
+
+function hasBlockedPriceContext(context: string): boolean {
+  return /(?:\bparcela(?:s)?\b|\bem\s+at[eé]\b|\bsem\s+juros\b|\b\d{1,2}\s*x\s*(?:de\s*)?R?\$?|\bvezes\b|ui-pdp-price__original-value|andes-money-amount--previous|original-price|previous-price|old-price|strikethrough|riscad[oa]|<s\b|<del\b)/i.test(context);
 }
 
 /** 1. JSON-LD */
@@ -599,7 +618,7 @@ function tryStrategy7MercadoLivreSpecific(content: string): number | null {
       const centsMatch = snippet.match(/andes-money-amount__cents["'][^>]*>([0-9]+)</i);
       const cents = centsMatch ? centsMatch[1] : "00";
       const parsed = parseFloat(`${fraction}.${cents}`);
-      if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
+      if (!isNaN(parsed) && parsed > 0 && parsed < 100000 && !hasBlockedPriceContext(snippet)) {
         console.log(`[Scraper Price Log] Preço R$ ${parsed.toFixed(2)} localizado via ESTRATÉGIA_7_MERCADOLIVRE_SPECIFIC (second-line DOM)`);
         return parsed;
       }
@@ -613,7 +632,7 @@ function tryStrategy7MercadoLivreSpecific(content: string): number | null {
     const matchIdx = m.index || 0;
     const snippet = content.slice(Math.max(0, matchIdx - 150), Math.min(content.length, matchIdx + 150));
     
-    if (/(?:ui-pdp-price__original-value|andes-money-amount--previous|strikethrough|<s>)/i.test(snippet)) {
+    if (hasBlockedPriceContext(snippet)) {
       continue;
     }
 
@@ -641,7 +660,7 @@ function tryStrategy8RegexFallback(content: string): number | null {
     }
   }
 
-  const porApenasMatch = content.match(/(?:por|Por|por apenas|Preço|preco|Preço atual)\s*:?\s*R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i);
+  const porApenasMatch = content.match(/(?:por\s+apenas|pre[çc]o\s+atual|por|pre[çc]o)\s*:?\s*R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)/i);
   if (porApenasMatch && porApenasMatch[1]) {
     const val = parseBrlNumber(porApenasMatch[1]);
     if (val > 0 && val < 100000) {

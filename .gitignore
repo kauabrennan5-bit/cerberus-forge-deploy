@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Estado operacional local e resultados transitórios — não são fonte de verdade.
+data/telegram_reviews.json
+data/telegram_user_states.json
+state/watchdog-state.json
+tmp_*.html
