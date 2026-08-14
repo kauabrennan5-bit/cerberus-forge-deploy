@@ -11,10 +11,17 @@ import {
   type SafeAction,
   SafeAutoHealEngine,
 } from "./safeAutoHealEngine";
+import {
+  decideRecovery,
+  OperationalStateStore,
+  OperatorStateMachine,
+  type OperationalStateSnapshot,
+  type StateTransition,
+} from "./operatorAutonomy";
 
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "DOWN" | "UNKNOWN";
 export type IncidentSeverity = "INFO" | "WARNING" | "ERROR" | "CRITICAL";
-export type IncidentStatus = "OPEN" | "INVESTIGATING" | "AUTO_FIXING" | "RESOLVED" | "FAILED" | "REQUIRES_APPROVAL";
+export type IncidentStatus = "OPEN" | "INVESTIGATING" | "AUTO_FIXING" | "RESOLVED" | "FAILED" | "REQUIRES_APPROVAL" | "ESCALATED";
 export type OperatorMode = AutoHealMode;
 
 export interface ComponentHealth {
@@ -22,6 +29,8 @@ export interface ComponentHealth {
   status: HealthStatus;
   latencyMs: number;
   timestamp: string;
+  details?: string;
+  version?: string;
   error?: string;
 }
 
@@ -33,6 +42,9 @@ export interface OperatorSystemReport {
   recentCorrectionsCount: number;
   lastCheckAt: string;
   nextCheckAt?: string;
+  autonomyLevel?: 0 | 1 | 2 | 3;
+  operatorState?: string;
+  escalationCount?: number;
 }
 
 export interface Incident {
@@ -87,6 +99,8 @@ let nextCheckTimestamp: string = "Agendado";
 let schedulerTimer: NodeJS.Timeout | null = null;
 let consecutiveFailures: Record<string, number> = {};
 let pendingApprovals: PendingApproval[] = [];
+const operatorStateMachine = new OperatorStateMachine();
+const operationalStateStore = new OperationalStateStore();
 
 const CONFIG = {
   checkIntervalMs: 10 * 60 * 1000, // 10 minutos (conservador para evitar cold start excessivo no Render)
@@ -94,6 +108,22 @@ const CONFIG = {
   maxIncidents: 50,
   failureThresholdForError: 3 // 3 falhas consecutivas elevam para ERROR persistente
 };
+
+const BACKEND_PRODUCTS_URL = process.env.CATALOG_API_URL || "https://cerberus-forge-deploy-backend.onrender.com/api/products";
+const STATIC_CATALOG_URL = "https://cerberus-static-catalog.onrender.com/data/products.json";
+const GITHUB_MAIN_URL = "https://api.github.com/repos/kauabrennan5-bit/cerberus-forge-deploy/branches/main";
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<any> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "cerberus-operator" } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export function setOperatorMode(mode: OperatorMode): void {
   currentMode = mode;
@@ -114,6 +144,28 @@ export function getHealthHistory(): HistoryRecord[] {
 
 export function getRecentCorrections(): Array<{ timestamp: string; action: string; result: string }> {
   return recentCorrectionsLog;
+}
+
+export function getOperationalState(): OperationalStateSnapshot {
+  return operationalStateStore.snapshot(currentMode, operatorStateMachine);
+}
+
+export function getOperatorStateHistory(): StateTransition[] {
+  return operatorStateMachine.getHistory();
+}
+
+export function getEscalatedIncidents(): Incident[] {
+  return incidents.filter(incident => incident.status === "ESCALATED");
+}
+
+function moveOperatorState(to: Parameters<OperatorStateMachine["transition"]>[0], reason: string): StateTransition | undefined {
+  try {
+    return operatorStateMachine.transition(to, reason);
+  } catch (error) {
+    // O estado é fail-safe: não força transição inválida nem interrompe funções fundamentais.
+    console.warn(`[OPERATOR STATE] Transição ignorada: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 function catalogOutputPath(): string {
@@ -324,13 +376,29 @@ export async function approveOperatorAction(approvalId: string, adminId: string)
 }
 
 export async function runSafeAutoHeal(actionId: string, context: AutoHealContext): Promise<AutoHealActionResult> {
+  moveOperatorState("HEALING", `Ação registrada selecionada: ${actionId}.`);
   const result = await autoHealEngine.run(actionId, currentMode, context);
   const incident = context.incidentId ? incidents.find(item => item.id === context.incidentId) : undefined;
   if (incident) {
     incident.actionTaken = actionId;
     incident.result = result.message;
-    if (result.status === "SUCCESS") incident.status = "RESOLVED";
-    if (result.status === "FAILED" || result.status === "TIMEOUT") incident.status = "REQUIRES_APPROVAL";
+    if (result.status === "SUCCESS") {
+      moveOperatorState("VALIDATING", `Validação pós-ação: ${actionId}.`);
+      moveOperatorState("RECOVERING", `Recuperação confirmada: ${actionId}.`);
+      incident.status = "RESOLVED";
+      incident.recoveredAt = new Date().toLocaleTimeString("pt-BR");
+      moveOperatorState("RESOLVED", `Incidente ${incident.id} validado como recuperado.`);
+    }
+    if (result.status === "FAILED" || result.status === "TIMEOUT" || result.status === "CIRCUIT_OPEN") {
+      incident.status = "ESCALATED";
+      incident.result = `${result.message} Escalado para administrador.`;
+      operationalStateStore.markEscalated();
+      moveOperatorState("ESCALATED", `Ação ${actionId} falhou ou atingiu proteção contra loops.`);
+    }
+    if (result.status === "APPROVAL_REQUIRED") {
+      incident.status = "REQUIRES_APPROVAL";
+      moveOperatorState("WAITING_APPROVAL", `Ação ${actionId} requer aprovação explícita.`);
+    }
   }
   recentCorrectionsLog.unshift({
     timestamp: new Date().toLocaleTimeString("pt-BR"),
@@ -346,6 +414,7 @@ export async function runSafeAutoHeal(actionId: string, context: AutoHealContext
  * Executa o ciclo completo de monitoramento contínuo (Heartbeat & Anomaly Detection)
  */
 export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
+  moveOperatorState("CHECKING", "Início de health check periódico ou manual.");
   const now = new Date().toISOString();
   const timeStr = new Date().toLocaleTimeString("pt-BR");
   lastCheckTimestamp = timeStr;
@@ -355,13 +424,28 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
 
   const components: Record<string, ComponentHealth> = {};
 
-  // 1. Backend
-  components["Backend"] = {
-    name: "Backend",
-    status: "HEALTHY",
-    latencyMs: 2,
-    timestamp: now
-  };
+  // 1. Backend: endpoint canônico responde com coleção válida.
+  const t0Backend = Date.now();
+  try {
+    const backendJson = await fetchJsonWithTimeout(BACKEND_PRODUCTS_URL);
+    const backendProducts = backendJson.products || backendJson.data || backendJson;
+    if (!Array.isArray(backendProducts)) throw new Error("Resposta não contém coleção de produtos.");
+    components["Backend"] = {
+      name: "Backend",
+      status: "HEALTHY",
+      latencyMs: Date.now() - t0Backend,
+      timestamp: now,
+      details: `API respondeu ${backendProducts.length} produtos.`,
+    };
+  } catch (err: any) {
+    components["Backend"] = {
+      name: "Backend",
+      status: "DOWN",
+      latencyMs: Date.now() - t0Backend,
+      timestamp: now,
+      error: err?.message || "Endpoint de backend indisponível.",
+    };
+  }
 
   // 2. Supabase
   const t0Supabase = Date.now();
@@ -386,16 +470,44 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 3. Catálogo
+  // 3. Produtos: fonte canônica e integridade mínima.
+  let canonicalProducts: any[] = [];
+  const t0Products = Date.now();
+  try {
+    canonicalProducts = await getProducts();
+    const invalidProducts = canonicalProducts.filter(product => !product.id || !product.produto || !product.link);
+    components["Produtos"] = {
+      name: "Produtos",
+      status: canonicalProducts.length > 0 && invalidProducts.length === 0 ? "HEALTHY" : "DEGRADED",
+      latencyMs: Date.now() - t0Products,
+      timestamp: now,
+      details: `${canonicalProducts.length} produtos canônicos; ${invalidProducts.length} inválidos.`,
+    };
+  } catch (err: any) {
+    components["Produtos"] = {
+      name: "Produtos",
+      status: "DOWN",
+      latencyMs: Date.now() - t0Products,
+      timestamp: now,
+      error: err?.message || "Consulta de produtos falhou.",
+    };
+  }
+
+  // 4. Catálogo: projeção pública versus produtos canônicos, sem modificar arquivo algum.
   const t0Catalog = Date.now();
   try {
-    const dbProducts = await getProducts();
-    const latency = Date.now() - t0Catalog;
+    const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
+    if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("products.json ausente, vazio ou inválido.");
+    const canonicalActive = canonicalProducts.filter(product => product.ativo !== false && product.status !== "pending");
+    const jsonIds = new Set(staticCatalog.map((product: any) => product.id));
+    const missing = canonicalActive.filter(product => !jsonIds.has(product.id));
+    const invalidIdentity = staticCatalog.some((product: any) => !product.id || !product.slug || !product.produto || !product.link);
     components["Catálogo"] = {
       name: "Catálogo",
-      status: dbProducts.length > 0 ? "HEALTHY" : "DEGRADED",
-      latencyMs: latency,
-      timestamp: now
+      status: missing.length === 0 && !invalidIdentity ? "HEALTHY" : "DEGRADED",
+      latencyMs: Date.now() - t0Catalog,
+      timestamp: now,
+      details: `${staticCatalog.length}/${canonicalActive.length} produtos projetados; ${missing.length} ausentes.`,
     };
   } catch (err: any) {
     components["Catálogo"] = {
@@ -438,30 +550,49 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     };
   }
 
-  // 6. Telegram
-  components["Telegram"] = {
-    name: "Telegram",
-    status: "HEALTHY",
-    latencyMs: 12,
-    timestamp: now
-  };
+  // 6. Telegram: API acessível, mantendo o token estritamente no servidor.
+  const t0Telegram = Date.now();
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) throw new Error("Token não configurado.");
+    const telegramInfo = await fetchJsonWithTimeout(`https://api.telegram.org/bot${token}/getMe`);
+    if (!telegramInfo.ok) throw new Error("API do bot recusou a verificação.");
+    components["Telegram"] = {
+      name: "Telegram",
+      status: "HEALTHY",
+      latencyMs: Date.now() - t0Telegram,
+      timestamp: now,
+      details: "API do bot respondeu ao health check.",
+    };
+  } catch {
+    components["Telegram"] = {
+      name: "Telegram",
+      status: "DEGRADED",
+      latencyMs: Date.now() - t0Telegram,
+      timestamp: now,
+      error: "API Telegram indisponível ou não configurada.",
+    };
+  }
 
-  // 7. Site & Deploy
+  // 7. Site e deploy: conteúdo público mínimo disponível.
   const t0Site = Date.now();
   try {
-    const res = await fetch("https://cerberus-static-catalog.onrender.com/data/products.json", { method: "HEAD" });
+    const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
+    const healthyPublicCatalog = Array.isArray(staticCatalog) && staticCatalog.length > 0;
     const latency = Date.now() - t0Site;
     components["Site"] = {
       name: "Site",
-      status: res.ok ? "HEALTHY" : "DEGRADED",
+      status: healthyPublicCatalog ? "HEALTHY" : "DEGRADED",
       latencyMs: latency,
-      timestamp: now
+      timestamp: now,
+      details: healthyPublicCatalog ? `${staticCatalog.length} produtos públicos.` : "Catálogo público inválido.",
     };
     components["Deploy"] = {
       name: "Deploy",
-      status: res.ok ? "HEALTHY" : "DEGRADED",
+      status: healthyPublicCatalog ? "HEALTHY" : "DEGRADED",
       latencyMs: latency,
-      timestamp: now
+      timestamp: now,
+      details: "Projeção pública do Static Site disponível.",
     };
   } catch (err: any) {
     components["Site"] = {
@@ -476,6 +607,30 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       status: "UNKNOWN",
       latencyMs: Date.now() - t0Site,
       timestamp: now
+    };
+  }
+
+  // 8. GitHub: branch main acessível e versão conhecida, sem escrita remota.
+  const t0GitHub = Date.now();
+  try {
+    const branch = await fetchJsonWithTimeout(GITHUB_MAIN_URL);
+    const sha = branch?.commit?.sha;
+    if (!sha) throw new Error("SHA da branch main indisponível.");
+    components["GitHub"] = {
+      name: "GitHub",
+      status: "HEALTHY",
+      latencyMs: Date.now() - t0GitHub,
+      timestamp: now,
+      version: sha.slice(0, 7),
+      details: "Branch main acessível.",
+    };
+  } catch {
+    components["GitHub"] = {
+      name: "GitHub",
+      status: "UNKNOWN",
+      latencyMs: Date.now() - t0GitHub,
+      timestamp: now,
+      error: "Não foi possível verificar a branch main.",
     };
   }
 
@@ -501,6 +656,8 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   } else if (statuses.includes("DEGRADED") || statuses.includes("UNKNOWN")) {
     overallStatus = "DEGRADED";
   }
+
+  moveOperatorState("DIAGNOSING", "Health check concluído; analisando anomalias e incidentes.");
 
   // Gerenciamento de Incidentes, Deduplicação por Fingerprint e Recovery Detection
   const currentlyDownOrDegraded = Object.entries(components).filter(([_, c]) => c.status === "DOWN" || c.status === "DEGRADED");
@@ -548,13 +705,35 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
       }
       console.warn(`[INCIDENT] Novo incidente aberto: ${newInc.id} em ${compName} [${severity}]`);
       const suggestedAction = suggestedActionFor(compName);
-      if (currentMode === "SAFE_AUTO_HEAL" && suggestedAction) {
+      const action = suggestedAction ? AVAILABLE_OPERATOR_ACTIONS.find(item => item.id === suggestedAction) : undefined;
+      const decision = decideRecovery({
+        mode: currentMode,
+        risk: action?.risk,
+        hasRegisteredAction: Boolean(action),
+        requiresApproval: action?.requiresApproval,
+        circuitOpen: false,
+        consecutiveFailures: consecutiveFailures[compName],
+        maxFailures: CONFIG.failureThresholdForError,
+      });
+
+      if (decision === "AUTO_HEAL" && suggestedAction) {
         newInc.status = "AUTO_FIXING";
         void runSafeAutoHeal(suggestedAction, {
           incidentId: newInc.id,
           incidentFingerprint: newInc.fingerprint,
           actor: "CERBERUS",
         });
+      } else if (decision === "WAIT_APPROVAL") {
+        newInc.status = "REQUIRES_APPROVAL";
+        newInc.actionTaken = suggestedAction || "Nenhuma ação autorizada";
+        newInc.result = "Ação requer aprovação administrativa explícita.";
+        moveOperatorState("WAITING_APPROVAL", `Incidente ${newInc.id} aguarda aprovação.`);
+      } else if (decision === "ESCALATE") {
+        newInc.status = "ESCALATED";
+        newInc.result = "Sem ação segura disponível, falhas persistentes ou risco elevado. Escalado ao administrador.";
+        operationalStateStore.markEscalated();
+        moveOperatorState("ESCALATED", `Incidente ${newInc.id} não pode ser corrigido com segurança.`);
+        console.warn(`[ESCALATION] ${newInc.id} escalado: ${newInc.result}`);
       }
     }
   }
@@ -566,16 +745,33 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
     }
   }
 
-  const openIncidents = incidents.filter(i => i.status === "OPEN" || i.status === "INVESTIGATING");
+  const activeIncidents = incidents.filter(i => ["OPEN", "INVESTIGATING", "AUTO_FIXING", "REQUIRES_APPROVAL", "ESCALATED"].includes(i.status));
+  const incidentsByComponent = Object.fromEntries(activeIncidents.map(incident => [incident.component, incident.id]));
+  const stateTransition = moveOperatorState(activeIncidents.length === 0 ? "RESOLVED" : operatorStateMachine.getState(), activeIncidents.length === 0 ? "Nenhuma anomalia ativa após diagnóstico." : "Estado operacional atualizado.");
+  operationalStateStore.update(
+    Object.values(components).map(component => ({
+      name: component.name,
+      status: component.status,
+      timestamp: component.timestamp,
+      latencyMs: component.latencyMs,
+      error: component.error,
+    })),
+    incidentsByComponent,
+    stateTransition,
+  );
+  const operationalState = getOperationalState();
 
   const report: OperatorSystemReport = {
     overallStatus,
     mode: currentMode,
     components,
-    activeIncidentsCount: openIncidents.length,
+    activeIncidentsCount: activeIncidents.length,
     recentCorrectionsCount: recentCorrectionsLog.length,
     lastCheckAt: lastCheckTimestamp,
-    nextCheckAt: nextCheckTimestamp
+    nextCheckAt: nextCheckTimestamp,
+    autonomyLevel: operationalState.autonomyLevel,
+    operatorState: operationalState.operatorState,
+    escalationCount: operationalState.escalations,
   };
 
   lastReportCache = report;

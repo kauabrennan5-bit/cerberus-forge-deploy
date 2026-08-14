@@ -43,3 +43,13 @@
 - [x] Integrar o fluxo de autocorreção e o audit log ao painel do Telegram com aprovação obrigatória para ações de risco alto.
 - [x] Criar SAFE_AUTO_HEAL_ARCHITECTURE.md e validar build, lint, testes existentes e ausência de exposição de segredos.
 - [x] Revisar o diff e enviar somente o Bloco 5 para a branch main.
+
+# Bloco 6 — Autonomia Operacional e Recuperação
+
+- [x] Criar estado operacional consolidado e máquina de estados determinística com transições auditáveis.
+- [x] Implementar Decision Engine separado, níveis de autonomia e Escalation Engine sem executar ações fora do Action Registry.
+- [x] Orquestrar recuperação com seleção, execução, validação, recovery real, circuit breaker e fail-safe.
+- [x] Aprofundar health checks de produtos, catálogo, GitHub, site e deploy sem gerar ou alterar dados.
+- [x] Atualizar painel Telegram com estado, nível, pendências, escalonamentos e audit log operacional.
+- [x] Criar documentação e testes do Bloco 6; validar lint, testes, build e segurança.
+- [x] Revisar o diff e enviar exclusivamente o Bloco 6 para a branch main.

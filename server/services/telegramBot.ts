@@ -315,6 +315,8 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data === "operator_home" || data === "operator_refresh") {
       await answerCallbackQuery(callbackId, "Verificando saúde do sistema...");
       const report = await cerberusOperator.runSystemHealthCheck();
+      const operational = cerberusOperator.getOperationalState();
+      const pendingApprovals = cerberusOperator.getPendingApprovals();
       const statusEmoji = report.overallStatus === "HEALTHY" ? "🟢" : report.overallStatus === "DEGRADED" ? "🟡" : "🔴";
       const healthyCount = Object.values(report.components).filter(c => c.status === "HEALTHY").length;
       const totalCount = Object.keys(report.components).length;
@@ -324,7 +326,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         "━━━━━━━━━━━━━━━━━━\n" +
         `Status do Sistema: ${statusEmoji} <b>${report.overallStatus}</b>\n` +
         `Componentes OK: <b>${healthyCount}/${totalCount}</b>\n` +
-        `Modo: <code>${report.mode}</code>\n\n` +
+        `Modo: <code>${report.mode}</code>\n` +
+        `Nível: <b>LEVEL ${operational.autonomyLevel}</b>\n` +
+        `Estado: <code>${operational.operatorState}</code>\n\n` +
         `• Backend: ${report.components["Backend"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
         `• Supabase: ${report.components["Supabase"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
         `• Catálogo: ${report.components["Catálogo"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
@@ -333,6 +337,8 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         `• Telegram: ${report.components["Telegram"]?.status === "HEALTHY" ? "🟢" : "🔴"}\n` +
         `• Site / Deploy: ${report.components["Site"]?.status === "HEALTHY" ? "🟢" : "🟡"}\n\n` +
         `🚨 Incidentes ativos: <b>${report.activeIncidentsCount}</b>\n` +
+        `🔐 Ações pendentes: <b>${pendingApprovals.length}</b>\n` +
+        `📣 Escalations: <b>${operational.escalations}</b>\n` +
         `🕐 Última verificação: ${report.lastCheckAt}\n` +
         `⏰ Próxima agendada: ${report.nextCheckAt || "Em breve"}\n` +
         "━━━━━━━━━━━━━━━━━━";
@@ -341,6 +347,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         inline_keyboard: [
           [{ text: "🏥 Status Detalhado", callback_data: "operator_health" }, { text: "🚨 Incidentes", callback_data: "operator_incidents" }],
           [{ text: "📊 Histórico", callback_data: "operator_history" }, { text: "🔧 Ações", callback_data: "operator_actions" }],
+          [{ text: "🔐 Pendências", callback_data: "operator_pending" }, { text: "📣 Escalations", callback_data: "operator_escalations" }],
           [{ text: "⚙️ Modo", callback_data: "operator_config" }, { text: "📜 Logs", callback_data: "operator_logs" }],
           [{ text: "🔄 Verificar Agora", callback_data: "operator_refresh" }],
           [{ text: "⬅️ Menu Principal", callback_data: "admin_menu" }]
@@ -363,6 +370,30 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           text += `${em} [${h.timestamp}] <b>${h.component}</b> (${h.latencyMs}ms)${h.error ? ` - <i>${h.error}</i>` : ""}\n`;
         }
       }
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_pending") {
+      await answerCallbackQuery(callbackId);
+      const pending = cerberusOperator.getPendingApprovals();
+      let text = "🔐 <b>AÇÕES PENDENTES DE APROVAÇÃO</b>\n\n";
+      text += pending.length === 0
+        ? "Nenhuma ação aguarda aprovação administrativa."
+        : pending.map(item => `• <code>${item.actionId}</code>\n  Solicitação: ${item.id}\n  Criada: ${new Date(item.createdAt).toLocaleString("pt-BR")}\n`).join("\n");
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+      return;
+    }
+
+    if (data === "operator_escalations") {
+      await answerCallbackQuery(callbackId);
+      const escalated = cerberusOperator.getEscalatedIncidents();
+      let text = "📣 <b>INCIDENTES ESCALADOS</b>\n\n";
+      text += escalated.length === 0
+        ? "Nenhum incidente exige intervenção humana no momento."
+        : escalated.slice(0, 10).map(item => `• <code>${item.id}</code> · <b>${item.component}</b>\n  ${item.result}\n`).join("\n");
       const keyboard = { inline_keyboard: [[{ text: "⬅️ Voltar ao Operator", callback_data: "operator_home" }]] };
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
