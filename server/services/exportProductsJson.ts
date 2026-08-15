@@ -10,7 +10,7 @@ import { containsRawPayloadMarkers } from "./productLifecycle";
  * - Apenas produtos válidos, publicados e com URL válida.
  * - Eliminação de produtos fictícios, fantasmas ou sem dados essenciais.
  * - Sem inclusão de dados administrativos ou senhas.
- * - Preservação dos campos essenciais para o frontend (id, produto, preco, imagens, link, categoria, marketplace, etc).
+ * - Preservação dos campos essenciais para o frontend (id, ref quando existente, produto, preco, imagens, link e categoria).
  */
 export async function exportStaticProductsJson(): Promise<number> {
   try {
@@ -51,6 +51,7 @@ export async function exportStaticProductsJson(): Promise<number> {
       return true;
     }).map((p: Product) => ({
       id: p.id,
+      ref: p.ref,
       slug: p.slug || p.id,
       produto: p.produto.trim(),
       preco: Number(p.preco),
@@ -58,9 +59,6 @@ export async function exportStaticProductsJson(): Promise<number> {
       imagens: Array.isArray(p.imagens) ? p.imagens : [],
       link: p.link,
       categoria: p.categoria || 'Geral',
-      marketplace: (p as any).marketplace || 'Shopee',
-      cupom: (p as any).cupom || '',
-      freteGratis: Boolean((p as any).freteGratis),
       descricao: containsRawPayloadMarkers(p.descricao) ? '' : p.descricao || '',
       paginaPonteUrl: p.paginaPonteUrl || '',
       ativo: true,

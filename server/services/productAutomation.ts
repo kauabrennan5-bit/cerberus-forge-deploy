@@ -43,6 +43,8 @@ const PROMPT_INJECTION_PATTERNS = [
   /\b(ignore|disregard|forget|override)\b[\s\S]{0,80}\b(previous|prior|system|developer|assistant|instructions?|rules?)\b/i,
   /\b(system|developer|assistant)\s*(message|prompt|instruction)?\s*:/i,
   /\b(reveal|show|print|leak)\b[\s\S]{0,80}\b(prompt|instructions?|secret|api key|token)\b/i,
+  /\b(trate|considere|use)\s+(este|esse)\s+(texto|conteúdo)\s+como\s+(?:uma\s+)?instrução\s+(?:do\s+)?sistema\b/i,
+  /\b(revele|mostrar|mostre|imprima|exiba)\b[\s\S]{0,80}\b(prompt|instruções?|segredo|chave|token)\b/i,
 ];
 
 function normalizeCuratorText(value: unknown, maxLength: number): string {
