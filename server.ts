@@ -245,7 +245,10 @@ async function startServer() {
       if (!product) {
         return res.status(404).json({ success: false, error: "Produto não encontrado" });
       }
-      return res.json({ success: true, product });
+      const publicProduct = containsRawPayloadMarkers(product.descricao)
+        ? { ...product, descricao: "" }
+        : product;
+      return res.json({ success: true, product: publicProduct });
     } catch (err: any) {
       console.error("❌ [/api/products/:idOrSlug] Erro de repositório:", err.message);
       return res.status(500).json({ success: false, error: err.message || "Erro ao buscar produto." });
@@ -337,7 +340,17 @@ async function startServer() {
       if (imagesArray !== undefined) updatePayload.imagens = imagesArray;
       if (link !== undefined) updatePayload.link = String(link).trim();
       if (destaque !== undefined) updatePayload.destaque = Boolean(destaque);
-      if (descricao !== undefined) updatePayload.descricao = String(descricao).trim();
+      if (descricao !== undefined) {
+        const normalizedDescription = String(descricao).trim();
+        if (containsRawPayloadMarkers(normalizedDescription)) {
+          return res.status(400).json({
+            success: false,
+            code: "RAW_PAYLOAD_DESCRIPTION_REJECTED",
+            error: "Descrição técnica do scraper não pode ser gravada como conteúdo editorial.",
+          });
+        }
+        updatePayload.descricao = normalizedDescription;
+      }
       if (paginaPonteUrl !== undefined) updatePayload.paginaPonteUrl = String(paginaPonteUrl).trim();
       if (ativo !== undefined) updatePayload.ativo = Boolean(ativo);
 
@@ -527,7 +540,7 @@ async function startServer() {
         const prodLink = `${baseUrl}/produto/${slug}`;
         const mainImage = p.imagens?.[0] || "";
         const titleEscaped = `"${(p.produto || "").replace(/"/g, '""')}"`;
-        const descEscaped = `"${(p.descricao || `Peça curada Cerberus Finds em ${p.categoria}`).replace(/"/g, '""')}"`;
+        const descEscaped = `"${((containsRawPayloadMarkers(p.descricao) ? "" : p.descricao) || `Peça curada Cerberus Finds em ${p.categoria}`).replace(/"/g, '""')}"`;
         const priceFormatted = `${Number(p.preco || 0).toFixed(2)} BRL`;
 
         const row = [
@@ -577,7 +590,8 @@ async function startServer() {
         xml += `    <item>\n`;
         xml += `      <g:id>${p.id}</g:id>\n`;
         xml += `      <g:title><![CDATA[${p.produto}]]></g:title>\n`;
-        xml += `      <g:description><![CDATA[${p.descricao || `Peça curada Cerberus Finds em ${p.categoria}`}]]></g:description>\n`;
+        const publicDescription = (containsRawPayloadMarkers(p.descricao) ? "" : p.descricao) || `Peça curada Cerberus Finds em ${p.categoria}`;
+        xml += `      <g:description><![CDATA[${publicDescription}]]></g:description>\n`;
         xml += `      <g:link>${prodLink}</g:link>\n`;
         xml += `      <g:image_link>${mainImage}</g:image_link>\n`;
         xml += `      <g:brand>Cerberus Finds</g:brand>\n`;
