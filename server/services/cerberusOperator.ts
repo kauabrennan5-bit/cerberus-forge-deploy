@@ -32,6 +32,14 @@ import {
   type OperationalDiagnostic,
 } from "./operationalDiagnostics";
 import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
+import {
+  persistOperationalIncident,
+  persistOperationalOperation,
+  persistOperationalRecoveryAttempt,
+  type OperationalIncident,
+  type OperationalOperation,
+  type OperationalMemoryOutcome,
+} from "../repositories/operationalMemoryRepository";
 
 export type HealthStatus = "HEALTHY" | "DEGRADED" | "DOWN" | "UNKNOWN";
 export type IncidentSeverity = "INFO" | "WARNING" | "ERROR" | "CRITICAL";
@@ -418,6 +426,45 @@ const SAFE_ACTIONS: SafeAction<any, any>[] = [
   },
 ];
 
+function toOperationalIncident(incident: Incident): OperationalIncident {
+  const status: OperationalIncident["status"] =
+    incident.status === "RESOLVED" ? "RESOLVED" :
+    incident.status === "AUTO_FIXING" ? "RECOVERING" :
+    ["REQUIRES_APPROVAL", "ESCALATED", "FAILED"].includes(incident.status) ? "BLOCKED" :
+    incident.status === "INVESTIGATING" ? "ACKNOWLEDGED" : "OPEN";
+  return {
+    incidentId: incident.id,
+    incidentType: incident.type,
+    fingerprint: incident.fingerprint,
+    severity: incident.severity,
+    status,
+    createdAt: incident.timestamp,
+    updatedAt: new Date().toISOString(),
+    source: "cerberusOperator",
+    correlationId: incident.operationId,
+    operationId: incident.operationId,
+    summary: incident.diagnosis,
+    errorCode: incident.type,
+    impact: incident.impact,
+    recoverability: incident.recoverability,
+    metadata: {
+      component: incident.component,
+      detection: incident.detection,
+      actionTaken: incident.actionTaken,
+      result: incident.result,
+      stage: incident.stage,
+      dependency: incident.dependency,
+      httpStatus: incident.httpStatus,
+    },
+  };
+}
+
+function persistIncidentSnapshot(incident: Incident): void {
+  void persistOperationalIncident(toOperationalIncident(incident)).catch(error => {
+    console.warn(`[MEMORY] memory.persistence.failed incidentId=${incident.id} reason=${sanitizeOperationalText(error)}`);
+  });
+}
+
 async function persistCriticalAutoHealState(state: import("./safeAutoHealEngine").PersistedAutoHealState): Promise<void> {
   const persisted = await persistOperatorState({
     stateKey: state.stateKey,
@@ -523,9 +570,67 @@ export async function approveOperatorAction(approvalId: string, adminId: string)
   }
 }
 
+function recoveryOutcomeFor(status: AutoHealActionResult["status"]): OperationalMemoryOutcome {
+  if (status === "SUCCESS") return "SUCCESS";
+  if (["FAILED", "TIMEOUT", "CIRCUIT_OPEN", "BUDGET_EXCEEDED", "FORBIDDEN"].includes(status)) return "FAILED";
+  if (["APPROVAL_REQUIRED", "COOLDOWN"].includes(status)) return "BLOCKED";
+  return "SKIPPED";
+}
+
+function operationStatusFor(status: AutoHealActionResult["status"]): OperationalOperation["status"] {
+  return recoveryOutcomeFor(status) === "SUCCESS" ? "SUCCEEDED" :
+    recoveryOutcomeFor(status) === "BLOCKED" ? "BLOCKED" :
+    recoveryOutcomeFor(status) === "FAILED" ? "FAILED" : "CANCELLED";
+}
+
 export async function runSafeAutoHeal(actionId: string, context: AutoHealContext): Promise<AutoHealActionResult> {
+  const operationId = createOperationId("HEAL");
+  const startedAt = new Date().toISOString();
+  const operation: OperationalOperation = {
+    operationId,
+    operationType: "SAFE_AUTO_HEAL",
+    status: "RUNNING",
+    actor: context.actor === "ADMIN" ? "human" : "operator",
+    correlationId: operationId,
+    attempt: 1,
+    createdAt: startedAt,
+    startedAt,
+    metadata: { actionId, incidentId: context.incidentId },
+    schemaVersion: "1.0",
+  };
+  void persistOperationalOperation(operation).catch(error => {
+    console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`);
+  });
   moveOperatorState("HEALING", `Ação registrada selecionada: ${actionId}.`);
   const result = await autoHealEngine.run(actionId, currentMode, context);
+  const completedAt = new Date().toISOString();
+  const recoveryOutcome = recoveryOutcomeFor(result.status);
+  void persistOperationalOperation({
+    ...operation,
+    status: operationStatusFor(result.status),
+    completedAt,
+    resultCode: result.status,
+    errorCode: recoveryOutcome === "FAILED" ? result.status : undefined,
+  }).catch(error => {
+    console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`);
+  });
+  if (context.incidentId) {
+    void persistOperationalRecoveryAttempt({
+      attemptId: `${operationId}-ATT-1`,
+      incidentId: context.incidentId,
+      operationId,
+      attemptNumber: 1,
+      strategy: actionId,
+      startedAt,
+      completedAt,
+      outcome: recoveryOutcome,
+      errorCode: recoveryOutcome === "FAILED" ? result.status : undefined,
+      metadata: { actor: context.actor, adminId: context.adminId },
+    }).catch(error => {
+      console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`);
+    });
+  }
+
   const incident = context.incidentId ? incidents.find(item => item.id === context.incidentId) : undefined;
   if (incident) {
     incident.actionTaken = actionId;
@@ -557,6 +662,7 @@ export async function runSafeAutoHeal(actionId: string, context: AutoHealContext
       incident.status = "REQUIRES_APPROVAL";
       moveOperatorState("WAITING_APPROVAL", `Ação ${actionId} requer aprovação explícita.`);
     }
+    persistIncidentSnapshot(incident);
   }
   recentCorrectionsLog.unshift({
     timestamp: new Date().toLocaleTimeString("pt-BR"),
@@ -880,6 +986,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
         const startMs = new Date(`${new Date().toDateString()} ${inc.timestamp}`).getTime();
         inc.durationMs = !isNaN(startMs) ? Date.now() - startMs : 0;
         console.log(`[RECOVERY] Componente ${inc.component} recuperado com sucesso. Incidente ${inc.id} resolvido.`);
+        persistIncidentSnapshot(inc);
       }
     }
   }
@@ -914,8 +1021,9 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
         recoverability: comp.diagnostic?.recoverability || "MANUAL",
         httpStatus: comp.httpStatus,
       };
-      incidents.unshift(newInc);
-      if (incidents.length > CONFIG.maxIncidents) {
+        incidents.unshift(newInc);
+        persistIncidentSnapshot(newInc);
+        if (incidents.length > CONFIG.maxIncidents) {
         incidents = incidents.slice(0, CONFIG.maxIncidents);
       }
       console.warn(`[INCIDENT] Novo incidente aberto: ${newInc.id} em ${compName} [${severity}]`);

@@ -38,6 +38,7 @@ test("diagnóstico estruturado preserva etapa, dependência e impacto sem causa 
   });
   assert.equal(diagnostic.stage, "GITHUB_AUTH");
   assert.equal(diagnostic.dependency, "GitHub");
+  assert.equal(diagnostic.correlationId, "PUB-20260814120000-0001");
   assert.equal(diagnostic.cause?.includes("github_pat_sensitive"), false);
   assert.match(formatDiagnosticForAdmin(diagnostic), /GITHUB_AUTH_ERROR/);
 });

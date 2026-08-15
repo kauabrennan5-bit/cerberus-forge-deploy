@@ -7,6 +7,8 @@ import {
   sanitizeOperationalText,
   type OperationalDiagnostic,
 } from "./operationalDiagnostics";
+import { createOperationalEvent, emitOperationalEvent } from "./operationalEvents";
+import { persistOperationalEvent, persistOperationalOperation } from "../repositories/operationalMemoryRepository";
 
 export interface SyncLogResult {
   success: boolean;
@@ -107,6 +109,19 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
   let jsonCount = 0;
   let publicJsonCount = 0;
   let productFoundPublic = false;
+  const operationStartedAt = new Date().toISOString();
+  void persistOperationalOperation({
+    operationId,
+    operationType: "CATALOG_SYNC",
+    status: "RUNNING",
+    actor: "system",
+    correlationId: operationId,
+    attempt: 1,
+    createdAt: operationStartedAt,
+    startedAt: operationStartedAt,
+    metadata: { productId: productId || undefined },
+    schemaVersion: "1.0",
+  }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
 
   try {
     let canonicalProducts;
@@ -165,7 +180,38 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
         productFoundPublic = productId ? publicIds.has(productId) : missingIds.length === 0;
 
         if (missingIds.length === 0 && unexpectedIds.length === 0 && !hasInvalidIdentity && productFoundPublic) {
-          console.info(`[Catalog Sync] operation=${operationId} commit=${github.commitSha?.slice(0, 7)} public=${publicJsonCount}/${expectedPublicIds.size}`);
+          const completionEvent = createOperationalEvent({
+            eventType: "catalog.build.completed",
+            source: "catalogSync",
+            actor: "system",
+            correlationId: operationId,
+            severity: "INFO",
+            outcome: "SUCCESS",
+            payload: {
+              productId: productId || undefined,
+              supabaseCount,
+              jsonCount,
+              publicJsonCount,
+              expectedPublicCount: expectedPublicIds.size,
+              commitShortSha: github.commitSha?.slice(0, 7),
+            },
+          });
+          emitOperationalEvent(completionEvent);
+          void persistOperationalEvent(completionEvent).catch(error => console.warn(`[MEMORY] memory.persistence.failed eventId=${completionEvent.eventId} reason=${sanitizeOperationalText(error)}`));
+          void persistOperationalOperation({
+            operationId,
+            operationType: "CATALOG_SYNC",
+            status: "SUCCEEDED",
+            actor: "system",
+            correlationId: operationId,
+            attempt: 1,
+            createdAt: operationStartedAt,
+            startedAt: operationStartedAt,
+            completedAt: new Date().toISOString(),
+            resultCode: "CATALOG_BUILD_COMPLETED",
+            metadata: { productId: productId || undefined, publicJsonCount },
+            schemaVersion: "1.0",
+          }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
           return {
             success: true,
             operationId,

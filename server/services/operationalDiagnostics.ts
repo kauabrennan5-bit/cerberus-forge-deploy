@@ -26,6 +26,7 @@ export type RecoveryClass = "AUTO" | "ADMIN_APPROVAL" | "MANUAL" | "NOT_APPLICAB
 
 export interface OperationalDiagnostic {
   operationId: string;
+  correlationId: string;
   operation: OperationKind;
   stage: OperationStage;
   dependency: DependencyName;
@@ -59,9 +60,14 @@ export function sanitizeOperationalText(value: unknown): string {
     .slice(0, 500);
 }
 
-export function createOperationalDiagnostic(input: Omit<OperationalDiagnostic, "occurredAt" | "cause"> & { cause?: unknown }): OperationalDiagnostic {
+export function createOperationalDiagnostic(input: Omit<OperationalDiagnostic, "occurredAt" | "cause" | "correlationId"> & { correlationId?: string; cause?: unknown }): OperationalDiagnostic {
+  const operationId = String(input.operationId || "").trim();
+  const correlationId = String(input.correlationId || operationId).trim();
+  if (!operationId || !correlationId) throw new Error("INVALID_OPERATIONAL_DIAGNOSTIC_CORRELATION");
   return {
     ...input,
+    operationId,
+    correlationId,
     cause: input.cause ? sanitizeOperationalText(input.cause) : undefined,
     occurredAt: new Date().toISOString(),
   };
@@ -70,7 +76,7 @@ export function createOperationalDiagnostic(input: Omit<OperationalDiagnostic, "
 export function formatDiagnosticForAdmin(diagnostic: OperationalDiagnostic): string {
   const http = diagnostic.httpStatus ? ` HTTP ${diagnostic.httpStatus}.` : "";
   return [
-    `<b>${diagnostic.code}</b> · <code>${diagnostic.operationId}</code>`,
+    `<b>${diagnostic.code}</b> · <code>${diagnostic.operationId}</code> · <code>${diagnostic.correlationId}</code>`,
     `Etapa: ${diagnostic.stage} · Dependência: ${diagnostic.dependency}.${http}`,
     `Impacto: ${diagnostic.impact}`,
     `Causa provável: ${diagnostic.likelyCause}`,

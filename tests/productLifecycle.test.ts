@@ -94,6 +94,7 @@ test("falha estruturada de sincronização preserva operação e código especí
       operationId,
       diagnostic: {
         operationId,
+        correlationId: operationId,
         operation: "CATALOG_SYNC",
         stage: "GITHUB_AUTH",
         dependency: "GitHub",
