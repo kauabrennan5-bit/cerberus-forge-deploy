@@ -202,7 +202,7 @@ async function startServer() {
   app.post("/api/admin/rebuild-static-catalog", requireAdminAuth, async (req, res) => {
     try {
       const { syncCatalogAndDeploy } = await import("./server/services/catalogSync");
-      const result = await syncCatalogAndDeploy("Rebuild Administrativo Manual", "manual-rebuild");
+      const result = await syncCatalogAndDeploy("Rebuild Administrativo Manual");
       return res.json({
         success: result.success,
         message: result.success ? "Catálogo estático reconstruído e sincronizado com sucesso!" : "Falha na sincronização do catálogo estático.",
