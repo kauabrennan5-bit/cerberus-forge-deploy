@@ -242,6 +242,31 @@ test("D06. persist=false não grava no journal", { concurrency: false }, async (
   assert.equal(list.body.evaluations.length, 0);
 });
 
+// D06b. regressão (prova viva do Bloco 15): a rota aceita context opcional e
+// a persistência DEVE carregá-lo no journal sem alterar a decisão —
+// proveniência explícita é o mecanismo que falta para auditoria.
+test("D06b. persistido com context de proveniência carrega contexto intacto", { concurrency: false }, async () => {
+  const app = buildApp();
+  const res = await request(app)
+    .post("/api/policy/evaluate")
+    .set("x-admin-password", "testpass")
+    .send(makeRequest({ persist: "true", context: "live_probe|security_agent_contract_test" }));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.decision, "DENY");
+  assert.equal(res.body.reason_code, "AGENT_DISABLED");
+  assert.match(res.body.journal.outcome, /inserted|identical_duplicate/);
+  // Proveniência: o registro persistido deve carregar o context passado na avaliação.
+  const list = await request(app)
+    .get("/api/policy/journal")
+    .set("x-admin-password", "testpass")
+    .query({ evaluation_id: res.body.evaluationId });
+  assert.equal(list.status, 200);
+  const stored = list.body.evaluation;
+  assert.ok(stored, "registro persistido deve existir");
+  assert.equal(stored.evaluation_id, res.body.evaluationId);
+  assert.match(stored.context ?? "", /live_probe\|security_agent_contract_test/);
+});
+
 test("D07. payload inválido → 400 sem avaliar", { concurrency: false }, async () => {
   const res = await request(buildApp())
     .post("/api/policy/evaluate")
