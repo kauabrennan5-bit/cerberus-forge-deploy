@@ -12,3 +12,14 @@ data/telegram_reviews.json
 data/telegram_user_states.json
 state/watchdog-state.json
 tmp_*.html
+
+# Temporários de diagnóstico (não versionar)
+_probe*
+_verify*
+_checks_input.json
+_idempotency_analysis.md
+_mcp_read.py
+_migration_input.json
+_tables_input.json
+BLOCO15_CONSOLIDACAO_NOTAS.md
+BLOCO15_FASECNOTAS.md
