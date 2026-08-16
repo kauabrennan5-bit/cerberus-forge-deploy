@@ -23,6 +23,8 @@ import { setAgentExecutionClient } from "./server/repositories/agentExecutionsRe
 import { registerAgentRuntimeRoutes } from "./server/routes/agentRuntimeRoutes";
 import { registerExperimentRoutes } from "./server/routes/experimentRoutes";
 import { setExperimentClient } from "./server/repositories/experimentRepository";
+import { registerCandidateRoutes } from "./server/routes/candidateRoutes";
+import { setCandidatesClient } from "./server/repositories/candidatesRepository";
 
 dotenv.config();
 
@@ -1002,8 +1004,15 @@ NUNCA modifique ou invente preços ou imagens.`,
   if (productsRepository.supabase) {
     setExperimentClient(productsRepository.supabase as any);
   }
-  registerExperimentRoutes({ app, requireAdminAuth });
-
+    registerExperimentRoutes({ app, requireAdminAuth });
+  // Bloco N1 — Contratos de Descoberta: candidatos (projeção, nunca fato).
+  // CANDIDATE != FACT CANÔNICO · OBSERVATION != FACT CANÔNICO — as rotas
+  // NUNCA criam produto canônico, executam scraping ou alteram catálogo,
+  // Telegram, lifecycle, job queue ou Operator.
+  if (productsRepository.supabase) {
+    setCandidatesClient(productsRepository.supabase as any);
+  }
+  registerCandidateRoutes({ app, requireAdminAuth });
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first

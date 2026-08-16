@@ -1320,6 +1320,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderRecommendations());
       return;
     }
+    // Bloco N1 — funil de candidatos (render-only, CANDIDATE != FACT CANÔNICO)
+    if (text.startsWith("/discover")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderDiscover());
+      return;
+    }
 
     // --- DETECÇÃO DE LINKS (FLUXO DE PUBLICAÇÃO) ---
     const urlRegex = /(https?:\/\/[^\s]+)/gi;

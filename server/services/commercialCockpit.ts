@@ -452,6 +452,57 @@ export async function renderPriority(): Promise<string> {
 
   lines.push("");
   lines.push("🧭 COCKPIT = INFORMAÇÃO, NÃO AUTORIDADE. Nenhum comando executa ação.");
-  lines.push("   USE: /opportunities · /risks · /experiments · /agents · /decisions · /recommendations");
+  lines.push("   USE: /opportunities · /risks · /experiments · /agents · /decisions · /recommendations · /discover");
+  return lines.join("\n");
+}
+
+// ============================================================================
+// /discover — funil de candidatos do Bloco N1 (render-only)
+// ============================================================================
+export async function renderDiscover(): Promise<string> {
+  const lines: string[] = [];
+  lines.push("🔭 <b>DESCOBERTA — FUNIL DE CANDIDATOS (NÃO CANÔNICOS)</b>");
+  lines.push("━━━━━━━━━━━━━━━━━━");
+  lines.push("📏 Regra: CANDIDATE != FACT CANÔNICO. Candidato é projeção descoberta; nenhum candidato abaixo é produto publicado.");
+
+  const summary: Array<{ status: string; label: string }> = [];
+  let anyRead = false;
+  for (const status of ["DISCOVERED", "REVIEWING", "APPROVED", "REJECTED", "INCONCLUSIVE", "WITHDRAWN"] as const) {
+    try {
+      const list = await import("../repositories/candidatesRepository").then(m => m.listCandidates({ status }));
+      anyRead = true;
+      const count = list.total;
+      const emoji = status === "REJECTED" || status === "INCONCLUSIVE" ? "🔴" : status === "APPROVED" ? "🟢" : "🟡";
+      lines.push(`${emoji} <b>${status}</b>: ${count} candidato(s)`);
+      summary.push({ status, label: `${status}: ${count}` });
+    } catch {
+      lines.push("🟡 Funil indisponível neste momento (leitura recusada — nenhuma inferência).");
+      return lines.join("\n");
+    }
+  }
+
+  if (!anyRead) {
+    lines.push("🟡 Funil de descoberta indisponível.");
+    return lines.join("\n");
+  }
+
+  // Top candidates recentes (não aprovados) — sem dados ≠ fato negativo
+  try {
+    const pending = await import("../repositories/candidatesRepository").then(m =>
+      m.listCandidates({ status: "REVIEWING", limit: 3 }),
+    );
+    if (pending.candidates.length > 0) {
+      for (const c of pending.candidates) {
+        lines.push(`   🔎 <b>${c.title || c.candidate_id}</b> (${c.marketplace}) — preço observado: ${c.observed_price ?? "n/a"}`);
+      }
+    } else {
+      lines.push("🟡 Nenhum candidato em revisão agora (ausência ≠ rejeição).");
+    }
+  } catch {
+    lines.push("🟡 Lista de revisão indisponível.");
+  }
+
+  lines.push("");
+  lines.push("🧭 OBSERVATION != FACT CANÔNICO. Nenhum candidato foi promovido ou publicado por este comando.");
   return lines.join("\n");
 }
