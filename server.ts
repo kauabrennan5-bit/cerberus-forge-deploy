@@ -17,6 +17,8 @@ import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./
 import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
 import { setCommercialBrainClient } from "./server/repositories/commercialBrainRepository";
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
+import { registerPolicyEngineRoutes } from "./server/routes/policyEngineRoutes";
+import { setPolicyJournalClient } from "./server/repositories/policyJournalRepository";
 
 dotenv.config();
 
@@ -974,8 +976,12 @@ NUNCA modifique ou invente preços ou imagens.`,
   // Fonte única do cliente Supabase para o Cérebro Comercial (MEMORY, não autoridade). O repositório segue o padrão injetável do Bloco 13; em produção o cliente real vem de productsRepository (mesma credencial administrativa do catálogo). Testes continuam injetando cliente falso via setCommercialBrainClientForTests.
   if (productsRepository.supabase) {
     setCommercialBrainClient(productsRepository.supabase as any);
+    setPolicyJournalClient(productsRepository.supabase as any);
   }
   registerCommercialBrainRoutes({ app, requireAdminAuth });
+  // Bloco 15 — Fase D: superfície read-only de avaliação de política.
+  // POLICY != EXECUTION — nenhuma rota write de execução é criada aqui.
+  registerPolicyEngineRoutes({ app, requireAdminAuth });
 
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
