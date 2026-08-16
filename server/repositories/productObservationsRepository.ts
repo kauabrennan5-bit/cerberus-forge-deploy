@@ -108,7 +108,7 @@ export function setProductObservationsClientForTests(client: SupabaseClient | nu
   testClient = client;
 }
 
-function getClient(): SupabaseClient | null {
+export function getClient(): SupabaseClient | null {
   return testClient === undefined ? supabase : testClient;
 }
 

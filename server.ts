@@ -15,6 +15,7 @@ import { createProductionProductPipeline } from "./server/services/productPipeli
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./server/services/telegramDiagnostics";
 import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
+import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
 
 dotenv.config();
 
@@ -1002,6 +1003,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+  registerCommercialBrainRoutes({ app, requireAdminAuth });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
