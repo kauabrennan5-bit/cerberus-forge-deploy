@@ -233,6 +233,11 @@ const METADATA_SENSITIVE_KEYS = new Set([
   "credentials",
 ]);
 
+/** Acesso fechado de leitura às chaves sensíveis (usado pelo N3). */
+export function getMetadataSensitiveKeys(): ReadonlySet<string> {
+  return METADATA_SENSITIVE_KEYS;
+}
+
 export function sanitizeMetadata(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return {};

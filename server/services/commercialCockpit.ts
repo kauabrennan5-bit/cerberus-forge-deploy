@@ -28,6 +28,10 @@ import {
 } from "../repositories/commercialBrainRepository";
 import * as cerberusOperator from "./cerberusOperator";
 import { listAgents } from "../agentRegistry/agents";
+import {
+  listCandidateEvidence,
+  listResearchSessions,
+} from "../repositories/candidateEvidenceRepository";
 import { deriveMinSampleSize, deriveConfidenceV2, DEFAULT_FDR } from "../commercialBrain/statisticalRigor";
 import type { SignalConfidence } from "../commercialBrain/types";
 
@@ -504,5 +508,79 @@ export async function renderDiscover(): Promise<string> {
 
   lines.push("");
   lines.push("🧭 OBSERVATION != FACT CANÔNICO. Nenhum candidato foi promovido ou publicado por este comando.");
+  return lines.join("\n");
+}
+
+// ============================================================================
+// /research — pesquisa + evidência do Bloco N3 (RENDER-ONLY)
+// Estado da pesquisa de um candidato: sessões, evidências, UNKNOWNs,
+// contradições e qualidade geral. NUNCA executa coleta ou mutação.
+// ============================================================================
+export async function renderResearch(candidateId?: string): Promise<string> {
+  const lines: string[] = [];
+  lines.push("🔬 <b>PESQUISA + EVIDÊNCIA — BLOCO N3 (RENDER-ONLY)</b>");
+  lines.push("━━━━━━━━━━━━━━━━━━");
+  lines.push("📏 Regra: EVIDENCE != FACT CANÔNICO · OBSERVATION != FACT CANÔNICO. RESEARCH != PUBLICATION · RESEARCH != PROMOTION. Nenhuma pesquisa abaixo é produto publicado.");
+
+  if (!candidateId) {
+    lines.push("⚠️ Uso: /research &lt;candidate_id&gt; (ex: /research can-abc123...)");
+    lines.push("   Para ver o funil geral: /discover");
+    return lines.join("\n");
+  }
+
+  let sessions: Array<{ evidence_id: string; research_id: string; field_state: string; evidence_note: string; created_at: string; observed_at: string }> = [];
+  let evidence: Array<{ evidence_id: string; research_id: string; kind: string; field_name: string | null; field_state: string; field_value: Record<string, unknown> | null; quality: string; evidence_note: string; created_at: string }> = [];
+  let anyRead = false;
+  try {
+    const s = await listResearchSessions(candidateId);
+    const e = await listCandidateEvidence(candidateId);
+    anyRead = true;
+    if (s.ok) sessions = s.sessions;
+    if (e.ok) evidence = e.evidence;
+  } catch {
+    lines.push("🟡 Registry de evidências indisponível neste momento (leitura recusada — nenhuma inferência).");
+    return lines.join("\n");
+  }
+
+  if (!anyRead) {
+    lines.push("🟡 Pesquisa indisponível.");
+    return lines.join("\n");
+  }
+
+  const contradictions = evidence.filter(ev => ev.field_state === "CONTRADICTED").length;
+  const unknowns = evidence.filter(ev => ev.field_state === "UNKNOWN" || ev.field_state === "COLLECTION_FAILED").length;
+  const failed = evidence.filter(ev => ev.field_state === "COLLECTION_FAILED").length;
+
+  lines.push(`🆔 <b>Candidato</b>: ${candidateId}`);
+  lines.push(`📚 Sessões de pesquisa: ${sessions.length}`);
+  lines.push(`🧩 Evidências: ${evidence.length}`);
+  lines.push(`🔴 Contradições preservadas: ${contradictions}`);
+  lines.push(`🟡 UNKNOWN/COLLECTION_FAILED: ${unknowns}`);
+  if (failed > 0) {
+    lines.push(`❗ Coletas que FALHARAM (identificáveis): ${failed} — ausência ≠ dado negativo`);
+  }
+
+  // Últimas evidências por campo (não contraditas, KNOWN ou DERIVED)
+  const fieldEvidence = evidence.filter(ev => ev.kind === "FIELD");
+  const byField = new Map<string, typeof fieldEvidence>();
+  for (const ev of fieldEvidence) {
+    const list = byField.get(ev.field_name ?? "") ?? [];
+    list.push(ev);
+    byField.set(ev.field_name ?? "", list);
+  }
+  if (byField.size > 0) {
+    lines.push("🧪 <b>Campos pesquisados</b>:");
+    for (const [field, evs] of byField) {
+      const latest = evs[0];
+      const emoji = latest.field_state === "CONTRADICTED" ? "🔴" : latest.field_state === "KNOWN" ? "🟢" : latest.field_state === "DERIVED" ? "🟠" : "🟡";
+      const value = latest.field_value?.value ?? (latest.field_state === "COLLECTION_FAILED" ? "COLETA FALHOU" : "—");
+      lines.push(`   ${emoji} ${field}: ${typeof value === "string" && value.length > 60 ? value.slice(0, 60) + "…" : String(value)} (${latest.field_state} · qualidade ${latest.quality})`);
+    }
+  } else {
+    lines.push("🟡 Nenhuma evidência de campo ainda (ausência ≠ rejeição — nenhuma pesquisa iniciada).");
+  }
+
+  lines.push("");
+  lines.push("🧭 EVIDENCE != FACT CANÔNICO. Nenhuma evidência abaixo é produto canônico; nenhuma ação de publicação foi executada.");
   return lines.join("\n");
 }

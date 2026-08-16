@@ -25,7 +25,9 @@ import { registerExperimentRoutes } from "./server/routes/experimentRoutes";
 import { setExperimentClient } from "./server/repositories/experimentRepository";
 import { registerCandidateRoutes } from "./server/routes/candidateRoutes";
 import { setupDiscoveryRoutes } from "./server/routes/discoveryRoutes";
+import { registerResearchRoutes } from "./server/routes/researchRoutes";
 import { setCandidatesClient } from "./server/repositories/candidatesRepository";
+import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
 
 dotenv.config();
 
@@ -1016,6 +1018,13 @@ NUNCA modifique ou invente preços ou imagens.`,
   registerCandidateRoutes({ app, requireAdminAuth });
   // Bloco N2 — descoberta controlada (READ-ONLY, limites de servidor)
   setupDiscoveryRoutes({ app, requireAdminAuth });
+  // Bloco N3 — pipeline de pesquisa + evidência. EVIDENCE != FACT CANÔNICO ·
+  // RESEARCH != PUBLICATION · RESEARCH != PROMOTION — as rotas NUNCA criam
+  // produto canônico, alteram candidates ou executam ações externas.
+  if (productsRepository.supabase) {
+    setCandidateEvidenceClient(productsRepository.supabase as any);
+  }
+  registerResearchRoutes({ app, requireAdminAuth });
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first

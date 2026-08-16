@@ -1321,6 +1321,14 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderRecommendations());
       return;
     }
+    // Bloco N3 — pesquisa + evidência (RENDER-ONLY: /research <candidate_id>
+    // EVIDENCE != FACT CANÔNICO · RESEARCH != PUBLICATION · RESEARCH != PROMOTION)
+    if (text.startsWith("/research")) {
+      const args = text.slice("/research".length).trim();
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderResearch(args || undefined));
+      return;
+    }
+
     // Bloco N1 — funil de candidatos (render-only, CANDIDATE != FACT CANÔNICO)
     // Bloco N2 — descoberta controlada: /discover ML url <url> e /discover SH search <termo>
     if (text.startsWith("/discover")) {
