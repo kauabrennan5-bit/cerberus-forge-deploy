@@ -32,6 +32,7 @@ import { setCandidatesClient } from "./server/repositories/candidatesRepository"
 import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
 import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
 import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
+import { setAffiliateClient } from "./server/commercial/affiliate/affiliateRepository";
 
 dotenv.config();
 
@@ -1049,6 +1050,12 @@ NUNCA modifique ou invente preços ou imagens.`,
   // catálogo canônico, criam jobs, habilitam agentes ou executam ações
   // externas; registro/validação são apenas dados governados consumíveis
   // pelo N5 quando houver DECISION + Policy Engine + ApprovalStore.
+  // Bloco N6 — injeção do client (mesmo padrão N1–N4: client do
+  // productsRepository). Somente persistência governada: não altera
+  // executor do N5 (REGISTER != VALIDATE != APPROVE != EXECUTE).
+  if (productsRepository.supabase) {
+    setAffiliateClient(productsRepository.supabase as any);
+  }
   registerAffiliateRoutes(app, requireAdminAuth);
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
