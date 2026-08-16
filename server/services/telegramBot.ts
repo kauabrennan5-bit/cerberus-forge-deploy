@@ -12,6 +12,7 @@ import { detectMarketplace } from "./marketplace";
 import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
 import * as commercialCockpit from "./commercialCockpit";
+import { runDiscoverCommand } from "./discoveryCommands";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -1321,8 +1322,17 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
     // Bloco N1 — funil de candidatos (render-only, CANDIDATE != FACT CANÔNICO)
+    // Bloco N2 — descoberta controlada: /discover ML url <url> e /discover SH search <termo>
     if (text.startsWith("/discover")) {
-      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderDiscover());
+      const args = text.slice("/discover".length).trim();
+      if (!args) {
+        if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderDiscover());
+        return;
+      }
+      if (chatId) {
+        const response = await runDiscoverCommand(args);
+        await sendTelegramMessage(chatId, response);
+      }
       return;
     }
 

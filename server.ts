@@ -24,6 +24,7 @@ import { registerAgentRuntimeRoutes } from "./server/routes/agentRuntimeRoutes";
 import { registerExperimentRoutes } from "./server/routes/experimentRoutes";
 import { setExperimentClient } from "./server/repositories/experimentRepository";
 import { registerCandidateRoutes } from "./server/routes/candidateRoutes";
+import { setupDiscoveryRoutes } from "./server/routes/discoveryRoutes";
 import { setCandidatesClient } from "./server/repositories/candidatesRepository";
 
 dotenv.config();
@@ -1013,6 +1014,8 @@ NUNCA modifique ou invente preços ou imagens.`,
     setCandidatesClient(productsRepository.supabase as any);
   }
   registerCandidateRoutes({ app, requireAdminAuth });
+  // Bloco N2 — descoberta controlada (READ-ONLY, limites de servidor)
+  setupDiscoveryRoutes({ app, requireAdminAuth });
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
