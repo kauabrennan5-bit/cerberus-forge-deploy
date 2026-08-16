@@ -15,6 +15,7 @@ import { createProductionProductPipeline } from "./server/services/productPipeli
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./server/services/telegramDiagnostics";
 import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
+import { setCommercialBrainClient } from "./server/repositories/commercialBrainRepository";
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
 
 dotenv.config();
@@ -970,6 +971,10 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
+  // Fonte única do cliente Supabase para o Cérebro Comercial (MEMORY, não autoridade). O repositório segue o padrão injetável do Bloco 13; em produção o cliente real vem de productsRepository (mesma credencial administrativa do catálogo). Testes continuam injetando cliente falso via setCommercialBrainClientForTests.
+  if (productsRepository.supabase) {
+    setCommercialBrainClient(productsRepository.supabase as any);
+  }
   registerCommercialBrainRoutes({ app, requireAdminAuth });
 
   // Vite Middleware for development
