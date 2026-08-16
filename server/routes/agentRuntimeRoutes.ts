@@ -119,8 +119,15 @@ export function registerAgentRuntimeRoutes(deps: RuntimeRouteDeps): void {
         },
       });
 
-      const payload = buildExecutionPayload(request, result);
-      const writeResult = await persistExecution(payload);
+      // Journal de EXECUÇÃO: somente a fronteira ALLOW é registrada.
+      // Denys estruturais (REQUEST_INVALID, identity, budget) são negações
+      // de validação — o Decision Journal do Policy Engine já registra as
+      // decisões do engine; gravar negações aqui com campos vazios poluiria
+      // o journal (execution_id=""/intention_key="" = resíduo não idempotente).
+      const writeResult =
+        result.decision === "ALLOW"
+          ? await persistExecution(buildExecutionPayload(request, result))
+          : undefined;
 
       // Loop pós-aprovação: REQUIRES_APPROVAL → approval oficial →
       // re-avaliação da política → execução. O executor só executa para a
@@ -154,7 +161,14 @@ export function registerAgentRuntimeRoutes(deps: RuntimeRouteDeps): void {
         lifecycleState: result.lifecycleState,
         executorStatus: result.executorStatus,
         deterministic: result.deterministic,
-        persisted: writeResult.journalFailure ? false : true,
+        persisted:
+          result.decision === "ALLOW"
+            ? writeResult
+              ? writeResult.journalFailure
+                ? false
+                : true
+              : true
+            : false,
         policyVersion: result.policyEvaluation?.policyVersion ?? null,
         evaluationId: result.policyEvaluation?.evaluationId ?? null,
         runtimeVersion: RUNTIME_VERSION,
@@ -286,6 +300,7 @@ interface RuntimeResultLike {
   } | null;
   executionPlan: ExecutionPlan | null;
   executorStatus: "NOT_CONNECTED" | "SKIPPED" | "EXECUTED";
+  reasonCode: string;
   deterministic: boolean;
 }
 
@@ -327,7 +342,7 @@ function buildExecutionPayload(
     targetType: String(request.targetType ?? "NONE"),
     targetId: request.targetId ? String(request.targetId) : null,
     decision,
-    reasonCode: "POLICY_DECISION",
+    reasonCode: String(result.reasonCode ?? "POLICY_DECISION"),
     approvalState: decision === "REQUIRES_APPROVAL" ? "PENDING" : decision === "ALLOW" ? "NOT_REQUIRED" : "NONE",
     approvalId: null,
     lifecycleState: result.lifecycleState,
