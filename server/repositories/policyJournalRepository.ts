@@ -524,9 +524,11 @@ async function resolveDuplicate(
     const existing = data as StoredEvaluation;
     const sameRequest = existing.request_fingerprint === requestFp;
     const sameDecision = existing.decision_fingerprint === decisionFp;
+    // Comparação canônica: o JSONB do Postgres não preserva ordem de
+    // chaves; JSON.stringify ordem-dependente falsamente rejeitaria
+    // duplicatas idênticas. Reuso da mesma canonicalJson dos fingerprints.
     const sameChecks =
-      JSON.stringify(existing.checks) ===
-      JSON.stringify(candidate.checks);
+      canonicalJson(existing.checks) === canonicalJson(candidate.checks);
     if (sameRequest && sameDecision && sameChecks) {
       return {
         outcome: "identical_duplicate",

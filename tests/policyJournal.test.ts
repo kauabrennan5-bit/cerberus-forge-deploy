@@ -264,6 +264,29 @@ test("06. duplicate idêntico → identical_duplicate", { concurrency: false }, 
   assert.equal(second.journalFailure, false);
 });
 
+// 6b. regressão: JSONB do Postgres reordena chaves — checks em ordem
+// divergente, com conteúdo idêntico, devem ser identical_duplicate
+// (nunca false conflict_rejected).
+test("06b. duplicate idêntico com checks em ordem divergente → identical_duplicate", { concurrency: false }, async () => {
+  const { client, store } = makeFakeClient();
+  setPolicyJournalClientForTests(client as any);
+  const { decision, evaluationId } = makeDecision("DENY");
+  const first = await insertEvaluation({ decision, evaluationId });
+  assert.equal(first.outcome, "inserted");
+  // Simular a reordenação de chaves do JSONB: reconstruir checks com
+  // ordem deliberadamente diferente (Postgres reordena na leitura).
+  const tableRows = (store.get("policy_evaluations") as Record<string, unknown>[]) ?? [];
+  const existing = tableRows.find(r => r.evaluation_id === evaluationId) as Record<string, unknown>;
+  const originalChecks = existing.checks as Record<string, unknown>;
+  const reordered: Record<string, unknown> = {};
+  const keys = Object.keys(originalChecks).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  for (const k of keys) reordered[k] = originalChecks[k];
+  existing.checks = reordered;
+  const second = await insertEvaluation({ decision, evaluationId });
+  assert.equal(second.outcome, "identical_duplicate");
+  assert.equal(second.journalFailure, false);
+});
+
 // 7. duplicate conflitante
 test("07. duplicate conflitante (mesma evaluation_id, decisão divergente) → conflict_rejected", { concurrency: false }, async () => {
   const { client } = makeFakeClient();
