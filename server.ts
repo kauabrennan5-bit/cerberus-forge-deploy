@@ -970,6 +970,8 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
+  registerCommercialBrainRoutes({ app, requireAdminAuth });
+
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
@@ -1003,7 +1005,6 @@ NUNCA modifique ou invente preços ou imagens.`,
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-  registerCommercialBrainRoutes({ app, requireAdminAuth });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
