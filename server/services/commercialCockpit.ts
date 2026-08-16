@@ -32,6 +32,7 @@ import {
   listCandidateEvidence,
   listResearchSessions,
 } from "../repositories/candidateEvidenceRepository";
+import { listCandidateAssessments } from "../repositories/candidateAssessmentRepository";
 import { deriveMinSampleSize, deriveConfidenceV2, DEFAULT_FDR } from "../commercialBrain/statisticalRigor";
 import type { SignalConfidence } from "../commercialBrain/types";
 
@@ -582,5 +583,62 @@ export async function renderResearch(candidateId?: string): Promise<string> {
 
   lines.push("");
   lines.push("🧭 EVIDENCE != FACT CANÔNICO. Nenhuma evidência abaixo é produto canônico; nenhuma ação de publicação foi executada.");
+  return lines.join("\n");
+}
+
+// ============================================================================
+// /assess — avaliação do Bloco N4 (RENDER-ONLY)
+// Renderiza a ÚLTIMA avaliação de um candidato (candidato → 9 eixos →
+// classificação → recomendação → prioridade explicável). NUNCA executa o
+// filtro, nunca publica, nunca promove e nunca executa ação.
+// ============================================================================
+export async function renderAssessment(candidateId?: string): Promise<string> {
+  const lines: string[] = [];
+  lines.push("🎯 <b>FILTRO + PRIORIZAÇÃO — BLOCO N4 (RENDER-ONLY)</b>");
+  lines.push("━━━━━━━━━━━━━━━━━━");
+  lines.push("📏 Regra: CANDIDATE != FACT CANÔNICO · RECOMMENDATION != ACTION. Nenhuma avaliação abaixo é produto publicado nem ação executada.");
+
+  if (!candidateId) {
+    lines.push("⚠️ Uso: /assess &lt;candidate_id&gt; (ex: /assess can-abc123...)");
+    return lines.join("\n");
+  }
+
+  let assessments: Array<{ classification: string | null; recommendation: string | null; classification_basis: string; recommendation_basis: string; priority: Record<string, unknown> | null; priority_level: string | null; priority_score: number | null; unknowns: unknown[]; contradictions: unknown[]; collection_failures: unknown[]; created_at: string }> = [];
+  let anyRead = false;
+  try {
+    const list = await listCandidateAssessments({ candidateId, limit: 1 });
+    anyRead = true;
+    if (list.ok) assessments = list.assessments as typeof assessments;
+  } catch {
+    lines.push("🟡 Filtro Cerberus indisponível neste momento (leitura recusada — nenhuma inferência).");
+    return lines.join("\n");
+  }
+
+  if (!anyRead || assessments.length === 0) {
+    lines.push("🆔 <b>Candidato</b>: " + candidateId);
+    lines.push("🟡 Nenhuma avaliação registrada ainda — execute a avaliação administrativa primeiro (/assess não a executa, apenas renderiza).");
+    return lines.join("\n");
+  }
+
+  const a = assessments[0];
+  const unknowns = Array.isArray(a.unknowns) ? a.unknowns.length : 0;
+  const contradictions = Array.isArray(a.contradictions) ? a.contradictions.length : 0;
+  const failures = Array.isArray(a.collection_failures) ? a.collection_failures.length : 0;
+
+  lines.push(`🆔 <b>Candidato</b>: ${candidateId}`);
+  lines.push(`🏷️ Classificação: <b>${a.classification ?? "—"}</b>`);
+  lines.push(`🧭 Recomendação: <b>${a.recommendation ?? "—"}</b> (is_actionable=false — RECOMMENDATION != ACTION)`);
+  if (a.priority_level) lines.push(`⚖️ Prioridade: ${a.priority_level}${a.priority_score !== null && a.priority_score !== undefined ? ` (${a.priority_score.toFixed(4)})` : ""} — nunca exibida sem os eixos`);
+  if (contradictions > 0) lines.push(`🔴 Contradições preservadas: ${contradictions}`);
+  if (unknowns > 0) lines.push(`🟡 Incertezas declaradas (UNKNOWN): ${unknowns}`);
+  if (failures > 0) lines.push(`❗ Falhas de coleta declaradas: ${failures}`);
+  lines.push(`📝 Base da classificação: ${a.classification_basis || "—"}`);
+  lines.push(`📝 Base da recomendação: ${a.recommendation_basis || "—"}`);
+  if (a.priority && typeof a.priority === "object") {
+    const explanation = (a.priority as { explanation?: string }).explanation;
+    if (explanation) lines.push(`📐 Explicação da prioridade: ${explanation}`);
+  }
+  lines.push("");
+  lines.push("🧭 CANDIDATE != FACT CANÔNICO · RECOMMENDATION != ACTION. Nenhuma avaliação abaixo é produto canônico; nenhuma ação de publicação foi executada.");
   return lines.join("\n");
 }

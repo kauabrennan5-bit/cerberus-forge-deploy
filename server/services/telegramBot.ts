@@ -1328,6 +1328,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderResearch(args || undefined));
       return;
     }
+    // Bloco N4 — filtro + priorização (RENDER-ONLY: /assess <candidate_id> [--reassess] [--list])
+    // ASSESSMENT != ACTION · PRIORITY != DECISION · SCORE SEM RACIONAL = SEM SIGNIFICADO
+    if (text.startsWith("/assess")) {
+      const args = text.slice("/assess".length).trim();
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderAssessment(args || undefined));
+      return;
+    }
 
     // Bloco N1 — funil de candidatos (render-only, CANDIDATE != FACT CANÔNICO)
     // Bloco N2 — descoberta controlada: /discover ML url <url> e /discover SH search <termo>

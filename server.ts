@@ -26,8 +26,10 @@ import { setExperimentClient } from "./server/repositories/experimentRepository"
 import { registerCandidateRoutes } from "./server/routes/candidateRoutes";
 import { setupDiscoveryRoutes } from "./server/routes/discoveryRoutes";
 import { registerResearchRoutes } from "./server/routes/researchRoutes";
+import { registerAssessmentRoutes } from "./server/routes/assessmentRoutes";
 import { setCandidatesClient } from "./server/repositories/candidatesRepository";
 import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
+import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
 
 dotenv.config();
 
@@ -1025,6 +1027,14 @@ NUNCA modifique ou invente preços ou imagens.`,
     setCandidateEvidenceClient(productsRepository.supabase as any);
   }
   registerResearchRoutes({ app, requireAdminAuth });
+  // Bloco N4 — filtro e priorização Cerberus. CANDIDATE != FACT CANÔNICO ·
+  // RECOMMENDATION != ACTION — as rotas NUNCA publicam, promovem candidatos a
+  // products, alteram o catálogo canônico ou executam ações externas; a
+  // avaliação é persistida com histórico e prioridade nunca exibida sem eixos.
+  if (productsRepository.supabase) {
+    setCandidateAssessmentClient(productsRepository.supabase as any);
+  }
+  registerAssessmentRoutes(app, requireAdminAuth);
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
