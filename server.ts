@@ -27,6 +27,7 @@ import { registerCandidateRoutes } from "./server/routes/candidateRoutes";
 import { setupDiscoveryRoutes } from "./server/routes/discoveryRoutes";
 import { registerResearchRoutes } from "./server/routes/researchRoutes";
 import { registerAssessmentRoutes } from "./server/routes/assessmentRoutes";
+import { registerPublicationRoutes } from "./server/routes/publicationRoutes";
 import { setCandidatesClient } from "./server/repositories/candidatesRepository";
 import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
 import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
@@ -1035,6 +1036,12 @@ NUNCA modifique ou invente preços ou imagens.`,
     setCandidateAssessmentClient(productsRepository.supabase as any);
   }
   registerAssessmentRoutes(app, requireAdminAuth);
+  // Bloco N5 — Governed Publication (Cockpit + executor governado, admin-only).
+  // DECISION != ACTION · CANDIDATE != FACT CANÔNICO · ASSESSMENT != ACTION —
+  // a rota de execução NUNCA contorna Policy Engine, ApprovalStore ou Agent
+  // Runtime: exige DECISION + política ALLOW + aprovação explícita; preview,
+  // status e listagem são READ-ONLY e nunca criam produto ou vínculo.
+  registerPublicationRoutes(app, requireAdminAuth);
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
