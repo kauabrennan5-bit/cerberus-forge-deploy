@@ -19,6 +19,8 @@ import { setCommercialBrainClient } from "./server/repositories/commercialBrainR
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
 import { registerPolicyEngineRoutes } from "./server/routes/policyEngineRoutes";
 import { setPolicyJournalClient } from "./server/repositories/policyJournalRepository";
+import { setAgentExecutionClient } from "./server/repositories/agentExecutionsRepository";
+import { registerAgentRuntimeRoutes } from "./server/routes/agentRuntimeRoutes";
 
 dotenv.config();
 
@@ -982,6 +984,15 @@ NUNCA modifique ou invente preços ou imagens.`,
   // Bloco 15 — Fase D: superfície read-only de avaliação de política.
   // POLICY != EXECUTION — nenhuma rota write de execução é criada aqui.
   registerPolicyEngineRoutes({ app, requireAdminAuth });
+
+  // Bloco 16 — Fase D: execução governada do Agent Runtime (admin-only).
+  // POLICY != EXECUTION · ALLOW != EXECUTION — a rota executa apenas no loop
+  // de prova explícito (executeProof=true), sempre após re-avaliação da
+  // política. Executores reais permanecem EXECUTOR_NOT_CONNECTED.
+  if (productsRepository.supabase) {
+    setAgentExecutionClient(productsRepository.supabase as any);
+  }
+  registerAgentRuntimeRoutes({ app, requireAdminAuth });
 
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
