@@ -31,6 +31,7 @@ import { registerPublicationRoutes } from "./server/routes/publicationRoutes";
 import { setCandidatesClient } from "./server/repositories/candidatesRepository";
 import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
 import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
+import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
 
 dotenv.config();
 
@@ -1042,6 +1043,13 @@ NUNCA modifique ou invente preços ou imagens.`,
   // Runtime: exige DECISION + política ALLOW + aprovação explícita; preview,
   // status e listagem são READ-ONLY e nunca criam produto ou vínculo.
   registerPublicationRoutes(app, requireAdminAuth);
+  // Bloco N6 — Affiliate Economics + Link Resolution (governado, admin-only).
+  // AFFILIATE LINK != AUTHORITY · REGISTER != VALIDATE != APPROVE != EXECUTE —
+  // as rotas NUNCA publicam, promovem candidatos a products, alteram o
+  // catálogo canônico, criam jobs, habilitam agentes ou executam ações
+  // externas; registro/validação são apenas dados governados consumíveis
+  // pelo N5 quando houver DECISION + Policy Engine + ApprovalStore.
+  registerAffiliateRoutes(app, requireAdminAuth);
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
