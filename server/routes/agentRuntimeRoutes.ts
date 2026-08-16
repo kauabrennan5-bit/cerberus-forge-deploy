@@ -108,7 +108,9 @@ export function registerAgentRuntimeRoutes(deps: RuntimeRouteDeps): void {
           toolCallBudget: 0,
           costBudget: 0,
         },
-        memoryScope: Array.isArray(body.memoryScope) ? (body.memoryScope.map(String) as never) : (["NONE"] as never),
+        // Default: nenhum escopo alocado (a política nega SCOPE_NOT_SUBSET
+        // quando a memória declarada não é subconjunto dos escopos permitidos).
+        memoryScope: Array.isArray(body.memoryScope) ? (body.memoryScope.map(String) as never) : ([] as never),
       };
 
       const nowIso = () => new Date().toISOString();
