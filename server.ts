@@ -21,6 +21,8 @@ import { registerPolicyEngineRoutes } from "./server/routes/policyEngineRoutes";
 import { setPolicyJournalClient } from "./server/repositories/policyJournalRepository";
 import { setAgentExecutionClient } from "./server/repositories/agentExecutionsRepository";
 import { registerAgentRuntimeRoutes } from "./server/routes/agentRuntimeRoutes";
+import { registerExperimentRoutes } from "./server/routes/experimentRoutes";
+import { setExperimentClient } from "./server/repositories/experimentRepository";
 
 dotenv.config();
 
@@ -993,6 +995,14 @@ NUNCA modifique ou invente preços ou imagens.`,
     setAgentExecutionClient(productsRepository.supabase as any);
   }
   registerAgentRuntimeRoutes({ app, requireAdminAuth });
+
+  // Bloco 17 — Fase C: Experiment Registry (cockpit comercial, read-only +
+  // registro formal). EXPERIMENT != EXECUTION · DECISION != ACTION — as
+  // rotas NUNCA executam variante, produto, Telegram ou executor.
+  if (productsRepository.supabase) {
+    setExperimentClient(productsRepository.supabase as any);
+  }
+  registerExperimentRoutes({ app, requireAdminAuth });
 
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {

@@ -250,7 +250,7 @@ export function sanitizeMetadata(value: unknown): Record<string, unknown> {
 }
 
 /** Sanitiza texto livre (context): remove tokens/secrets conhecidos. */
-const TEXT_SENSITIVE_PATTERNS: ReadonlyArray<string> = [
+export const TEXT_SENSITIVE_PATTERNS: ReadonlyArray<string> = [
   "Authorization:",
   "Bearer ",
   "sk-",

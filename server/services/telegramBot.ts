@@ -11,6 +11,7 @@ import { syncCatalogAndDeploy } from "./catalogSync";
 import { detectMarketplace } from "./marketplace";
 import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
+import * as commercialCockpit from "./commercialCockpit";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -1284,6 +1285,39 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (text.startsWith("/help")) {
       if (chatId) await renderMainMenu(chatId);
+      return;
+    }
+
+    // --- BLOCO 17 — COMANDOS DO COCKPIT COMERCIAL (RENDER-ONLY) ---
+    // COCKPIT = INFORMAÇÃO, NÃO AUTORIDADE. Nenhum comando abaixo executa
+    // variante, produto, Telegram, agente ou executor.
+    if (text.startsWith("/priority")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderPriority());
+      return;
+    }
+    if (text.startsWith("/opportunities")) {
+      const arg = text.split(" ")[1]?.trim();
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderOpportunities(arg));
+      return;
+    }
+    if (text.startsWith("/risks")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderRisks());
+      return;
+    }
+    if (text.startsWith("/experiments")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderExperiments());
+      return;
+    }
+    if (text.startsWith("/agents")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderAgents());
+      return;
+    }
+    if (text.startsWith("/decisions")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderDecisions());
+      return;
+    }
+    if (text.startsWith("/recommendations")) {
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderRecommendations());
       return;
     }
 
