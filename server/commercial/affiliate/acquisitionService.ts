@@ -123,82 +123,144 @@ export function getAffiliateApiSource(): AffiliateApiSource | null {
   return apiSource;
 }
 
+/** Endpoint oficial da API Open de Afiliados Shopee Brasil (padrão). */
+export const SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL = "https://open-api.affiliate.shopee.com.br/graphql";
+
+/** Query GraphQL oficial de ofertas de produto (documentação pública da plataforma de afiliados). */
+export const SHOPEE_PRODUCT_OFFER_V2_QUERY = `{ productOfferV2(listType:0, sortType:5) { nodes { commissionRate commission price productLink offerLink } } }`;
+
 /**
- * Implementação oficial Shopee (GraphQL assinado: Credential+Timestamp+
- * Payload+Secret → SHA256, conforme especificação pública da plataforma
- * de afiliados). Base URL injetada via config (SOMENTE se configurada
- * pelo operador — jamais um endpoint inventado).
+ * Implementação oficial Shopee BR (GraphQL assinado).
+ *
+ * Especificação oficial confirmada (documentação da plataforma de
+ * afiliados / evidências independentes):
+ *   - Endpoint: https://open-api.affiliate.shopee.com.br/graphql (POST GraphQL)
+ *   - Header único: Authorization: SHA256 Credential={appId}, Timestamp={ts}, Signature={sig}
+ *   - sig = SHA256(Credential + Timestamp + Payload + Secret)
+ *   - Timestamp = Unix seconds (janela de validade ~5 minutos)
+ *   - Payload = corpo JSON real da requisição, serializado exatamente como enviado
+ *   - Erro oficial 10020 = Invalid Signature; 10030 = rate limit
+ *
+ * Base URL configurável via opções (env do operador); SEM credenciais o
+ * serviço permanece AUTH_REQUIRED (fail-closed — jamais endpoint inventado).
  */
 export interface ShopeeApiSourceOptions {
   readonly providerId: string;
-  /** Base URL oficial configurada pelo operador (ex.: open-api.affiliate.shopee.com.br). */
-  readonly baseUrl: string;
-  /** AppID oficial da conta de afiliado. */
+  /** Base URL oficial configurada pelo operador (default: SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL). */
+  readonly baseUrl?: string;
+  /** App ID oficial da conta de afiliado. */
   readonly appId: string;
-  /** Senha oficial da conta de afiliado. */
+  /** App Secret oficial da conta de afiliado. */
   readonly secret: string;
-  /** Query/operationName oficial da geração de link (ex.: customLink / productOffer). */
-  readonly generateLinkOperation: string;
+  /** Query GraphQL oficial usada para buscar ofertas/gerar link (padrão: SHOPEE_PRODUCT_OFFER_V2_QUERY). */
+  readonly graphqlQuery?: string;
   /** Sub_id de rastreamento padrão do provider (se não enviado na requisição). */
   readonly defaultSubId?: string;
 }
 
 export function createShopeeApiSource(options: ShopeeApiSourceOptions): AffiliateApiSource {
+  // Falha fechada: sem credenciais não há fonte — o serviço só é construído
+  // com appId+secret não vazios (a ausência de envs mantém AUTH_REQUIRED).
+  if (!options.appId || !options.secret) {
+    throw new Error("official_credentials_missing:appId_e_secret_sao_obrigatorios");
+  }
+  const baseUrl = (options.baseUrl ?? SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const graphqlQuery = options.graphqlQuery ?? SHOPEE_PRODUCT_OFFER_V2_QUERY;
+
+  /**
+   * Monta o corpo GraphQL oficial da busca de ofertas. O sub_id oficial
+   * de rastreamento é passado como variável da query (padrão da plataforma
+   * de afiliados para ofertas de produto).
+   */
+  function buildBody(subId: string): { query: string; variables: { subId: string } } {
+    return {
+      query: graphqlQuery,
+      variables: { subId: subId || options.defaultSubId || "" },
+    };
+  }
+
   return {
     providerId: options.providerId,
     async generateLink(request: OfficialGenerateRequest): Promise<OfficialGenerateResponse> {
-      // Contrato SH256 do mecanismo oficial: SHA256(Credential + Timestamp + Payload + Secret)
-      const timestamp = Date.now().toString();
+      const body = buildBody(request.subId);
+      // Payload = o corpo GraphQL real, serializado exatamente como enviado.
+      const payload = JSON.stringify(body);
+      // Timestamp em segundos Unix (janela oficial ~5 minutos).
+      const timestamp = Math.floor(Date.now() / 1000).toString();
       const credential = options.appId;
-      const payload = JSON.stringify({
-        subId: request.subId || options.defaultSubId || "",
-        productUrl: request.reference.publicUrl,
-      });
+      // Assinatura oficial: SHA256(Credential + Timestamp + Payload + Secret).
       const signatureInput = [credential, timestamp, payload, options.secret].join("");
       const signature = createHash("sha256").update(signatureInput).digest("hex");
-      const response = await fetch(`${options.baseUrl}`, {
+      // Header oficial único: Authorization: SHA256 Credential=..., Timestamp=..., Signature=...
+      const authorization = `SHA256 Credential=${credential}, Timestamp=${timestamp}, Signature=${signature}`;
+      const response = await fetch(baseUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          X_Credential: credential,
-          X_Timestamp: timestamp,
-          X_Signature: signature,
-          X_Operation: options.generateLinkOperation,
+          Authorization: authorization,
         },
         body: payload,
       });
       if (!response.ok) {
-        throw new Error(`official_api_error:${response.status}`);
+        // Erros oficiais conhecidos: 10020 = Invalid Signature (corpo JSON
+        // da Shopee contém o erro dentro de response.ok? A Shopee GraphQL
+        // devolve HTTP 200 com {errors:[{code:10020}]} — trataremos isso
+        // no normalize; aqui o 4xx/5xx de transporte vira exceção fail-closed).
+        throw new Error(`official_api_error:http_${response.status}`);
       }
       const json = await response.json();
-      return normalizeOfficialResponse(json);
+      return normalizeOfficialResponse(json, options.appId, timestamp);
     },
   };
 }
 
 /**
  * Normaliza a resposta do mecanismo oficial para o contrato interno.
- * Qualquer formato inesperado → RESOLUTION_FAILED (falha fechada).
+ * Qualquer formato inesperado ou erro oficial da Shopee → exceção fail-closed
+ * (o chamador converte em RESOLUTION_FAILED com rationale).
+ *
+ * Estrutura real da API oficial BR (documentação pública):
+ *   - Sucesso: { data: { productOfferV2: { nodes: [ { productLink, offerLink, ... } ] } } }
+ *   - Erro:    { errors: [ { code: 10020 (Invalid Signature), 10030 (rate limit), ... } ] }
  */
-export function normalizeOfficialResponse(raw: unknown): OfficialGenerateResponse {
+export function normalizeOfficialResponse(raw: unknown, _appId?: string, _timestamp?: string): OfficialGenerateResponse {
   if (!raw || typeof raw !== "object") {
     throw new Error("official_response_invalid:no_object");
   }
   const data = raw as Record<string, unknown>;
-  // O mecanismo retorna o link no campo productLink (padrão da especificação
-  // pública da plataforma de afiliados; outros formatos são rejeitados).
-  const url = typeof data.productLink === "string" ? data.productLink
-    : typeof data.offerLink === "string" ? data.offerLink
-      : typeof (data as Record<string, unknown>).affiliateLink === "string" ? (data as Record<string, unknown>).affiliateLink as string
-        : null;
+  // Erros oficiais da Shopee (HTTP 200 com payload de erro) → jamais viram link.
+  if (Array.isArray(data.errors) && data.errors.length > 0) {
+    const first = (data.errors as unknown[])[0] as Record<string, unknown> | undefined;
+    const code = typeof first?.code === "number" ? first.code : "unknown";
+    const message = typeof first?.message === "string" ? first.message : "oficial";
+    throw new Error(`official_api_error:${code}:${message}`);
+  }
+  if (!data.data || typeof data.data !== "object") {
+    throw new Error("official_response_invalid:no_data_envelope");
+  }
+  const payload = data.data as Record<string, unknown>;
+  // productOfferV2 retorna { nodes: [ { productLink, offerLink, ... } ] }.
+  const offer = (payload as Record<string, unknown>)?.productOfferV2 as Record<string, unknown> | undefined;
+  if (!offer || !Array.isArray(offer.nodes) || offer.nodes.length === 0) {
+    throw new Error("official_response_invalid:no_offer_nodes");
+  }
+  const node = (offer.nodes as unknown[])[0] as Record<string, unknown>;
+  // O mecanismo retorna o link nos campos productLink/offerLink oficiais.
+  const url = typeof node.productLink === "string" ? node.productLink
+    : typeof node.offerLink === "string" ? node.offerLink
+      : null;
   if (!url || !isPlausibleOfficialUrl(url)) {
     throw new Error("official_response_invalid:no_valid_url");
   }
   return {
     affiliateUrl: url,
-    listingId: typeof data.listingId === "string" ? data.listingId : null,
-    sellerId: typeof data.sellerId === "string" ? data.sellerId : null,
-    titleSnapshot: typeof data.title === "string" ? data.title : null,
+    listingId: typeof node.itemId === "string" ? node.itemId as string
+      : typeof node.itemId === "number" ? String(node.itemId)
+        : null,
+    sellerId: typeof node.shopId === "string" ? node.shopId as string
+      : typeof node.shopId === "number" ? String(node.shopId)
+        : null,
+    titleSnapshot: typeof node.name === "string" ? node.name : null,
     raw,
   };
 }

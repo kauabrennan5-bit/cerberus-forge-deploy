@@ -22,6 +22,7 @@
 // ============================================================================
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "crypto";
 import express from "express";
 import supertest from "supertest";
 import {
@@ -147,7 +148,7 @@ function fakeApiSource(opts: {
           ? { unexpectedField: "not-a-link" }
           : behavior === "no_url"
             ? { listingId: "123" }
-            : { productLink: url, listingId: opts.listingId !== undefined ? opts.listingId : "715084914", sellerId: opts.sellerId !== undefined ? opts.sellerId : "seller-n8", title: opts.title ?? "Produto Prova N8" };
+            : { data: { productOfferV2: { nodes: [{ productLink: url, offerLink: url, ...(opts.listingId !== null ? { itemId: opts.listingId === undefined ? 715084914 : Number(opts.listingId) } : {}), ...(opts.sellerId !== null ? { shopId: opts.sellerId === undefined ? "seller-n8" : opts.sellerId } : {}), ...(opts.title !== null ? { name: opts.title === undefined ? "Produto Prova N8" : opts.title } : {}) }] } } };
       return normalizeOfficialResponse(raw);
     },
   };
@@ -262,11 +263,13 @@ test("N8-09 API retorna resposta inesperada → RESOLUTION_FAILED (fail-closed)"
   assert.match(r.reason, /official_api_error|no_valid_url/);
 });
 
-test("N8-19 normalizeOfficialResponse rejeita formato inválido e sem URL", async () => {
+test("N8-19 normalizeOfficialResponse rejeita formato inválido, envelope ausente e sem URL", async () => {
   assert.throws(() => normalizeOfficialResponse(null));
-  assert.throws(() => normalizeOfficialResponse({ unexpected: 1 }));
-  assert.throws(() => normalizeOfficialResponse({ productLink: "not-a-url" }));
-  const ok = normalizeOfficialResponse({ productLink: "https://s.shopee.com.br/token" });
+  assert.throws(() => normalizeOfficialResponse({ unexpected: 1 }), /official_response_invalid/);
+  assert.throws(() => normalizeOfficialResponse({ data: { productOfferV2: { nodes: [] } } }), /official_response_invalid:no_offer_nodes/);
+  assert.throws(() => normalizeOfficialResponse({ data: { productOfferV2: { nodes: [{ productLink: "not-a-url" }] } } }), /official_response_invalid:no_valid_url/);
+  assert.throws(() => normalizeOfficialResponse({ errors: [{ code: 10020, message: "Invalid Signature" }] }), /official_api_error:10020/);
+  const ok = normalizeOfficialResponse({ data: { productOfferV2: { nodes: [{ productLink: "https://s.shopee.com.br/token" }] } } });
   assert.equal(ok.affiliateUrl, "https://s.shopee.com.br/token");
 });
 
@@ -374,29 +377,106 @@ test("N8-18 API de outro provider → RESOLUTION_FAILED (proteção de escopo)",
   assert.equal(r.reason, "api_source_provider_mismatch");
 });
 
-test("N8-20 assinatura SHA256 composta Credential+Timestamp+Payload+Secret", async () => {
+test("N8-20 formato oficial de autenticação: Authorization SHA256 + timestamp segundos + assinatura sobre o corpo GraphQL serializado", async () => {
+  const originalFetch = globalThis.fetch;
+  const appId = "18384911047";
+  const secret = "secret-oficial-n8";
   const source = createShopeeApiSource({
     providerId: "provider-n8-shopee",
     baseUrl: "https://example.invalid/graphql",
-    appId: "app-123",
-    secret: "sec-456",
-    generateLinkOperation: "productOffer",
+    appId,
+    secret,
     defaultSubId: "sub-default",
   });
+  // Sem credenciais → exceção fail-closed (jamais fonte sem appId/secret).
+  assert.throws(
+    () => createShopeeApiSource({ providerId: "p", appId: "", secret: "s" }),
+    /official_credentials_missing/,
+  );
+  let captured: { url: string; auth: string; timestamp: string; body: string } | null = null;
+  globalThis.fetch = (async (url: any, init: any) => {
+    captured = { url, auth: init.headers.Authorization, timestamp: "", body: init.body };
+    const match = /Timestamp=(\d+)/.exec(init.headers.Authorization);
+    if (match) captured.timestamp = match[1];
+    return new Response(JSON.stringify({ data: { productOfferV2: { nodes: [{ productLink: "https://s.shopee.com.br/token", offerLink: "https://s.shopee.com.br/token", itemId: 715084914, shopId: "seller-n8", name: "Produto Prova N8" }] } } }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as never;
+  try {
+    const result = await source.generateLink({
+      providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
+      reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
+      subId: "sub-n8-001",
+    });
+    assert.ok(captured, "fetch deve ter sido chamado");
+    // 1. Endpoint: POST para a base configurada (default oficial quando omitida).
+    assert.equal(captured!.url, "https://example.invalid/graphql");
+    // 2. Header oficial único (sem X_Credential/X_Timestamp/X_Signature).
+    assert.ok(/^SHA256 Credential=/.test(captured!.auth), "header oficial: Authorization: SHA256 Credential=...");
+    assert.ok(/Timestamp=\d+/.test(captured!.auth), "Timestamp no header");
+    assert.ok(/Signature=[0-9a-f]{64}/.test(captured!.auth), "Signature hex SHA256 no header");
+    // 3. Timestamp em segundos Unix (ordem de grandeza correta, não ms).
+    const ts = Number(captured!.timestamp);
+    assert.ok(ts > 1_700_000_000 && ts < 2_000_000_000, "timestamp em segundos Unix");
+    assert.ok(Math.abs(ts - Math.floor(Date.now() / 1000)) <= 2, "timestamp ≈ now em segundos");
+    // 4. Payload = corpo GraphQL real serializado exatamente como enviado.
+    const sentBody = JSON.parse(captured!.body);
+    assert.ok(sentBody.query.includes("productOfferV2"), "corpo contém a query oficial productOfferV2");
+    assert.deepEqual(sentBody.variables, { subId: "sub-n8-001" }, "variables com sub_id oficial");
+    // 5. Assinatura recriável: SHA256(Credential+Timestamp+Payload+Secret).
+    const signatureMatch = /Signature=([0-9a-f]{64})/.exec(captured!.auth);
+    assert.ok(signatureMatch, "signature capturável");
+    const expectedSig = createHash("sha256").update([appId, captured!.timestamp, captured!.body, secret].join("")).digest("hex");
+    assert.equal(signatureMatch![1], expectedSig, "assinatura = SHA256(Credential+Timestamp+Payload+Secret)");
+    // 6. Resposta oficial (nodes) normalizada com identidade e URL oficial.
+    assert.equal(result.affiliateUrl, "https://s.shopee.com.br/token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("N8-20b endpoint oficial BR como default (sem baseUrl) e erro GraphQL oficial → fail-closed", async () => {
   const originalFetch = globalThis.fetch;
-  let capturedSignature: string | null = null;
-  globalThis.fetch = (async (_url: any, init: any) => {
-    capturedSignature = init.headers.X_Signature;
-    return new Response(JSON.stringify({ productLink: "https://s.shopee.com.br/token" }), { status: 200, headers: { "content-type": "application/json" } });
+  const source = createShopeeApiSource({
+    providerId: "provider-n8-shopee",
+    appId: "app-123",
+    secret: "sec-456",
+  });
+  let capturedUrl: string | null = null;
+  // Cenário A: default = endpoint oficial BR.
+  globalThis.fetch = (async (url: any) => {
+    capturedUrl = url;
+    return new Response(JSON.stringify({ data: { productOfferV2: { nodes: [{ productLink: "https://s.shopee.com.br/token" }] } } }), { status: 200 });
   }) as never;
   try {
     await source.generateLink({
       providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
       reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
-      subId: "sub-n8-001",
+      subId: "",
     });
-    assert.ok(capturedSignature, "assinatura deve ser enviada no header");
-    assert.equal(capturedSignature?.length, 64, "SHA256 hex = 64 caracteres");
+    assert.equal(capturedUrl, "https://open-api.affiliate.shopee.com.br/graphql", "default = endpoint oficial BR");
+    // Cenário B: erro oficial {errors:[{code:10020}]} jamais vira link.
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ errors: [{ code: 10020, message: "Invalid Signature" }] }), { status: 200 })
+    ) as never;
+    await assert.rejects(
+      () => source.generateLink({
+        providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
+        reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
+        subId: "",
+      }),
+      /official_api_error:10020/,
+      "erro oficial 10020 (Invalid Signature) → exceção fail-closed",
+    );
+    // Cenário C: envelope sem data → rejeitado.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ unexpected: 1 }), { status: 200 })) as never;
+    await assert.rejects(
+      () => source.generateLink({
+        providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
+        reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
+        subId: "",
+      }),
+      /official_response_invalid/,
+      "resposta sem envelope data → rejeitada",
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
