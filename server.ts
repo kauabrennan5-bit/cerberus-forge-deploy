@@ -33,6 +33,10 @@ import { setCandidateEvidenceClient } from "./server/repositories/candidateEvide
 import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
 import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
 import { setAffiliateClient } from "./server/commercial/affiliate/affiliateRepository";
+import {
+  createShopeeApiSource,
+  setAffiliateApiSource,
+} from "./server/commercial/affiliate/acquisitionService";
 
 dotenv.config();
 
@@ -1055,6 +1059,43 @@ NUNCA modifique ou invente preços ou imagens.`,
   // executor do N5 (REGISTER != VALIDATE != APPROVE != EXECUTE).
   if (productsRepository.supabase) {
     setAffiliateClient(productsRepository.supabase as any);
+  }
+  // Bloco N8 — bootstrap fail-closed da API oficial de Afiliados Shopee BR.
+  // Sem SHOPEE_AFFILIATE_APP_ID + SHOPEE_AFFILIATE_APP_SECRET, o caminho API
+  // permanece AUTH_REQUIRED (nenhum endpoint é presumido). Com as envs
+  // presentes, a fonte oficial é construída automaticamente.
+  // SHOPEE_AFFILIATE_API_BASE_URL é opcional (default oficial BR).
+  // PENDENTE: credenciais oficiais aguardam a resposta da Shopee.
+  const shopeeAppId = process.env.SHOPEE_AFFILIATE_APP_ID?.trim();
+  const shopeeSecret = process.env.SHOPEE_AFFILIATE_APP_SECRET?.trim();
+  if (shopeeAppId && shopeeSecret) {
+    try {
+      setAffiliateApiSource(
+        createShopeeApiSource({
+          // providerId canônico do marketplace Shopee. O serviço de aquisição
+          // rejeita qualquer requisição com provider_id diferente do providerId
+          // da fonte injetada (RESOLUTION_FAILED / api_source_provider_mismatch).
+          providerId: "shopee",
+          appId: shopeeAppId,
+          secret: shopeeSecret,
+          baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL?.trim() || undefined,
+        }),
+      );
+      console.log(
+        "[N8] fonte oficial Shopee afiliados inicializada (endpoint: " +
+          (process.env.SHOPEE_AFFILIATE_API_BASE_URL || "default BR") + ")",
+      );
+    } catch (err) {
+      // Falha fechada: envs inválidas jamais habilitam fonte defeituosa —
+      // o caminho API permanece AUTH_REQUIRED.
+      console.warn(
+        "[N8] fonte oficial Shopee afiliados NÃO inicializada (falha fechada): " +
+          (err as Error)?.message || String(err),
+      );
+      setAffiliateApiSource(null);
+    }
+  } else {
+    setAffiliateApiSource(null);
   }
   registerAffiliateRoutes(app, requireAdminAuth);
   // Vite Middleware for development
