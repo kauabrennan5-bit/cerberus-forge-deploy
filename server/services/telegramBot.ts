@@ -1255,7 +1255,44 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
     }
 
-    // --- COMANDOS /start /admin /listar /categorias /help ---
+    // Bloco N9 — renderizador RENDER-ONLY do estado do ciclo comercial.
+// Lê APENAS: getCycle/getDecisionByCycle/listSteps (somente leituras).
+// NUNCA executa estágio, decisão, publicação ou qualquer mutação.
+async function renderCycleState(input: string): Promise<string> {
+  try {
+    const args = input.slice("/cycle".length).trim();
+    if (!args.startsWith("status ")) {
+      return "🔄 <b>BLOCO N9 — CICLO COMERCIAL</b>\n\nUso: <code>/cycle status &lt;cycle_id&gt;</code>\n\nCiclo = projeção orquestrada (N2→N8). DECISION != ACTION — este comando NUNCA executa estágio, decisão ou publicação; apenas consulta o estado consolidado do ciclo.";
+    }
+    const cycleId = args.slice("status ".length).trim();
+    if (!/^ncc-[A-Za-z0-9_-]+$/.test(cycleId)) {
+      return "⚠️ <b>CYCLE_ID INVÁLIDO</b>\n\nFormato esperado: <code>ncc-&lt;marketplace&gt;-&lt;hash&gt;</code>\n\nUse <code>/cycle status &lt;cycle_id&gt;</code>.";
+    }
+    const { getCycleState } = await import("../commercial/cycle/commercialCycleService");
+    const state = await getCycleState(cycleId);
+    if (!state.ok || !state.state) {
+      return `⚠️ <b>CICLO NÃO ENCONTRADO</b>\n\nCycle ID: <code>${cycleId}</code>\nMotivo: ${state.reason ?? "not_found"}\n\nCiclos só existem após serem abertos pelas rotas administrativas do N9.`;
+    }
+    const s = state.state;
+    const lines: string[] = [];
+    lines.push("🔄 <b>CICLO COMERCIAL N9</b>");
+    lines.push(`\nCycle: <code>${s.cycleId ?? cycleId}</code>`);
+    lines.push(`Status: ${String(s.status ?? "?")}`);
+    lines.push(`Marketplace: ${String(s.marketplace ?? "?")} · Fonte: ${String(s.sourceUrl ?? "?")}`);
+    lines.push(`Candidate: <code>${String(s.candidateId ?? "—")}</code>`);
+    lines.push(`Decisão (gate v1): ${String(s.decision ?? "—")}`);
+    lines.push(`Identidade: ${String(s.resolutionStatus ?? "—")}`);
+    if (Array.isArray(s.blockingRules) && s.blockingRules.length > 0) {
+      lines.push(`Bloqueios: ${s.blockingRules.join(", ")}`);
+    }
+    lines.push(`\nIDENTITY ≠ CONFIRMED · DECISION ≠ ACTION\nEste comando NÃO executa nada.`);
+    return lines.join("\n");
+  } catch {
+    return "⚠️ <b>ERRO DE INFRAESTRUTURA</b>\n\nNão foi possível consultar o ciclo (leitura falhou). Sem dados confiáveis, nada é executado (fail-closed).";
+  }
+}
+
+// --- COMANDOS /start /admin /listar /categorias /help ---
     if (text.startsWith("/start") || text.startsWith("/admin")) {
       if (chatId) await renderMainMenu(chatId);
       return;
@@ -1326,6 +1363,14 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (text.startsWith("/affiliates")) {
       const args = text.slice("/affiliates".length).trim();
       if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderAffiliates(args || undefined));
+      return;
+    }
+    // Bloco N9 — Ciclo Comercial (RENDER-ONLY: /cycle status <cycle_id>)
+    // CICLO = PROJEÇÃO ORQUESTRADA, NÃO AUTORIDADE. O comando NUNCA executa
+    // estágio, decisão ou publicação; apenas consulta o estado consolidado
+    // do ciclo (ciclo, decisão v1 e passos registrados). DECISION != ACTION.
+    if (text.startsWith("/cycle")) {
+      if (chatId) await sendTelegramMessage(chatId, await renderCycleState(text));
       return;
     }
     // Bloco N3 — pesquisa + evidência (RENDER-ONLY: /research <candidate_id>

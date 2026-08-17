@@ -37,6 +37,8 @@ import {
   createShopeeApiSource,
   setAffiliateApiSource,
 } from "./server/commercial/affiliate/acquisitionService";
+import { registerCycleRoutes } from "./server/routes/cycleRoutes";
+import { setCycleClient } from "./server/commercial/cycle/cycleRepository";
 
 dotenv.config();
 
@@ -1098,6 +1100,17 @@ NUNCA modifique ou invente preços ou imagens.`,
     setAffiliateApiSource(null);
   }
   registerAffiliateRoutes(app, requireAdminAuth);
+  // Bloco N9 — Ciclo Comercial Real: orquestração governada S1→S8 +
+  // Commercial Decision Gate v1. CICLO != PUBLICAÇÃO · DECISION != ACTION ·
+  // RECOMMENDATION != ACTION — o gate v1 nunca produz DECISION_ALLOWED por
+  // fallback; a única rota que pode encadear execução delega ao executor N5
+  // (que por sua vez exige Policy Engine + ApprovalStore + idempotencyKey).
+  // As rotas de estado (state/list) são READ-ONLY (render-only);
+  // /cleanup é exclusivo de prova controlada (proof=commercial_proof).
+  if (productsRepository.supabase) {
+    setCycleClient(productsRepository.supabase as any);
+  }
+  registerCycleRoutes(app, requireAdminAuth, productsRepository.supabase);
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
