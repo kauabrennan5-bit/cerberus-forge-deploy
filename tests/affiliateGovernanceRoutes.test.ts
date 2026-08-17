@@ -467,8 +467,9 @@ test("N6-FailClosed: resolver é fail-closed em qualquer erro (adapter N5)", asy
   // fechada, sem lançar). resolveUsableLinkForCandidate puro lança por
   // design; o adapter affiliateLinkResolver do contrato N5 cobre o erro.
   setAffiliateClientForTests(null as any);
-  const resolved = await resolveAffiliateLink("cand-x");
-  assert.equal(resolved, null, "resolver fail-closed retorna null sem lançar");
+  const resolved = await resolveAffiliateLink({ candidateId: "cand-x", affiliateUrlManual: null });
+  assert.equal(resolved.status, "RESOLUTION_ERROR", "resolver fail-closed retorna status explícito sem lançar");
+  assert.equal(resolved.affiliateUrl, null);
   // Restaurar para os demais testes (node:test roda em ordem no arquivo).
   setAffiliateClientForTests(fakeClient as any);
 });

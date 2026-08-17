@@ -1321,6 +1321,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderRecommendations());
       return;
     }
+    // Blocos N6/N7 — Affiliate Registry (RENDER-ONLY: /affiliates [link_id ou provider_code])
+    // AFFILIATE LINK != AUTHORITY · REGISTRY = DADOS, NÃO AUTORIDADE
+    if (text.startsWith("/affiliates")) {
+      const args = text.slice("/affiliates".length).trim();
+      if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderAffiliates(args || undefined));
+      return;
+    }
     // Bloco N3 — pesquisa + evidência (RENDER-ONLY: /research <candidate_id>
     // EVIDENCE != FACT CANÔNICO · RESEARCH != PUBLICATION · RESEARCH != PROMOTION)
     if (text.startsWith("/research")) {

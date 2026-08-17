@@ -32,6 +32,7 @@ export type PublicationOutcome =
   | "INCOMPATIBLE"
   | "POLICY_DENIED"
   | "POLICY_ERROR"
+  | "AFFILIATE_MISSING" // Bloco N7 (modo exigente): nenhum link elegível no registry
   | "INTERNAL_ERROR";
 
 /** Catálogo fechado dos motivos de falha do preflight. */
@@ -69,7 +70,8 @@ export type ExecutionFailureCode =
   | "DUPLICATE_DETECTED"
   | "ROLLBACK_FAILED"
   | "STORE_ERROR"
-  | "DUPLICATE_EXECUTION";
+  | "DUPLICATE_EXECUTION"
+  | "AFFILIATE_MISSING"; // Bloco N7 (modo exigente)
 
 /**
  * AffiliateLink: única forma legítima de publicar com rastreamento de
@@ -125,7 +127,13 @@ export interface PublicationAuditEvent {
     | "PROMOTION_LINKED"
     | "PUBLICATION_VALIDATED"
     | "PUBLICATION_RESTORED"
-    | "EXECUTION_FINISHED";
+    | "EXECUTION_FINISHED"
+    | "AFFILIATE_RESOLUTION"
+    | "AFFILIATE_RESOLUTION_ERROR"
+    | "AFFILIATE_MANUAL_PROVIDED"
+    | "LINK_RESOLVED"
+    | "LINK_RESOLUTION_SKIPPED"
+    | "AFFILIATE_REQUIRED_NOT_MET";
   at: string;
   message: string;
   actor?: string;
@@ -174,6 +182,12 @@ export interface PublicationContract {
   affiliateUrl: string | null;
   affiliateState: "AVAILABLE" | "UNKNOWN";
   affiliateSource: AffiliateLinkSource | null;
+  /** N7 — resolução do Affiliate Registry (DADOS; nunca autoriza publicação). */
+  affiliateLinkId?: string | null;
+  providerId?: string | null;
+  affiliateDigest?: string | null;
+  affiliateSelectionBasis?: string | null;
+  affiliateResolverVersion?: string;
   provenance: PublicationProvenance;
   createdAt: string;
   updatedAt: string;

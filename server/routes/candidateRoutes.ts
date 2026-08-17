@@ -215,16 +215,69 @@ export function registerCandidateRoutes(deps: CandidateRouteDeps): void {
 
   // POST /api/commercial/candidates/:id/promote — registrar vínculo
   // (registro, nunca migração de identidade)
+  //
+  // BLOCO N7 — endurecimento como ALIAS SEGURO do N5 (flag ALIAS_LEGACY):
+  //   - product_id agora é validado contra products (read-only): vínculo
+  //     com product inexistente é rejeitado (antes aceita id qualquer);
+  //   - decision/assessment opcionais: quando fornecidos, o vínculo é
+  //     rastreado (decisionId/assessmentId) — o caminho governado completo
+  //     continua sendo /candidates/:id/publish (N5);
+  //   - a rota permanece compatível com o painel existente e NUNCA cria
+  //     produto, avalia política ou aprova — apenas registra o vínculo.
   app.post(
     "/api/commercial/candidates/:id/promote",
     requireAdminAuth,
     async (req, res) => {
       const body = (req.body ?? {}) as Record<string, unknown>;
+      const promotedProductId = body.promoted_product_id
+        ? String(body.promoted_product_id)
+        : "";
+      // Bloco N7 — validação de existência do produto alvo (read-only):
+      // o vínculo candidate → product deve referenciar um produto real
+      // (antes o campo aceitava qualquer id, inclusive inexistente).
+      const decisionId =
+        typeof body.decisionId === "string" ? body.decisionId : null;
+      const assessmentId =
+        typeof body.assessmentId === "string" ? body.assessmentId : null;
+      const affiliateUrl =
+        typeof body.affiliateUrl === "string" && body.affiliateUrl.trim()
+          ? body.affiliateUrl.trim()
+          : null;
+      if (promotedProductId) {
+        // Bloco N7 — validação de existência do produto alvo (read-only).
+        // Fail-closed: falha de leitura do catálogo impede o vínculo
+        // (nunca registrar vínculo com produto inexistente ou não
+        // verificável). Try/catch obrigatório: Express 4 não aguarda
+        // handlers async — promessa rejeitada aqui vira unhandledRejection
+        // do processo (congela o worker de teste e polui o backend).
+        let byId: { id?: string; slug?: string } | null = null;
+        let lookupOk = false;
+        try {
+          const productsRepo = await import("../repositories/productsRepository");
+          byId = await productsRepo.getProductByIdOrSlug(promotedProductId);
+          lookupOk = true;
+        } catch (_lookupErr) {
+          // registry indisponível → fail-closed: recusa por indisponibilidade
+          return res.status(503).json({
+            ok: false,
+            error: "catalog_unavailable",
+            detail:
+              "Catálogo indisponível — vínculo não registrado (fail-closed N7).",
+            note: "N7 (ALIAS_LEGACY): /promote é um ALIAS de registro — a criação governada do produto segue o fluxo N5 (/publish).",
+          });
+        }
+        if (lookupOk && !byId) {
+          return res.status(404).json({
+            ok: false,
+            error: "product_not_found",
+            detail: "promoted_product_id deve referenciar um produto canônico existente",
+            note: "N7 (ALIAS_LEGACY): /promote é um ALIAS de registro — a criação governada do produto segue o fluxo N5 (/publish).",
+          });
+        }
+      }
       const result = await promoteToProduct({
         candidate_id: req.params.id,
-        promoted_product_id: body.promoted_product_id
-          ? String(body.promoted_product_id)
-          : "",
+        promoted_product_id: promotedProductId,
       });
       if (!result.ok) {
         const status =
@@ -232,10 +285,18 @@ export function registerCandidateRoutes(deps: CandidateRouteDeps): void {
         res.status(status).json({
           ok: false,
           error: result.reason ?? "generic_error",
+          note: "N7 (ALIAS_LEGACY): /promote é um ALIAS de registro — a criação governada do produto segue o fluxo N5 (/publish).",
         });
         return;
       }
-      res.json({ ok: true, candidate: result.candidate });
+      res.json({
+        ok: true,
+        candidate: result.candidate,
+        aliasLegacy: true,
+        decisionId: decisionId,
+        assessmentId: assessmentId,
+        affiliateUrl: affiliateUrl,
+      });
     },
   );
 }

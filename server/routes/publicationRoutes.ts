@@ -22,6 +22,10 @@ import {
   type PublicationRepositoryAdapter,
   type ApprovalLookup,
 } from "../commercial/publication/publicationExecutor";
+import {
+  resolveAffiliateLink,
+  type AffiliateRegistrySnapshot,
+} from "../commercial/affiliate/affiliateLinkResolver";
 import { evaluatePolicy } from "../policyEngine/policyEngine";
 import { supabasePublicationAdapter } from "../commercial/publication/supabasePublicationAdapter";
 import {
@@ -43,6 +47,12 @@ function validateCandidateId(id: string): boolean {
 let publicationApprovalStore: ApprovalStore = new InMemoryApprovalStore();
 export function setPublicationApprovalStoreForTests(store: ApprovalStore | null): void {
   publicationApprovalStore = store ?? new InMemoryApprovalStore();
+}
+
+/** Snapshot injetável do Affiliate Registry (testes/isolamento). */
+let affiliateRegistrySnapshot: AffiliateRegistrySnapshot | undefined;
+export function setAffiliateRegistrySnapshotForTests(snapshot: AffiliateRegistrySnapshot | null | undefined): void {
+  affiliateRegistrySnapshot = snapshot ?? undefined;
 }
 
 function mapApprovalState(state: string): import("../agentRuntime/types").ApprovalDecisionState {
@@ -168,7 +178,18 @@ export function registerPublicationRoutes(
         typeof body.correlationId === "string" && body.correlationId
           ? body.correlationId
           : `pub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const idempotencyKey = buildIdempotencyKeyFromDecision({ candidateId, assessmentId, affiliateUrl });
+      // Bloco N7: resolver é executado ANTES de qualquer escrita
+      // irreversível. O resultado é DADOS (idempotência inclui a URL
+      // resolvida — replay idêntico = mesma chave). Falha fechada:
+      // erro de resolução não inventa link (affiliateUrl continua null).
+      const resolution = await resolveAffiliateLink(
+        { candidateId, affiliateUrlManual: affiliateUrl },
+        affiliateRegistrySnapshot
+      );
+      const resolvedUrl = resolution.status === "RESOLVED" || resolution.status === "MANUAL_PROVIDED"
+        ? (resolution.affiliateUrl ?? null)
+        : null;
+      const idempotencyKey = buildIdempotencyKeyFromDecision({ candidateId, assessmentId, affiliateUrl: resolvedUrl });
       const executionId = buildExecutionId(candidateId, idempotencyKey);
 
       // A decisão usa a avaliação do Policy Engine sobre a intenção
@@ -199,6 +220,21 @@ export function registerPublicationRoutes(
         correlationId,
       });
 
+      // Bloco N7 — modo exigente (opcional via body.requireAffiliateLink,
+      // quando a decision/policy vigente exigir link afiliado válido).
+      const requireAffiliateLink =
+        body.requireAffiliateLink === true;
+      if (requireAffiliateLink && !resolvedUrl) {
+        return res.status(409).json({
+          ok: false,
+          outcome: "AFFILIATE_MISSING" as const,
+          failureCode: "AFFILIATE_MISSING",
+          reason: "policy/decision exigem link afiliado válido; nenhum link elegível no Affiliate Registry",
+          affiliateResolutionStatus: resolution.status,
+          affiliateResolutionReason: resolution.reason,
+        });
+      }
+
       const result = await executePublication({
         request: {
           candidateId,
@@ -209,10 +245,12 @@ export function registerPublicationRoutes(
           idempotencyKey,
           decidedBy: "operator-admin",
         },
-        affiliateUrl: affiliateUrl,
+        affiliateUrl: resolvedUrl,
         affiliateSource,
         repo,
         approveLookup: approvalLookup,
+        affiliateRegistrySnapshot: affiliateRegistrySnapshot,
+        requireAffiliateLink,
       });
 
       const status = result.ok ? 200 :

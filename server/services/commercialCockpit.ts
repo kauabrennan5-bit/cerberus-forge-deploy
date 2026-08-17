@@ -587,6 +587,82 @@ export async function renderResearch(candidateId?: string): Promise<string> {
 }
 
 // ============================================================================
+// /affiliates — estado do Affiliate Registry (Blocos N6/N7, RENDER-ONLY)
+// REGISTRY = DADOS, NÃO AUTORIDADE. Nenhum comando abaixo valida, ativa,
+// revoga, registra ou executa link — apenas LÊ o estado atual do registry.
+// AFFILIATE LINK != AUTHORITY · VALID != AUTORIZA PUBLICAÇÃO (exige DECISION
+// + Policy Engine + ApprovalStore do N5).
+// ============================================================================
+export async function renderAffiliates(arg?: string): Promise<string> {
+  const lines: string[] = [];
+  lines.push("🛒 <b>AFILIADOS — AFFILIATE REGISTRY (BLOCO N6/N7, RENDER-ONLY)</b>");
+  lines.push("━━━━━━━━━━━━━━━━━━");
+  lines.push("📏 Regra: VALID == DADOS ESTRUTURAIS · NÃO AUTORIZA PUBLICAÇÃO. Nenhuma ação de escrita é executada por este comando.");
+
+  const affiliateRepo = await import("../commercial/affiliate/affiliateRepository").catch(() => null);
+  if (!affiliateRepo) {
+    lines.push("🟡 Registry indisponível neste momento (leitura recusada — nenhuma inferência).");
+    return lines.join("\n");
+  }
+
+  const idArg = typeof arg === "string" ? arg.trim() : "";
+  if (idArg) {
+    // /affiliates <affiliate_link_id ou provider_code> — detalhe de um registro
+    const link = await affiliateRepo.getLink(idArg).catch(() => null);
+    if (link) {
+      const l = link as Record<string, unknown>;
+      lines.push(`🆔 Link: <code>${String(l.link_id ?? idArg)}</code>`);
+      lines.push(`📦 Provider: ${String(l.provider_id ?? l.providerId ?? "—")}`);
+      lines.push(`🌐 Marketplace: ${String(l.marketplace ?? "—")}`);
+      lines.push(`🧪 Validação: <code>${String(l.validation_state ?? l.validationState ?? "UNVALIDATED")}</code>`);
+      lines.push(`⏱️ Expira: ${String(l.expires_at ?? l.expiresAt ?? "—")}`);
+      lines.push(`🔑 Digest: <code>${String(l.digest ?? "—").slice(0, 12)}…</code>`);
+      lines.push("⚠️ Link VALID ≠ publicação autorizada (exige decision + policy + approval do N5).");
+      return lines.join("\n");
+    }
+    const providers = await affiliateRepo.listProviders().catch(() => []);
+    const provider = (providers ?? []).find((p: Record<string, unknown>) =>
+      String(p.provider_code ?? p.providerCode ?? "").toLowerCase() === idArg.toLowerCase() ||
+      String(p.provider_id ?? p.providerId ?? "").toLowerCase() === idArg.toLowerCase()
+    );
+    if (provider) {
+      const p = provider as Record<string, unknown>;
+      lines.push(`📦 Provider: <code>${String(p.provider_code ?? p.providerCode ?? "—")}</code>`);
+      lines.push(`🏷️ Nome: ${String(p.name ?? "—")}`);
+      lines.push(`🟢 Status: <code>${String(p.status ?? "—")}</code>`);
+      lines.push(`🌐 Marketplace: ${String(p.marketplace ?? "—")}`);
+      return lines.join("\n");
+    }
+    lines.push(`🟡 Registro <code>${idArg}</code> não encontrado no Affiliate Registry.`);
+    return lines.join("\n");
+  }
+
+  // Lista geral: resumo do registry (sem expor URLs rastreadas — leitura de estado).
+  try {
+    const providers = (await affiliateRepo.listProviders()) as Array<Record<string, unknown>>;
+    // listLinksByCandidate exige um candidate_id específico; para o resumo
+    // geral o comando lista providers e aceita /affiliates <link_id> para o
+    // detalhe de um link (sem varredura em massa do registry).
+    if (!providers.length) {
+      lines.push("🟡 Nenhum provider ou link afiliado registrado no registry.");
+      lines.push("   (ausência de registro ≠ ausência de oportunidade)");
+    } else {
+      lines.push(`📦 <b>Providers:</b> ${providers.length}`);
+      for (const p of providers) {
+        lines.push(`• <code>${String(p.provider_code ?? p.providerCode ?? "—")}</code> [${String(p.status ?? "—")}] · ${String(p.marketplace ?? "—")}`);
+      }
+    }
+  } catch {
+    lines.push("🟡 Registry indisponível neste momento (leitura recusada — nenhuma inferência).");
+  }
+
+  lines.push("");
+  lines.push("USE: /affiliates &lt;affiliate_link_id ou provider_code&gt;");
+  lines.push("🧭 AFFILIATE LINK != AUTHORITY. Nenhuma validação, ativação ou revogação foi executada.");
+  return lines.join("\n");
+}
+
+// ============================================================================
 // /assess — avaliação do Bloco N4 (RENDER-ONLY)
 // Renderiza a ÚLTIMA avaliação de um candidato (candidato → 9 eixos →
 // classificação → recomendação → prioridade explicável). NUNCA executa o

@@ -27,6 +27,10 @@ import {
 } from "./contract";
 import type { PolicyDecision, PolicyDecisionValue, PolicyRequest } from "../../policyEngine/types";
 import type { ApprovalDecisionState } from "../../agentRuntime/types";
+import {
+  resolveAffiliateLink,
+  type AffiliateRegistrySnapshot,
+} from "../affiliate/affiliateLinkResolver";
 
 export const PUBLICATION_EXECUTOR_VERSION = "1.0";
 
@@ -379,6 +383,10 @@ export async function executePublication(params: {
   repo: PublicationRepositoryAdapter;
   approveLookup: ApprovalLookup;
   clock?: () => string;
+  /** Snapshot injetável do Affiliate Registry (N7 — testes/isolamento). */
+  affiliateRegistrySnapshot?: AffiliateRegistrySnapshot;
+  /** Modo exigente (Bloco N7): sem link afiliado válido = negação (AFFILIATE_MISSING). */
+  requireAffiliateLink?: boolean;
 }): Promise<PublicationExecutionResult> {
   const clock = params.clock ?? (() => new Date().toISOString());
   const now = clock();
@@ -418,6 +426,71 @@ export async function executePublication(params: {
     };
   }
   audit.push(Object.freeze({ stage: "PREFLIGHT_PASSED", at: clock(), message: "todos os gates de pré-requisito atendidos" }));
+
+  // ------------------------------------------------------------------
+  // 1b. Gate 8b — Affiliate Resolver (Bloco N7): resolve o link afiliado
+  //     governado ANTES de qualquer escrita irreversível.
+  //     - affiliateUrl manual já fornecida → MANUAL_PROVIDED (proveniência
+  //       admin:manual registrada no AffiliateLinkSource do contrato).
+  //     - sem manual → registry: RESOLVED / MISSING / NO_ELEGIBLE_LINK /
+  //       RESOLUTION_ERROR — fail-closed: nunca link inventado.
+  //     O resolver fornece DADOS; NÃO autoriza publicação (AFFILIATE
+  //     LINK != AUTHORIZATION). A política vigente decide o que fazer
+  //     com o resultado — modo permissivo (UNKNOWN + sourceUrl) ou
+  //     modo exigente (negação AFFILIATE_MISSING) via requireAffiliateLink.
+  // ------------------------------------------------------------------
+  const affiliateResolution = await resolveAffiliateLink(
+    {
+      candidateId: params.request.candidateId,
+      affiliateUrlManual: params.affiliateUrl ?? params.request.affiliateSource?.affiliateUrl ?? null,
+    },
+    params.affiliateRegistrySnapshot
+  );
+  const affiliateProvidedUrl =
+    affiliateResolution.affiliateUrl && affiliateResolution.affiliateUrl.trim()
+      ? affiliateResolution.affiliateUrl.trim()
+      : null;
+  if (affiliateResolution.status === "RESOLUTION_ERROR") {
+    audit.push(
+      Object.freeze({ stage: "AFFILIATE_RESOLUTION_ERROR", at: clock(), message: `resolver falhou: ${affiliateResolution.reason ?? "unknown"}; publication prossegue SEM link (UNKNOWN) — nunca link inventado` })
+    );
+  } else if (affiliateResolution.status === "RESOLVED") {
+    audit.push(
+      Object.freeze({
+        stage: "LINK_RESOLVED",
+        at: clock(),
+        message: `providerId=${affiliateResolution.providerId} affiliateLinkId=${affiliateResolution.affiliateLinkId} digest=${affiliateResolution.digest} selectionBasis=${affiliateResolution.selectionBasis} resolverVersion=${affiliateResolution.resolverVersion}`,
+      })
+    );
+  } else if (affiliateResolution.status === "MANUAL_PROVIDED") {
+    audit.push(
+      Object.freeze({ stage: "AFFILIATE_MANUAL_PROVIDED", at: clock(), message: "affiliate_url manual explícita — proveniência admin:manual registrada" })
+    );
+  } else {
+    audit.push(
+      Object.freeze({
+        stage: "LINK_RESOLUTION_SKIPPED",
+        at: clock(),
+        message: `status=${affiliateResolution.status} reason=${affiliateResolution.reason ?? "no_eligible_link"}`,
+      })
+    );
+  }
+  // Modo exigente (Bloco N7): quando a decisão/policy exigir link afiliado
+  // válido, ausência = negação ANTES de qualquer escrita (fail-closed).
+  // Sem esta flag, vigora o modo permissivo atual (UNKNOWN + sourceUrl).
+  if (params.requireAffiliateLink && affiliateProvidedUrl === null) {
+    audit.push(
+      Object.freeze({ stage: "AFFILIATE_REQUIRED_NOT_MET", at: clock(), message: "modo exigente: publicação negada por ausência de link afiliado válido" })
+    );
+    return {
+      ok: false,
+      outcome: "AFFILIATE_MISSING",
+      contract: null,
+      productId: null,
+      failureCode: "AFFILIATE_MISSING",
+      reason: "policy/decision exigem link afiliado válido; nenhum link elegível disponível no Affiliate Registry",
+    };
+  }
 
   // ------------------------------------------------------------------
   // 2. Policy Engine — a execução NUNCA acontece sem avaliação.
@@ -503,10 +576,9 @@ export async function executePublication(params: {
   // ------------------------------------------------------------------
   const c = preflight.candidate;
   const a = preflight.assessment;
-  const linkForProduct =
-    params.affiliateUrl !== null && params.affiliateUrl !== undefined && params.affiliateUrl.trim() !== ""
-      ? params.affiliateUrl
-      : c.sourceUrl; // link do anúncio como link comercial (decisão humana registrada)
+  const linkForProduct = affiliateProvidedUrl ?? c.sourceUrl; // link afiliado
+    // governado quando resolvido/manual; senão o link do anúncio (decisão
+    // humana registrada)
   const price = Number(c.observedPrice);
   if (!Number.isFinite(price)) {
     audit.push(Object.freeze({ stage: "PREFLIGHT_FAILED", at: clock(), message: "preço não numérico após conversão" }));
@@ -589,7 +661,13 @@ export async function executePublication(params: {
       executionId: params.request.executionId,
       idempotencyKey: params.request.idempotencyKey,
       productId: product.id,
-      affiliateState: params.affiliateUrl ? "AVAILABLE" : "UNKNOWN",
+      affiliateState: affiliateResolution.status === "RESOLVED" ? "AVAILABLE" : affiliateResolution.status === "MANUAL_PROVIDED" ? "AVAILABLE" : "UNKNOWN",
+      affiliateLinkId: affiliateResolution.affiliateLinkId,
+      providerId: affiliateResolution.providerId,
+      affiliateDigest: affiliateResolution.digest,
+      affiliateSelectionBasis: affiliateResolution.selectionBasis,
+      affiliateResolverVersion: affiliateResolution.resolverVersion,
+      affiliateResolutionStatus: affiliateResolution.status,
       executedBy: params.request.decidedBy,
     },
   });
@@ -622,9 +700,22 @@ export async function executePublication(params: {
     price,
     priceState: "KNOWN",
     images: c.images ? [...c.images] : null,
-      affiliateUrl: params.affiliateUrl ?? null,
-      affiliateState: params.affiliateUrl ? "AVAILABLE" : "UNKNOWN",
-      affiliateSource: params.affiliateSource ?? null,
+    affiliateUrl: affiliateProvidedUrl ?? null,
+    affiliateState: affiliateResolution.status === "RESOLVED" ? "AVAILABLE" : affiliateResolution.status === "MANUAL_PROVIDED" ? "AVAILABLE" : "UNKNOWN",
+    affiliateSource: affiliateProvidedUrl
+      ? Object.freeze({
+          provider: affiliateResolution.status === "RESOLVED" ? "provider:admin:manual" : "admin:manual",
+          providerRef: affiliateResolution.providerId,
+          affiliateUrl: affiliateProvidedUrl,
+          providedAt: now,
+        }) as AffiliateLinkSource
+      : null,
+    /** N7 — resolução do Affiliate Registry (DADOS; nunca autoriza publicação). */
+    affiliateLinkId: affiliateResolution.affiliateLinkId,
+    providerId: affiliateResolution.providerId,
+    affiliateDigest: affiliateResolution.digest,
+    affiliateSelectionBasis: affiliateResolution.selectionBasis,
+    affiliateResolverVersion: affiliateResolution.resolverVersion,
     provenance,
     createdAt: now,
     updatedAt: clock(),
