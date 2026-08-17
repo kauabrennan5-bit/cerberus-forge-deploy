@@ -532,6 +532,20 @@ export async function runAcquisition(cycleId: string): Promise<CycleStepResult> 
   const marketplace = marketplaceMap[cycle.cycle.marketplace as CycleMarketplace];
   const providerId = cycle.cycle.marketplace === "shopee" ? "shopee" : "mercadolivre";
   const provider = await getProvider(providerId);
+  // Fail-closed: provider ausente (tabela N6 vazia ou desativado) NUNCA pode
+  // virar crash no N8 — o passo é registrado com código governado explícito
+  // e identity_confidence persistido (gravação exigida em todo outcome de
+  // aquisição; ausência de provider = identidade não confirmável).
+  if (!provider) {
+    return recordStage(cycleId, "ACQUISITION", null, {
+      stage: "ACQUISITION",
+      ok: false,
+      result: "PROVIDER_NOT_ACTIVE",
+      blockingCode: "PROVIDER_NOT_ACTIVE",
+      rationale: `provider N6 "${providerId}" inexistente/inativo; sem credenciais oficiais configuradas — nenhum endpoint foi presumido e nenhum link foi inventado`,
+      evidenceRef: "",
+    });
+  }
   const acquireFn = acquisitionOverride ?? acquireAffiliateLink;
   let acquireResult: AcquireResult;
   try {

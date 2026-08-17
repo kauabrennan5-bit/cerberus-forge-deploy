@@ -832,11 +832,28 @@ test("N9-10 runAssessment: override N4 ok → step registrado com assessmentId",
 // ---------------------------------------------------------------------------
 test("N9-11 runAcquisition: sem credenciais → AUTH_REQUIRED (fail-closed)", async () => {
   cfg.acquisitionKind = "AUTH_REQUIRED";
+  cfg.providerExists = true;
   const s = await cycleService.startCycle({ marketplace: "shopee", sourceUrl: PROOF_SOURCE, sourceType: "URL" });
   await cycleService.runDiscovery(s.cycleId!);
   const step = await cycleService.runAcquisition(s.cycleId!);
   assert.equal(step.ok, false);
   assert.equal(step.blockingCode, "AUTH_REQUIRED");
+});
+
+// N9-11b: provider N6 ausente (tabela vazia, getProvider=null) NUNCA pode
+// virar crash no N8 (NPE em provider.status). O passo deve ser registrado
+// como PROVIDER_NOT_ACTIVE com rationale explícito e identityConfidence
+// gravado (fail-closed). Reproduz o bug real encontrado na prova viva.
+test("N9-11b runAcquisition: provider N6 ausente → PROVIDER_NOT_ACTIVE governado (sem NPE)", async () => {
+  cfg.providerExists = false;
+  cfg.providers = [];
+  const s = await cycleService.startCycle({ marketplace: "shopee", sourceUrl: PROOF_SOURCE, sourceType: "URL" });
+  await cycleService.runDiscovery(s.cycleId!);
+  const step = await cycleService.runAcquisition(s.cycleId!);
+  assert.equal(step.ok, false);
+  assert.equal(step.blockingCode, "PROVIDER_NOT_ACTIVE");
+  assert.equal(step.result, "PROVIDER_NOT_ACTIVE");
+  assert.match(String(step.rationale), /nenhum endpoint foi presumido e nenhum link foi inventado/);
 });
 
 test("N9-12 runAcquisition: override N8 SUCCESS → step SUCCESS + acquisitionRef", async () => {
@@ -929,6 +946,7 @@ test("N9-18b runDecision: price UNKNOWN → BLOCK_UNKNOWN_CRITICAL persistido", 
 
 test("N9-19b runDecision: IDENTITY_UNCERTAIN → BLOCK_IDENTITY_UNCERTAIN", async () => {
   cfg.acquisitionKind = "IDENTITY_UNCERTAIN";
+  cfg.providerExists = true;
   const s = await cycleService.startCycle({ marketplace: "shopee", sourceUrl: PROOF_SOURCE, sourceType: "URL" });
   await cycleService.runDiscovery(s.cycleId!);
   await cycleService.runAssessment(s.cycleId!);
