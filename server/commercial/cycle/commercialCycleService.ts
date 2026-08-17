@@ -315,9 +315,15 @@ function stageVincula(stage: CycleStage, result: StageResult): Record<string, un
 export async function runDiscovery(cycleId: string): Promise<CycleStepResult> {
   const cycle = await getCycle(cycleId);
   if (!cycle.ok || !cycle.cycle) return { ok: false, stage: "DISCOVERY", status: "FAILED", result: "cycle_absent", evidenceRef: "", blockingCode: "CYCLE_NOT_FOUND", rationale: "ciclo não encontrado" };
+  // Normaliza o marketplace do ciclo (snake_case, ex: "mercadolivre") para o
+  // canônico exigido pelo executor de Discovery (UPPER, ex: "MERCADOLIVRE").
+  const discoveryMarketplace =
+    cycle.cycle.marketplace === "shopee"
+      ? ("SHOPEE" as import("../discovery/types").MarketplaceSource)
+      : ("MERCADOLIVRE" as import("../discovery/types").MarketplaceSource);
   const discoverFn = discoveryOverride ?? executeDiscover;
   const result = await (discoverFn as typeof executeDiscover)({
-    marketplace: cycle.cycle.marketplace as unknown as import("../discovery/types").MarketplaceSource,
+    marketplace: discoveryMarketplace,
     mode: "url",
     url: cycle.cycle.source_url,
   });

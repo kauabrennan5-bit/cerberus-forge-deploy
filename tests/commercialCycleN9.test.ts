@@ -737,6 +737,29 @@ test("N9-04 runDiscovery: override N2 ok → step registrado com evidenceRef", a
   assert.ok(STORE.steps.some((st) => st.cycle_id === s.cycleId && st.stage === "DISCOVERY" && st.result === "created"));
 });
 
+// N9-04b: o marketplace do ciclo é snake_case ("mercadolivre"/"shopee") mas o
+// executor de Discovery exige o canônico UPPER ("MERCADOLIVRE"/"SHOPEE"). A
+// captura do input passado ao override prova que o service normaliza antes
+// de invocar o N2 — sem essa normalização o discovery dispara erro de
+// infraestrutura (marketplace_desconhecido) em produção.
+test("N9-04b runDiscovery: marketplace snake_case → canônico UPPER antes do N2", async () => {
+  clearStore();
+  const seen: string[] = [];
+  cycleService.setCycleDiscoveryOverrideForTests(async (input: unknown) => {
+    const i = input as { marketplace: string };
+    seen.push(i.marketplace);
+    return {
+      ok: true,
+      items: [{ candidate_id: "candidate-proof-n9", outcome: "created", title: "Produto de Prova N9" }],
+    };
+  });
+  const ml = await cycleService.startCycle({ marketplace: "mercadolivre", sourceUrl: PROOF_SOURCE, sourceType: "URL" });
+  const sh = await cycleService.startCycle({ marketplace: "shopee", sourceUrl: "https://shopee.com.br/prova-i.715084914.999", sourceType: "URL" });
+  await cycleService.runDiscovery(ml.cycleId!);
+  await cycleService.runDiscovery(sh.cycleId!);
+  assert.deepEqual(seen, ["MERCADOLIVRE", "SHOPEE"], "o N2 recebeu o marketplace canônico UPPER");
+});
+
 test("N9-05 runDiscovery: N2 falha operacional → DISCOVERY_FAILED recuperável", async () => {
   cfg.discoveryOk = false;
   cfg.discoveryError = "rate_limited";
