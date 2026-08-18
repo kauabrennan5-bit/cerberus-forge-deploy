@@ -1223,7 +1223,7 @@ NUNCA modifique ou invente preços ou imagens.`,
 
       // Sanitização: remove qualquer valor que pareça credencial da resposta
       const sanitize = (value: unknown, depth = 0): unknown => {
-        if (depth > 6) return "[sanitized_deep]";
+        if (depth > 20) return "[sanitized_deep]";
         if (typeof value === "string") {
           if (
             /SHA256\s/i.test(value) ||
