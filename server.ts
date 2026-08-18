@@ -1254,7 +1254,7 @@ NUNCA modifique ou invente preços ou imagens.`,
         // Query introspection customizada e read-only (apenas __type/__schema).
         const customQuery = typeof body.query === "string" ? body.query.trim() : "";
         if (customQuery) {
-          if (!/^\{( __type|__schema)/.test(customQuery)) {
+          if (!/^\{ ?(__type|__schema)/.test(customQuery)) {
             return res.status(400).json({
               ok: false,
               proof_run_id: PROOF_RUN_ID,
