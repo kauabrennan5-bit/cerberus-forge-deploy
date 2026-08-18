@@ -1155,7 +1155,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       }
       const mode = typeof body.mode === "string" ? body.mode : "introspection";
       const allowedModes = [
-        "introspection", "operations", "resolve", "shortlink",
+        "introspection", "operations", "resolve", "direct", "shortlink",
       ];
       if (!allowedModes.includes(mode)) {
         return res.status(400).json({
@@ -1361,6 +1361,56 @@ NUNCA modifique ou invente preços ou imagens.`,
         });
       }
 
+      if (mode === "direct") {
+        // Probes read-only direcionados pela tupla (shop_id, item_id):
+        // * productOfferV2(itemId, shopId, limit:1) — filtro oficial exato
+        // * shopOfferV2(shopId, limit:1) — filtro por loja
+        // * generateShortLink(originUrl) — link de afiliado da URL específica
+        const shopId = typeof body.shop_id === "string" ? body.shop_id : null;
+        const itemId = typeof body.item_id === "string" ? body.item_id : null;
+        if (!shopId || !itemId || !/^\d+$/.test(shopId) || !/^\d+$/.test(itemId)) {
+          return res.status(400).json({
+            ok: false,
+            proof_run_id: PROOF_RUN_ID,
+            error: "probe_direct_ids_invalid",
+            note: "shop_id e item_id numéricos são obrigatórios no body.",
+          });
+        }
+        const originUrl = typeof body.origin_url === "string" ? body.origin_url : "";
+        const subIds = Array.isArray(body.sub_ids)
+          ? (body.sub_ids.filter((s) => typeof s === "string") as string[]).slice(0, 5)
+          : ["ds-shopee-1"];
+        const subIdsEsc = JSON.stringify(subIds);
+        const results: Record<string, unknown> = {};
+        // Probe 1: filtro oficial exato itemId + shopId
+        results.productOfferV2_direct = sanitize(
+          (await callApi(
+            `query { productOfferV2(itemId: ${itemId}, shopId: ${shopId}, limit: 1) { nodes { itemId shopId productName productLink offerLink } } }`,
+          )).body,
+        );
+        // Probe 2: filtro por loja (shopId)
+        results.shopOfferV2_direct = sanitize(
+          (await callApi(
+            `query { shopOfferV2(shopId: ${shopId}, limit: 1) { nodes { itemId shopId name productLink offerLink } } }`,
+          )).body,
+        );
+        // Probe 3: short link oficial da URL específica (preview-only)
+        if (originUrl && originUrl.startsWith("https://")) {
+          results.generateShortLink_direct = sanitize(
+            (await callApi(
+              `mutation { generateShortLink(input: { originUrl: "${originUrl.replace(/[^\x20-\x7E]/g, "")}", subIds: ${subIdsEsc} }) { shortLink longLink } }`,
+            )).body,
+          );
+        }
+        return res.status(200).json({
+          ok: true,
+          proof_run_id: PROOF_RUN_ID,
+          http_status: 200,
+          direct_probes: results,
+          note: "Consultas read-only; links tratados em memória e NÃO persistidos.",
+        });
+      }
+
       // mode === "resolve": consulta direcionada por shop_id + item_id.
       const shopId = typeof body.shop_id === "string" ? body.shop_id : null;
       const itemId = typeof body.item_id === "string" ? body.item_id : null;
@@ -1375,7 +1425,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       // Consulta oficial: productOfferV2 (listagem) buscando match exato
       // pela tupla (shopId, itemId). É a única forma de estabelecer
       // requested == returned com identificadores oficiais.
-      const result = await callApi(
+      let result = await callApi(
         `query { productOfferV2(listType: 0, sortType: 5) { nodes { itemId shopId name productLink offerLink } } }`,
       );
       const nodes =
