@@ -1393,7 +1393,7 @@ NUNCA modifique ou invente preços ou imagens.`,
         );
         results.shopOfferV2 = sanitize(
           (await callApi(
-            `query { shopOfferV2(keyword: "${keyword.replace(/[^\x20-\x7E]/g, "")}", limit: 3) { nodes { ... on Offer { itemId shopId productLink offerLink } } } }`,
+            `query { shopOfferV2(keyword: "${keyword.replace(/[^\x20-\x7E]/g, "")}", limit: 3) { nodes { shopId shopName offerLink } } }`,
           )).body,
         );
         return res.status(200).json({
@@ -1435,7 +1435,7 @@ NUNCA modifique ou invente preços ou imagens.`,
         // Probe 2: filtro por loja (shopId) — campos do tipo ShopOfferV2
         results.shopOfferV2_direct = sanitize(
           (await callApi(
-            `query { shopOfferV2(shopId: ${shopId}, limit: 1) { nodes { ... on Offer { itemId shopId productLink offerLink } } } }`,
+            `query { shopOfferV2(shopId: ${shopId}, limit: 1) { nodes { shopId shopName offerLink } } }`,
           )).body,
         );
         // Probe 3: short link oficial da URL específica (preview-only)
