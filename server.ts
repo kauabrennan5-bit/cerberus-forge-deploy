@@ -1097,7 +1097,9 @@ NUNCA modifique ou invente preços ou imagens.`,
           // providerId canônico do marketplace Shopee. O serviço de aquisição
           // rejeita qualquer requisição com provider_id diferente do providerId
           // da fonte injetada (RESOLUTION_FAILED / api_source_provider_mismatch).
-          providerId: "shopee",
+          // Usa o padrão DB affprv-<provider_code> (affprv-shopee) para casar
+          // com o registro canônico do provider na tabela (idempotência N6).
+          providerId: "affprv-shopee",
           appId: shopeeAppId,
           secret: shopeeSecret,
           baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL?.trim() || undefined,
