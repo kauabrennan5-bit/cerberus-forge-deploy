@@ -35,9 +35,9 @@ import { setCandidateAssessmentClient } from "./server/repositories/candidateAss
 import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
 import { setAffiliateClient } from "./server/commercial/affiliate/affiliateRepository";
 import {
-  createShopeeApiSource,
   setAffiliateApiSource,
 } from "./server/commercial/affiliate/acquisitionService";
+import { createShopeeAffiliateProvider } from "./server/commercial/affiliate/shopeeAffiliateProvider";
 import { registerCycleRoutes } from "./server/routes/cycleRoutes";
 import { setCycleClient } from "./server/commercial/cycle/cycleRepository";
 import { registerN2SourceConnectors } from "./server/commercial/sourceConnector/registerN2SourceConnectors";
@@ -1093,7 +1093,7 @@ NUNCA modifique ou invente preços ou imagens.`,
   if (shopeeAppId && shopeeSecret) {
     try {
       setAffiliateApiSource(
-        createShopeeApiSource({
+        createShopeeAffiliateProvider({
           // providerId canônico do marketplace Shopee. O serviço de aquisição
           // rejeita qualquer requisição com provider_id diferente do providerId
           // da fonte injetada (RESOLUTION_FAILED / api_source_provider_mismatch).
@@ -1103,7 +1103,7 @@ NUNCA modifique ou invente preços ou imagens.`,
           appId: shopeeAppId,
           secret: shopeeSecret,
           baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL?.trim() || undefined,
-        }),
+        }).apiSource(),
       );
       console.log(
         "[N8] fonte oficial Shopee afiliados inicializada (endpoint: " +
