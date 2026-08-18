@@ -1251,6 +1251,26 @@ NUNCA modifique ou invente preços ou imagens.`,
       };
 
       if (mode === "introspection") {
+        // Query introspection customizada e read-only (apenas __type/__schema).
+        const customQuery = typeof body.query === "string" ? body.query.trim() : "";
+        if (customQuery) {
+          if (!/^\{( __type|__schema)/.test(customQuery)) {
+            return res.status(400).json({
+              ok: false,
+              proof_run_id: PROOF_RUN_ID,
+              error: "probe_query_not_introspection",
+              note: "Somente consultas introspection read-only ( __type/__schema ) são aceitas.",
+            });
+          }
+          const result = await callApi(customQuery);
+          return res.status(200).json({
+            ok: true,
+            proof_run_id: PROOF_RUN_ID,
+            introspection: "available",
+            http_status: result.status,
+            schema: sanitize(result.body),
+          });
+        }
         const deep = body.deep === true;
         const result = await callApi(
           deep
