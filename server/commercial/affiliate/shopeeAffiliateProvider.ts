@@ -123,6 +123,10 @@ export function createShopeeAffiliateProvider(options: ShopeeProviderOptions) {
     if (!itemId || !shopId) {
       throw new Error("shopee_client_error:SHOPEE_NOT_FOUND:no_valid_identifiers");
     }
+    // D-SHOPEE-1 (2026-08-18): resolução direcionada oficial —
+    // productOfferV2(itemId, shopId, limit:1) é consultada com os
+    // identificadores como ARGUMENTOS oficiais da API (match exato de
+    // identificadores oficiais → IDENTITY_CONFIRMED).
     const result = await client.acquireAffiliateLink({ shopId, itemId });
     switch (result.status) {
       case "link_acquired": {
@@ -145,6 +149,32 @@ export function createShopeeAffiliateProvider(options: ShopeeProviderOptions) {
         throw new Error("shopee_client_error:SHOPEE_NOT_ELIGIBLE:offer_without_official_affiliate_link");
       }
       case "not_found": {
+        // Fallback direcionado oficial (D-SHOPEE-1): a listagem de ofertas
+        // pode não conter o produto (não elegível a afiliado ou indisponível
+        // na listagem), mas a mutation oficial generateShortLink gera o link
+        // de afiliado da URL específica do produto — ainda com tracking
+        // oficial (utm_medium=affiliates) e sem derivar/heurística.
+        if (request.reference.publicUrl) {
+          const shortLink = await client.generateShortLink({
+            originUrl: request.reference.publicUrl,
+            subIds: request.reference.productId ? [`p${request.reference.productId.slice(0, 24)}`] : undefined,
+          });
+          if (shortLink.status === "link_acquired" && shortLink.shortLink) {
+            return {
+              affiliateUrl: shortLink.shortLink,
+              listingId: itemId,
+              sellerId: shopId,
+              titleSnapshot: null,
+              raw: null,
+            };
+          }
+          if (shortLink.status === "invalid_url") {
+            throw new Error("shopee_client_error:SHOPEE_INVALID_RESPONSE:public_url_rejected_by_official_shortlink");
+          }
+          if (shortLink.status === "transient") {
+            throw new Error("shopee_client_error:SHOPEE_TRANSIENT:official_shortlink_transient");
+          }
+        }
         throw new Error("shopee_client_error:SHOPEE_NOT_FOUND:product_not_in_official_offers");
       }
       case "auth_error": {

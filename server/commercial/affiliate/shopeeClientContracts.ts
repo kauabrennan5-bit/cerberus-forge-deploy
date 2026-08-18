@@ -67,6 +67,8 @@ export function isShopeeTransientError(kind: ShopeeErrorKind): kind is ShopeeTra
 export const SHOPEE_OPERATIONS = [
   "productOfferV2",
   "productOfferSearch",
+  "productOfferDirect",
+  "generateShortLink",
 ] as const;
 export type ShopeeOperation = (typeof SHOPEE_OPERATIONS)[number];
 
@@ -89,6 +91,21 @@ export interface ShopeeProductLookupRequest {
    *  shopId/itemId ausentes — extração estrita, nunca presumida). */
   readonly publicUrl?: string | null;
 }
+
+/**
+ * Prova oficial da resolução direcionada (D-SHOPEE-1, 2026-08-18):
+ * introspection real da API BR confirmou que productOfferV2 aceita
+ * os argumentos oficiais itemId (Int64) e shopId (Int64). A consulta
+ * `productOfferV2(itemId, shopId, limit: 1)` retorna o nó exato com
+ * identificadores oficiais — correspondência returned == requested
+ * estabelece IDENTITY_CONFIRMED. Tupla ausente/não elegível retorna
+ * nodes vazio (IDENTITY_UNCERTAIN, fail-closed).
+ *
+ * generateShortLink(input: { originUrl: String!, subIds: [String] })
+ * → { shortLink, longLink } (mutation oficial do BR): gera link curto
+ * de afiliado da URL específica de produto/loja/oferta (subIds máx 5,
+ * alfanuméricos, máx 40 chars; fora disso → erro oficial 11001).
+ */
 
 /**
  * Resultado estável de uma consulta por produto (NÃO é link de afiliado).

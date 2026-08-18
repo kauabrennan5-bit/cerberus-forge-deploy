@@ -175,14 +175,28 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     return "SHOPEE_GRAPHQL_ERROR";
   }
 
-  /** Corpo GraphQL oficial de oferta de produto (consulta de listagem). */
+  /**
+   * Corpo GraphQL oficial de oferta de produto.
+   * D-SHOPEE-1 (2026-08-18): quando shopId/itemId são fornecidos, a
+   * consulta passa-os como ARGUMENTOS oficiais de productOfferV2
+   * (itemId: Int64, shopId: Int64 — confirmados por introspection da
+   * API real). Isso é a resolução DIRECIONADA do produto específico.
+   * Sem identificadores, usa a listagem geral (limit alto) e o match
+   * continua exato em extractOfferNodes/matchNode (fail-closed).
+   * Valores numéricos são interpolados SOMENTE após validação estrita
+   * de dígitos (jamais strings não validadas entram na query).
+   */
   function offerQueryBody(params: { shopId?: string | null; itemId?: string | null }): { query: string; variables: Record<string, unknown> } {
+    const num = (v: string | null | undefined): string | null =>
+      v && /^\d+$/.test(v) ? v : null;
+    const args = [
+      num(params.itemId) ? `itemId: ${num(params.itemId)}` : null,
+      num(params.shopId) ? `shopId: ${num(params.shopId)}` : null,
+      "limit: 1",
+    ].filter(Boolean).join(", ");
     return {
-      query: "{ productOfferV2(listType:0, sortType:5) { nodes { itemId shopId name price productLink offerLink } } }",
-      variables: {
-        ...(params.shopId ? { shop_id: params.shopId } : {}),
-        ...(params.itemId ? { item_id: params.itemId } : {}),
-      },
+      query: `{ productOfferV2(${args}) { nodes { itemId shopId name productName price productLink offerLink } } }`,
+      variables: {},
     };
   }
 
@@ -286,6 +300,140 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     };
   }
 
+  /**
+   * Mutation oficial `generateShortLink(input: { originUrl: String!,
+   * subIds: [String] })` — gera o link curto de afiliado da URL
+   * específica (produto/loja/oferta) com tracking oficial (utm_content).
+   * D-SHOPEE-1 (2026-08-18): provada contra a API real.
+   *   - subIds: 0–5 itens, alfanuméricos, máx 40 chars (erro oficial
+   *     11001 invalid sub id fora do formato).
+   *   - Sem erro de validação e sem erro GraphQL: link_acquired.
+   *   - Erro de validação oficial: never_viral/invalid_url → invalid_url.
+   *   - Qualquer outro erro → fail-closed (mapKindToStatus).
+   */
+  interface GenerateShortLinkResult {
+    readonly status: "link_acquired" | "invalid_url" | "auth_error" | "rate_limited" | "transient" | "permanent";
+    readonly shortLink: string | null;
+    readonly longLink: string | null;
+    readonly error: ShopeeClientError | null;
+  }
+
+  /** Formato oficial de sub id (1–5 itens, alfanumérico, máx 40 chars). */
+  function isValidSubId(s: string): boolean {
+    return s.length > 0 && s.length <= 40 && /^[a-zA-Z0-9]+$/.test(s);
+  }
+
+  async function generateShortLink(params: {
+    originUrl: string;
+    subIds?: ReadonlyArray<string>;
+  }): Promise<GenerateShortLinkResult> {
+    let originUrl = "";
+    try {
+      const parsed = new URL(params.originUrl);
+      if (parsed.protocol !== "https:") {
+        return { status: "invalid_url", shortLink: null, longLink: null, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "non_https_url") };
+      }
+      originUrl = parsed.toString();
+    } catch {
+      return { status: "invalid_url", shortLink: null, longLink: null, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "url_parse_failed") };
+    }
+    const subIds = (params.subIds ?? [])
+      .filter((s) => typeof s === "string" && isValidSubId(s))
+      .slice(0, 5);
+    const payloadJson = JSON.stringify({
+      query: `mutation { generateShortLink(input: { originUrl: ${JSON.stringify(originUrl)}, subIds: ${JSON.stringify(subIds)} }) { shortLink longLink } }`,
+      variables: {},
+    });
+    try {
+      const json = await signedGraphqlPostRaw(payloadJson);
+      if (!json || typeof json !== "object") {
+        return { status: "permanent", shortLink: null, longLink: null, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object") };
+      }
+      const data = (json as Record<string, unknown>).data;
+      const gql = data && typeof data === "object"
+        ? (data as Record<string, unknown>).generateShortLink
+        : null;
+      if (!gql || typeof gql !== "object") {
+        return { status: "permanent", shortLink: null, longLink: null, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_shortlink_envelope") };
+      }
+      const shortLink = typeof (gql as Record<string, unknown>).shortLink === "string" ? (gql as Record<string, unknown>).shortLink as string : null;
+      const longLink = typeof (gql as Record<string, unknown>).longLink === "string" ? (gql as Record<string, unknown>).longLink as string : null;
+      if (!shortLink) {
+        // Sem shortLink oficial → não confirmado (jamais derivar URL).
+        return { status: "permanent", shortLink: null, longLink, error: new ShopeeClientError("SHOPEE_NOT_ELIGIBLE", "no_official_short_link") };
+      }
+      return { status: "link_acquired", shortLink, longLink, error: null };
+    } catch (err) {
+      if (!(err instanceof ShopeeClientError)) {
+        return { status: "permanent", shortLink: null, longLink: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+      }
+      // Validação oficial de URL (parametro oficial): erro catalogado como
+      // invalid_url em vez de permanente — a entrada era rejeitada pela
+      // plataforma, não houve falha de transporte/auth.
+      if (err.detail && (err.detail.includes("url") || err.detail.includes("Url"))) {
+        return { status: "invalid_url", shortLink: null, longLink: null, error: err };
+      }
+      if (err.kind === "SHOPEE_AUTH_ERROR") return { status: "auth_error", shortLink: null, longLink: null, error: err };
+      if (err.kind === "SHOPEE_RATE_LIMITED") return { status: "rate_limited", shortLink: null, longLink: null, error: err };
+      if (err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR") return { status: "transient", shortLink: null, longLink: null, error: err };
+      return { status: "permanent", shortLink: null, longLink: null, error: err };
+    }
+  }
+
+  /** POST GraphQL assinado com payload pronto (exigido pela assinatura oficial). */
+  async function signedGraphqlPostRaw(payload: string): Promise<unknown> {
+    const timestamp = Math.floor(clock() / 1000).toString();
+    let authorization: string;
+    try {
+      authorization = buildAuthorizationHeader(payload, options.appId, options.secret, timestamp);
+    } catch {
+      throw new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "signature_build_failed");
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      let response: Response;
+      try {
+        response = await transport(baseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: authorization },
+          body: payload,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        if (controller.signal.aborted) {
+          throw new ShopeeClientError("SHOPEE_TIMEOUT", "transport_timed_out");
+        }
+        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", "transport_failed");
+      } finally {
+        clearTimeout(timer);
+      }
+      if (response.status === 401) throw new ShopeeClientError("SHOPEE_AUTH_ERROR", "http_401");
+      if (response.status === 403) throw new ShopeeClientError("SHOPEE_FORBIDDEN", "http_403");
+      if (!response.ok) {
+        if (response.status === 429) throw new ShopeeClientError("SHOPEE_RATE_LIMITED", "http_429");
+        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", `http_${response.status}`);
+      }
+      let json: unknown;
+      try {
+        json = await response.json();
+      } catch {
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "body_not_json");
+      }
+      if (!json || typeof json !== "object") {
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
+      }
+      const data = json as Record<string, unknown>;
+      if (Array.isArray(data.errors) && data.errors.length > 0) {
+        throw shopeeGraphqlErrorsToError(data.errors);
+      }
+      return json;
+    } catch (err) {
+      if (err instanceof ShopeeClientError) throw err;
+      throw new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected");
+    }
+  }
+
   function mapKindToStatus(err: ShopeeClientError): ShopeeAffiliateAcquisitionResult {
     if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") {
       return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
@@ -303,6 +451,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
   return {
     lookupProduct,
     acquireAffiliateLink,
+    generateShortLink,
   };
 }
 
@@ -333,17 +482,26 @@ function extractOfferNodes(json: unknown): OfferNode[] {
   return nodes
     .filter((n) => n && typeof n === "object")
     .map((n) => {
-      const obj = n as Record<string, unknown>;
-      return {
-        shopId: typeof obj.shopId === "number" ? String(obj.shopId) : typeof obj.shopId === "string" ? obj.shopId : null,
-        itemId: typeof obj.itemId === "number" ? String(obj.itemId) : typeof obj.itemId === "string" ? obj.itemId : null,
-        name: typeof obj.name === "string" ? obj.name : null,
-        price: typeof obj.price === "number" ? obj.price : null,
-        productLink: typeof obj.productLink === "string" ? obj.productLink : null,
-        offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
-      };
-    });
-}
+        const obj = n as Record<string, unknown>;
+        // productName e name são ambos aceitos pela query oficial;
+        // o cliente usa o primeiro valor textual disponível (sem
+        // presumir — se nenhum existir, name=null).
+        const name =
+          typeof obj.productName === "string" && obj.productName.length > 0
+            ? obj.productName
+            : typeof obj.name === "string" && obj.name.length > 0
+              ? obj.name
+              : null;
+        return {
+          shopId: typeof obj.shopId === "number" ? String(obj.shopId) : typeof obj.shopId === "string" ? obj.shopId : null,
+          itemId: typeof obj.itemId === "number" ? String(obj.itemId) : typeof obj.itemId === "string" ? obj.itemId : null,
+          name,
+          price: typeof obj.price === "number" ? obj.price : null,
+          productLink: typeof obj.productLink === "string" ? obj.productLink : null,
+          offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
+        };
+      });
+  }
 
 /**
  * Match estrito do nó ao produto procurado. Sem identificadores requeridos
