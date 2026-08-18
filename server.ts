@@ -25,6 +25,7 @@ import { registerExperimentRoutes } from "./server/routes/experimentRoutes";
 import { setExperimentClient } from "./server/repositories/experimentRepository";
 import { registerCandidateRoutes } from "./server/routes/candidateRoutes";
 import { setupDiscoveryRoutes } from "./server/routes/discoveryRoutes";
+import { registerResearchBatchRoutes } from "./server/routes/researchBatchRoutes";
 import { registerResearchRoutes } from "./server/routes/researchRoutes";
 import { registerAssessmentRoutes } from "./server/routes/assessmentRoutes";
 import { registerPublicationRoutes } from "./server/routes/publicationRoutes";
@@ -1030,6 +1031,11 @@ NUNCA modifique ou invente preços ou imagens.`,
   registerCandidateRoutes({ app, requireAdminAuth });
   // Bloco N2 — descoberta controlada (READ-ONLY, limites de servidor)
   setupDiscoveryRoutes({ app, requireAdminAuth });
+  // Bloco N12 — pesquisa automatizada em lote sobre candidatos N1 (admin-only,
+  // coordenação read-only sobre N1 + N3). RESEARCH != PUBLICATION ·
+  // RESEARCH != PROMOTION — nenhuma criação/alteração de produto, evidence
+  // criada somente no funil candidate_evidence via N3 (field_hash preservado).
+  registerResearchBatchRoutes({ app, requireAdminAuth });
   // Bloco N10 — integrar runtime do Source Connector: registrar os connectors
   // N2 no registry único do N10 (idempotente). Sem este registro o discovery
   // por URL falha fechado (connector_ausente). NÃO altera produtos, agents,
