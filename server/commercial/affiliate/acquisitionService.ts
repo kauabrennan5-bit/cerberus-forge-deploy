@@ -420,7 +420,27 @@ export async function acquireAffiliateLink(options: AcquireOptions): Promise<Acq
         acquiredAt: Date.now(),
       };
     } catch (error) {
-      return { kind: "RESOLUTION_FAILED", reason: `official_api_error:${error instanceof Error ? error.message : "unknown"}` };
+      const message = error instanceof Error ? error.message : "unknown";
+      // PATCH DE CONTRATO (fonte oficial Shopee): quando a plataforma de
+      // afiliados localiza o produto mas NÃO devolve um link oficial de
+      // afiliado (offerLink ausente), o produto é reconhecido porém não
+      // elegível para aquisição — incerteza explícita de elegibilidade
+      // da fonte oficial (jamais SUCCESS, jamais URL derivada). Qualquer
+      // outro erro segue fail-closed (RESOLUTION_FAILED).
+      if (typeof message === "string" && message.startsWith("shopee_client_error:SHOPEE_NOT_ELIGIBLE")) {
+        return {
+          kind: "IDENTITY_UNCERTAIN",
+          affiliateUrl: null,
+          identity: null,
+          identityConfidence: "PRODUCT_IDENTITY_UNCERTAIN",
+          rationale: "fonte_oficial_reconhece_o_produto_mas_not_eligible_para_aquisicao_oficial_sem_offerLink_oficial;produtos_sem_link_oficial_nunca_sao_promovidos;fail_closed_sem_url_derivada",
+          method: "API" as const,
+          acquisitionRef: null,
+          rawResponse: null,
+          acquiredAt: Date.now(),
+        };
+      }
+      return { kind: "RESOLUTION_FAILED", reason: `official_api_error:${message}` };
     }
   }
 

@@ -1,0 +1,362 @@
+// ============================================================================
+// Cliente isolado da API oficial Shopee Afiliados BR (fail-closed)
+//
+// Responsabilidades:
+//   - construir requisição GraphQL oficial;
+//   - autenticar/assinar conforme contrato oficial (SHA256 header);
+//   - aplicar timeout determinístico;
+//   - interpretar HTTP errors e GraphQL errors;
+//   - normalizar erros externos para o catálogo interno (SHOPEE_*);
+//   - NÃO vazar secrets (nunca em logs, erros, headers logados ou
+//     payloads registrados);
+//   - permitir injeção/mock do transporte HTTP nos testes.
+//
+// NÃO cria products, não promove candidates, não publica, não altera
+// affiliate_links diretamente (essa autoridade é do N8) e não toca
+// job_queue/scheduler/agentes.
+// ============================================================================
+
+import { createHash } from "node:crypto";
+import {
+  ShopeeClientError,
+  type ShopeeOperation,
+  SHOPEE_DEFAULT_TIMEOUT_MS,
+  type ShopeeAffiliateAcquisitionResult,
+  type ShopeeProductLookupResult,
+} from "./shopeeClientContracts";
+
+/** Endpoint oficial da Plataforma Aberta de Afiliados Shopee Brasil. */
+export const SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL = "https://open-api.affiliate.shopee.com.br/graphql";
+
+/**
+ * Contrato oficial do header de autorização da plataforma de afiliados BR:
+ *   Authorization: SHA256 Credential={appId}, Timestamp={ts}, Signature={sig}
+ *   sig = SHA256(Credential + Timestamp + Payload + Secret)
+ *   ts = Unix seconds (janela ~5 minutos)
+ *   Payload = corpo JSON real, serializado exatamente como enviado
+ */
+function buildAuthorizationHeader(payload: string, appId: string, secret: string, timestamp: string): string {
+  const signatureInput = [appId, timestamp, payload, secret].join("");
+  const signature = createHash("sha256").update(signatureInput).digest("hex");
+  return `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${signature}`;
+}
+
+/** Transport HTTP injetável (default: fetch global). */
+export type ShopeeHttpTransport = (url: string, init: {
+  method: "POST";
+  headers: Record<string, string>;
+  body: string;
+  /** window de AbortController — usado pelo timeout externo. */
+  signal: AbortSignal;
+}) => Promise<Response>;
+
+export interface ShopeeApiClientOptions {
+  /** App ID oficial (process.env — nunca armazenar). */
+  readonly appId: string;
+  /** App Secret oficial (process.env — nunca armazenar/logar). */
+  readonly secret: string;
+  /** Base URL oficial (default BR). */
+  readonly baseUrl?: string;
+  /** Timeout em ms (default SHOPEE_DEFAULT_TIMEOUT_MS). */
+  readonly timeoutMs?: number;
+  /** Transport injetável para testes. */
+  readonly transport?: ShopeeHttpTransport;
+  /** Clock injetável para testes de assinatura (default: Date.now). */
+  readonly clock?: () => number;
+}
+
+/**
+ * Cliente da API oficial — construído SOMENTE com credenciais não vazias
+ * (a ausência de env mantém AUTH_REQUIRED na autoridade N8).
+ */
+export function createShopeeApiClient(options: ShopeeApiClientOptions) {
+  if (!options.appId || !options.secret) {
+    throw new ShopeeClientError("SHOPEE_NOT_CONFIGURED", "credentials_missing");
+  }
+  const baseUrl = (options.baseUrl ?? SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const timeoutMs = options.timeoutMs ?? SHOPEE_DEFAULT_TIMEOUT_MS;
+  const transport = options.transport ?? fetch;
+  const clock = options.clock ?? (() => Date.now());
+
+  /**
+   * POST GraphQL assinado. Falha fechada para qualquer desvio do contrato:
+   *   HTTP não-2xx / GraphQL errors / payload fora do envelope → erro
+   *   catalogado (jamais URL derivada, jamais exceção não catalogada).
+   */
+  async function signedGraphqlPost(body: { query: string; variables: Record<string, unknown> }): Promise<unknown> {
+    const payload = JSON.stringify(body);
+    // Timestamp em segundos Unix (janela oficial ~5 minutos).
+    const timestamp = Math.floor(clock() / 1000).toString();
+    let authorization: string;
+    try {
+      authorization = buildAuthorizationHeader(payload, options.appId, options.secret, timestamp);
+    } catch {
+      // Assinatura nunca falha com inputs válidos; falha aqui = BUG → permanent.
+      throw new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "signature_build_failed");
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      let response: Response;
+      try {
+        response = await transport(baseUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: authorization,
+          },
+          body: payload,
+          signal: controller.signal,
+        });
+      } catch (err) {
+        // Falha de transporte (DNS/TLS/conexão/abort de timeout).
+        if (controller.signal.aborted) {
+          throw new ShopeeClientError("SHOPEE_TIMEOUT", "transport_timed_out");
+        }
+        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", "transport_failed");
+      } finally {
+        clearTimeout(timer);
+      }
+      if (response.status === 401) {
+        throw new ShopeeClientError("SHOPEE_AUTH_ERROR", "http_401");
+      }
+      if (response.status === 403) {
+        throw new ShopeeClientError("SHOPEE_FORBIDDEN", "http_403");
+      }
+      if (!response.ok) {
+        // 429 = rate limit oficial (transitório); demais 4xx/5xx = permanente.
+        if (response.status === 429) {
+          throw new ShopeeClientError("SHOPEE_RATE_LIMITED", "http_429");
+        }
+        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", `http_${response.status}`);
+      }
+      let json: unknown;
+      try {
+        json = await response.json();
+      } catch {
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "body_not_json");
+      }
+      if (!json || typeof json !== "object") {
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
+      }
+      const data = json as Record<string, unknown>;
+      // Erros oficiais da Shopee (HTTP 200 + payload de erro) — catalogados
+      // por código oficial; jamais viram sucesso.
+      if (Array.isArray(data.errors) && data.errors.length > 0) {
+        throw shopeeGraphqlErrorsToError(data.errors);
+      }
+      return json;
+    } catch (err) {
+      if (err instanceof ShopeeClientError) throw err;
+      // Qualquer exceção não catalogada = FAIL-CLOSED (unknown).
+      throw new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected");
+    }
+  }
+
+  /**
+   * Mapeia códigos oficiais da plataforma de afiliados para o catálogo:
+   *   10020 = Invalid Signature → AUTH_ERROR (permanente)
+   *   10030 = rate limit       → RATE_LIMITED (transitório)
+   *   demais                    → GRAPHQL_ERROR (permanente, fail-closed)
+   */
+  function shopeeGraphqlErrorsToError(errors: unknown[]): ShopeeClientError {
+    const first = errors[0] as Record<string, unknown> | undefined;
+    const code = typeof first?.code === "number" ? first.code
+      : typeof first?.code === "string" ? first.code
+        : "unknown";
+    const kind: ReturnType<typeof kindFromCode> = kindFromCode(code);
+    return new ShopeeClientError(kind, `code_${code}`);
+  }
+
+  function kindFromCode(code: number | string): import("./shopeeClientContracts").ShopeeErrorKind {
+    if (code === 10020) return "SHOPEE_AUTH_ERROR";
+    if (code === 10030 || code === "10030") return "SHOPEE_RATE_LIMITED";
+    if (code === 10010 || code === "10010") return "SHOPEE_FORBIDDEN";
+    return "SHOPEE_GRAPHQL_ERROR";
+  }
+
+  /** Corpo GraphQL oficial de oferta de produto (consulta de listagem). */
+  function offerQueryBody(params: { shopId?: string | null; itemId?: string | null }): { query: string; variables: Record<string, unknown> } {
+    return {
+      query: "{ productOfferV2(listType:0, sortType:5) { nodes { itemId shopId name price productLink offerLink } } }",
+      variables: {
+        ...(params.shopId ? { shop_id: params.shopId } : {}),
+        ...(params.itemId ? { item_id: params.itemId } : {}),
+      },
+    };
+  }
+
+  /**
+   * Consulta oficial por produto (listagem) — resultado estável interno.
+   * Encontrar o item na resposta EXIGE match estrito de shop_id/item_id
+   * quando fornecidos; caso contrário o primeiro nó NÃO é presumido
+   * como o produto procurado (fail-closed → not_found).
+   */
+  async function lookupProduct(params: { shopId?: string | null; itemId?: string | null }): Promise<ShopeeProductLookupResult> {
+    try {
+      const json = await signedGraphqlPost(offerQueryBody(params));
+      return parseProductLookup(json, params.shopId ?? null, params.itemId ?? null);
+    } catch (err) {
+      if (err instanceof ShopeeClientError) {
+        return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: null, error: err };
+      }
+      return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+    }
+  }
+
+  /**
+   * Aquisição de link de afiliado via API oficial — o item retornado pela
+   * fonte contém offerLink oficial de afiliado (quando elegível).
+   * Sem elegibilidade explícita → not_eligible (jamais URL derivada).
+   */
+  const MAX_ATTEMPTS = 2;
+  const RETRY_BACKOFF_MS = 1500;
+  async function acquireAffiliateLink(params: { shopId?: string | null; itemId?: string | null }): Promise<ShopeeAffiliateAcquisitionResult> {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const json = await signedGraphqlPost(offerQueryBody(params));
+        return parseAffiliateAcquisition(json, params.shopId ?? null, params.itemId ?? null);
+      } catch (err) {
+        lastError = err;
+        if (!(err instanceof ShopeeClientError)) {
+          return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+        }
+        // Permanentes e definitivamente catalogados nunca retentam (fail-closed).
+        const transient = err.kind === "SHOPEE_RATE_LIMITED" || err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR";
+        if (!transient || attempt >= MAX_ATTEMPTS) {
+          return mapKindToStatus(err);
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS));
+      }
+    }
+    // Inacessível: última tentativa falhou; retorna o último erro mapeado.
+    if (lastError instanceof ShopeeClientError) return mapKindToStatus(lastError);
+    return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+  }
+
+  function parseProductLookup(json: unknown, wantShop: string | null, wantItem: string | null): ShopeeProductLookupResult {
+    const nodes = extractOfferNodes(json);
+    if (nodes.length === 0) {
+      return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: json, error: null };
+    }
+    // Match estrito — o primeiro nó só vale se coincide com o identificador
+    // procurado; se não há identificadores, a fonte não localizou o produto
+    // com precisão → fail-closed (not_found, sem presumir).
+    const node = matchNode(nodes, wantShop, wantItem);
+    if (!node) {
+      return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: json, error: null };
+    }
+    return {
+      status: "found",
+      shopId: node.shopId,
+      itemId: node.itemId,
+      name: node.name,
+      priceMinorUnits: node.price,
+      productLink: node.productLink,
+      raw: json,
+      error: null,
+    };
+  }
+
+  function parseAffiliateAcquisition(json: unknown, wantShop: string | null, wantItem: string | null): ShopeeAffiliateAcquisitionResult {
+    const nodes = extractOfferNodes(json);
+    if (nodes.length === 0) {
+      return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: json, error: null };
+    }
+    const node = matchNode(nodes, wantShop, wantItem);
+    if (!node) {
+      return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: json, error: null };
+    }
+    // Elegibilidade explícita: a fonte oficial devolve o link de afiliado
+    // no campo offerLink do nó. Sem ele → não elegível (jamais derivar).
+    const url = node.offerLink;
+    if (!url || typeof url !== "string") {
+      return { status: "not_eligible", affiliateUrl: null, productLink: node.productLink, shopId: node.shopId, itemId: node.itemId, name: node.name, raw: json, error: null };
+    }
+    return {
+      status: "link_acquired",
+      affiliateUrl: url,
+      productLink: node.productLink,
+      shopId: node.shopId,
+      itemId: node.itemId,
+      name: node.name,
+      raw: json,
+      error: null,
+    };
+  }
+
+  function mapKindToStatus(err: ShopeeClientError): ShopeeAffiliateAcquisitionResult {
+    if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") {
+      return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+    }
+    if (err.kind === "SHOPEE_RATE_LIMITED") {
+      return { status: "rate_limited", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+    }
+    if (err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR") {
+      return { status: "transient", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+    }
+    // GRAPHQL_ERROR / INVALID_RESPONSE / NOT_CONFIGURED / UNKNOWN → permanent.
+    return { status: "permanent", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+  }
+
+  return {
+    lookupProduct,
+    acquireAffiliateLink,
+  };
+}
+
+/** Nó de oferta normalizado (tipos internos estáveis). */
+interface OfferNode {
+  shopId: string | null;
+  itemId: string | null;
+  name: string | null;
+  price: number | null;
+  productLink: string | null;
+  offerLink: string | null;
+}
+
+function extractOfferNodes(json: unknown): OfferNode[] {
+  if (!json || typeof json !== "object") {
+    throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
+  }
+  const data = (json as Record<string, unknown>)?.data;
+  if (!data || typeof data !== "object") {
+    throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_data_envelope");
+  }
+  const payload = data as Record<string, unknown>;
+  const offer = payload?.productOfferV2;
+  if (!offer || typeof offer !== "object" || !Array.isArray((offer as Record<string, unknown>).nodes)) {
+    throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_offer_nodes");
+  }
+  const nodes = (offer as Record<string, unknown>).nodes as unknown[];
+  return nodes
+    .filter((n) => n && typeof n === "object")
+    .map((n) => {
+      const obj = n as Record<string, unknown>;
+      return {
+        shopId: typeof obj.shopId === "number" ? String(obj.shopId) : typeof obj.shopId === "string" ? obj.shopId : null,
+        itemId: typeof obj.itemId === "number" ? String(obj.itemId) : typeof obj.itemId === "string" ? obj.itemId : null,
+        name: typeof obj.name === "string" ? obj.name : null,
+        price: typeof obj.price === "number" ? obj.price : null,
+        productLink: typeof obj.productLink === "string" ? obj.productLink : null,
+        offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
+      };
+    });
+}
+
+/**
+ * Match estrito do nó ao produto procurado. Sem identificadores requeridos
+ * → null (jamais presumir o primeiro nó como o produto alvo).
+ */
+function matchNode(nodes: OfferNode[], wantShop: string | null, wantItem: string | null): OfferNode | null {
+  const required = (wantShop && wantShop.trim().length > 0) || (wantItem && wantItem.trim().length > 0);
+  if (!required) return null;
+  return nodes.find((n) => {
+    const shopOk = !wantShop || n.shopId === wantShop;
+    const itemOk = !wantItem || n.itemId === wantItem;
+    return shopOk && itemOk;
+  }) ?? null;
+}
+
+export type ShopeeApiClient = ReturnType<typeof createShopeeApiClient>;

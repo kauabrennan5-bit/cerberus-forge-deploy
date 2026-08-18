@@ -1083,8 +1083,13 @@ NUNCA modifique ou invente preços ou imagens.`,
   // presentes, a fonte oficial é construída automaticamente.
   // SHOPEE_AFFILIATE_API_BASE_URL é opcional (default oficial BR).
   // PENDENTE: credenciais oficiais aguardam a resposta da Shopee.
-  const shopeeAppId = process.env.SHOPEE_AFFILIATE_APP_ID?.trim();
-  const shopeeSecret = process.env.SHOPEE_AFFILIATE_APP_SECRET?.trim();
+  // Credenciais oficiais da conta de afiliado Shopee BR (variáveis de
+  // ambiente — nunca armazenadas no código). Suporta os nomes em uso no
+  // Render (SHOPEE_APP_ID/SECRET) e os nomes históricos N8
+  // (SHOPEE_AFFILIATE_APP_ID/SECRET) como fallback de compatibilidade.
+  // O bootstrap NUNCA imprime valores sensíveis — apenas presença/ausência.
+  const shopeeAppId = (process.env.SHOPEE_APP_ID?.trim() || process.env.SHOPEE_AFFILIATE_APP_ID?.trim()) ?? "";
+  const shopeeSecret = (process.env.SHOPEE_APP_SECRET?.trim() || process.env.SHOPEE_AFFILIATE_APP_SECRET?.trim()) ?? "";
   if (shopeeAppId && shopeeSecret) {
     try {
       setAffiliateApiSource(
