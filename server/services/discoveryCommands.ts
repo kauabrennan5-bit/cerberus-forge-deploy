@@ -12,6 +12,14 @@
 import { isMarketplaceSource, MarketplaceSource, DISCOVERY_LIMITS } from "../commercial/discovery/types";
 import { validateDiscoveryUrl } from "../commercial/discovery/evidence";
 import { executeDiscover } from "../commercial/discovery/discover";
+// Integração N10 — Source Connector runtime. O /discover (modo url) utiliza o
+// discoverFromSource do N10, que: normaliza dialetos de marketplace, extrai a
+// identidade externa determinística (ITEM_ID/SHOP_ITEM/UNKNOWN+rationale)
+// e DELEGA a execução de rede ao executeDiscover/N2 (SSRF guards intactos).
+// O N1 continua sendo a única autoridade de candidates (idempotência).
+import { discoverFromSource } from "../commercial/sourceConnector/sourceConnector";
+import type { ExternalIdentity } from "../commercial/sourceConnector/contracts";
+import { isExternalIdentityKnown } from "../commercial/sourceConnector/contracts";
 
 const MP_ALIASES: Record<string, MarketplaceSource> = {
   ML: "MERCADOLIVRE",
@@ -86,13 +94,74 @@ export async function runDiscoverCommand(argsRaw: string): Promise<string> {
   lines.push("━━━━━━━━━━━━━━━━━━");
   lines.push(`Modo: ${parsed.mode === "url" ? "URL" : "busca"}`);
 
-  const result = await executeDiscover({
-    marketplace: parsed.marketplace!,
-    mode: parsed.mode!,
-    url: parsed.url,
-    query: parsed.query,
-    limit: Math.min(5, DISCOVERY_LIMITS.MAX_RESULTS),
-  });
+  let result;
+  if (parsed.mode === "url" && parsed.url) {
+    // Integração N10: o Source Connector é a porta de entrada do discovery
+    // por URL — identidade determinística + delegação ao N2. Não há
+    // re-implementação de guards SSRF aqui (executeDiscover continua
+    // aplicando a whitelist MARKETPLACE_HOSTS do N2).
+    const delegate = await discoverFromSource({
+      marketplace: parsed.marketplace!,
+      source_url: parsed.url,
+    });
+    if (!delegate.ok) {
+      // Falha governada do N10 (dialeto inválido, connector ausente,
+      // delegação rejeitada pelo N2...): propagar sem inventar contagens.
+      const dr = delegate.discover_result;
+      const hasResult = dr && dr.ok && dr.items.length > 0;
+      lines.push(`❌ Não foi possível concluir a descoberta.`);
+      lines.push(`Motivo: ${delegate.failure_reason ?? delegate.error ?? "indisponível"}`);
+      const eid: ExternalIdentity = delegate.external_identity;
+      if (eid.status === "UNKNOWN") {
+        lines.push(`🆔 Identidade: UNKNOWN (${eid.rationale})`);
+      }
+      if (hasResult && dr!.items.length > 0) {
+        const it = dr!.items[0];
+        lines.push(`   candidate: ${it.candidate_id ?? "—"} (${it.marketplace})`);
+        if (it.unknown_fields.length > 0) {
+          lines.push(`   ⚠️ UNKNOWN: ${it.unknown_fields.join(", ")}`);
+        }
+      }
+      lines.push("━━━━━━━━━━━━━━━━━━");
+      lines.push("CANDIDATE != FACT CANÔNICO — nenhum dado canônico foi alterado.");
+      return lines.join("\n");
+    }
+    const dr = delegate.discover_result!;
+    result = dr.ok ? dr : result;
+    if (!result) {
+      result = {
+        ok: false,
+        marketplace: delegate.marketplace,
+        mode: "url",
+        found: 0,
+        created: 0,
+        duplicates: 0,
+        conflicts: 0,
+        items: [],
+        error: delegate.error ?? "discovery_failed",
+      };
+    }
+    // Anexa a external_identity do N10 ao item retornado (proveniência da
+    // identidade; o N1 continua controlando candidate/listing_key/idempotência).
+    const eid: ExternalIdentity = delegate.external_identity;
+    const enriched = {
+      ...dr.items[0],
+      external_identity: eid,
+      identity_source: eid.status === "UNKNOWN" ? "UNKNOWN" : eid.source,
+    };
+    result.items = [enriched];
+    result.error = undefined;
+    // Idempotência (prova N10-RT-11): quando o delegate delegou e o N1
+    // registrou duplicate/conflict, refletir nas contagens originais do dr.
+  } else {
+    result = await executeDiscover({
+      marketplace: parsed.marketplace!,
+      mode: parsed.mode!,
+      url: parsed.url,
+      query: parsed.query,
+      limit: Math.min(5, DISCOVERY_LIMITS.MAX_RESULTS),
+    });
+  }
 
   if (!result.ok) {
     lines.push(`❌ Não foi possível concluir a descoberta.`);
@@ -110,6 +179,17 @@ export async function runDiscoverCommand(argsRaw: string): Promise<string> {
   for (const item of result.items) {
     const statusEmoji = item.outcome === "created" ? "✅" : item.outcome === "identical_duplicate" ? "🔁" : "⚔️";
     lines.push(`${statusEmoji} <b>${item.title ?? item.candidate_id ?? "sem título"}</b> (${item.marketplace})`);
+    // Identidade externa N10: ITEM_ID/SHOP_ITEM confirmados ou UNKNOWN+rationale.
+    const eid = (item as { external_identity?: ExternalIdentity }).external_identity;
+    if (eid) {
+      if (eid.status === "ITEM_ID") {
+        lines.push(`   🆔 Identidade: ITEM_ID = ${eid.value} (${eid.source})`);
+      } else if (eid.status === "SHOP_ITEM") {
+        lines.push(`   🆔 Identidade: SHOP_ITEM shop=${eid.shop_id} item=${eid.item_id} (${eid.source})`);
+      } else {
+        lines.push(`   🆔 Identidade: UNKNOWN (${eid.rationale})`);
+      }
+    }
     if (item.unknown_fields.length > 0) {
       lines.push(`   ⚠️ UNKNOWN: ${item.unknown_fields.join(", ")}`);
     }

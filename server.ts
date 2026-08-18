@@ -39,6 +39,7 @@ import {
 } from "./server/commercial/affiliate/acquisitionService";
 import { registerCycleRoutes } from "./server/routes/cycleRoutes";
 import { setCycleClient } from "./server/commercial/cycle/cycleRepository";
+import { registerN2SourceConnectors } from "./server/commercial/sourceConnector/registerN2SourceConnectors";
 
 dotenv.config();
 
@@ -1029,6 +1030,14 @@ NUNCA modifique ou invente preços ou imagens.`,
   registerCandidateRoutes({ app, requireAdminAuth });
   // Bloco N2 — descoberta controlada (READ-ONLY, limites de servidor)
   setupDiscoveryRoutes({ app, requireAdminAuth });
+  // Bloco N10 — integrar runtime do Source Connector: registrar os connectors
+  // N2 no registry único do N10 (idempotente). Sem este registro o discovery
+  // por URL falha fechado (connector_ausente). NÃO altera produtos, agents,
+  // scheduler, job queue, Telegram, lifecycle ou qualquer outra autoridade.
+  const n2SourceConnectorsRegistered = registerN2SourceConnectors();
+  if (!n2SourceConnectorsRegistered) {
+    console.error("[N10] Falha ao registrar Source Connectors N2 — discovery por URL permanecerá indisponível.");
+  }
   // Bloco N3 — pipeline de pesquisa + evidência. EVIDENCE != FACT CANÔNICO ·
   // RESEARCH != PUBLICATION · RESEARCH != PROMOTION — as rotas NUNCA criam
   // produto canônico, alteram candidates ou executam ações externas.
