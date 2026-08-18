@@ -102,10 +102,13 @@ export interface AffiliateApiSource {
 }
 
 /**
- * Injetar fonte real para produção:
- *   setAffiliateApiSource(createShopeeApiSource({ baseUrl, appId, secret }))
- * Fonte injetada uma única vez no bootstrap do server (server.ts), com
- * credenciais vindas de variáveis de ambiente (nunca no código).
+ * Injetar fonte real para produção — a implementação oficial Shopee BR
+ * vive em shopeeAffiliateProvider.ts (D-SHOPEE-1: resolução direcionada
+ * via productOfferV2(itemId, shopId) + fallback oficial generateShortLink).
+ * A fonte é injetada uma única vez no bootstrap (server.ts) com
+ * credenciais de variáveis de ambiente (jamais no código). Este módulo
+ * NÃO implementa transporte de API (fonte legada createShopeeApiSource
+ * removida — o transporte vive no cliente isolado shopeeApiClient.ts).
  */
 let apiSource: AffiliateApiSource | null = null;
 
@@ -125,185 +128,10 @@ export function getAffiliateApiSource(): AffiliateApiSource | null {
 
 /** Endpoint oficial da API Open de Afiliados Shopee Brasil (padrão). */
 export const SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL = "https://open-api.affiliate.shopee.com.br/graphql";
+// NOTA: a query oficial de ofertas vive agora no cliente isolado
+// shopeeApiClient.ts (D-SHOPEE-1: productOfferV2 com itemId/shopId como
+// argumentos oficiais confirmados por introspection da API real).
 
-/** Query GraphQL oficial de ofertas de produto (documentação pública da plataforma de afiliados). */
-export const SHOPEE_PRODUCT_OFFER_V2_QUERY = `{ productOfferV2(listType:0, sortType:5) { nodes { commissionRate commission price productLink offerLink } } }`;
-
-/**
- * Implementação oficial Shopee BR (GraphQL assinado).
- *
- * Especificação oficial confirmada (documentação da plataforma de
- * afiliados / evidências independentes):
- *   - Endpoint: https://open-api.affiliate.shopee.com.br/graphql (POST GraphQL)
- *   - Header único: Authorization: SHA256 Credential={appId}, Timestamp={ts}, Signature={sig}
- *   - sig = SHA256(Credential + Timestamp + Payload + Secret)
- *   - Timestamp = Unix seconds (janela de validade ~5 minutos)
- *   - Payload = corpo JSON real da requisição, serializado exatamente como enviado
- *   - Erro oficial 10020 = Invalid Signature; 10030 = rate limit
- *
- * Base URL configurável via opções (env do operador); SEM credenciais o
- * serviço permanece AUTH_REQUIRED (fail-closed — jamais endpoint inventado).
- */
-export interface ShopeeApiSourceOptions {
-  readonly providerId: string;
-  /** Base URL oficial configurada pelo operador (default: SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL). */
-  readonly baseUrl?: string;
-  /** App ID oficial da conta de afiliado. */
-  readonly appId: string;
-  /** App Secret oficial da conta de afiliado. */
-  readonly secret: string;
-  /** Query GraphQL oficial usada para buscar ofertas/gerar link (padrão: SHOPEE_PRODUCT_OFFER_V2_QUERY). */
-  readonly graphqlQuery?: string;
-  /** Sub_id de rastreamento padrão do provider (se não enviado na requisição). */
-  readonly defaultSubId?: string;
-}
-
-export function createShopeeApiSource(options: ShopeeApiSourceOptions): AffiliateApiSource {
-  // Falha fechada: sem credenciais não há fonte — o serviço só é construído
-  // com appId+secret não vazios (a ausência de envs mantém AUTH_REQUIRED).
-  if (!options.appId || !options.secret) {
-    throw new Error("official_credentials_missing:appId_e_secret_sao_obrigatorios");
-  }
-  const baseUrl = (options.baseUrl ?? SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL).replace(/\/+$/, "");
-  const graphqlQuery = options.graphqlQuery ?? SHOPEE_PRODUCT_OFFER_V2_QUERY;
-
-  /**
-   * Monta o corpo GraphQL oficial da busca de ofertas. O sub_id oficial
-   * de rastreamento é passado como variável da query (padrão da plataforma
-   * de afiliados para ofertas de produto).
-   */
-  function buildBody(subId: string): { query: string; variables: { subId: string } } {
-    return {
-      query: graphqlQuery,
-      variables: { subId: subId || options.defaultSubId || "" },
-    };
-  }
-
-  return {
-    providerId: options.providerId,
-    async generateLink(request: OfficialGenerateRequest): Promise<OfficialGenerateResponse> {
-      const body = buildBody(request.subId);
-      // Payload = o corpo GraphQL real, serializado exatamente como enviado.
-      const payload = JSON.stringify(body);
-      // Timestamp em segundos Unix (janela oficial ~5 minutos).
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-      const credential = options.appId;
-      // Assinatura oficial: SHA256(Credential + Timestamp + Payload + Secret).
-      const signatureInput = [credential, timestamp, payload, options.secret].join("");
-      const signature = createHash("sha256").update(signatureInput).digest("hex");
-      // Header oficial único: Authorization: SHA256 Credential=..., Timestamp=..., Signature=...
-      const authorization = `SHA256 Credential=${credential}, Timestamp=${timestamp}, Signature=${signature}`;
-      const response = await fetch(baseUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: authorization,
-        },
-        body: payload,
-      });
-      if (!response.ok) {
-        // Erros oficiais conhecidos: 10020 = Invalid Signature (corpo JSON
-        // da Shopee contém o erro dentro de response.ok? A Shopee GraphQL
-        // devolve HTTP 200 com {errors:[{code:10020}]} — trataremos isso
-        // no normalize; aqui o 4xx/5xx de transporte vira exceção fail-closed).
-        throw new Error(`official_api_error:http_${response.status}`);
-      }
-      const json = await response.json();
-      return normalizeOfficialResponse(json, options.appId, timestamp);
-    },
-  };
-}
-
-/**
- * Normaliza a resposta do mecanismo oficial para o contrato interno.
- * Qualquer formato inesperado ou erro oficial da Shopee → exceção fail-closed
- * (o chamador converte em RESOLUTION_FAILED com rationale).
- *
- * Estrutura real da API oficial BR (documentação pública):
- *   - Sucesso: { data: { productOfferV2: { nodes: [ { productLink, offerLink, ... } ] } } }
- *   - Erro:    { errors: [ { code: 10020 (Invalid Signature), 10030 (rate limit), ... } ] }
- */
-export function normalizeOfficialResponse(raw: unknown, _appId?: string, _timestamp?: string): OfficialGenerateResponse {
-  if (!raw || typeof raw !== "object") {
-    throw new Error("official_response_invalid:no_object");
-  }
-  const data = raw as Record<string, unknown>;
-  // Erros oficiais da Shopee (HTTP 200 com payload de erro) → jamais viram link.
-  if (Array.isArray(data.errors) && data.errors.length > 0) {
-    const first = (data.errors as unknown[])[0] as Record<string, unknown> | undefined;
-    const code = typeof first?.code === "number" ? first.code : "unknown";
-    const message = typeof first?.message === "string" ? first.message : "oficial";
-    throw new Error(`official_api_error:${code}:${message}`);
-  }
-  if (!data.data || typeof data.data !== "object") {
-    throw new Error("official_response_invalid:no_data_envelope");
-  }
-  const payload = data.data as Record<string, unknown>;
-  // productOfferV2 retorna { nodes: [ { productLink, offerLink, ... } ] }.
-  const offer = (payload as Record<string, unknown>)?.productOfferV2 as Record<string, unknown> | undefined;
-  if (!offer || !Array.isArray(offer.nodes) || offer.nodes.length === 0) {
-    throw new Error("official_response_invalid:no_offer_nodes");
-  }
-  const node = (offer.nodes as unknown[])[0] as Record<string, unknown>;
-  // O mecanismo retorna o link nos campos productLink/offerLink oficiais.
-  const url = typeof node.productLink === "string" ? node.productLink
-    : typeof node.offerLink === "string" ? node.offerLink
-      : null;
-  if (!url || !isPlausibleOfficialUrl(url)) {
-    throw new Error("official_response_invalid:no_valid_url");
-  }
-  return {
-    affiliateUrl: url,
-    listingId: typeof node.itemId === "string" ? node.itemId as string
-      : typeof node.itemId === "number" ? String(node.itemId)
-        : null,
-    sellerId: typeof node.shopId === "string" ? node.shopId as string
-      : typeof node.shopId === "number" ? String(node.shopId)
-        : null,
-    titleSnapshot: typeof node.name === "string" ? node.name : null,
-    raw,
-  };
-}
-
-/**
- * Plausibilidade mínima de URL oficial (não aceita URL pública "pura").
- * Regra forte: a URL DEVE conter um host oficial de marketplace; URL
- * pública sem domínio de redirect oficial é IMPOSSÍVEL de ser uma
- * affiliate URL legítima → rejeitada.
- */
-export function isPlausibleOfficialUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    const hostname = parsed.hostname.toLowerCase();
-    const allHosts = (AFFILIATE_MARKETPLACES as ReadonlyArray<string>).flatMap(
-      (mp) => AFFILIATE_MARKETPLACE_HOSTS[mp as AffiliateMarketplace] as ReadonlyArray<string>,
-    );
-    return allHosts.some((host) => hostname === host || hostname.endsWith(`.${host}`));
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Determina o host oficial final esperado a partir da URL de afiliado.
- * Usado pelo registro N6 para garantir que o link gravado aponta para
- * o domínio de redirect oficial do marketplace.
- */
-export function extractOfficialHost(url: string): string | null {
-  try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    const allHosts = (AFFILIATE_MARKETPLACES as ReadonlyArray<string>).flatMap(
-      (mp) => AFFILIATE_MARKETPLACE_HOSTS[mp as AffiliateMarketplace] as ReadonlyArray<string>,
-    );
-    return allHosts.find((host) => hostname === host || hostname.endsWith(`.${host}`)) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Serviço de aquisição (3B/3C) — fail-closed, sem gravação.
-// ---------------------------------------------------------------------------
 
 export interface AcquireOptions {
   /** Provider N6 de origem (somente leitura). */
@@ -376,7 +204,7 @@ export async function acquireAffiliateLink(options: AcquireOptions): Promise<Acq
       // com rationale de caminho manual assistido (que não se aplica à
       // fonte oficial).
       const expectedHosts = AFFILIATE_MARKETPLACE_HOSTS[provider.marketplace] as ReadonlyArray<string>;
-      const officialHost = extractOfficialHost(response.affiliateUrl);
+      const officialHost = officialHostOf(response.affiliateUrl);
       if (!officialHost || !expectedHosts.includes(officialHost)) {
         return {
           kind: "RESOLUTION_FAILED",
@@ -494,6 +322,24 @@ function identityConfidenceOf(identity: ProductIdentity, reference: ProductRefer
  *   - nunca é "normalizado" (a URL exata fornecida é o que será registrado);
  *   - o host final observado deve ser o mesmo host oficial declarado.
  */
+/**
+ * Determina o host oficial final esperado a partir da URL de afiliado
+ * (versão interna — o fail-closed de host da fonte oficial usa a whitelist
+ * do provider do N6). Não exportada: a fonte oficial vive em
+ * shopeeAffiliateProvider/shopeeApiClient (D-SHOPEE-1).
+ */
+function officialHostOf(url: string): string | null {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const allHosts = (AFFILIATE_MARKETPLACES as ReadonlyArray<string>).flatMap(
+      (mp) => AFFILIATE_MARKETPLACE_HOSTS[mp as AffiliateMarketplace] as ReadonlyArray<string>,
+    );
+    return allHosts.find((host) => hostname === host || hostname.endsWith(`.${host}`)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function validateManualUrl(params: {
   provider: AffiliateProviderRecord;
   reference: ProductReference;

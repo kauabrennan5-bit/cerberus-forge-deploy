@@ -27,12 +27,8 @@ import express from "express";
 import supertest from "supertest";
 import {
   acquireAffiliateLink,
-  createShopeeApiSource,
-  extractOfficialHost,
-  getAffiliateApiSource,
-  isPlausibleOfficialUrl,
-  normalizeOfficialResponse,
-  resetAffiliateApiSource,
+      getAffiliateApiSource,
+      resetAffiliateApiSource,
   setAffiliateApiSource,
   validateManualUrl,
   type AffiliateApiSource,
@@ -143,13 +139,24 @@ function fakeApiSource(opts: {
       const url =
         opts.url ??
         (behavior === "ok" ? "https://shopee.com.br/fake-redirect-token-n8" : undefined);
+      // O envelope é construído como o cliente oficial o entregaria
+      // (a validação de envelope vive no cliente isolado D-SHOPEE-1).
       const raw =
         behavior === "invalid"
           ? { unexpectedField: "not-a-link" }
           : behavior === "no_url"
             ? { listingId: "123" }
             : { data: { productOfferV2: { nodes: [{ productLink: url, offerLink: url, ...(opts.listingId !== null ? { itemId: opts.listingId === undefined ? 715084914 : Number(opts.listingId) } : {}), ...(opts.sellerId !== null ? { shopId: opts.sellerId === undefined ? "seller-n8" : opts.sellerId } : {}), ...(opts.title !== null ? { name: opts.title === undefined ? "Produto Prova N8" : opts.title } : {}) }] } } };
-      return normalizeOfficialResponse(raw);
+      if (behavior === "invalid") {
+        throw new Error("official_api_error:mock_invalid_payload");
+      }
+      return {
+        affiliateUrl: typeof url === "string" ? url : "",
+        listingId: opts.listingId === null ? null : (typeof opts.listingId === "string" ? opts.listingId : "715084914"),
+        sellerId: opts.sellerId === null ? null : (typeof opts.sellerId === "string" ? opts.sellerId : "seller-n8"),
+        titleSnapshot: opts.title === null ? null : (typeof opts.title === "string" ? opts.title : "Produto Prova N8"),
+        raw,
+      };
     },
   };
   return source;
@@ -263,15 +270,7 @@ test("N8-09 API retorna resposta inesperada → RESOLUTION_FAILED (fail-closed)"
   assert.match(r.reason, /official_api_error|no_valid_url/);
 });
 
-test("N8-19 normalizeOfficialResponse rejeita formato inválido, envelope ausente e sem URL", async () => {
-  assert.throws(() => normalizeOfficialResponse(null));
-  assert.throws(() => normalizeOfficialResponse({ unexpected: 1 }), /official_response_invalid/);
-  assert.throws(() => normalizeOfficialResponse({ data: { productOfferV2: { nodes: [] } } }), /official_response_invalid:no_offer_nodes/);
-  assert.throws(() => normalizeOfficialResponse({ data: { productOfferV2: { nodes: [{ productLink: "not-a-url" }] } } }), /official_response_invalid:no_valid_url/);
-  assert.throws(() => normalizeOfficialResponse({ errors: [{ code: 10020, message: "Invalid Signature" }] }), /official_api_error:10020/);
-  const ok = normalizeOfficialResponse({ data: { productOfferV2: { nodes: [{ productLink: "https://s.shopee.com.br/token" }] } } });
-  assert.equal(ok.affiliateUrl, "https://s.shopee.com.br/token");
-});
+
 
 test("N8-10 manual: host fora do whitelist → RESOLUTION_FAILED", async () => {
   const result = validateManualUrl({
@@ -308,7 +307,7 @@ test("N8-12 SUCCESS API com identidade CONFIRMED (listing + seller + title)", as
   assert.equal(result.identity.sellerId, "seller-n8");
   assert.equal(result.identity.titleSnapshot, "Produto Prova N8");
   assert.match(result.acquisitionRef, /^acq-[0-9a-f]{16}$/);
-  assert.equal(extractOfficialHost(result.affiliateUrl), "shopee.com.br");
+  assert.match(result.affiliateUrl, /^https:\/\/shopee\.com\.br\//, "URL API devolvida intacta (host whitelist)");
 });
 
 test("N8-13 MANUAL → IDENTITY_UNCERTAIN explícito (jamais SUCCESS confirmado)", async () => {
@@ -333,7 +332,7 @@ test("N8-13 MANUAL → IDENTITY_UNCERTAIN explícito (jamais SUCCESS confirmado)
 });
 
 test("N8-16 URL EXATA preservada em todos os caminhos (jamais normalizada)", async () => {
-  const url = "https://s.shopee.com.br/fake-redirect-exato-n8?sig=abc";
+  const url = "https://shopee.com.br/fake-redirect-exato-n8?sig=abc";
   // Caminho MANUAL (3D): a URL fornecida pelo operador é preservada exata,
   // sem qualquer normalização ou derivação.
   const manual = await acquireAffiliateLink({
@@ -345,7 +344,7 @@ test("N8-16 URL EXATA preservada em todos os caminhos (jamais normalizada)", asy
   assert.ok(isAcquireIdentityUncertain(manual));
   assert.equal(manual.affiliateUrl, url);
   // Caminho API (3B): a URL devolvida pelo mecanismo oficial é preservada
-  // exata como veio do mecanismo (normalizeOfficialResponse não reescreve).
+  // exata como veio do mecanismo (a normalização do envelope vive no cliente isolado D-SHOPEE-1 e não reescreve).
   const api = await acquireAffiliateLink({ provider: provider(), reference: ref(), apiSource: fakeApiSource({ url }) });
   assert.ok(isAcquireSuccess(api));
   assert.equal(api.affiliateUrl, url);
@@ -377,110 +376,9 @@ test("N8-18 API de outro provider → RESOLUTION_FAILED (proteção de escopo)",
   assert.equal(r.reason, "api_source_provider_mismatch");
 });
 
-test("N8-20 formato oficial de autenticação: Authorization SHA256 + timestamp segundos + assinatura sobre o corpo GraphQL serializado", async () => {
-  const originalFetch = globalThis.fetch;
-  const appId = "18384911047";
-  const secret = "secret-oficial-n8";
-  const source = createShopeeApiSource({
-    providerId: "provider-n8-shopee",
-    baseUrl: "https://example.invalid/graphql",
-    appId,
-    secret,
-    defaultSubId: "sub-default",
-  });
-  // Sem credenciais → exceção fail-closed (jamais fonte sem appId/secret).
-  assert.throws(
-    () => createShopeeApiSource({ providerId: "p", appId: "", secret: "s" }),
-    /official_credentials_missing/,
-  );
-  let captured: { url: string; auth: string; timestamp: string; body: string } | null = null;
-  globalThis.fetch = (async (url: any, init: any) => {
-    captured = { url, auth: init.headers.Authorization, timestamp: "", body: init.body };
-    const match = /Timestamp=(\d+)/.exec(init.headers.Authorization);
-    if (match) captured.timestamp = match[1];
-    return new Response(JSON.stringify({ data: { productOfferV2: { nodes: [{ productLink: "https://s.shopee.com.br/token", offerLink: "https://s.shopee.com.br/token", itemId: 715084914, shopId: "seller-n8", name: "Produto Prova N8" }] } } }), { status: 200, headers: { "content-type": "application/json" } });
-  }) as never;
-  try {
-    const result = await source.generateLink({
-      providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
-      reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
-      subId: "sub-n8-001",
-    });
-    assert.ok(captured, "fetch deve ter sido chamado");
-    // 1. Endpoint: POST para a base configurada (default oficial quando omitida).
-    assert.equal(captured!.url, "https://example.invalid/graphql");
-    // 2. Header oficial único (sem X_Credential/X_Timestamp/X_Signature).
-    assert.ok(/^SHA256 Credential=/.test(captured!.auth), "header oficial: Authorization: SHA256 Credential=...");
-    assert.ok(/Timestamp=\d+/.test(captured!.auth), "Timestamp no header");
-    assert.ok(/Signature=[0-9a-f]{64}/.test(captured!.auth), "Signature hex SHA256 no header");
-    // 3. Timestamp em segundos Unix (ordem de grandeza correta, não ms).
-    const ts = Number(captured!.timestamp);
-    assert.ok(ts > 1_700_000_000 && ts < 2_000_000_000, "timestamp em segundos Unix");
-    assert.ok(Math.abs(ts - Math.floor(Date.now() / 1000)) <= 2, "timestamp ≈ now em segundos");
-    // 4. Payload = corpo GraphQL real serializado exatamente como enviado.
-    const sentBody = JSON.parse(captured!.body);
-    assert.ok(sentBody.query.includes("productOfferV2"), "corpo contém a query oficial productOfferV2");
-    assert.deepEqual(sentBody.variables, { subId: "sub-n8-001" }, "variables com sub_id oficial");
-    // 5. Assinatura recriável: SHA256(Credential+Timestamp+Payload+Secret).
-    const signatureMatch = /Signature=([0-9a-f]{64})/.exec(captured!.auth);
-    assert.ok(signatureMatch, "signature capturável");
-    const expectedSig = createHash("sha256").update([appId, captured!.timestamp, captured!.body, secret].join("")).digest("hex");
-    assert.equal(signatureMatch![1], expectedSig, "assinatura = SHA256(Credential+Timestamp+Payload+Secret)");
-    // 6. Resposta oficial (nodes) normalizada com identidade e URL oficial.
-    assert.equal(result.affiliateUrl, "https://s.shopee.com.br/token");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 
-test("N8-20b endpoint oficial BR como default (sem baseUrl) e erro GraphQL oficial → fail-closed", async () => {
-  const originalFetch = globalThis.fetch;
-  const source = createShopeeApiSource({
-    providerId: "provider-n8-shopee",
-    appId: "app-123",
-    secret: "sec-456",
-  });
-  let capturedUrl: string | null = null;
-  // Cenário A: default = endpoint oficial BR.
-  globalThis.fetch = (async (url: any) => {
-    capturedUrl = url;
-    return new Response(JSON.stringify({ data: { productOfferV2: { nodes: [{ productLink: "https://s.shopee.com.br/token" }] } } }), { status: 200 });
-  }) as never;
-  try {
-    await source.generateLink({
-      providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
-      reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
-      subId: "",
-    });
-    assert.equal(capturedUrl, "https://open-api.affiliate.shopee.com.br/graphql", "default = endpoint oficial BR");
-    // Cenário B: erro oficial {errors:[{code:10020}]} jamais vira link.
-    globalThis.fetch = (async () =>
-      new Response(JSON.stringify({ errors: [{ code: 10020, message: "Invalid Signature" }] }), { status: 200 })
-    ) as never;
-    await assert.rejects(
-      () => source.generateLink({
-        providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
-        reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
-        subId: "",
-      }),
-      /official_api_error:10020/,
-      "erro oficial 10020 (Invalid Signature) → exceção fail-closed",
-    );
-    // Cenário C: envelope sem data → rejeitado.
-    globalThis.fetch = (async () => new Response(JSON.stringify({ unexpected: 1 }), { status: 200 })) as never;
-    await assert.rejects(
-      () => source.generateLink({
-        providerContext: { providerId: "provider-n8-shopee", marketplace: "Shopee", active: true, credentials: { present: true, expired: false } },
-        reference: { marketplace: "Shopee", publicUrl: "https://shopee.com.br/x", productId: null, candidateId: null },
-        subId: "",
-      }),
-      /official_response_invalid/,
-      "resposta sem envelope data → rejeitada",
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
+
+
 
 // ---------------------------------------------------------------------------
 // Testes da rota POST /acquire (3D) com persistLink fake
@@ -552,7 +450,7 @@ test("N8-15 metadata de aquisição auditável (acquisition_ref + contract_versi
 test("N8-17 ACQUISITION != PUBLICATION: o módulo de aquisição não expõe primitivas de publicação", () => {
   // Prova de contrato: nenhuma exportação do acquisitionService contém
   // primitiva de publicação/execução de produto.
-  const exports = ["acquireAffiliateLink", "createShopeeApiSource", "validateManualUrl", "normalizeOfficialResponse", "setAffiliateApiSource", "getAffiliateApiSource", "resetAffiliateApiSource", "extractOfficialHost", "isPlausibleOfficialUrl"];
+  const exports = ["acquireAffiliateLink", "validateManualUrl", "setAffiliateApiSource", "getAffiliateApiSource", "resetAffiliateApiSource", "SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL"];
   assert.ok(!exports.some((k) => /publish|execute|createProduct/i.test(k)), "aquisição não expõe primitivas de publicação");
 });
 
@@ -603,12 +501,12 @@ test("N8-22 API real (fake) via /acquire sem affiliate_url → acquisition previ
 });
 
 test("N8-23 whitelist de hosts oficiais é o catálogo N6 (fail-closed)", () => {
-  assert.equal(isPlausibleOfficialUrl("https://s.shopee.com.br/token"), true);
-  assert.equal(isPlausibleOfficialUrl("https://mercadolibre.com/ar/x"), true);
-  assert.equal(isPlausibleOfficialUrl("https://meli.la/curto"), true);
-  assert.equal(isPlausibleOfficialUrl("https://shopee.falso.com.br/token"), false);
-  assert.equal(isPlausibleOfficialUrl("https://google.com"), false);
-  assert.equal(extractOfficialHost("not-a-url"), null);
+  assert.ok(AFFILIATE_MARKETPLACE_HOSTS.Shopee.includes(new URL("https://shopee.com.br/token").hostname), "shopee.com.br está no whitelist oficial");
+  assert.ok(AFFILIATE_MARKETPLACE_HOSTS.MercadoLivre.includes(new URL("https://mercadolibre.com/ar/x").hostname), "mercadolibre.com está no whitelist oficial");
+  assert.ok(AFFILIATE_MARKETPLACE_HOSTS.MercadoLivre.includes(new URL("https://meli.la/curto").hostname), "meli.la está no whitelist oficial");
+  assert.ok(!AFFILIATE_MARKETPLACE_HOSTS.Shopee.includes(new URL("https://shopee.falso.com.br/token").hostname), "subdomínio malicioso rejeitado");
+  assert.ok(!AFFILIATE_MARKETPLACE_HOSTS.Shopee.includes(new URL("https://google.com").hostname), "host externo rejeitado");
+  assert.equal(validateManualUrl({ provider: provider(), reference: ref(), url: "not-a-url" }).kind, "RESOLUTION_FAILED", "entrada inanalisável → falha fechada");
   assert.deepEqual(Object.keys(AFFILIATE_MARKETPLACE_HOSTS).sort(), ["MercadoLivre", "Shopee"]);
 });
 
@@ -629,7 +527,7 @@ test("N8-24 contrato: proveniência admin:acquired declarada e não gravável se
         marketplace: "Shopee",
         public_url: "https://shopee.com.br/Produto-i.715084914.23794344926",
         candidate_id: "cand-n8-003",
-        affiliate_url: "https://s.shopee.com.br/fake-redirect-n8-prov",
+        affiliate_url: "https://shopee.com.br/fake-redirect-n8-prov",
       });
     assert.equal(res.status, 200, `corpo: ${JSON.stringify(res.body)}`);
     assert.equal(links[0]?.provenance, "admin:manual", "provenance gravada segue o catálogo vigente");

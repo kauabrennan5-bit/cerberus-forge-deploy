@@ -212,10 +212,14 @@ function makeObservationsStore(): Map<string, Record<string, unknown>[]> {
   store.set("product_image_observed", []);
   store.set("commercial_signals", []);
   store.set("commercial_artifacts", []);
+  // Timestamps RELATIVOS ao momento da execução (countClicksForProduct usa
+  // Date.now() real como origem da janela) — evita teste sensível a horário.
+  const now = Date.now();
+  const rel = (offsetHours: number): string => new Date(now - offsetHours * 3600_000).toISOString();
   store.set("product_clicks", [
-    { id: "c1", product_id: PRODUCT_ID, created_at: "2026-08-16T10:00:00.000Z" },
-    { id: "c2", product_id: PRODUCT_ID, created_at: "2026-08-17T08:00:00.000Z" },
-    { id: "c3", product_id: "outro-produto", created_at: "2026-08-17T08:00:00.000Z" },
+    { id: "c1", product_id: PRODUCT_ID, created_at: rel(24) },
+    { id: "c2", product_id: PRODUCT_ID, created_at: rel(10) },
+    { id: "c3", product_id: "outro-produto", created_at: rel(8) },
   ]);
   return store;
 }
