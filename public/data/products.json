@@ -1,5 +1,21 @@
 [
   {
+    "id": "prod-1787024911696",
+    "ref": "REF-013",
+    "slug": "banqueta-madeira-macica-cadeira-70cm-balcao-bar-rustica-cera-de-crnauba-natural",
+    "produto": "Banqueta Madeira Maciça Cadeira 70cm Balcão Bar Rústica Cera De Crnaúba Natural",
+    "preco": 72,
+    "imagens": [
+      "https://http2.mlstatic.com/D_NQ_NP_985873-MLB93012467498_092025-O.webp"
+    ],
+    "link": "https://meli.la/1YTkf9n",
+    "categoria": "Acessórios",
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1786740273195",
     "ref": "REF-012",
     "slug": "puff-banqueta-decorativa-linho-pes-madeira-envio-imediato",
