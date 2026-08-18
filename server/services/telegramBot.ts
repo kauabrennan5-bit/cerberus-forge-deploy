@@ -13,6 +13,8 @@ import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
 import * as commercialCockpit from "./commercialCockpit";
 import { runDiscoverCommand } from "./discoveryCommands";
+// Bloco N11 — porta controlada de batch /discover-batch (somente URLs).
+import { runDiscoverBatchCommand } from "../commercial/facilitator/discoverBatchCommand";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -1390,7 +1392,10 @@ async function renderCycleState(input: string): Promise<string> {
 
     // Bloco N1 — funil de candidatos (render-only, CANDIDATE != FACT CANÔNICO)
     // Bloco N2 — descoberta controlada: /discover ML url <url> e /discover SH search <termo>
-    if (text.startsWith("/discover")) {
+    // Bloco N11 — /discover-batch ML|SH <url1> [url2] ... (lote controlado).
+    // Discriminação explícita para não capturar o novo comando:
+    // "/discover" exato OU "/discover " (com argumento).
+    if (text === "/discover" || text.startsWith("/discover ")) {
       const args = text.slice("/discover".length).trim();
       if (!args) {
         if (chatId) await sendTelegramMessage(chatId, await commercialCockpit.renderDiscover());
@@ -1402,7 +1407,14 @@ async function renderCycleState(input: string): Promise<string> {
       }
       return;
     }
-
+    if (text === "/discover-batch" || text.startsWith("/discover-batch ")) {
+      const args = text.slice("/discover-batch".length).trim();
+      if (chatId) {
+        const response = await runDiscoverBatchCommand(args);
+        await sendTelegramMessage(chatId, response);
+      }
+      return;
+    }
     // --- DETECÇÃO DE LINKS (FLUXO DE PUBLICAÇÃO) ---
     const urlRegex = /(https?:\/\/[^\s]+)/gi;
     const matches = text.match(urlRegex);
