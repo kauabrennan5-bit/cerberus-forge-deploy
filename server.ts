@@ -1251,8 +1251,11 @@ NUNCA modifique ou invente preços ou imagens.`,
       };
 
       if (mode === "introspection") {
+        const deep = body.deep === true;
         const result = await callApi(
-          "{ __schema { queryType { name fields { name args { name type { kind name ofType { name } } } } } mutationType { name } } }",
+          deep
+            ? "{ __schema { queryType { name fields { name args { name type { kind name ofType { name } } } } } mutationType { name fields { name args { name } } } } }"
+            : "{ __schema { queryType { name fields { name args { name type { kind name ofType { name } } } } } mutationType { name } } }",
         );
         const intro =
           result.status === 200 &&
