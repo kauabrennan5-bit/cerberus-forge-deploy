@@ -1155,7 +1155,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       }
       const mode = typeof body.mode === "string" ? body.mode : "introspection";
       const allowedModes = [
-        "introspection", "operations", "resolve", "direct", "shortlink",
+        "introspection", "operations", "resolve", "direct", "search", "shortlink",
       ];
       if (!allowedModes.includes(mode)) {
         return res.status(400).json({
@@ -1361,6 +1361,50 @@ NUNCA modifique ou invente preços ou imagens.`,
         });
       }
 
+      if (mode === "search") {
+        // Listagem oficial com keyword (read-only) para obter tuplas reais.
+        const keyword = typeof body.keyword === "string" ? body.keyword.trim() : "";
+        if (keyword.length < 2 || keyword.length > 80) {
+          return res.status(400).json({
+            ok: false,
+            proof_run_id: PROOF_RUN_ID,
+            error: "probe_search_keyword_invalid",
+            note: "keyword deve ter entre 2 e 80 caracteres.",
+          });
+        }
+        if (!/^[a-zA-Z0-9À-ÿ\s\-_.]+$/.test(keyword)) {
+          return res.status(400).json({
+            ok: false,
+            proof_run_id: PROOF_RUN_ID,
+            error: "probe_search_keyword_charset",
+            note: "keyword aceita apenas letras, números e espaçospontuação básica.",
+          });
+        }
+        const results: Record<string, unknown> = {};
+        results.shopeeOfferV2 = sanitize(
+          (await callApi(
+            `query { shopeeOfferV2(keyword: "${keyword.replace(/[^\x20-\x7E]/g, "")}", limit: 3) { nodes { itemId shopId name productLink offerLink } } }`,
+          )).body,
+        );
+        results.productOfferV2 = sanitize(
+          (await callApi(
+            `query { productOfferV2(keyword: "${keyword.replace(/[^\x20-\x7E]/g, "")}", limit: 3) { nodes { itemId shopId productName productLink offerLink } } }`,
+          )).body,
+        );
+        results.shopOfferV2 = sanitize(
+          (await callApi(
+            `query { shopOfferV2(keyword: "${keyword.replace(/[^\x20-\x7E]/g, "")}", limit: 3) { nodes { ... on Offer { itemId shopId productLink offerLink } } } }`,
+          )).body,
+        );
+        return res.status(200).json({
+          ok: true,
+          proof_run_id: PROOF_RUN_ID,
+          http_status: 200,
+          searches: results,
+          note: "Consulta read-only; nenhuma persistência.",
+        });
+      }
+
       if (mode === "direct") {
         // Probes read-only direcionados pela tupla (shop_id, item_id):
         // * productOfferV2(itemId, shopId, limit:1) — filtro oficial exato
@@ -1388,10 +1432,10 @@ NUNCA modifique ou invente preços ou imagens.`,
             `query { productOfferV2(itemId: ${itemId}, shopId: ${shopId}, limit: 1) { nodes { itemId shopId productName productLink offerLink } } }`,
           )).body,
         );
-        // Probe 2: filtro por loja (shopId)
+        // Probe 2: filtro por loja (shopId) — campos do tipo ShopOfferV2
         results.shopOfferV2_direct = sanitize(
           (await callApi(
-            `query { shopOfferV2(shopId: ${shopId}, limit: 1) { nodes { itemId shopId name productLink offerLink } } }`,
+            `query { shopOfferV2(shopId: ${shopId}, limit: 1) { nodes { ... on Offer { itemId shopId productLink offerLink } } } }`,
           )).body,
         );
         // Probe 3: short link oficial da URL específica (preview-only)
