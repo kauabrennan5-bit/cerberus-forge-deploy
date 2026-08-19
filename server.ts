@@ -1143,7 +1143,8 @@ NUNCA modifique ou invente preços ou imagens.`,
   // N16 não importa nem referencia productsRepository.
   const n16AssessmentClient = getCandidateAssessmentClient();
   if (n16AssessmentClient) setPublicationExecutionsClient(n16AssessmentClient as any);
-  const n16FakeMode = process.env.N16_PHASE2_FAKE_PROVIDER_MODE;
+  // Fase 4 é a nomenclatura canônica; a chave da Fase 2 permanece apenas como compatibilidade legada controlada.
+  const n16FakeMode = process.env.N16_PHASE4_FAKE_PROVIDER_MODE || process.env.N16_PHASE2_FAKE_PROVIDER_MODE;
   if (n16FakeMode === "success" || n16FakeMode === "failure" || n16FakeMode === "ambiguous") {
     setN16PublicationProvider(new FakePublicationProvider(n16FakeMode as FakePublicationProviderMode));
   } else {

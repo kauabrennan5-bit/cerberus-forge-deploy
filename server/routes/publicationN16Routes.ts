@@ -33,7 +33,7 @@ export function registerPublicationN16Routes(
       return;
     }
     try {
-      const configuredProofRunId = process.env.N16_PHASE2_PROOF_RUN_ID?.trim();
+      const configuredProofRunId = (process.env.N16_PHASE4_PROOF_RUN_ID || process.env.N16_PHASE2_PROOF_RUN_ID)?.trim();
       const isProduction = process.env.NODE_ENV === "production";
       const proofProvider = provider && (!isProduction || (configuredProofRunId && req.body.proof_run_id === configuredProofRunId))
         ? provider
