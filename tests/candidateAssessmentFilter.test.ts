@@ -369,7 +369,7 @@ test("A01. catálogos fechados espelham a migration (CHECKs)", () => {
   assert.deepEqual([...RECOMMENDATIONS], ["NONE", "INVESTIGATE_FURTHER", "ADD_TO_NICHE", "PARK", "REJECT"]);
   assert.deepEqual([...PRIORITY_LEVELS], ["HIGH", "MEDIUM", "LOW", "NO_ACTION"]);
   assert.deepEqual([...KNOWN_NICHES], ["VINTAGE", "BAUHAUS", "SPACE_AGE", "MID_CENTURY", "JAPANESE", "MINIMALIST", "INDUSTRIAL"]);
-  assert.deepEqual([...ASSESSMENT_KINDS], ["cerberus_filter_v1"]);
+  assert.deepEqual([...ASSESSMENT_KINDS], ["cerberus_filter_v1", "n13:curator_v1"]);
 });
 
 test("A02. pesos somam exatamente 1.00 (composição determinística válida)", () => {

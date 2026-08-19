@@ -33,6 +33,7 @@ import { setCandidatesClient } from "./server/repositories/candidatesRepository"
 import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
 import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
 import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
+import { registerCurationRoutes } from "./server/routes/curationRoutes";
 import { setAffiliateClient } from "./server/commercial/affiliate/affiliateRepository";
 import {
   setAffiliateApiSource,
@@ -1122,6 +1123,9 @@ NUNCA modifique ou invente preços ou imagens.`,
     setAffiliateApiSource(null);
   }
   registerAffiliateRoutes(app, requireAdminAuth);
+  // Bloco N13 — Filtro / Curadoria Cerberus (Fase 1): curadoria estrutural
+  // PASS/FAIL/BLOCKED. READ-ONLY: não cria produto, link, job ou publicação.
+  registerCurationRoutes(app, requireAdminAuth);
   // Bloco N9 — Ciclo Comercial Real: orquestração governada S1→S8 +
   // Commercial Decision Gate v1. CICLO != PUBLICAÇÃO · DECISION != ACTION ·
   // RECOMMENDATION != ACTION — o gate v1 nunca produz DECISION_ALLOWED por

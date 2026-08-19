@@ -13,7 +13,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createHash } from "crypto";
 
-export const ASSESSMENT_KINDS = ["cerberus_filter_v1"] as const;
+// "cerberus_filter_v1" = classificação comercial (Bloco N4).
+// "n13:curator_v1" = filtro de curadoria estrutural (Bloco N13 Fase 1):
+// verdade = PASS/FAIL/BLOCKED; não comercial; is_actionable=false sempre.
+export const ASSESSMENT_KINDS = ["cerberus_filter_v1", "n13:curator_v1"] as const;
 export type AssessmentVersion = (typeof ASSESSMENT_KINDS)[number];
 
 export const CLASSIFICATIONS = [
