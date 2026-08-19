@@ -50,7 +50,7 @@ create table if not exists public.candidate_assessment (
   assessment_id text primary key,
   candidate_id text not null,
   filter_version text not null
-    check (filter_version in ('cerberus_filter_v1')),
+    check (filter_version in ('cerberus_filter_v1', 'n13:curator_v1')),
   -- Resultado multidimensional (os 9 eixos, nunca "score mágico" solto)
   dimensions jsonb not null default '{}'::jsonb
     check (jsonb_typeof(dimensions) = 'object'),
