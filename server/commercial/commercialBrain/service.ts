@@ -254,10 +254,27 @@ export async function evaluateCommercialBrain(
       coverage: decision.coverage,
       conflict: decision.conflict,
     };
-    const classification =
-    decision.band === "INSUFFICIENT"
-      ? null
-      : (decision.band === "HIGH" ? "COMMERCIAL_HIGH" : decision.band === "MEDIUM" ? "COMMERCIAL_MEDIUM" : "COMMERCIAL_LOW") as "COMMERCIAL_HIGH" | "COMMERCIAL_MEDIUM" | "COMMERCIAL_LOW";
+    // Mapeamento para o catálogo real da coluna candidate_assessment.classification
+    // em produção (CHECK: WINNER | HIDDEN_GEM | NICHE_DROP | INSUFFICIENT |
+    // NOT_RECOMMENDED). O band/score comercial reais permanecem auditáveis
+    // no metadata (band, score, weightsVersion) — classificação persistida
+    // nunca é consumida por fluxos comerciais; a publicação continua fora
+    // do escopo N14 (RECOMMENDATION != ACTION). INSUFFICIENT grava NULL
+    // (sem classificação comercial) — band INSUFFICIENT nunca gera rótulo.
+    const classification:
+      | "WINNER"
+      | "HIDDEN_GEM"
+      | "NICHE_DROP"
+      | "INSUFFICIENT"
+      | "NOT_RECOMMENDED"
+      | null =
+      decision.band === "INSUFFICIENT"
+        ? null
+        : decision.band === "HIGH"
+          ? "WINNER"
+          : decision.band === "MEDIUM"
+            ? "HIDDEN_GEM"
+            : "NICHE_DROP";
     const classificationBasis = `commercial_brain_v1; score=${decision.score ?? "NA"}; coverage=${decision.coverage}; conflict=${decision.conflict}`;
 
     const persistResult: PersistAssessmentResult = await persistAssessment({
