@@ -614,6 +614,33 @@ test("service: replay → identical_duplicate, mesmo digest e mesma key", async 
   assert.equal(handle.insertCalls(), 2);
 });
 
+// Regressão: o digest N14 NÃO pode depender do horário exato do relógio —
+// replays separados por horas/minutos (mesmo snapshot, mesmo dia UTC)
+// devem produzir o mesmo digest/key. A referência de risco é truncada
+// a dia UTC; o horário exato vive apenas em evaluatedAt (fora do digest).
+test("service: replay com clock distinto → mesmo digest, score e key", async () => {
+  const { handle } = installMocks({
+    listAssessments: [n13AssessmentRow("PASS")],
+    succeedInserts: 1,
+  });
+  const ref = "2026-08-19T03:00:00.000Z";
+  setCommercialBrainNowProvider(() => ref);
+  const a = await evaluateCommercialBrain(VALID_CANDIDATE_ID);
+  // Relógio avança 3h47min: mesmo snapshot no mesmo dia UTC.
+  setCommercialBrainNowProvider(() => "2026-08-19T06:47:12.111Z");
+  const b = await evaluateCommercialBrain(VALID_CANDIDATE_ID);
+  assert.equal(a.decision!.digest, b.decision!.digest);
+  assert.equal(a.decision!.score, b.decision!.score);
+  assert.equal(a.decision!.band, b.decision!.band);
+  assert.equal(a.decision!.rationale, b.decision!.rationale);
+  assert.equal(a.decision!.idempotencyKey, b.decision!.idempotencyKey);
+  // evaluatedAt usa a mesma referência truncada a dia UTC (fora do
+  // digest, auditável apenas como data de referência do risco).
+  assert.equal(a.decision!.evaluatedAt, "2026-08-19");
+  assert.equal(b.decision!.evaluatedAt, "2026-08-19");
+  assert.equal(handle.insertCalls(), 2);
+});
+
 test("service: alteração real no snapshot → nova avaliação (nova key)", async () => {
   const { handle } = installMocks({ listAssessments: [n13AssessmentRow("PASS")] });
   const a = await evaluateCommercialBrain(VALID_CANDIDATE_ID, {

@@ -192,7 +192,15 @@ export async function evaluateCommercialBrain(
     };
     const normalized: NormalizedSignals = normalizeSignalsInput(mergedInput);
 
-    const referenceDateIso = nowIso ?? nowIsoProvider();
+    // Referência de risco TRUNCADA A DIA UTC: o mesmo snapshot (mesmo
+    // candidato + mesmos sinais) produz a mesma referência no mesmo dia
+    // UTC, garantindo digest/idempotency_key determinísticos entre
+    // replays separados por segundos/minutos/horas. O horário exato
+    // continua auditável via evaluatedAt (metadado, fora do digest).
+    // null → usa now (fallback); truncamento só se ambos tiverem valor.
+    const referenceDateIso = nowIso
+      ? nowIso.slice(0, 10)
+      : nowIsoProvider().slice(0, 10);
     const additionalFactors: string[] = [];
     if (!normalized.price.signal.provenance && normalized.price.signal.status === "KNOWN") {
       additionalFactors.push(`unprovenanced_dimension:price`);
