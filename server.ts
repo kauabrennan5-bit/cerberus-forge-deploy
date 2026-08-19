@@ -31,7 +31,7 @@ import { registerAssessmentRoutes } from "./server/routes/assessmentRoutes";
 import { registerPublicationRoutes } from "./server/routes/publicationRoutes";
 import { setCandidatesClient } from "./server/repositories/candidatesRepository";
 import { setCandidateEvidenceClient } from "./server/repositories/candidateEvidenceRepository";
-import { setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
+import { getCandidateAssessmentClient, setCandidateAssessmentClient } from "./server/repositories/candidateAssessmentRepository";
 import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
 import { registerCurationRoutes } from "./server/routes/curationRoutes";
 import { registerCommercialBrainCandidatesRoutes } from "./server/routes/commercialBrainCandidatesRoutes";
@@ -44,6 +44,9 @@ import { createShopeeAffiliateProvider } from "./server/commercial/affiliate/sho
 import { registerCycleRoutes } from "./server/routes/cycleRoutes";
 import { setCycleClient } from "./server/commercial/cycle/cycleRepository";
 import { registerN2SourceConnectors } from "./server/commercial/sourceConnector/registerN2SourceConnectors";
+import { setPublicationExecutionsClient } from "./server/repositories/publicationExecutionsRepository";
+import { registerPublicationN16Routes, setN16PublicationProvider } from "./server/routes/publicationN16Routes";
+import { FakePublicationProvider, type FakePublicationProviderMode } from "./server/commercial/publication/n16Provider";
 
 dotenv.config();
 
@@ -1134,6 +1137,19 @@ NUNCA modifique ou invente preços ou imagens.`,
   // advertise). READ-ONLY: não executa nada; apenas registra decisão
   // de autorização. Gates obrigatórios: N13 PASS + N14 score válido.
   registerGovernanceRoutes(app, requireAdminAuth);
+  // Bloco N16 — Publicação Automática Governada: consome exclusivamente N15 APPROVED/PUBLISH.
+  // N16 não cria autorização, não usa products, não aciona N17–N20, Telegram, scheduler ou job_queue.
+  // O ledger reutiliza o cliente já configurado pela fonte oficial de assessments;
+  // N16 não importa nem referencia productsRepository.
+  const n16AssessmentClient = getCandidateAssessmentClient();
+  if (n16AssessmentClient) setPublicationExecutionsClient(n16AssessmentClient as any);
+  const n16FakeMode = process.env.N16_PHASE2_FAKE_PROVIDER_MODE;
+  if (n16FakeMode === "success" || n16FakeMode === "failure" || n16FakeMode === "ambiguous") {
+    setN16PublicationProvider(new FakePublicationProvider(n16FakeMode as FakePublicationProviderMode));
+  } else {
+    setN16PublicationProvider(null);
+  }
+  registerPublicationN16Routes(app, requireAdminAuth);
   // Bloco N9 — Ciclo Comercial Real: orquestração governada S1→S8 +
   // Commercial Decision Gate v1. CICLO != PUBLICAÇÃO · DECISION != ACTION ·
   // RECOMMENDATION != ACTION — o gate v1 nunca produz DECISION_ALLOWED por
