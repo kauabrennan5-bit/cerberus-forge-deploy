@@ -45,8 +45,29 @@ const DUPLICATE_ERROR = {
  * maybeSingle.
  */
 function makeReadChain(data: unknown): unknown {
+  // Filtro de igualdade do próprio mock: se o dado for um único objeto
+  // (linha de candidates/candidate_evidence), eq() só devolve a linha quando o
+  // valor da coluna coincide — comportamento real do PostgREST. Isso evita
+  // que IDs malformados "vazem" como candidatos encontrados.
+  const row =
+    Array.isArray(data) || data === null || data === undefined
+      ? data
+      : typeof data === "object"
+        ? data
+        : data;
+  let matched: unknown = row;
   const chain: Record<string, unknown> = {
-    eq() {
+    eq(key: string, value: unknown): unknown {
+      if (matched !== null && matched !== undefined && typeof matched === "object" && !Array.isArray(matched)) {
+        const rec = matched as Record<string, unknown>;
+        if (Object.prototype.hasOwnProperty.call(rec, key) && rec[key] !== value) {
+          matched = null;
+        }
+      } else if (Array.isArray(matched)) {
+        matched = matched.filter(
+          (item) => typeof item === "object" && item !== null && (item as Record<string, unknown>)[key] === value,
+        );
+      }
       return chain;
     },
     order() {
@@ -62,16 +83,20 @@ function makeReadChain(data: unknown): unknown {
       return chain;
     },
     single() {
-      return Promise.resolve({ data, error: null });
+      return Promise.resolve({ data: Array.isArray(matched) ? matched[0] : matched, error: null });
     },
     maybeSingle() {
-      return Promise.resolve({ data, error: null });
+      return Promise.resolve({ data: Array.isArray(matched) ? matched[0] : matched, error: null });
     },
     then(resolve: (v: unknown) => void, reject?: (e: unknown) => void) {
-      return Promise.resolve({ data, error: null }).then(resolve, reject);
+      // Await sem maybeSingle/single trata o resultado como lista:
+      // linha única vira lista de 0-1 itens; arrays permanecem arrays.
+      const list = Array.isArray(matched) ? matched : matched === null || matched === undefined ? [] : [matched];
+      return Promise.resolve({ data: list, error: null }).then(resolve, reject);
     },
     catch(rej: (e: unknown) => void) {
-      return Promise.resolve({ data, error: null }).catch(rej);
+      const list = Array.isArray(matched) ? matched : matched === null || matched === undefined ? [] : [matched];
+      return Promise.resolve({ data: list, error: null }).catch(rej);
     },
   };
   return chain;
