@@ -16,7 +16,14 @@ import { createHash } from "crypto";
 // "cerberus_filter_v1" = classificação comercial (Bloco N4).
 // "n13:curator_v1" = filtro de curadoria estrutural (Bloco N13 Fase 1):
 // verdade = PASS/FAIL/BLOCKED; não comercial; is_actionable=false sempre.
-export const ASSESSMENT_KINDS = ["cerberus_filter_v1", "n13:curator_v1"] as const;
+// "n14:commercial_brain_v1" = score comercial de CANDIDATES (Bloco N14):
+// verdade = band (HIGH/MEDIUM/LOW/INSUFFICIENT) + score; NÃO é aprovação;
+// is_actionable=false sempre.
+export const ASSESSMENT_KINDS = [
+  "cerberus_filter_v1",
+  "n13:curator_v1",
+  "n14:commercial_brain_v1",
+] as const;
 export type AssessmentVersion = (typeof ASSESSMENT_KINDS)[number];
 
 export const CLASSIFICATIONS = [
@@ -25,6 +32,9 @@ export const CLASSIFICATIONS = [
   "NICHE_DROP",
   "INSUFFICIENT",
   "NOT_RECOMMENDED",
+  "COMMERCIAL_HIGH",
+  "COMMERCIAL_MEDIUM",
+  "COMMERCIAL_LOW",
 ] as const;
 export type Classification = (typeof CLASSIFICATIONS)[number];
 

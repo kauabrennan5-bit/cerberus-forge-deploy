@@ -23,6 +23,9 @@ export interface MockReadBehavior {
   evidence?: unknown[];
   /** Evidências indisponíveis → leitura falha ({ ok: false }). */
   evidenceUnavailable?: boolean;
+  /** Lista de assessments devolvida por listCandidateAssessments (usado
+   *  pelo gate N13 do N14). */
+  listAssessments?: unknown[];
   /** Candidato não encontrado. */
   candidateNotFound?: boolean;
 }
@@ -146,9 +149,19 @@ function makeFailChain(reason: string): unknown {
 function makeInsertChain(
   options: { succeedInserts: number; replayRow?: Record<string, unknown> },
   tracker: { count: number },
+  insertedRowSink?: { data: Record<string, unknown> | null },
 ): unknown {
+  // Linha registrada pela 1ª inserção bem-sucedida (auto-replay):
+  // resolveReplay (select.eq.order.limit.maybeSingle no mesmo client)
+  // deve encontrar o registro já inserido.
+  const insertedRow: { data: Record<string, unknown> | null; input?: Record<string, unknown> } = { data: null };
   const fromTable = {
-    insert(): unknown {
+    insert(inputRow?: Record<string, unknown>): unknown {
+      // Captura a linha enviada ao insert() para que o auto-replay
+      // (resolveReplay via eq.idempotency_key) encontre campos completos.
+      if (inputRow && typeof inputRow === "object") {
+        insertedRow.input = inputRow;
+      }
       tracker.count += 1;
       const ok = tracker.count <= options.succeedInserts;
       const insertChain: Record<string, unknown> = {
@@ -166,13 +179,24 @@ function makeInsertChain(
         },
         single() {
           if (ok) {
-            return Promise.resolve({ data: { assessment_id: "cur-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" }, error: null });
+            // Linha completa persistida: dados do input + id oficial.
+            const base = insertedRow.input ?? {};
+            const row = {
+              ...base,
+              assessment_id: base.assessment_id ?? "cur-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+              schema_version: base.schema_version ?? "1.0",
+              created_at: base.created_at ?? "2026-08-19T00:00:00Z",
+            };
+            if (options.replayRow) Object.assign(row, options.replayRow);
+            insertedRow.data = row;
+            if (insertedRowSink) insertedRowSink.data = row;
+            return Promise.resolve({ data: row, error: null });
           }
           return Promise.resolve({ data: null, error: DUPLICATE_ERROR });
         },
         maybeSingle() {
           // resolveReplay: busca o registro pelo idempotency_key.
-          return Promise.resolve({ data: options.replayRow ?? { assessment_id: "cur-replay" }, error: null });
+          return Promise.resolve({ data: insertedRow.data ?? options.replayRow ?? null, error: null });
         },
       };
       return insertChain;
@@ -202,6 +226,91 @@ function makeInsertChain(
   return fromTable;
 }
 
+/**
+ * Cadeia híbrida para candidate_assessment (usada pelo gate N13 + persist
+ * do N14 no MESMO client): listCandidateAssessments usa
+ * select().order().limit() (await), persistAssessment usa
+ * insert().select().single(). O modo é decidido pelo primeiro método
+ * chamado — insert → cadeia de persist; select sem insert antes → read.
+ */
+function makeHybridCandidateAssessmentChain(options: {
+  succeedInserts: number;
+  replayRow?: Record<string, unknown>;
+  listData?: unknown[];
+  insertCallsTracker: { count: number };
+  insertedRowSink?: Record<string, { data: Record<string, unknown> | null }>;
+}): unknown {
+  const state: { mode: "read" | "insert" | null } = { mode: null };
+  // Última coluna/valor de eq() da cadeia — usada para reconhecer a query
+  // de replay do resolveReplay (eq('idempotency_key', key)).
+  const lastEq: { column: string | null; value: unknown } = { column: null, value: null };
+  // Linha inserida pela 1ª chamada bem-sucedida (auto-replay idempotência):
+  // a referência vem do store compartilhado do client (insertedRows),
+  // persistindo entre chamadas from().
+  const sharedInsertedRow: { data: Record<string, unknown> | null } =
+    options.insertedRowSink?.candidate_assessment ?? { data: null };
+  const readChain = makeReadChain(options.listData ?? null);
+  const insertChain = makeInsertChain(
+    { succeedInserts: options.succeedInserts, replayRow: options.replayRow },
+    options.insertCallsTracker,
+    sharedInsertedRow,
+  );
+  const insertObj = insertChain as Record<string, (...args: unknown[]) => unknown>;
+  const readObj = readChain as Record<string, (...args: unknown[]) => unknown>;
+  // O insertObj não conhece sharedInsertedRow (closure própria); sobrescrever
+  // o maybeSingle do hybrid para resolver replay pela linha inserida.
+  const hybridMaybeSingle = (): unknown => {
+    if (sharedInsertedRow.data !== null) {
+      return Promise.resolve({ data: sharedInsertedRow.data, error: null });
+    }
+    return readObj.maybeSingle();
+  };
+  const chain: Record<string, unknown> = {
+    insert(): unknown {
+      state.mode = "insert";
+      return insertObj.insert();
+    },
+    eq(column?: string | null, value?: unknown): unknown {
+      if (typeof column === "string") lastEq.column = column;
+      if (value !== undefined) lastEq.value = value;
+      return chain;
+    },
+    order() {
+      return chain;
+    },
+    limit() {
+      return chain;
+    },
+    range() {
+      return chain;
+    },
+    select() {
+      if (state.mode === null) state.mode = "read";
+      return chain;
+    },
+    single() {
+      if (state.mode === "insert") return insertObj.single();
+      // Replay: busca pontual pelo idempotency_key sem insert prévio
+      // (resolveReplay de outra avaliação no mesmo client).
+      if (lastEq.column === "idempotency_key" && sharedInsertedRow.data !== null) {
+        return Promise.resolve({ data: sharedInsertedRow.data, error: null });
+      }
+      return readObj.single();
+    },
+    maybeSingle() {
+      if (state.mode === "insert") return insertObj.maybeSingle();
+      return hybridMaybeSingle();
+    },
+    then(resolve: (v: unknown) => void, reject?: (e: unknown) => void) {
+      return state.mode === "insert" ? insertObj.then(resolve, reject) : readObj.then(resolve, reject);
+    },
+    catch(rej: (e: unknown) => void) {
+      return state.mode === "insert" ? insertObj.catch(rej) : readObj.catch(rej);
+    },
+  };
+  return chain;
+}
+
 export type MockSupabaseClientHandle = {
   client: { from: (table: string) => unknown };
   insertCalls(): number;
@@ -215,6 +324,11 @@ export function makeMockSupabaseClient(options: CurationMockOptions = {}): MockS
   const persist = options.persist ?? {};
   const insertCallsTracker = { count: 0 };
   const succeedInserts = persist.succeedInserts ?? 1;
+  // Store compartilhado por tabela: linhas inseridas por QUALQUER cadeia
+  // persistem entre chamadas from() (idempotência do resolveReplay).
+  const insertedRows: Record<string, { data: Record<string, unknown> | null }> = {
+    candidate_assessment: { data: null },
+  };
 
   const fromTable = (table: string): unknown => {
     if (table === "candidates") {
@@ -226,7 +340,13 @@ export function makeMockSupabaseClient(options: CurationMockOptions = {}): MockS
       return makeReadChain(reads.evidence ?? []);
     }
     if (table === "candidate_assessment") {
-      return makeInsertChain({ succeedInserts, replayRow: persist.replayRow }, insertCallsTracker);
+      return makeHybridCandidateAssessmentChain({
+        succeedInserts,
+        replayRow: persist.replayRow,
+        listData: reads.listAssessments,
+        insertCallsTracker,
+        insertedRowSink: insertedRows,
+      });
     }
     return makeReadChain(null);
   };
@@ -243,8 +363,6 @@ export function makeMockSupabaseClient(options: CurationMockOptions = {}): MockS
 
   return {
     client: proxy,
-    get insertCalls() {
-      return insertCallsTracker.count;
-    },
+    insertCalls: () => insertCallsTracker.count,
   } as unknown as MockSupabaseClientHandle;
 }

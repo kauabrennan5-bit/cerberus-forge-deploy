@@ -457,7 +457,7 @@ test("N13 service: candidato válido → PASS avaliado e persistido (mock)", asy
   assert.equal(result.ok, true, `esperado ok mas outcome=${result.outcome} error=${result.error}`);
   assert.equal(result.outcome, "evaluated");
   assert.equal(result.decision?.verdict, "PASS", `verdict=${result.decision?.verdict} rationale=${result.decision?.rationale}`);
-  assert.equal(mockHandle.insertCalls, 1, "persistAssessment NUNCA foi chamado");
+  assert.equal(mockHandle.insertCalls(), 1, "persistAssessment NUNCA foi chamado");
 });
 
 test("N13 service: idempotência — segundo evaluate retorna identical_duplicate", async () => {
@@ -490,7 +490,7 @@ test("N13 service: candidato inexistente → candidate_not_found (sem avaliaçã
   const result = await evaluateCandidateById(VALID_CANDIDATE_ID);
   assert.equal(result.ok, false);
   assert.equal(result.outcome, "candidate_not_found");
-  assert.equal(mockHandle.insertCalls, 0, "candidato inexistente NÃO deve gerar avaliação persistida");
+  assert.equal(mockHandle.insertCalls(), 0, "candidato inexistente NÃO deve gerar avaliação persistida");
 });
 
 test("N13 service: erro de leitura de evidência → erro reportado, sem PASS", async () => {
@@ -505,7 +505,7 @@ test("N13 service: erro de leitura de evidência → erro reportado, sem PASS", 
   const result = await evaluateCandidateById(VALID_CANDIDATE_ID);
   assert.equal(result.ok, false);
   assert.equal(result.outcome, "evidence_unavailable");
-  assert.equal(mockHandle.insertCalls, 0, "erro de evidência NÃO deve persistir avaliação");
+  assert.equal(mockHandle.insertCalls(), 0, "erro de evidência NÃO deve persistir avaliação");
 });
 
 test("N13 service: exceção inesperada → fail-closed, decisão BLOCKED persistida", async () => {
