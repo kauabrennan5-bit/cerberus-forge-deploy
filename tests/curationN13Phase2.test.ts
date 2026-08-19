@@ -500,6 +500,25 @@ test("N13 Fase 2: N13 nunca publica — decision não carrega productId nem prom
 // 4. ISOLAMENTO N13 → N14 — sem sinais comerciais
 // ---------------------------------------------------------------------------
 
+test("N13 Fase 2: formato real do N1 (can-<hex 24>) é aceito pelo engine e passa em c_candidate_identity_present", () => {
+  // generateCandidateId() do N1 emite 24 hex chars (nonce base36 + random).
+  const n1style = "can-9f0ff72cd302b49e53419fc5"; // 24 hex, ID real da prova viva
+  const d = evaluateCandidate(baseInput({ candidateId: n1style, evidence: knownGoodEvidence() }), FIXED_NOW);
+  const identity = d.criteria.find((c) => c.criterion === "c_candidate_identity_present");
+  assert.equal(identity?.result, "checked", "ID real de 24 chars rejeitado pelo engine");
+});
+
+test("N13 Fase 2: IDs com 23 ou 33 hex chars permanecem BLOCKED (fail-closed)", () => {
+  const tooShort = "can-9f0ff72cd302b49e53419fc"; // 23 hex
+  const tooLong = "can-9f0ff72cd302b49e53419fc5000000000"; // 33 hex
+  for (const id of [tooShort, tooLong]) {
+    const d = evaluateCandidate(baseInput({ candidateId: id, evidence: knownGoodEvidence() }), FIXED_NOW);
+    assert.equal(d.verdict, "BLOCKED", `verdict inesperado para ID ${id.length - 4} chars: ${d.verdict}`);
+    const identity = d.criteria.find((c) => c.criterion === "c_candidate_identity_present");
+    assert.equal(identity?.result, "blocked");
+  }
+});
+
 test("N13 Fase 2: engine não contém sinais comerciais (demanda, comissão, margem, CTR, ROI, concorrência, score)", () => {
   const src = fs.readFileSync(path.resolve(__dirname, "../server/commercial/curation/engine.ts"), "utf8");
   const forbidden = ["demand", "commission", "margin", "ctr", "conversion", "competition", "roi", "revenue", "profit"];

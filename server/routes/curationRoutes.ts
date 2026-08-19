@@ -24,7 +24,7 @@ export function registerCurationRoutes(
 ): void {
   /**
    * POST /api/commercial/curation/evaluate
-   * Body: { "candidate_id": "can-<sha256hex>" }
+   * Body: { "candidate_id": "can-<hex 24-32>" } (alinhado ao N1: generateCandidateId)
    * Avalia o candidato contra os critérios estruturais do contrato
    * curator_v1 e persiste a avaliação (idempotente). Read-only: nada
    * fora de candidate_assessment é tocado.
@@ -32,11 +32,14 @@ export function registerCurationRoutes(
   app.post("/api/commercial/curation/evaluate", requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const candidateId = typeof req.body?.candidate_id === "string" ? req.body.candidate_id.trim() : "";
-      if (!/^can-[A-Za-z0-9]{32}$/.test(candidateId)) {
+      // Bloco N13 Fase 2 — formato canônico can-<hex 24-32>, alinhado ao
+      // generateCandidateId() do N1 (24 hex). IDs fora do formato → 400
+      // (fail-closed: nenhuma avaliação é executada).
+      if (!/^can-[A-Za-z0-9]{24,32}$/.test(candidateId)) {
         res.status(400).json({
           ok: false,
           error: "invalid_candidate_id",
-          note: "candidate_id deve estar no formato can-<sha256 hex 32 chars>",
+          note: "candidate_id deve estar no formato can-<hex 24-32>",
         });
         return;
       }
@@ -67,7 +70,7 @@ export function registerCurationRoutes(
   app.get("/api/commercial/curation/:candidateId", requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const candidateId = typeof req.params.candidateId === "string" ? req.params.candidateId.trim() : "";
-      if (!/^can-[A-Za-z0-9]{32}$/.test(candidateId)) {
+      if (!/^can-[A-Za-z0-9]{24,32}$/.test(candidateId)) {
         res.status(400).json({ ok: false, error: "invalid_candidate_id" });
         return;
       }

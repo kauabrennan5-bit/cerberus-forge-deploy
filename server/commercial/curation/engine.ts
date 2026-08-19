@@ -66,11 +66,15 @@ function hostOf(url: string | null): string | null {
 // ---------------------------------------------------------------------------
 
 function evaluateIdentityPresent(input: CuratorDecisionInput): CriterionEvaluation {
-  if (!input.candidateId || !/^can-[A-Za-z0-9]{32}$/.test(input.candidateId)) {
+  // Bloco N13 Fase 2 — contrato alinhado ao N1: generateCandidateId() emite
+  // can-<hex 24 chars> (nonce base36 + aleatório). O formato canônico aceito
+  // é can-<hex entre 24 e 32 chars>; qualquer outro formato é BLOCKED
+  // (fail-closed preservado).
+  if (!input.candidateId || !/^can-[A-Za-z0-9]{24,32}$/.test(input.candidateId)) {
     return {
       criterion: "c_candidate_identity_present",
       result: "blocked",
-      rationale: "candidate_id ausente ou fora do formato canônico can-<sha256-hex>",
+      rationale: "candidate_id ausente ou fora do formato canônico can-<hex 24-32>",
     };
   }
   return {
