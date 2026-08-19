@@ -201,7 +201,18 @@ export async function persistAssessment(
 
   if (result.error) {
     if (isPostgrestDuplicate(result.error)) {
-      return resolveReplay(supabase, input.idempotencyKey);
+      // Duplicate real de idempotência: a chave do snapshot já existe →
+      // replay. Duplicate ESPÚRIO: a chave NÃO existe (colisão de PK do
+      // assessment_id com outra avaliação do mesmo candidato) → retentar uma
+      // única vez com PK determinística única por snapshot.
+      const replayResult = await resolveReplay(supabase, input.idempotencyKey);
+      if (replayResult.ok || replayResult.error !== "replay_lookup_failed") {
+        return replayResult;
+      }
+      // Avaliação legítima com snapshot novo: PK única por snapshot
+      // (prefixo do input + digest) elimina a colisão; a idempotency_key
+      // permanece a referência determinística de replay.
+      return retryWithUniqueKey(supabase, input);
     }
     return {
       ok: false,
@@ -231,6 +242,51 @@ async function resolveReplay(
     return { ok: false, outcome: "identical_duplicate", error: "replay_lookup_failed" };
   }
   return { ok: true, outcome: "identical_duplicate", assessment: result.data as Record<string, unknown> };
+}
+
+async function retryWithUniqueKey(
+  supabase: SupabaseClient,
+  input: PersistAssessmentInput,
+): Promise<PersistAssessmentResult> {
+  // Colisão espúria de PK (assessment_id) com outra avaliação legítima do
+  // mesmo candidato. Nova PK determinística: prefixo + idempotency_key,
+  // única por snapshot. Uma única retentativa — falha aqui é erro real.
+  const uniqueId = input.assessmentId && input.idempotencyKey
+    ? `${input.assessmentId.slice(0, 30)}-${input.idempotencyKey}`
+    : `${input.assessmentId}-${input.idempotencyKey ?? "none"}`;
+  const row = {
+    assessment_id: uniqueId,
+    candidate_id: input.candidateId,
+    filter_version: input.filterVersion,
+    dimensions: input.dimensions,
+    classification: input.classification ?? null,
+    classification_basis: input.classificationBasis,
+    recommendation: input.recommendation ?? null,
+    recommendation_basis: input.recommendationBasis,
+    is_actionable: false,
+    priority: input.priority,
+    priority_level: input.priorityLevel ?? null,
+    priority_score: input.priorityScore ?? null,
+    scoring_version: "cerberus_priority_v1",
+    unknowns: input.unknowns ?? [],
+    contradictions: input.contradictions ?? [],
+    collection_failures: input.collectionFailures ?? [],
+    evidence_refs: input.evidenceRefs ?? [],
+    input_snapshot: input.inputSnapshot,
+    correlation_id: input.correlationId ?? null,
+    idempotency_key: input.idempotencyKey ?? null,
+    metadata: input.metadata ? sanitizeMetadata(input.metadata) : {},
+    schema_version: "1.0",
+  };
+  const result = await supabase.from("candidate_assessment").insert(row).select().single();
+  if (result.error) {
+    return {
+      ok: false,
+      outcome: "created",
+      error: `retry_error:${result.error.message || "persist_error"}`,
+    };
+  }
+  return { ok: true, outcome: "created", assessment: (result.data ?? null) as Record<string, unknown> | null };
 }
 
 function isPostgrestDuplicate(error: { code?: string; message?: string }): boolean {

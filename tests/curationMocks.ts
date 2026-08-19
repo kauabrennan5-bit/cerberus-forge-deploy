@@ -33,6 +33,9 @@ export interface MockReadBehavior {
 export interface CurationMockOptions {
   reads?: MockReadBehavior;
   persist?: MockPersistBehavior;
+  /** Ref mutável de evidências: permite mudar o snapshot entre avaliações
+   *  SEM trocar o client (reproduz a colisão de PK real do PostgREST). */
+  evidenceRef?: { current: unknown[] };
 }
 
 const DUPLICATE_ERROR = {
@@ -153,8 +156,11 @@ function makeInsertChain(
 ): unknown {
   // Linha registrada pela 1ª inserção bem-sucedida (auto-replay):
   // resolveReplay (select.eq.order.limit.maybeSingle no mesmo client)
-  // deve encontrar o registro já inserido.
-  const insertedRow: { data: Record<string, unknown> | null; input?: Record<string, unknown> } = { data: null };
+  // deve encontrar o registro já inserido. Estado COMPARTILHADO entre as
+  // chamadas de insert() (cada insert cria um novo insertChain): usar
+  // insertedRowSink quando disponível para manter o histórico de PK.
+  const insertedRow: { data: Record<string, unknown> | null; input?: Record<string, unknown> } =
+    insertedRowSink ?? { data: null };
   const fromTable = {
     insert(inputRow?: Record<string, unknown>): unknown {
       // Captura a linha enviada ao insert() para que o auto-replay
@@ -163,7 +169,23 @@ function makeInsertChain(
         insertedRow.input = inputRow;
       }
       tracker.count += 1;
-      const ok = tracker.count <= options.succeedInserts;
+      const rowId = inputRow && typeof inputRow === "object" ? (inputRow as Record<string, unknown>).assessment_id : null;
+      // Fiel ao PostgREST: 23505 ocorre apenas por colisão de PK (PK =
+      // assessment_id) ou de unique (idempotency_key). Retentativa com PK
+      // diferente (duplicate espúrio do repositório) deve ter sucesso —
+      // simula a constraint real da tabela candidate_assessment.
+      const rowKey = inputRow && typeof inputRow === "object" ? (inputRow as Record<string, unknown>).idempotency_key : null;
+      const pkCollision =
+        rowId !== null &&
+        rowId !== undefined &&
+        insertedRow.data !== null &&
+        insertedRow.data.assessment_id === rowId;
+      const keyCollision =
+        rowKey !== null &&
+        rowKey !== undefined &&
+        insertedRow.data !== null &&
+        insertedRow.data.idempotency_key === rowKey;
+      const ok = !pkCollision && !keyCollision;
       const insertChain: Record<string, unknown> = {
         select() {
           return insertChain;
@@ -187,7 +209,6 @@ function makeInsertChain(
               schema_version: base.schema_version ?? "1.0",
               created_at: base.created_at ?? "2026-08-19T00:00:00Z",
             };
-            if (options.replayRow) Object.assign(row, options.replayRow);
             insertedRow.data = row;
             if (insertedRowSink) insertedRowSink.data = row;
             return Promise.resolve({ data: row, error: null });
@@ -258,17 +279,27 @@ function makeHybridCandidateAssessmentChain(options: {
   const insertObj = insertChain as Record<string, (...args: unknown[]) => unknown>;
   const readObj = readChain as Record<string, (...args: unknown[]) => unknown>;
   // O insertObj não conhece sharedInsertedRow (closure própria); sobrescrever
-  // o maybeSingle do hybrid para resolver replay pela linha inserida.
+  // o maybeSingle do hybrid para resolver replay pela linha inserida — com
+  // filtro fiel ao PostgREST: quando a última eq() é idempotency_key, a linha
+  // inserida só corresponde se a chave gravada coincidir com o valor buscado.
+  const matchesLastEq = (row: Record<string, unknown> | null): boolean => {
+    if (row === null || lastEq.column === null) return true;
+    const actual = (row as Record<string, unknown>)[lastEq.column];
+    return actual === lastEq.value;
+  };
   const hybridMaybeSingle = (): unknown => {
-    if (sharedInsertedRow.data !== null) {
-      return Promise.resolve({ data: sharedInsertedRow.data, error: null });
+    if (sharedInsertedRow.data !== null && matchesLastEq(sharedInsertedRow.data as Record<string, unknown> | null)) {
+      const replayed = options.replayRow
+        ? { ...((sharedInsertedRow.data as Record<string, unknown>) ?? {}), ...options.replayRow }
+        : sharedInsertedRow.data;
+      return Promise.resolve({ data: replayed, error: null });
     }
     return readObj.maybeSingle();
   };
   const chain: Record<string, unknown> = {
-    insert(): unknown {
+    insert(...args: unknown[]): unknown {
       state.mode = "insert";
-      return insertObj.insert();
+      return insertObj.insert(...args);
     },
     eq(column?: string | null, value?: unknown): unknown {
       if (typeof column === "string") lastEq.column = column;
@@ -291,8 +322,10 @@ function makeHybridCandidateAssessmentChain(options: {
     single() {
       if (state.mode === "insert") return insertObj.single();
       // Replay: busca pontual pelo idempotency_key sem insert prévio
-      // (resolveReplay de outra avaliação no mesmo client).
-      if (lastEq.column === "idempotency_key" && sharedInsertedRow.data !== null) {
+      // (resolveReplay de outra avaliação no mesmo client), com filtro
+      // fiel ao PostgREST (a linha inserida só corresponde se a chave
+      // gravada coincidir com o valor buscado).
+      if (lastEq.column === "idempotency_key" && sharedInsertedRow.data !== null && matchesLastEq(sharedInsertedRow.data as Record<string, unknown> | null)) {
         return Promise.resolve({ data: sharedInsertedRow.data, error: null });
       }
       return readObj.single();
@@ -337,7 +370,7 @@ export function makeMockSupabaseClient(options: CurationMockOptions = {}): MockS
     }
     if (table === "candidate_evidence") {
       if (reads.evidenceUnavailable) return makeFailChain("generic_error");
-      return makeReadChain(reads.evidence ?? []);
+      return makeReadChain(options.evidenceRef?.current ?? reads.evidence ?? []);
     }
     if (table === "candidate_assessment") {
       return makeHybridCandidateAssessmentChain({

@@ -203,8 +203,19 @@ export async function evaluateCandidateById(
       evidenceCount: evidenceResult.evidence?.length ?? 0,
     };
 
+    // assessment_id DERIVADO DO DIGEST: mesmo snapshot → mesmo assessment_id
+    // (replay retorna identical_duplicate via idempotency_key); snapshot alterado
+    // → digest e assessment_id novos → avaliação legítima sem colisão de PK.
+    // FIX incidente replay_lookup_failed (N14 Fase 3): o formato anterior
+    // `cur-${candidateId.slice(4)}` colidia na PRIMARY KEY quando o snapshot
+    // mudava, fazendo o repositório tratar o erro 23505 como duplicate e falhar
+    // o lookup de replay (key novo ≠ key antigo gravado).
     const persistResult: PersistAssessmentResult = await persistAssessment({
-      assessmentId: `cur-${candidateId.slice(4)}`,
+      assessmentId: `cur-${buildAssessmentDigest({
+        candidateId,
+        filterVersion: mapped.filterVersion,
+        snapshot,
+      }).slice(-40)}`,
       candidateId,
       filterVersion: mapped.filterVersion,
       dimensions: { contractVersion: decision.contractVersion, verdict: decision.verdict },
@@ -252,8 +263,13 @@ export async function evaluateCandidateById(
     try {
       const decision = errorDecision(candidateId, (error as Error)?.message ?? "unknown", now);
       const mapped = mapVerdictToAssessment(decision);
+      const errDigest = buildAssessmentDigest({
+        candidateId,
+        filterVersion: mapped.filterVersion,
+        snapshot: { internalError: true, candidateId },
+      });
       await persistAssessment({
-        assessmentId: `cur-err-${candidateId.slice(4)}`,
+        assessmentId: `cur-err-${errDigest.slice(-36)}`,
         candidateId,
         filterVersion: mapped.filterVersion,
         dimensions: { contractVersion: decision.contractVersion, verdict: "BLOCKED", internalError: true },
@@ -270,11 +286,7 @@ export async function evaluateCandidateById(
         evidenceRefs: [],
         inputSnapshot: { internalError: true },
         correlationId: null,
-        idempotencyKey: buildAssessmentDigest({
-          candidateId,
-          filterVersion: mapped.filterVersion,
-          snapshot: { internalError: true, candidateId },
-        }),
+        idempotencyKey: errDigest,
         metadata: { block: "n13", version: "curator_v1", internalError: true },
       });
     } catch {
