@@ -207,6 +207,12 @@ function engineInput(params: {
   n13CreatedAt?: string;
   n14CreatedAt?: string;
   n14Metadata?: Record<string, unknown>;
+  extListingId?: string | null;
+  marketplaceOverride?: string;
+  publishedPublishDecision?: {
+    assessment_id: string;
+    created_at: string;
+  };
 } = {}): Parameters<typeof evaluateGovernance>[0] {
   const n13 = params.n13 === undefined
     ? (params.n13Verdict === null
@@ -241,7 +247,10 @@ function engineInput(params: {
     action: params.action ?? "PUBLISH",
     candidateSnapshot: {
       candidate_id: VALID_CANDIDATE_ID,
-      marketplace: "Mercado Livre",
+      marketplace: params.marketplaceOverride ?? "Mercado Livre",
+      // Identidade externa do anúncio: sem external_listing_id o N8 não
+      // resolve o produto no marketplace de afiliados (fail-closed).
+      external_listing_id: params.extListingId !== undefined ? params.extListingId : "MLB-1456580521",
       title: "Produto Exemplo",
       category: "Eletrônicos",
       provenance: params.provenance ?? "n10:telegram:url",
@@ -256,6 +265,7 @@ function engineInput(params: {
       authorization_scope: (params.scope ?? ["PUBLISH"]) as unknown as import("../server/commercial/governance/contract").GovernanceAction[],
     },
     nowIso: params.nowIso ?? FIXED_NOW,
+    publishedPublishDecision: params.publishedPublishDecision ?? undefined,
   };
 }
 
@@ -303,10 +313,103 @@ test("C.1 — ADVERTISE score 0.9 + risk 0.1 + publish_approved + channel → AP
   assert.equal(decision.status, "APPROVED");
 });
 
-test("C.2 — ADVERTISE score 0.9 sem publish_approved → BLOCKED (publish_previously_authorized)", () => {
+test("C.2 — ADVERTISE score 0.9 sem autorização PUBLISH → BLOCKED (publish_authorization_invalid)", () => {
   const decision = evaluateGovernance(engineInput({ action: "ADVERTISE", score: 0.9, band: "HIGH", riskPenalty: 0.1, scope: ["ADVERTISE"] }));
   assert.equal(decision.status, "BLOCKED");
-  assert.ok(decision.reasons.some((r) => r.code === "publish_previously_authorized"));
+  assert.ok(decision.reasons.some((r) => r.code === "publish_authorization_invalid"));
+});
+
+test("C.3 — ADVERTISE com decisão PUBLISH persistida vigente (<=168h) → APPROVED", () => {
+  const decision = evaluateGovernance(engineInput({
+    action: "ADVERTISE",
+    score: 0.9,
+    band: "HIGH",
+    riskPenalty: 0.1,
+    scope: ["ADVERTISE"],
+    n14Metadata: { publish_approved: true, publish_decision_id: "gov-xxxx", allowed_channels: ["telegram"] },
+    publishedPublishDecision: {
+      assessment_id: "n15-assessment-pub",
+      created_at: FIXED_NOW,
+    },
+  }));
+  assert.equal(decision.status, "APPROVED");
+});
+
+test("C.4 — ADVERTISE com decisão PUBLISH persistida EXPIRADA (>168h) e sem fallback N14 → BLOCKED", () => {
+  const decision = evaluateGovernance(engineInput({
+    action: "ADVERTISE",
+    score: 0.9,
+    band: "HIGH",
+    riskPenalty: 0.1,
+    scope: ["ADVERTISE"],
+    publishedPublishDecision: {
+      assessment_id: "n15-assessment-pub",
+      created_at: "2026-07-20T12:00:00.000Z",
+    },
+    nowIso: "2026-08-01T00:00:00.000Z",
+    n13CreatedAt: "2026-07-31T12:00:00.000Z",
+    n14CreatedAt: "2026-07-31T12:00:00.000Z",
+  }));
+  assert.equal(decision.status, "BLOCKED");
+  assert.ok(decision.reasons.some((r) => r.code === "publish_authorization_invalid"));
+});
+
+test("C.5 — PUBLISH risk 0.5 exato → APPROVED (limite inclusivo, fail-closed até >0.5)", () => {
+  const decision = evaluateGovernance(engineInput({ riskPenalty: 0.5 }));
+  assert.equal(decision.status, "APPROVED");
+});
+
+test("C.6 — PUBLISH risk 0.51 → BLOCKED (risk_unacceptable)", () => {
+  const decision = evaluateGovernance(engineInput({ riskPenalty: 0.51 }));
+  assert.equal(decision.status, "BLOCKED");
+  assert.ok(decision.reasons.some((r) => r.code === "risk_unacceptable"));
+});
+
+test("C.7 — PUBLISH risk NaN → BLOCKED (fail-closed)", () => {
+  const decision = evaluateGovernance(engineInput({ riskPenalty: NaN }));
+  assert.equal(decision.status, "BLOCKED");
+});
+
+test("C.8 — PUBLISH risk Infinity → BLOCKED (fail-closed)", () => {
+  const decision = evaluateGovernance(engineInput({ riskPenalty: Infinity }));
+  assert.equal(decision.status, "BLOCKED");
+});
+
+test("B.2 — ACQUIRE_AFFILIATE sem external_listing_id → BLOCKED (n8_contract_compatible)", () => {
+  const decision = evaluateGovernance(engineInput({
+    action: "ACQUIRE_AFFILIATE",
+    score: 0.8,
+    band: "HIGH",
+    scope: ["ACQUIRE_AFFILIATE"],
+    extListingId: null,
+  }));
+  assert.equal(decision.status, "BLOCKED");
+  assert.ok(decision.reasons.some((r) => r.code === "n8_contract_compatible"));
+});
+
+test("B.3 — ACQUIRE_AFFILIATE marketplace fora do catálogo de afiliados → BLOCKED (n8_contract_compatible)", () => {
+  const decision = evaluateGovernance(engineInput({
+    action: "ACQUIRE_AFFILIATE",
+    score: 0.8,
+    band: "HIGH",
+    scope: ["ACQUIRE_AFFILIATE"],
+    marketplaceOverride: "Amazon",
+  }));
+  assert.equal(decision.status, "BLOCKED");
+  assert.ok(decision.reasons.some((r) => r.code === "n8_contract_compatible"));
+});
+
+test("B.4 — ACQUIRE_AFFILIATE Shopee com external_listing_id → APPROVED (mínimo 0.6)", () => {
+  const decision = evaluateGovernance(engineInput({
+    action: "ACQUIRE_AFFILIATE",
+    score: 0.6,
+    band: "MEDIUM",
+    scope: ["ACQUIRE_AFFILIATE"],
+    marketplaceOverride: "Shopee",
+    extListingId: "SH-1530442944.23794344926",
+  }));
+  assert.equal(decision.status, "APPROVED");
+  assert.equal(decision.action, "ACQUIRE_AFFILIATE");
 });
 
 // ---------------------------------------------------------------------------
@@ -563,7 +666,7 @@ test("AA — DISTRIBUTE sem publish_approved no metadata N14 → BLOCKED", () =>
     n14Metadata: {},
   }));
   assert.equal(decision.status, "BLOCKED");
-  assert.ok(decision.reasons.some((r) => r.code === "publish_previously_authorized"));
+  assert.ok(decision.reasons.some((r) => r.code === "publish_authorization_invalid"));
 });
 
 test("AA.1 — DISTRIBUTE com publish_approved + channel telegram → REVIEW/BLOCKED conforme score", () => {

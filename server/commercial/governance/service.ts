@@ -156,9 +156,20 @@ export function buildCandidateSnapshot(params: {
         ? n13.evidence_refs.length
         : candidateObservationCount(candidate);
 
+  // Identidade externa do anúncio (fonte única do contrato N8 —
+  // sem external_listing_id não há como resolver o produto no
+  // marketplace de afiliados; fail-closed).
+  const externalListingId =
+    typeof candidate.external_listing_id === "string"
+      ? candidate.external_listing_id.trim()
+      : typeof (candidateMetadata.external_listing_id) === "string"
+        ? String(candidateMetadata.external_listing_id).trim()
+        : "";
+
   return {
     candidate_id: candidate.candidate_id ?? "",
     marketplace: candidate.marketplace ?? null,
+    external_listing_id: externalListingId === "" ? null : externalListingId,
     title: candidate.title ?? null,
     category: candidate.category ?? null,
     // Proveniência herdada do N10 (metadata.source) — padrão validado
@@ -292,6 +303,56 @@ async function loadN14Assessment(
     evidence_refs: Array.isArray(latest.evidence_refs)
       ? (latest.evidence_refs as string[])
       : [],
+  };
+}
+
+/**
+ * Lê a decisão N15 PERSISTIDA mais recente do candidato com
+ * action=PUBLISH e status=APPROVED ainda vigente (TTL da cadeia
+ * PUBLISH→ADVERTISE/DISTRIBUTE = 168h). Ausência/expiração → null
+ * (fail-closed no engine).
+ */
+async function loadN15PublishAuthorization(
+  candidateId: string,
+  nowIso: string,
+): Promise<{
+  assessment_id: string;
+  created_at: string;
+} | null> {
+  const listResult = await listCandidateAssessments({
+    candidateId,
+    limit: 100,
+  });
+  if (!listResult.ok) return null;
+  const publishRows = (listResult.assessments ?? [])
+    .filter((row) => {
+      const r = row as Record<string, unknown> | null;
+      if (!r || typeof r !== "object") return false;
+      if (r.filter_version !== GOVERNANCE_FILTER_VERSION) return false;
+      const dims =
+        r.dimensions && typeof r.dimensions === "object"
+          ? (r.dimensions as Record<string, unknown>)
+          : {};
+      return dims.action === "PUBLISH" && dims.status === "APPROVED";
+    })
+    .sort(
+      (a, b) =>
+        new Date(b.created_at as string).getTime() -
+        new Date(a.created_at as string).getTime(),
+    );
+  if (publishRows.length === 0) return null;
+  const latest = publishRows[0] as Record<string, unknown>;
+  // For a do TTL: a decisão persistida só autoriza a cadeia enquanto
+  // estiver dentro de 168h da avaliação de origem (mesma janela do
+  // assessment_not_stale para PUBLISH).
+  const createdIso = String(latest.created_at ?? "");
+  if (!createdIso) return null;
+  const ageHours =
+    (new Date(nowIso).getTime() - new Date(createdIso).getTime()) / 3_600_000;
+  if (ageHours > 168) return null;
+  return {
+    assessment_id: String(latest.assessment_id ?? ""),
+    created_at: createdIso,
   };
 }
 
@@ -499,7 +560,12 @@ export async function evaluateGovernanceDecision(
       };
     }
 
-    // 11. executar engine puro
+    // 11. carregar autorização PUBLISH persistida (cadeia
+    //     PUBLISH→ADVERTISE/DISTRIBUTE; TTL 168h) e executar o engine.
+    const publishedPublishDecision = await loadN15PublishAuthorization(
+      input.candidateId,
+      nowIso,
+    );
     let decision: GovernanceDecision;
     try {
       decision = evaluateGovernance({
@@ -529,10 +595,19 @@ export async function evaluateGovernanceDecision(
           : null,
         authorizationContext,
         nowIso,
+        publishedPublishDecision,
       });
     } catch (_engineError) {
-      // Fail-closed: erro interno do engine → BLOCKED registrado.
-      decision = buildInternalErrorDecision(input, nowIso, authorizationContext);
+      // Fail-closed: erro interno do engine → BLOCKED no resultado.
+      // SEM persistência: decisão de erro de infraestrutura não pode
+      // ser confundida com uma avaliação real (D-1).
+      return {
+        ok: false,
+        outcome: "internal_error",
+        error_code: "engine_internal_error",
+        http_status: 500,
+        decision: buildInternalErrorDecision(input, nowIso, authorizationContext),
+      };
     }
 
     // 12. persistir (filter_version n15:governance_v1)

@@ -60,7 +60,7 @@ export function registerGovernanceRoutes(
   app.post("/api/commercial/governance/decide", requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const candidateId = typeof req.body?.candidate_id === "string" ? req.body.candidate_id.trim() : "";
-      if (!/^can-[A-Za-z0-9]{24,32}$/.test(candidateId)) {
+      if (!/^can-[a-fA-F0-9]{24,32}$/.test(candidateId)) {
         res.status(400).json({
           ok: false,
           error: "invalid_candidate_id",
@@ -84,13 +84,9 @@ export function registerGovernanceRoutes(
         // signals é reservado para evolução futura (score manual N14);
         // por enquanto nada do corpo é injetado na decisão.
       );
-      const httpStatus = result.ok
-        ? 200
-        : result.outcome === "candidate_not_found"
-          ? 404
-          : result.outcome === "blocked_by_policy"
-            ? 403
-            : 500;
+      // Status HTTP estabelecido pelo service (fail-closed):
+      // 400 invalidCandidate/unknownAction · 404 ausente · 500 infra.
+      const httpStatus = result.ok ? 200 : result.http_status || 500;
       const payload: Record<string, unknown> = {
         ok: result.ok,
         outcome: result.outcome,
@@ -123,7 +119,7 @@ export function registerGovernanceRoutes(
   app.get("/api/commercial/governance/:candidateId", requireAdminAuth, async (req: Request, res: Response) => {
     try {
       const candidateId = typeof req.params.candidateId === "string" ? req.params.candidateId.trim() : "";
-      if (!/^can-[A-Za-z0-9]{24,32}$/.test(candidateId)) {
+      if (!/^can-[a-fA-F0-9]{24,32}$/.test(candidateId)) {
         res.status(400).json({ ok: false, error: "invalid_candidate_id" });
         return;
       }

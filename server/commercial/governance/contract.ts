@@ -87,6 +87,13 @@ export const GOVERNANCE_REASON_CODES = [
   "unknown_action",
   "unknown_policy",
   "internal_error",
+  // N8 compatibilidade do contrato (ACQUIRE_AFFILIATE): identidade externa
+  // conhecida (external_listing_id) e marketplace suportado pelo catálogo
+  // fechado de afiliados (MercadoLivre/Shopee).
+  "n8_contract_compatible",
+  // Cadeia PUBLISH→ADVERTISE/DISTRIBUTE: autorização PUBLISH APPROVED
+  // ausente, expirada (fora do TTL) ou com status inválido.
+  "publish_authorization_invalid",
 ] as const;
 export type GovernanceReasonCode = (typeof GOVERNANCE_REASON_CODES)[number];
 

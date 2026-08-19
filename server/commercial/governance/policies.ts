@@ -107,6 +107,7 @@ export const ACQUIRE_AFFILIATE_POLICY: ActionPolicySpec = {
     "n14_score_valid",
     "n14_band_valid",
     "provenance_valid",
+    "n8_contract_compatible",
     "operator_authorization",
   ],
   requirements: [
@@ -115,7 +116,7 @@ export const ACQUIRE_AFFILIATE_POLICY: ActionPolicySpec = {
       requirement: "n8_contract_compatible",
       required: true,
       description:
-        "A identidade externa deve ser compatível com o contrato do N8 (affiliate_resolver_v1).",
+        "A identidade externa deve ser compatível com o contrato do N8 (affiliate_resolver_v1): marketplace do catálogo fechado de afiliados e external_listing_id resolvido.",
     },
     {
       requirement: "score_at_least_min",

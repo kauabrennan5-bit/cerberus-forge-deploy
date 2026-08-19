@@ -57,6 +57,18 @@ export interface GovernanceEngineInput {
   authorizationContext: AuthorizationContext;
   /** Horário de referência (decided_at). Fora do digest quando truncado. */
   nowIso: string;
+  /**
+   * Decisão N15 PERSISTIDA do mesmo candidato com action=PUBLISH e
+   * status=APPROVED mais recente, ainda vigente (dentro do TTL da
+   * cadeia PUBLISH→ADVERTISE/DISTRIBUTE). Vem do service (leitura de
+   * candidate_assessment); o engine puro apenas valida. Ausente ou
+   * nula = sem autorização PUBLISH persistida (fallback: metadados
+   * do N14, compat legado).
+   */
+  publishedPublishDecision?: {
+    assessment_id: string;
+    created_at: string;
+  } | null;
 }
 
 export function digestString(payload: string): string {
@@ -229,21 +241,65 @@ export function evaluateGovernance(
     });
   }
 
-  // 9. publish_previously_authorized (DISTRIBUTE/ADVERTISE)
+  // 9. publish_previously_authorized (DISTRIBUTE/ADVERTISE) — fonte
+  //    primária: decisão N15 persistida PUBLISH=APPROVED vigente (TTL
+  //    n13 da cadeia = 168h); fallback legado: metadados do N14.
+  //    Fail-closed: ausência, expiração ou status inválido → bloqueado.
   let publishAuthorized = false;
   const requiresPublish =
     input.action === "DISTRIBUTE" || input.action === "ADVERTISE";
   const publishAuthorizationContext = (input.n14?.metadata ?? {}) as Record<string, unknown>;
   if (requiresPublish) {
-    publishAuthorized =
+    const persistedPublishDecision = input.publishedPublishDecision ?? null;
+    if (
+      persistedPublishDecision &&
+      typeof persistedPublishDecision.assessment_id === "string" &&
+      persistedPublishDecision.assessment_id.length > 0 &&
+      hoursBetween(persistedPublishDecision.created_at ?? input.nowIso, input.nowIso) <= 168
+    ) {
+      // Decisão N15 persistida PUBLISH=APPROVED ainda vigente —
+      // autorização válida para a cadeia DISTRIBUTE/ADVERTISE.
+      publishAuthorized = true;
+    } else if (
       publishAuthorizationContext.publish_approved === true &&
-      typeof publishAuthorizationContext.publish_decision_id === "string";
-    if (!publishAuthorized) {
-      reasons.push({
-        code: "publish_previously_authorized",
-        message: "No APPROVED PUBLISH decision referenced for this candidate.",
-      });
+      typeof publishAuthorizationContext.publish_decision_id === "string"
+    ) {
+      // Fallback legado: declaração de publicação aprovada injetada
+      // pelos metadados do N14 (compat com avaliações anteriores).
+      publishAuthorized = true;
     }
+    if (!publishAuthorized) {
+      const reason = persistedPublishDecision
+        ? "Persisted APPROVED PUBLISH decision is expired or invalid."
+        : "No APPROVED PUBLISH decision referenced for this candidate.";
+      reasons.push({ code: "publish_authorization_invalid", message: reason });
+    }
+  }
+
+  // 9b. n8_contract_compatible (ACQUIRE_AFFILIATE) — hard gate fail-closed:
+  //     o marketplace deve ser suportado pelo catálogo fechado de
+  //     afiliados ("Shopee" | "Mercado Livre") e a identidade externa
+  //     do anúncio deve estar resolvida (external_listing_id presente).
+  //     O mecanismo real do N8 exige identidade externa: Shopee via
+  //     productOfferV2(itemId, shopId) e Mercado Livre apenas por
+  //     caminho manual assistido (sem aquisição programática).
+  let n8ContractCompatible = false;
+  if (input.action === "ACQUIRE_AFFILIATE") {
+    const marketplace = input.candidateSnapshot?.marketplace;
+    const recognizedMarketplace =
+      marketplace === "Shopee" || marketplace === "Mercado Livre";
+    const externalId = input.candidateSnapshot?.external_listing_id;
+    const hasExternalIdentity =
+      typeof externalId === "string" && externalId.length > 0;
+    n8ContractCompatible = recognizedMarketplace && hasExternalIdentity;
+    if (!n8ContractCompatible) {
+      const detail = !recognizedMarketplace
+        ? `Marketplace '${String(marketplace)}' is not programmatically supported by the affiliate catalog.`
+        : "External listing identity is not resolved (external_listing_id missing).";
+      reasons.push({ code: "n8_contract_compatible", message: detail });
+    }
+  } else {
+    n8ContractCompatible = true;
   }
 
   // 10. channel_allowed (DISTRIBUTE)
@@ -346,6 +402,7 @@ export function evaluateGovernance(
         operatorAuthorized,
         minScoreMet,
         publishAuthorized,
+        n8ContractCompatible,
         channelAllowed,
         scopeExplicit,
         bandConsistent,
@@ -494,7 +551,12 @@ function extractRiskValue(input: GovernanceEngineInput): number {
   // risk_acceptable e o valor exceder max_risk, o hard gate rejeita).
   const metadata = (input.n14?.metadata ?? {}) as Record<string, unknown>;
   const penalty = metadata.risk_penalty;
-  return typeof penalty === "number" && Number.isFinite(penalty) ? Math.max(0, Math.min(1, penalty)) : 0;
+  if (typeof penalty === "number" && Number.isFinite(penalty)) {
+    return Math.max(0, Math.min(1, penalty));
+  }
+  // Fail-closed: penalidade não numérica/NaN/Infinity → risco máximo
+  // (qualquer política com risk_acceptable rejeita).
+  return 1;
 }
 
 function isBandConsistentWithScore(band: string, score: number): boolean {
@@ -518,7 +580,8 @@ const hardGateCodes: GovernanceReasonCode[] = [
   "risk_unacceptable",
   "operator_authorization_missing",
   "unknown_action",
-  "publish_previously_authorized",
+  "publish_authorization_invalid",
+  "n8_contract_compatible",
   "channel_allowed",
   "explicit_authorization_scope",
   "score_at_least_min",
@@ -564,6 +627,8 @@ function isRequirementSatisfied(
     operator_authorization: "operatorAuthorized",
     score_at_least_min: "minScoreMet",
     publish_previously_authorized: "publishAuthorized",
+    publish_authorization_invalid: "publishAuthorized",
+    n8_contract_compatible: "n8ContractCompatible",
     channel_allowed: "channelAllowed",
     explicit_authorization_scope: "scopeExplicit",
   };
