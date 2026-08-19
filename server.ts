@@ -35,6 +35,7 @@ import { setCandidateAssessmentClient } from "./server/repositories/candidateAss
 import { registerAffiliateRoutes } from "./server/commercial/affiliate/affiliateRoutes";
 import { registerCurationRoutes } from "./server/routes/curationRoutes";
 import { registerCommercialBrainCandidatesRoutes } from "./server/routes/commercialBrainCandidatesRoutes";
+import { registerGovernanceRoutes } from "./server/routes/governanceRoutes";
 import { setAffiliateClient } from "./server/commercial/affiliate/affiliateRepository";
 import {
   setAffiliateApiSource,
@@ -1128,6 +1129,11 @@ NUNCA modifique ou invente preços ou imagens.`,
   // PASS/FAIL/BLOCKED. READ-ONLY: não cria produto, link, job ou publicação.
   registerCurationRoutes(app, requireAdminAuth);
   registerCommercialBrainCandidatesRoutes(app, requireAdminAuth);
+  // Bloco N15 — Governança (Fase 1): camada de aprovação governada
+  // fail-closed para ações comerciais (publish/acquire/distribute/
+  // advertise). READ-ONLY: não executa nada; apenas registra decisão
+  // de autorização. Gates obrigatórios: N13 PASS + N14 score válido.
+  registerGovernanceRoutes(app, requireAdminAuth);
   // Bloco N9 — Ciclo Comercial Real: orquestração governada S1→S8 +
   // Commercial Decision Gate v1. CICLO != PUBLICAÇÃO · DECISION != ACTION ·
   // RECOMMENDATION != ACTION — o gate v1 nunca produz DECISION_ALLOWED por

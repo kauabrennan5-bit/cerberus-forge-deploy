@@ -28,6 +28,7 @@ export interface MockReadBehavior {
   listAssessments?: unknown[];
   /** Candidato não encontrado. */
   candidateNotFound?: boolean;
+  candidateReadError?: boolean;
 }
 
 export interface CurationMockOptions {
@@ -200,6 +201,9 @@ function makeInsertChain(
           return insertChain;
         },
         single() {
+          // Insert falho (ex.: persistência rejeitada na prova,
+          // succeedInserts = 0): fiel ao PostgREST, o erro 23505 chega
+          // no terminador .single() da cadeia .insert().select().single().
           if (ok) {
             // Linha completa persistida: dados do input + id oficial.
             const base = insertedRow.input ?? {};
@@ -366,6 +370,7 @@ export function makeMockSupabaseClient(options: CurationMockOptions = {}): MockS
   const fromTable = (table: string): unknown => {
     if (table === "candidates") {
       if (reads.candidateNotFound) return makeReadChain(null);
+      if (reads.candidateReadError) return makeFailChain("infra_read_error");
       return makeReadChain(reads.candidate?.candidate ?? null);
     }
     if (table === "candidate_evidence") {

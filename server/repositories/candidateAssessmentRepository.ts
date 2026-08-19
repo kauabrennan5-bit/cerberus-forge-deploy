@@ -19,10 +19,14 @@ import { createHash } from "crypto";
 // "n14:commercial_brain_v1" = score comercial de CANDIDATES (Bloco N14):
 // verdade = band (HIGH/MEDIUM/LOW/INSUFFICIENT) + score; NÃO é aprovação;
 // is_actionable=false sempre.
+// "n15:governance_v1" = decisão governada (Bloco N15):
+// verdade = status (APPROVED/REVIEW/BLOCKED) para uma ação declarada;
+// NÃO executa nada; is_actionable=false sempre.
 export const ASSESSMENT_KINDS = [
   "cerberus_filter_v1",
   "n13:curator_v1",
   "n14:commercial_brain_v1",
+  "n15:governance_v1",
 ] as const;
 export type AssessmentVersion = (typeof ASSESSMENT_KINDS)[number];
 

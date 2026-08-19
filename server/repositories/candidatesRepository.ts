@@ -248,7 +248,7 @@ export function setCandidatesClientForTests(
 ): void {
   candidatesClient = client;
 }
-function requireClient(): SupabaseClient | null {
+export function requireClient(): SupabaseClient | null {
   if (!candidatesClient) return null;
   return candidatesClient;
 }
