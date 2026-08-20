@@ -101,6 +101,8 @@ async function run() {
     fields: schema.fields,
     nodeCount: schema.nodeCount,
     identityMatch: schema.identityMatch,
+    errorCodes: schema.errorCodes,
+    dataKeys: schema.dataKeys,
     httpStatus,
     presence,
     note: "no_price_values_logged; no_credentials_logged; zero_side_effects",
@@ -139,9 +141,19 @@ function observeSchema(json: unknown): {
       }
     }
   }
-  const hasErrors = Array.isArray((json as { errors?: unknown })?.errors) && ((json as { errors?: unknown }).errors as unknown[]).length > 0;
-  const ok = nodeCount > 0 && fields.length > 0 && !hasErrors;
-  return { ok, fields, nodeCount, identityMatch };
+  const errors = ((json as { errors?: unknown[] })?.errors) ?? [];
+  const errorCodes: string[] = Array.isArray(errors)
+    ? errors
+        .map((e) => (e && typeof e === "object" ? String((e as { code?: unknown; message?: unknown })?.code ?? "<no_code>") : "<no_code>"))
+        .filter((c) => /^\d{3}|^[A-Z_]+$/i.test(c) || c === "<no_code>")
+        .slice(0, 10)
+    : [];
+  const dataKeys =
+    json && typeof json === "object"
+      ? Object.keys((json as { data?: Record<string, unknown> }).data ?? {}).sort()
+      : [];
+  const ok = nodeCount > 0 && fields.length > 0 && errors.length === 0;
+  return { ok, fields, nodeCount, identityMatch, errorCodes, dataKeys };
 }
 
 function describeType(value: unknown): string {
