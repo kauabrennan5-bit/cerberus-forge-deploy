@@ -41,11 +41,17 @@ function selectionSet(): string {
   const wantExtra = args.includes("--extra");
   const all = !wantBase && !wantExtra;
   const base = "itemId shopId productName price productLink offerLink";
-  const extra = "stockInfo seller sellerId sellerName sellerRating";
-  if (all) return `${base} ${extra}`;
-  if (wantBase && wantExtra) return `${base} ${extra}`;
+  // Bissect dos candidatos às dimensões N14:
+  //   --x1 = stockInfo, seller
+  //   --x2 = sellerId, sellerName, sellerRating
+  const x1 = "stockInfo seller";
+  const x2 = "sellerId sellerName sellerRating";
+  if (all) return `${base} ${x1} ${x2}`;
+  if (wantBase && wantExtra) return `${base} ${x1} ${x2}`;
   if (wantBase) return base;
-  return extra;
+  if (args.includes("--x1")) return `${base} ${x1}`;
+  if (args.includes("--x2")) return `${base} ${x2}`;
+  return `${base} ${x1} ${x2}`;
 }
 
 function envSanitize(v: string): boolean {
