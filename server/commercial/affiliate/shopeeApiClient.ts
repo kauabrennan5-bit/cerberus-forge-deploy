@@ -195,7 +195,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       "limit: 1",
     ].filter(Boolean).join(", ");
     return {
-      query: `{ productOfferV2(${args}) { nodes { itemId shopId productName productLink offerLink } } }`,
+      query: `{ productOfferV2(${args}) { nodes { itemId shopId productName price productLink offerLink } } }`,
       variables: {},
     };
   }

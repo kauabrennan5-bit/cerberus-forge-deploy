@@ -72,7 +72,7 @@ test("SHOPEE-D1-01 directed: match exato itemId+shopId oficiais → found/link_a
   assert.equal(res.affiliateUrl, "https://s.shopee.com.br/8Kop07WdVf");
   // A query enviou os identificadores como ARGUMENTOS oficiais.
   const sentBody = JSON.parse(handle.recorded[0].body);
-  assert.match(sentBody.query, /productOfferV2\(itemId: 22394976954, shopId: 1370479894, limit: 1\)/);
+  assert.match(sentBody.query, /productOfferV2\(itemId: 22394976954, shopId: 1370479894, limit: 1\).*price/);
 });
 
 // ----------------------------------------------------------------------------
