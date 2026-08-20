@@ -167,7 +167,11 @@ function describeType(value: unknown): string {
 function persist(out: unknown) {
   const dir = join(process.cwd(), "docs");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "phase14_schema_probe_result.json"), JSON.stringify(out, null, 2) + "\n");
+  const json = JSON.stringify(out, null, 2) + "\n";
+  writeFileSync(join(dir, "phase14_schema_probe_result.json"), json);
+  // Imprime o mesmo conteúdo sanitizado em stdout para que os logs do
+  // runtime (incl. one-off job) registrem o resultado da prova.
+  process.stdout.write(`[PROOF_OUTPUT]\n${json}[END_PROOF_OUTPUT]\n`);
 }
 
 void run();
