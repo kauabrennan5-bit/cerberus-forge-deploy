@@ -36,6 +36,10 @@ import { fetchListingPage } from "./fetchShared";
 import { validateDiscoveryUrl } from "./evidence";
 import { getCandidate } from "../../repositories/candidatesRepository";
 import { assessEvidenceQuality, detectContradictions } from "./researchQuality";
+import { createOfficialShopeeEvidenceAdapter } from "../sources/shopee/adapter";
+import type { ShopeeProductLookupClient } from "../sources/shopee/contracts";
+import { createShopeeApiClient } from "../affiliate/shopeeApiClient";
+import { extractShopeeIdentifiers } from "../affiliate/shopeeClientContracts";
 
 export const RESEARCH_FIELDS: ReadonlyArray<EvidenceFieldName> = [...FIELD_NAMES];
 
@@ -59,12 +63,48 @@ function contentDigest(input: string): string {
   return `sha256:${createHash("sha256").update(input).digest("hex")}`;
 }
 
+function numericShopeeId(value: unknown): string | null {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  if (typeof value === "string" && /^\d{1,20}$/.test(value.trim())) {
+    return value.trim();
+  }
+  return null;
+}
+
+function resolveShopeeIdentity(
+  candidate: { external_listing_id: string; metadata: Record<string, unknown> },
+  sourceUrl: string,
+): { itemId: string | null; shopId: string | null } {
+  const external = String(candidate.external_listing_id ?? "").trim();
+  const externalPair = /^shopee-(\d{1,20})-(\d{1,20})$/i.exec(external);
+  const urlIdentity = extractShopeeIdentifiers(sourceUrl);
+  return {
+    itemId: numericShopeeId(external) ?? externalPair?.[2] ?? urlIdentity.itemId,
+    shopId:
+      numericShopeeId(candidate.metadata?.shop_id) ??
+      externalPair?.[1] ??
+      urlIdentity.shopId,
+  };
+}
+
+function createDefaultShopeeClient(): ShopeeProductLookupClient {
+  return createShopeeApiClient({
+    appId: process.env.SHOPEE_APP_ID ?? process.env.SHOPEE_AFFILIATE_APP_ID ?? "",
+    secret: process.env.SHOPEE_APP_SECRET ?? process.env.SHOPEE_AFFILIATE_APP_SECRET ?? "",
+    baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL,
+  });
+}
+
 export interface ResearchInput {
   candidate_id: string;
   initiated_by?: string;
   requested_fields?: ReadonlyArray<string>;
   // Injeção de fetch para testes — em produção usa fetchListingPage real.
   fetchPage?: typeof fetchListingPage;
+  // Injeção do cliente oficial Shopee para testes; produção usa as envs oficiais.
+  shopeeClient?: ShopeeProductLookupClient;
 }
 
 export interface ResearchItemResult {
@@ -187,6 +227,145 @@ export async function startResearch(input: ResearchInput): Promise<ResearchResul
   const requested = (input.requested_fields ?? RESEARCH_FIELDS)
     .map(f => String(f))
     .filter(f => FIELD_NAMES.includes(f as EvidenceFieldName));
+
+  if (mp === "SHOPEE") {
+    const identity = resolveShopeeIdentity(candidate.candidate, sourceUrl);
+    const failureFields = async (reason: string, httpStatus: number | null, apiState: string) => {
+      const fields: ResearchItemResult[] = [];
+      for (const field of requested) {
+        const result = await persistEvidence({
+          candidate_id: candidateId,
+          research_id: researchId,
+          kind: "FIELD",
+          field_name: field,
+          field_value: { value: null, unknown: true },
+          field_state: "COLLECTION_FAILED",
+          source_url: sourceUrl,
+          source_type: "api",
+          collection_method: "API",
+          observed_at: new Date().toISOString(),
+          evidence_hash: contentDigest(`SHOPEE_COLLECTION_FAILED:${apiState}:${reason}:${sourceUrl}:${field}`),
+          quality: "UNKNOWN",
+          evidence_note: `COLLECTION_FAILED (${reason}): a operação oficial productOfferV2 não confirmou o campo ${field}; permanece UNKNOWN — nada confirmado`,
+          metadata: {
+            http_status: httpStatus,
+            api_state: apiState,
+            fetch_failed: true,
+            endpoint: "affiliate_graphql",
+            operation: "productOfferV2",
+            discovery_block: "N3",
+          },
+        });
+        fields.push({
+          field,
+          state: "FAILED",
+          source: "none",
+          quality: "UNKNOWN",
+          evidence_id: result.ok ? result.evidence_id ?? null : null,
+          outcome: result.outcome,
+        });
+      }
+      return {
+        ok: true,
+        research_id: researchId,
+        candidate_id: candidateId,
+        fetch_failed: true,
+        fetch_reason: reason,
+        session_evidence_id: sessionResult.evidence_id,
+        fields,
+        contradictions: 0,
+        unknowns: requested.length,
+      } satisfies ResearchResult;
+    };
+
+    if (!identity.itemId) {
+      return failureFields("identity_missing_item_id", null, "BLOCKED");
+    }
+
+    let shopeeResult;
+    try {
+      const client = input.shopeeClient ?? createDefaultShopeeClient();
+      shopeeResult = await createOfficialShopeeEvidenceAdapter(client).collect({
+        candidate_id: candidateId,
+        research_id: researchId,
+        item_id: identity.itemId,
+        shop_id: identity.shopId,
+        source_url: urlValidation.url,
+      });
+    } catch {
+      return failureFields("client_not_configured", null, "COLLECTION_FAILED");
+    }
+
+    if (shopeeResult.state !== "SUCCESS") {
+      return failureFields(shopeeResult.reason, shopeeResult.provenance.http_status, shopeeResult.state);
+    }
+
+    const fields: ResearchItemResult[] = [];
+    let contradictions = 0;
+    let unknowns = 0;
+    for (const field of shopeeResult.evidence.fields) {
+      const value = field.field_value;
+      const unknown = field.field_state === "UNKNOWN";
+      const previous = await listFieldEvidence(candidateId, field.field_name);
+      const contradictedIds = detectContradictions(
+        field.field_name,
+        value,
+        (previous.evidence ?? []).map(e => ({
+          evidence_id: e.evidence_id,
+          field_state: e.field_state,
+          field_value: e.field_value,
+        })),
+      );
+      const finalState: FieldState = contradictedIds.length > 0 ? "CONTRADICTED" : field.field_state;
+      const result = await persistEvidence({
+        candidate_id: candidateId,
+        research_id: researchId,
+        kind: "FIELD",
+        field_name: field.field_name,
+        field_value: { value: unknown ? null : value, unknown },
+        field_state: finalState,
+        source_url: field.source_url || sourceUrl,
+        source_type: "api",
+        collection_method: "API",
+        observed_at: field.observed_at,
+        evidence_hash: field.evidence_hash,
+        quality: field.quality,
+        unit: field.unit,
+        evidence_note:
+          finalState === "CONTRADICTED"
+            ? `${field.field_name} CONTRADITO: valor oficial Shopee diverge de evidência(s) anterior(es) — ambas preservadas`
+            : field.evidence_note,
+        metadata: {
+          ...field.metadata,
+          http_status: shopeeResult.provenance.http_status,
+          response_digest: shopeeResult.response_digest,
+          endpoint: shopeeResult.provenance.endpoint,
+          operation: shopeeResult.provenance.operation,
+          discovery_block: "N3",
+        },
+        contradicted_by_evidence_ids: contradictedIds,
+      });
+      if (unknown) unknowns += 1;
+      if (contradictedIds.length > 0) contradictions += 1;
+      fields.push({
+        field: field.field_name,
+        state: finalState,
+        source: "api",
+        quality: field.quality,
+        evidence_id: result.ok ? result.evidence_id ?? null : null,
+        outcome: result.outcome,
+      });
+    }
+    return {
+      ok: true,
+      research_id: researchId,
+      candidate_id: candidateId,
+      session_evidence_id: sessionResult.evidence_id,
+      fields,
+      contradictions,
+      unknowns,
+    };
+  }
 
   const fetchResult = await (input.fetchPage ?? fetchListingPage)({
     marketplace: mp,

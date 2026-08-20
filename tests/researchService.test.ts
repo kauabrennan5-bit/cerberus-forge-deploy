@@ -127,6 +127,19 @@ const candidateInput = {
   metadata: { discovery_block: "N1" },
 };
 
+const shopeeCandidateInput = {
+  marketplace: "Shopee" as const,
+  source_url: "https://shopee.com.br/porta-talher-i.1530442944.23794344926",
+  external_listing_id: "shopee-1530442944-23794344926",
+  merchant: null,
+  title: null,
+  observed_price: null,
+  observed_at: "2026-08-16T12:00:00Z",
+  evidence_hash: "sha256:shopee-evidence",
+  collection_method: "SCRAPE",
+  metadata: { discovery_block: "N1" },
+};
+
 let fakeClient: FakeSupabaseClient;
 
 test.beforeEach(() => {
@@ -157,6 +170,14 @@ async function ensureCandidate(): Promise<string> {
   const result = await candidatesRepo.registerCandidate(candidateInput);
   if (!result.ok || !result.candidate_id) {
     throw new Error(`registro de candidato falhou: ${result.reason ?? "unknown"}`);
+  }
+  return result.candidate_id;
+}
+
+async function ensureShopeeCandidate(input: Partial<typeof shopeeCandidateInput> = {}): Promise<string> {
+  const result = await candidatesRepo.registerCandidate({ ...shopeeCandidateInput, ...input });
+  if (!result.ok || !result.candidate_id) {
+    throw new Error(`registro de candidato Shopee falhou: ${result.reason ?? "unknown"}`);
   }
   return result.candidate_id;
 }
@@ -287,4 +308,115 @@ test("startResearch — candidate_id ausente → rejeição imediata sem criar n
   assert.equal(result.ok, false);
   assert.equal(result.research_id, null);
   assert.equal(evidenceCount(), 0);
+});
+
+test("startResearch — Shopee SUCCESS usa API oficial e persiste proveniência API", async () => {
+  const candidateId = await ensureShopeeCandidate();
+  let lookupCalls = 0;
+  const result = await startResearch({
+    candidate_id: candidateId,
+    shopeeClient: {
+      lookupProduct: async params => {
+        lookupCalls += 1;
+        assert.deepEqual(params, { shopId: "1530442944", itemId: "23794344926" });
+        return {
+          status: "found" as const,
+          shopId: "1530442944",
+          itemId: "23794344926",
+          name: "Porta Talher Madeira Nobre",
+          priceMinorUnits: 3590,
+          productLink: "https://shopee.com.br/porta-talher-i.1530442944.23794344926",
+          httpStatus: 200,
+          raw: null,
+          error: null,
+        };
+      },
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(lookupCalls, 1);
+  assert.equal(result.fields.length, 8);
+  assert.equal(result.unknowns, 6);
+  assert.equal(evidenceCount(), 9);
+  const price = getCandidatesEvidenceStore().find(r => r.field_name === "price");
+  assert.equal(price?.source_type, "api");
+  assert.equal(price?.collection_method, "API");
+  assert.equal(price?.field_state, "KNOWN");
+  assert.equal((price?.field_value as Record<string, unknown>)?.value, 3590);
+  assert.equal(price?.quality, "HIGH");
+});
+
+test("startResearch — Shopee COLLECTION_FAILED persiste todos os campos como falha", async () => {
+  const candidateId = await ensureShopeeCandidate();
+  const result = await startResearch({
+    candidate_id: candidateId,
+    shopeeClient: {
+      lookupProduct: async () => ({
+        status: "error" as const,
+        shopId: null,
+        itemId: null,
+        name: null,
+        priceMinorUnits: null,
+        productLink: null,
+        httpStatus: 503,
+        raw: null,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fetch_failed, true);
+  assert.equal(result.fetch_reason, "official_api_error");
+  assert.deepEqual(result.fields.map(f => f.state), Array(8).fill("FAILED"));
+  const failed = getCandidatesEvidenceStore().filter(r => r.field_state === "COLLECTION_FAILED");
+  assert.equal(failed.length, 8);
+  assert.ok(failed.every(r => r.source_type === "api" && r.collection_method === "API"));
+  assert.ok(failed.every(r => (r.metadata as Record<string, unknown>)?.api_state === "COLLECTION_FAILED"));
+});
+
+test("startResearch — Shopee BLOCKED por anúncio não encontrado é fail-closed", async () => {
+  const candidateId = await ensureShopeeCandidate();
+  const result = await startResearch({
+    candidate_id: candidateId,
+    shopeeClient: {
+      lookupProduct: async () => ({
+        status: "not_found" as const,
+        shopId: null,
+        itemId: null,
+        name: null,
+        priceMinorUnits: null,
+        productLink: null,
+        httpStatus: 200,
+        raw: null,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fetch_failed, true);
+  assert.equal(result.fetch_reason, "identity_unresolved_or_not_found");
+  assert.equal(result.unknowns, 8);
+  assert.equal(getCandidatesEvidenceStore().filter(r => r.field_state === "COLLECTION_FAILED").length, 8);
+});
+
+test("startResearch — Shopee sem item_id não chama API e registra BLOCKED", async () => {
+  const candidateId = await ensureShopeeCandidate({
+    source_url: "https://shopee.com.br/produto-sem-identidade",
+    external_listing_id: "UNKNOWN",
+  });
+  let lookupCalls = 0;
+  const result = await startResearch({
+    candidate_id: candidateId,
+    shopeeClient: {
+      lookupProduct: async () => {
+        lookupCalls += 1;
+        throw new Error("não deveria chamar");
+      },
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.fetch_failed, true);
+  assert.equal(result.fetch_reason, "identity_missing_item_id");
+  assert.equal(lookupCalls, 0);
+  assert.equal(getCandidatesEvidenceStore().filter(r => r.field_state === "COLLECTION_FAILED").length, 8);
 });
