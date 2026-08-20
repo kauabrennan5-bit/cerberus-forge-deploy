@@ -208,6 +208,8 @@ export async function executeDiscover(input: DiscoverInput): Promise<DiscoverRes
       idempotency_key: payload.evidence_hash.slice(0, 32),
       metadata: {
         source: payload.title.source,
+        // Proveniência canônica da operação N2; valor fechado e já reconhecido pelo N13.
+        provenance: "n10:discovery",
         unknown_fields: unknownFields,
         evidence_note: payload.evidence_note,
         // PROVENIÊNCIA DE FALHA: coleta identificável — COLLECTION_FAILED

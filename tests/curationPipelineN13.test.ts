@@ -97,6 +97,78 @@ test("N13 Fase 3 A) PASS — elegível para N14, sem efeito comercial", async ()
   assert.equal(result.service.outcome, "evaluated");
 });
 
+test("N13 Fase 10: provenance Shopee n10:discovery é reconhecido sem promoção indevida", async () => {
+  setCuratorNowProvider(() => FIXED_NOW);
+  const shopeeCandidate = {
+    ...baseCandidate,
+    marketplace: "Shopee",
+    source_url: "https://shopee.com.br/loja/1530442944/23794344926",
+    external_listing_id: "23794344926",
+    metadata: {
+      provenance: "n10:discovery",
+      source_type: "api",
+      collection_method: "API",
+      marketplace: "SHOPEE",
+      external_listing_id: "23794344926",
+      shop_id: "1530442944",
+      observed_at: "2026-08-20T02:46:00.000Z",
+      response_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+  };
+  const mock = makeMockSupabaseClient({
+    reads: { candidate: { ok: true, candidate: shopeeCandidate as never }, evidence: baseEvidence as never },
+    persist: { succeedInserts: 1 },
+  });
+  setCandidatesClientForTests(mock.client as never);
+  setCandidateAssessmentClient(mock.client as never);
+  setCandidateEvidenceClientForTests(mock.client as never);
+
+  const result = await runCurationGate(VALID_CANDIDATE_ID);
+  assertGateOk(result);
+  assert.equal(result.verdict, "PASS");
+  assert.equal(result.eligibleForN14, true);
+  const provenanceCriterion = result.criteria.find((criterion) => criterion.criterion === "c_provenance_valid");
+  assert.equal(provenanceCriterion?.result, "checked");
+});
+
+test("N13 Fase 10: provenance ausente permanece BLOCKED", async () => {
+  setCuratorNowProvider(() => FIXED_NOW);
+  const candidateWithoutProvenance = { ...baseCandidate, metadata: { source: "api" } };
+  const mock = makeMockSupabaseClient({
+    reads: { candidate: { ok: true, candidate: candidateWithoutProvenance as never }, evidence: baseEvidence as never },
+    persist: { succeedInserts: 1 },
+  });
+  setCandidatesClientForTests(mock.client as never);
+  setCandidateAssessmentClient(mock.client as never);
+  setCandidateEvidenceClientForTests(mock.client as never);
+
+  const result = await runCurationGate(VALID_CANDIDATE_ID);
+  assertGateOk(result);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.eligibleForN14, false);
+  const provenanceCriterion = result.criteria.find((criterion) => criterion.criterion === "c_provenance_valid");
+  assert.equal(provenanceCriterion?.result, "blocked");
+});
+
+test("N13 Fase 10: provenance não reconhecida permanece BLOCKED", async () => {
+  setCuratorNowProvider(() => FIXED_NOW);
+  const candidateWithInvalidProvenance = { ...baseCandidate, metadata: { provenance: "metadata.source" } };
+  const mock = makeMockSupabaseClient({
+    reads: { candidate: { ok: true, candidate: candidateWithInvalidProvenance as never }, evidence: baseEvidence as never },
+    persist: { succeedInserts: 1 },
+  });
+  setCandidatesClientForTests(mock.client as never);
+  setCandidateAssessmentClient(mock.client as never);
+  setCandidateEvidenceClientForTests(mock.client as never);
+
+  const result = await runCurationGate(VALID_CANDIDATE_ID);
+  assertGateOk(result);
+  assert.equal(result.verdict, "BLOCKED");
+  assert.equal(result.eligibleForN14, false);
+  const provenanceCriterion = result.criteria.find((criterion) => criterion.criterion === "c_provenance_valid");
+  assert.equal(provenanceCriterion?.result, "blocked");
+});
+
 // ---------------------------------------------------------------------------
 // B) BLOCKED — ausência de evidência → REVIEW, pipeline para
 // ---------------------------------------------------------------------------

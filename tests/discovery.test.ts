@@ -298,6 +298,35 @@ test("N2 (E): registerCandidate é o único caminho de persistência (fake clien
   }
 });
 
+test("N2 (E): Shopee candidate recebe provenance canônica n10:discovery", async () => {
+  const rows: Rows = [];
+  candidatesRepository.setCandidatesClientForTests(makeFakeClient(rows) as never);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    status: 200,
+    headers: { get: (_name: string) => null },
+    text: async () => "<html><head><title>Produto Shopee observado</title></head><body>produto</body></html>",
+  })) as unknown as typeof fetch;
+  try {
+    const result = await executeDiscover({
+      marketplace: "SHOPEE",
+      mode: "url",
+      url: "https://shopee.com.br/loja/77/88",
+      limit: 1,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.created, 1);
+    assert.equal(rows.length, 1);
+    const metadata = rows[0].metadata as Record<string, unknown>;
+    assert.equal(metadata.provenance, "n10:discovery");
+    assert.equal(metadata.discovery_block, "N2");
+    assert.equal(rows[0].collection_method, "SCRAPE");
+  } finally {
+    globalThis.fetch = originalFetch;
+    candidatesRepository.setCandidatesClientForTests(null as never);
+  }
+});
+
 test("N2 (E): executeDiscover não toca publicação — só conector + N1", async () => {
   // Prova de escopo: sem cliente N1 configurado (fail-closed), o registro é
   // recusado (missing_supabase) e NADA é gravado em products/candidatos.
