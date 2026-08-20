@@ -1,0 +1,44 @@
+N17 Fase 4 — evidência Supabase capturada em 2026-08-20 UTC
+
+Projeto confirmado: juiychcfdqxgnatffnla
+Status do projeto: ACTIVE_HEALTHY
+
+Schema antes da migration: public.affiliate_links continha link_id, candidate_id, product_id, marketplace, provider_id, affiliate_url, provenance, status, validation_state, validation_result, digest, observed_at, expires_at, notes, contract_version, idempotency_key, metadata, created_by, created_at, updated_at. A constraint affiliate_links_provenance_check aceitava somente admin:manual.
+
+Migration aplicada: 20260821_n17_acquisition_api
+Resultado da aplicação: success=true
+
+Schema após aplicação: as colunas acquisition_ref, authorization_ref, assessment_id, idempotency_key_n17, response_digest_n17, listing_id, seller_id, title_snapshot, canonical_url e method existem em public.affiliate_links e são nullable.
+
+Constraints após aplicação:
+- affiliate_links_method_check: method IS NULL OR method IN ('MANUAL','API')
+- affiliate_links_provenance_check: provenance IN ('admin:manual','n17:api')
+
+Índices após aplicação:
+- ux_affiliate_links_idempotency_key_n17: unique parcial em idempotency_key_n17 quando não nulo
+- idx_affiliate_links_listing_n17: índice parcial em listing_id quando não nulo
+
+Baseline agregado imediatamente após a migration e antes de qualquer aquisição:
+products=14
+candidates=0
+candidate_evidence=0
+candidate_assessment=0
+affiliate_links=0
+job_queue=0
+publication_executions=0
+commercial_cycles=0
+
+A contagem de products=14 diverge do baseline histórico esperado de 13. Consulta limitada de IDs/refs mostrou REF-014 como o décimo quarto registro, além dos refs históricos. Nenhuma remoção ou alteração foi realizada; a divergência foi preservada como estado preexistente/externo e deve ser reportada.
+
+Nenhum registro affiliate_links foi criado pela migration.
+Nenhuma chamada Shopee foi executada nesta etapa.
+
+Fase 4 — validação N15 em 2026-08-20: consulta somente leitura em public.candidate_assessment, filtrando filter_version='n15:governance_v1' e dimensions.action='ACQUIRE_AFFILIATE', retornou conjunto vazio (LIMIT 100, OFFSET 0). Não existe autorização N15 ACQUIRE_AFFILIATE aprovada observável para prova viva. Pela regra fail-closed do prompt, não criar autorização artificial e não executar chamada Shopee.
+
+N17 FASE 5 — AUDITORIA ADICIONAL
+PROOF_RUN_ID=N17_PHASE5_LIVE_20260820T162636Z
+Consulta N15 executada em 2026-08-20T16:28:32Z, somente leitura, com filtro ACQUIRE_AFFILIATE: resultado vazio ([]). Nenhum assessment_id/action/status/authorization_ref compatível foi observado.
+Consulta provider executada em 2026-08-20T16:28:54Z, somente leitura: provider_id=affprv-shopee, provider_code=shopee, status=ACTIVE, marketplace=Shopee.
+DECISION=BLOCKED — NO VALID N15 AUTHORIZATION
+Não houve candidate/opportunity legítima vinculável a autorização N15 ACQUIRE_AFFILIATE. Não foi criado authorization_ref, assessment_id, candidato, produto, item_id, shop_id ou qualquer artefato sintético.
+A ausência de autorização encerrou a Fase 5 antes de qualquer chamada Shopee, composição runtime nova, replay, teste de conflito ou consumo N16.

@@ -1,0 +1,156 @@
+N17_PHASE3_SNAPSHOT
+captured_at=2026-08-20T15:35:34Z
+sha=40ae71568f2b5f9e484541818912dd18d213cb1c
+git_status=
+ [31mM[m public/data/products.json
+ [31mM[m tests/shopeeAffiliateIntegration.test.ts
+[31m??[m docs/infra01_preflight_snapshot.md
+[31m??[m docs/infra01_report.md
+[31m??[m docs/infra02_phase1_design.md
+[31m??[m docs/infra02_phase2_report.md
+[31m??[m docs/infra02_phase3_report.md
+[31m??[m docs/infra02_phase3_report_copyable.txt
+[31m??[m docs/infra03_credential_check.md
+[31m??[m docs/infra03_phase10_provenance.md
+[31m??[m docs/infra03_phase11_controlled_validation.md
+[31m??[m docs/infra03_phase12_n14_validation.md
+[31m??[m docs/infra03_phase13_source_coverage.md
+[31m??[m docs/infra03_phase14_price_validation.md
+[31m??[m docs/infra03_phase15_runtime_probe.md
+[31m??[m docs/infra03_phase16_price_parser_diagnosis.md
+[31m??[m docs/infra03_phase17_price_shape_probe.md
+[31m??[m docs/infra03_phase18_price_parser_correction.md
+[31m??[m docs/infra03_phase19_price_contract.md
+[31m??[m docs/infra03_phase1_audit.md
+[31m??[m docs/infra03_phase20_commercial_coverage_audit.md
+[31m??[m docs/infra03_phase21_availability_contract.md
+[31m??[m docs/infra03_phase22_commission_audit.md
+[31m??[m docs/infra03_phase23_competition_audit.md
+[31m??[m docs/infra03_phase24_market_audit.md
+[31m??[m docs/infra03_phase25_shopee_commercial_coverage.md
+[31m??[m docs/infra03_phase3_report.md
+[31m??[m docs/infra03_phase4_real_api.md
+[31m??[m docs/infra03_phase5_bridge_deploy.md
+[31m??[m docs/infra03_phase6_integration.md
+[31m??[m docs/infra03_phase7_controlled_proof.md
+[31m??[m docs/infra03_phase8_controlled_proof.md
+[31m??[m docs/infra03_phase9_controlled_validation.md
+[31m??[m docs/infra03_render_env_check.md
+[31m??[m docs/infra03_runtime_propagation.md
+[31m??[m docs/n16_phase2_external_sources.md
+[31m??[m docs/n16_phase2_report.md
+[31m??[m docs/n16_phase3_preproof_snapshot.md
+[31m??[m docs/n16_phase3_report.md
+[31m??[m docs/n16_phase4_final_report.md
+[31m??[m docs/n16_phase4_final_report_copyable.txt
+[31m??[m docs/n16_phase4_preflight_snapshot.md
+[31m??[m docs/n17_phase1_audit.md
+[31m??[m docs/n17_phase2_report.md
+[31m??[m docs/n17_phase3_snapshot.txt
+[31m??[m server/commercial/affiliate/n17Contract.ts
+[31m??[m server/commercial/affiliate/n17Service.ts
+[31m??[m server/commercial/sources/mercadoLivre/
+[31m??[m tests/mercadoLivreOfficialAdapter.test.ts
+[31m??[m tests/n17Acquisition.test.ts
+baseline_expected=products=13 candidates=0 candidate_evidence=0 candidate_assessment=0 affiliate_links=0 job_queue=0 publication_executions=0 commercial_cycles=0
+target_files=
+server/commercial/affiliate/n17Contract.ts
+server/commercial/affiliate/n17Service.ts
+server/commercial/affiliate/affiliateRepository.ts
+supabase/migrations/20260816_affiliate_infrastructure.sql
+tests/n17Acquisition.test.ts
+existing_affiliate_columns=
+create table if not exists public.affiliate_links (
+  link_id text primary key,
+  -- Alvo: candidato OU produto canônico (um link pertence a um alvo de cada
+  -- vez; texto referencial — SEM FK: AFFILIATE LINK != PRODUCT FACT e sem
+  -- promoção implícita de candidato).
+  candidate_id text,
+  product_id text,
+  marketplace text not null check (marketplace in ('MercadoLivre', 'Shopee')),
+  provider_id text not null references public.affiliate_providers (provider_id) on delete restrict,
+  -- A URL rastreada fornecida explicitamente. URL pública de afiliado não é
+  -- segredo; pode ser logada com metadados de proveniência.
+  affiliate_url text not null check (char_length(affiliate_url) between 12 and 2048),
+  -- Proveniência fechada v1: somente 'admin:manual'.
+  provenance text not null default 'admin:manual'
+    check (provenance in ('admin:manual')),
+  -- Catálogo fechado de estados do link:
+  --   DRAFT          — registrado, ainda não validado
+  --   VALID          — validado (estrutura + domínio + redirect) e aprovado
+  --                    para USO pelo executor N5 (não é autorização de
+  --                    publicação por si só)
+  --   EXPIRED        — passou de expires_at declarado
+  --   INVALID        — reprovado na validação
+  --   REVOKED        — revogado pela autoridade humana; histórico preservado
+  status text not null default 'DRAFT'
+    check (status in ('DRAFT', 'VALID', 'EXPIRED', 'INVALID', 'REVOKED')),
+  -- Catálogo fechado do resultado da última validação:
+  --   UNVALIDATED    — validação ainda não executada (padrão; nunca vira
+  --                    APPROVED artificialmente)
+  --   VALID          — todas as checagens passaram
+  --   INVALID        — ao menos uma checagem falhou (rejeitado)
+  --   INCONCLUSIVE   — checagem externa não pôde ser concluída localmente
+  --                    (ex.: fetch indisponível) — permanece não-aprovado
+  --   PENDING_EXTERNAL — aguardando checagem viva futura
+  validation_state text not null default 'UNVALIDATED'
+    check (validation_state in ('UNVALIDATED', 'VALID', 'INVALID', 'INCONCLUSIVE', 'PENDING_EXTERNAL')),
+  -- Detalhes da validação (motivos de falha, hosts, redirect final)
+  validation_result jsonb not null default '{}'::jsonb check (jsonb_typeof(validation_result) = 'object'),
+  -- Digest idempotente: sha256(provider_id:target:affiliate_url)
+  digest text not null unique,
+  observed_at timestamptz not null default now(),
+  expires_at timestamptz null,
+  notes text not null default '' check (char_length(notes) <= 2000),
+  -- Auditoria e versão
+  contract_version text not null default '1.0',
+  idempotency_key text unique,
+  metadata jsonb not null default '{}'::jsonb check (jsonb_typeof(metadata) = 'object'),
+  created_by text not null default 'operator-admin',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- Regra: um link pertence a exatamente um alvo (candidato XOR produto).
+  constraint affiliate_links_exactly_one_target check (
+    (candidate_id is not null)::int + (product_id is not null)::int = 1
+  )
+);
+comment on table public.affiliate_links is 'Bloco N6: Affiliate Link Record — link de afiliado fornecido EXPLICITAMENTE por autoridade humana. AFFILIATE LINK != PRODUCT FACT: o registro NÃO promove candidato, NÃO cria produto canônico e NÃO autoriza publicação. Uso na publicação exige DECISION + Policy Engine + ApprovalStore (N5).';
+
+-- CHECKs: sem target vazio e sem marketplace/URL genéricos (defesa em profundidade)
+alter table public.affiliate_links add constraint affiliate_links_no_target_empty
+  check (candidate_id is not null or product_id is not null);
+
+-- Índices aditivos: alvo, provider, status, digest (idempotência), expiração
+create index if not exists idx_affiliate_links_candidate on public.affiliate_links (candidate_id) where candidate_id is not null;
+create index if not exists idx_affiliate_links_product on public.affiliate_links (product_id) where product_id is not null;
+create index if not exists idx_affiliate_links_provider on public.affiliate_links (provider_id);
+create index if not exists idx_affiliate_links_status on public.affiliate_links (status);
+create index if not exists idx_affiliate_links_validation on public.affiliate_links (validation_state);
+create index if not exists idx_affiliate_links_marketplace on public.affiliate_links (marketplace);
+create index if not exists idx_affiliate_links_expires on public.affiliate_links (expires_at) where expires_at is not null;
+
+-- ============================================================
+-- Row Level Security: ativo; SEM políticas públicas
+-- (somente service role / backend, igual aos Blocos N1-N5/13/14/15/16/17)
+-- ============================================================
+alter table public.affiliate_providers enable row level security;
+alter table public.affiliate_links enable row level security;
+
+-- Garantir que nenhuma policy pública exista (idempotente).
+do $$
+declare
+  _pol record;
+begin
+  for _pol in (
+    select policyname from pg_policies
+    where tablename = 'affiliate_providers' and schemaname = 'public'
+  ) loop
+    execute format('drop policy if exists %I on public.affiliate_providers', _pol.policyname);
+  end loop;
+  for _pol in (
+    select policyname from pg_policies
+    where tablename = 'affiliate_links' and schemaname = 'public'
+  ) loop
+    execute format('drop policy if exists %I on public.affiliate_links', _pol.policyname);
+  end loop;
+end $$;

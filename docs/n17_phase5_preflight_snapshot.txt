@@ -1,0 +1,40 @@
+N17 — FASE 5 — PREFLIGHT SNAPSHOT
+
+PROOF_RUN_ID=N17_PHASE5_LIVE_20260820T162636Z
+UTC_TIMESTAMP=2026-08-20T16:26:36Z
+SHA_INITIAL=40ae71568f2b5f9e484541818912dd18d213cb1c
+BRANCH=main
+NODE_ENV=UNSET (shell local; runtime de produção não alterado)
+SUPABASE_PROJECT_ID=juiychcfdqxgnatffnla
+
+ESCOPO
+- Fase 5 N17 בלבד: autorização N15 legítima, wiring N17→N8→provider oficial→N6 e prova controlada condicionada às pré-condições.
+- N13, N14 e lógica de decisão N15 não serão alterados.
+- N16 somente poderá ser consultado no resolver, sem publicação.
+- N18, N19, N20, scheduler, job_queue, Telegram, agentes, tracking, social e anúncios permanecem fora do escopo.
+- Commit, push e deploy não autorizados nesta fase.
+
+ESTADO DE TRABALHO RELEVANTE
+- M server/commercial/affiliate/affiliateRepository.ts
+- M server/commercial/affiliate/contract.ts
+- ?? docs/n17_phase4_report.md
+- ?? docs/n17_phase4_supabase_evidence.txt
+- ?? server/commercial/affiliate/n17Contract.ts
+- ?? server/commercial/affiliate/n17Service.ts
+- ?? supabase/migrations/20260821_n17_acquisition_api.sql
+- ?? tests/n17Acquisition.test.ts
+- ?? tests/n17AffiliateRepository.test.ts
+
+As alterações de implementação e migration acima são trabalho local não consolidado da Fase 3; não serão confundidas com alterações novas da Fase 5.
+
+ESTADO SUPABASE CONHECIDO DA FASE 4
+- Projeto ACTIVE_HEALTHY.
+- Migration 20260821_n17_acquisition_api aplicada com sucesso; não reaplicar.
+- affiliate_links=0 após a migration.
+- Nenhuma aquisição N17 real executada.
+- Consulta N15 ACQUIRE_AFFILIATE retornou conjunto vazio; não existe autorização legítima observável no snapshot anterior.
+- products=14 na projeção real, divergência histórica de 13 preservada sem correção.
+
+CRITÉRIO DE PARADA
+- Qualquer pré-condição ausente implica DECISION=BLOCKED e zero chamadas Shopee.
+- É proibido criar autorização N15 artificial ou fabricar oportunidade/identidade.

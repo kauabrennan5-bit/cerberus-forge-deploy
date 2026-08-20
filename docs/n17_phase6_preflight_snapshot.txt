@@ -1,0 +1,27 @@
+N17 Fase 6 — Preflight Snapshot
+
+PROOF_RUN_ID=N17_PHASE6_LIVE_20260820T163331Z
+UTC_TIMESTAMP=2026-08-20T16:33:31Z
+SHA_INITIAL=40ae71568f2b5f9e484541818912dd18d213cb1c
+BRANCH=main
+ENVIRONMENT=local code audit with read-only Supabase verification permitted; no acquisition executed
+SUPABASE_PROJECT_ID=juiychcfdqxgnatffnla
+
+SCOPE=lookup legítimo N15 e wiring explícito N15→N17→N8→provider oficial→N6
+FORBIDDEN=acquisition Shopee, replay, conflict test, N16, N18+, migration, commit, push, deploy
+
+N17_FILES_ALREADY_PRESENT_OR_MODIFIED:
+- server/commercial/affiliate/n17Contract.ts
+- server/commercial/affiliate/n17Service.ts
+- server/commercial/affiliate/affiliateRepository.ts
+- server/commercial/affiliate/contract.ts
+- tests/n17Acquisition.test.ts
+- tests/n17AffiliateRepository.test.ts
+
+PREVIOUS_PHASE_FACTS:
+- Fase 5 confirmou ausência de decisão N15 observável para ACQUIRE_AFFILIATE.
+- Fase 5 confirmou provider affprv-shopee ACTIVE.
+- Migration 20260821_n17_acquisition_api aplicada na Fase 4; não reaplicar nesta fase.
+- Nenhuma aquisição N17 real foi executada.
+
+WORKTREE contém alterações preexistentes de INFRA-03 e N17 Fases 1–5; nenhuma alteração foi atribuída a esta Fase 6 no momento do snapshot.

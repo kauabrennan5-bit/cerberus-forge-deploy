@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 //   ProviderStatus:    ACTIVE | INACTIVE | PENDING_REVIEW | WITHDRAWN
 //   ResolutionMethod:  MANUAL (único implementado v1) | IMPORT | PORTAL | API
 //   Ownership:         owner-human (sempre; adesão a programa é humana)
-//   Provenance:        admin:manual (única autorizada v1)
+//   Provenance:        admin:manual | n17:api (N17 API acquisition path)
 //   LinkStatus:        DRAFT | VALID | EXPIRED | INVALID | REVOKED
 //   ValidationState:   UNVALIDATED | VALID | INVALID | INCONCLUSIVE |
 //                      PENDING_EXTERNAL
@@ -57,8 +57,12 @@ export type ResolutionMethod = (typeof RESOLUTION_METHODS)[number];
 export const OWNERSHIPS = ["owner-human"] as const;
 export type Ownership = (typeof OWNERSHIPS)[number];
 
-export const LINK_PROVENANCES = ["admin:manual"] as const;
+export const LINK_PROVENANCES = ["admin:manual", "n17:api"] as const;
 export type LinkProvenance = (typeof LINK_PROVENANCES)[number];
+
+/** Método persistido; nullable em AffiliateLinkRecord para legacy rows. */
+export const LINK_METHODS = ["MANUAL", "API"] as const;
+export type LinkMethod = (typeof LINK_METHODS)[number];
 
 export const LINK_STATUSES = ["DRAFT", "VALID", "EXPIRED", "INVALID", "REVOKED"] as const;
 export type LinkStatus = (typeof LINK_STATUSES)[number];
@@ -116,6 +120,17 @@ export interface AffiliateLinkRecord {
   created_by: string;
   created_at: string;
   updated_at: string;
+  /** N17 API acquisition fields; nullable/optional for legacy manual links. */
+  acquisition_ref?: string | null;
+  authorization_ref?: string | null;
+  assessment_id?: string | null;
+  idempotency_key_n17?: string | null;
+  response_digest_n17?: string | null;
+  listing_id?: string | null;
+  seller_id?: string | null;
+  title_snapshot?: string | null;
+  canonical_url?: string | null;
+  method?: LinkMethod | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -33,12 +33,18 @@ import {
   type AffiliateMarketplace,
   type AffiliateProviderRecord,
   type IdempotentWriteResult,
+  type LinkMethod,
   type LinkProvenance,
   type LinkValidationOutcome,
   type RegisterLinkInput,
   type RegisterProviderInput,
 } from "./contract";
 import { sanitizeMetadata } from "../../repositories/policyJournalRepository";
+import type {
+  N17AcquisitionRecord,
+  N17Repository,
+  N17WriteOutcome,
+} from "./n17Contract";
 
 export const PROVIDERS_TABLE = "affiliate_providers" as const;
 export const LINKS_TABLE = "affiliate_links" as const;
@@ -458,3 +464,269 @@ export async function deleteLinksForProof(linkIds: ReadonlyArray<string>): Promi
   const { count } = await client.from(LINKS_TABLE).delete().in("link_id", linkIds);
   return count ?? 0;
 }
+
+// ---------------------------------------------------------------------------
+// N17 API Acquisition Adapter
+// ---------------------------------------------------------------------------
+//
+// This adapter is deliberately separate from persistLink()/validateLinkInput().
+// The existing manual path remains admin:manual + MANUAL. N17 can persist only
+// a confirmed N8 result with official-provider provenance and method API.
+
+const N17_PROVENANCE = "n17:api" as const;
+const N17_METHOD: LinkMethod = "API";
+const N17_CREATED_BY = "n17-orchestrator" as const;
+
+type N17Row = Record<string, unknown>;
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validUtc(value: unknown): value is string {
+  if (!nonEmpty(value) || !value.endsWith("Z")) return false;
+  return Number.isFinite(new Date(value).getTime());
+}
+
+function validOfficialUrl(value: unknown, marketplace: AffiliateMarketplace): value is string {
+  if (!nonEmpty(value)) return false;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.toLowerCase();
+    return AFFILIATE_MARKETPLACE_HOSTS[marketplace].some(
+      (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function n17Metadata(record: N17AcquisitionRecord): Record<string, unknown> {
+  return sanitizeInputMetadata({
+    n17_contract_version: "n17-acquisition-v1",
+    source_operation: record.provenance.source_operation,
+    source_url_origin: record.provenance.source_url_origin,
+    acquired_at: record.acquired_at,
+  });
+}
+
+function validN17Record(record: N17AcquisitionRecord): string | null {
+  if (!nonEmpty(record.affiliate_link_id)) return "affiliate_link_id_missing";
+  if (!nonEmpty(record.candidate_id) || !validateLinkCandidateId(record.candidate_id)) {
+    return "candidate_id_invalid";
+  }
+  // affiliate_links retains the N6 candidate XOR product invariant. N17
+  // acquisitions are candidate-targeted; source product identity is listing_id.
+  if (record.product_id !== null) return "n17_product_target_conflicts_with_candidate_target";
+  if (!(AFFILIATE_MARKETPLACES as ReadonlyArray<string>).includes(record.marketplace)) {
+    return "marketplace_invalid";
+  }
+  if (!nonEmpty(record.provider_id)) return "provider_id_missing";
+  if (!validOfficialUrl(record.affiliate_url, record.marketplace)) return "affiliate_url_not_official";
+  if (!nonEmpty(record.acquisition_ref)) return "acquisition_ref_missing";
+  if (!nonEmpty(record.authorization_ref)) return "authorization_ref_missing";
+  if (!nonEmpty(record.idempotency_key)) return "idempotency_key_missing";
+  if (!/^sha256:[0-9a-f]{64}$/.test(record.response_digest)) return "response_digest_invalid";
+  if (record.method !== N17_METHOD) return "method_not_api";
+  if (record.provenance.provider !== record.provider_id) return "provenance_provider_mismatch";
+  if (record.provenance.marketplace !== record.marketplace) return "provenance_marketplace_mismatch";
+  if (record.provenance.method !== N17_METHOD) return "provenance_method_not_api";
+  if (record.provenance.source_url_origin !== "official_provider") return "provenance_origin_not_official";
+  if (!nonEmpty(record.provenance.source_operation)) return "source_operation_missing";
+  if (!nonEmpty(record.identity.listing_id)) return "listing_id_missing";
+  if (!nonEmpty(record.identity.seller_id)) return "seller_id_missing";
+  if (!nonEmpty(record.identity.title_snapshot)) return "title_snapshot_missing";
+  if (!validOfficialUrl(record.identity.canonical_url, record.marketplace)) {
+    return "canonical_url_not_official";
+  }
+  if (!validUtc(record.acquired_at)) return "acquired_at_invalid";
+  if (!validUtc(record.observed_at)) return "observed_at_invalid";
+  return null;
+}
+
+function readMetadata(row: N17Row): Record<string, unknown> | null {
+  if (!row.metadata || typeof row.metadata !== "object" || Array.isArray(row.metadata)) return null;
+  return row.metadata as Record<string, unknown>;
+}
+
+function n17RecordFromRow(row: N17Row): N17AcquisitionRecord | null {
+  const marketplace = row.marketplace;
+  if (marketplace !== "MercadoLivre" && marketplace !== "Shopee") return null;
+  const metadata = readMetadata(row);
+  if (!metadata) return null;
+  const record: N17AcquisitionRecord = {
+    affiliate_link_id: typeof row.link_id === "string" ? row.link_id : "",
+    candidate_id: typeof row.candidate_id === "string" ? row.candidate_id : "",
+    product_id: typeof row.product_id === "string" ? row.product_id : null,
+    marketplace,
+    provider_id: typeof row.provider_id === "string" ? row.provider_id : "",
+    affiliate_url: typeof row.affiliate_url === "string" ? row.affiliate_url : "",
+    short_url: null,
+    identity: {
+      listing_id: typeof row.listing_id === "string" ? row.listing_id : "",
+      seller_id: typeof row.seller_id === "string" ? row.seller_id : "",
+      title_snapshot: typeof row.title_snapshot === "string" ? row.title_snapshot : "",
+      canonical_url: typeof row.canonical_url === "string" ? row.canonical_url : "",
+    },
+    acquisition_ref: typeof row.acquisition_ref === "string" ? row.acquisition_ref : "",
+    authorization_ref: typeof row.authorization_ref === "string" ? row.authorization_ref : "",
+    assessment_id: typeof row.assessment_id === "string" ? row.assessment_id : null,
+    idempotency_key: typeof row.idempotency_key_n17 === "string" ? row.idempotency_key_n17 : "",
+    method: row.method === N17_METHOD ? N17_METHOD : "MANUAL",
+    acquired_at: typeof metadata.acquired_at === "string" ? metadata.acquired_at : "",
+    observed_at: typeof row.observed_at === "string" ? row.observed_at : "",
+    response_digest: typeof row.response_digest_n17 === "string" ? row.response_digest_n17 : "",
+    provenance: {
+      provider: typeof row.provider_id === "string" ? row.provider_id : "",
+      marketplace,
+      method: row.method === N17_METHOD ? N17_METHOD : "MANUAL",
+      source_operation: typeof metadata.source_operation === "string" ? metadata.source_operation : "",
+      source_url_origin: metadata.source_url_origin === "official_provider" ? "official_provider" : "operator_manual",
+    },
+  };
+  const validationReason = validN17Record(record);
+  return validationReason ? null : record;
+}
+
+function canonicalN17Record(record: N17AcquisitionRecord): Record<string, unknown> {
+  return {
+    affiliate_link_id: record.affiliate_link_id,
+    candidate_id: record.candidate_id,
+    product_id: record.product_id,
+    marketplace: record.marketplace,
+    provider_id: record.provider_id,
+    affiliate_url: record.affiliate_url,
+    short_url: record.short_url,
+    identity: {
+      listing_id: record.identity.listing_id,
+      seller_id: record.identity.seller_id,
+      title_snapshot: record.identity.title_snapshot,
+      canonical_url: record.identity.canonical_url,
+    },
+    acquisition_ref: record.acquisition_ref,
+    authorization_ref: record.authorization_ref,
+    assessment_id: record.assessment_id,
+    idempotency_key: record.idempotency_key,
+    method: record.method,
+    acquired_at: record.acquired_at,
+    observed_at: record.observed_at,
+    response_digest: record.response_digest,
+    provenance: {
+      provider: record.provenance.provider,
+      marketplace: record.provenance.marketplace,
+      method: record.provenance.method,
+      source_operation: record.provenance.source_operation,
+      source_url_origin: record.provenance.source_url_origin,
+    },
+  };
+}
+
+function n17RecordsIdentical(left: N17AcquisitionRecord, right: N17AcquisitionRecord): boolean {
+  return JSON.stringify(canonicalN17Record(left)) === JSON.stringify(canonicalN17Record(right));
+}
+
+async function findN17RowBy(column: string, value: string): Promise<N17Row | null> {
+  const client = requireClient();
+  const { data, error } = await client
+    .from(LINKS_TABLE)
+    .select("*")
+    .eq(column, value)
+    .single();
+  if (error || !data || typeof data !== "object") return null;
+  return data as N17Row;
+}
+
+/** Busca somente a chave de idempotência própria do N17. */
+export async function findN17ByIdempotencyKey(key: string): Promise<N17AcquisitionRecord | null> {
+  if (!nonEmpty(key)) return null;
+  const row = await findN17RowBy("idempotency_key_n17", key);
+  return row ? n17RecordFromRow(row) : null;
+}
+
+/**
+ * Persiste uma aquisição API já confirmada pelo N8.
+ *
+ * O método nunca chama provider, transporte, GraphQL ou N8. Ele somente
+ * registra o resultado confirmado e diferencia replay idêntico de conflito.
+ */
+export async function persistN17Acquisition(record: N17AcquisitionRecord): Promise<{
+  outcome: N17WriteOutcome;
+  record: N17AcquisitionRecord | null;
+  reason?: string;
+}> {
+  const invalid = validN17Record(record);
+  if (invalid) return { outcome: "failed", record: null, reason: invalid };
+
+  const client = requireClient();
+  const now = new Date().toISOString();
+  const digest = affiliateLinkDigest({
+    provider_id: record.provider_id,
+    candidate_id: record.candidate_id,
+    product_id: null,
+    affiliate_url: record.affiliate_url,
+  });
+  const row: N17Row = {
+    link_id: record.affiliate_link_id,
+    candidate_id: record.candidate_id,
+    product_id: null,
+    marketplace: record.marketplace,
+    provider_id: record.provider_id,
+    affiliate_url: record.affiliate_url,
+    provenance: N17_PROVENANCE,
+    status: "DRAFT",
+    validation_state: "UNVALIDATED",
+    validation_result: {},
+    digest,
+    observed_at: record.observed_at,
+    expires_at: null,
+    notes: "N17 acquisition confirmed by N8; publication remains governed by N15/N16.",
+    contract_version: "n17-acquisition-v1",
+    idempotency_key: null,
+    metadata: n17Metadata(record),
+    created_by: N17_CREATED_BY,
+    created_at: now,
+    updated_at: now,
+    acquisition_ref: record.acquisition_ref,
+    authorization_ref: record.authorization_ref,
+    assessment_id: record.assessment_id,
+    idempotency_key_n17: record.idempotency_key,
+    response_digest_n17: record.response_digest,
+    listing_id: record.identity.listing_id,
+    seller_id: record.identity.seller_id,
+    title_snapshot: record.identity.title_snapshot,
+    canonical_url: record.identity.canonical_url,
+    method: N17_METHOD,
+  };
+
+  const { data, error } = await client.from(LINKS_TABLE).insert(row).single();
+  if (!error && data && typeof data === "object") {
+    const persisted = n17RecordFromRow(data as N17Row);
+    return persisted
+      ? { outcome: "created", record: persisted }
+      : { outcome: "failed", record: null, reason: "stored_n17_record_invalid" };
+  }
+  if (!error || !/duplicate|23505/i.test(error.message)) {
+    return { outcome: "failed", record: null, reason: "store_error" };
+  }
+
+  const existingByKey = await findN17RowBy("idempotency_key_n17", record.idempotency_key);
+  const existingN17 = existingByKey ? n17RecordFromRow(existingByKey) : null;
+  if (existingN17) {
+    return n17RecordsIdentical(existingN17, record)
+      ? { outcome: "identical_duplicate", record: existingN17 }
+      : { outcome: "conflict", record: null, reason: "idempotency_key_conflict" };
+  }
+
+  const existingByDigest = await findN17RowBy("digest", digest);
+  if (existingByDigest) {
+    return { outcome: "conflict", record: null, reason: "affiliate_link_digest_conflict" };
+  }
+  return { outcome: "failed", record: null, reason: "duplicate_without_resolvable_record" };
+}
+
+/** Adapter injetável usado pelo acquireN17 na composição real do backend. */
+export const n17AffiliateRepository: N17Repository = {
+  findByIdempotencyKey: findN17ByIdempotencyKey,
+  persist: persistN17Acquisition,
+};

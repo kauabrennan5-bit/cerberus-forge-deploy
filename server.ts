@@ -38,6 +38,12 @@ import { registerCommercialBrainCandidatesRoutes } from "./server/routes/commerc
 import { registerGovernanceRoutes } from "./server/routes/governanceRoutes";
 import { setAffiliateClient } from "./server/commercial/affiliate/affiliateRepository";
 import {
+  createN17RuntimeDeps,
+  setN17RuntimeDeps,
+} from "./server/commercial/affiliate/n17Runtime";
+import { registerN17Routes } from "./server/commercial/affiliate/n17Routes";
+import {
+  getAffiliateApiSource,
   setAffiliateApiSource,
 } from "./server/commercial/affiliate/acquisitionService";
 import { createShopeeAffiliateProvider } from "./server/commercial/affiliate/shopeeAffiliateProvider";
@@ -1128,6 +1134,24 @@ NUNCA modifique ou invente preços ou imagens.`,
     setAffiliateApiSource(null);
   }
   registerAffiliateRoutes(app, requireAdminAuth);
+  // Bloco N17 — Aquisição de Afiliados (governada, admin-only).
+  // N15 authorization → N17 acquireN17 → N8 acquireAffiliateLink →
+  // provider oficial → N6 persistN17Acquisition.
+  // ACQUISITION != PUBLICATION — N17 não aciona N16, N18+, Telegram,
+  // scheduler ou job_queue. A factory somente injeta dependências.
+  if (productsRepository.supabase) {
+    setN17RuntimeDeps(
+      createN17RuntimeDeps(
+        productsRepository.supabase as any,
+        getAffiliateApiSource(),
+      ),
+    );
+  } else {
+    setN17RuntimeDeps(null);
+  }
+  // A rota somente adapta HTTP ao runtime governado; não contém autoridade
+  // N15, transporte N8, lógica de provider ou persistência N6.
+  registerN17Routes(app, requireAdminAuth);
   // Bloco N13 — Filtro / Curadoria Cerberus (Fase 1): curadoria estrutural
   // PASS/FAIL/BLOCKED. READ-ONLY: não cria produto, link, job ou publicação.
   registerCurationRoutes(app, requireAdminAuth);
