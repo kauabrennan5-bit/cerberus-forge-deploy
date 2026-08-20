@@ -27,6 +27,11 @@ import {
   type CommercialSignalsInput,
 } from "./contract";
 import { normalizeSignalsInput, type NormalizedSignal } from "./normalizers";
+import {
+  resolveEvidenceSignals,
+  EVIDENCE_SIGNAL_PROVENANCE,
+} from "./evidenceSignals";
+import { listCandidateEvidence } from "../../repositories/candidateEvidenceRepository";
 import { getPriceRanges, lookupPriceRange, validatePriceRangesRegistry } from "./priceRanges";
 import { evaluateCommercialSignals, type NormalizedSignals } from "./engine";
 import {
@@ -193,8 +198,30 @@ export async function evaluateCommercialBrain(
       return { ok: false, outcome: "gate_failed", gateReason: n13.gateReason };
     }
 
+    // ELO EVIDENCE BRIDGE → N14 (Fase 20): transporte read-only das
+    // evidências elegíveis de candidate_evidence para os sinais do N14.
+    // Ordem de precedência: derivado do candidato < evidência oficial <
+    // override explícito da rota. Falha de leitura → readFailure e nenhum
+    // sinal é transportado (N14 permanece UNKNOWN/INSUFFICIENT).
+    let evidenceSignals: CommercialSignalsInput = {};
+    let evidenceRefs: ReadonlyArray<string> = [];
+    let evidenceAmbiguity: ReadonlyArray<string> = [];
+    try {
+      const resolved = await resolveEvidenceSignals(candidateId, cid =>
+        listCandidateEvidence(cid),
+      );
+      if (!resolved.readFailure) {
+        evidenceSignals = resolved.signals;
+        evidenceRefs = resolved.evidenceIds;
+        evidenceAmbiguity = resolved.ambiguousFields;
+      }
+    } catch {
+      evidenceSignals = {};
+      evidenceRefs = [];
+    }
     const mergedInput = {
       ...deriveSignalsFromCandidate(candidate),
+      ...normalizeOverrides(evidenceSignals),
       ...normalizeOverrides(signalsInput ?? {}),
     };
     const normalized: NormalizedSignals = normalizeSignalsInput(mergedInput);
@@ -309,7 +336,7 @@ export async function evaluateCommercialBrain(
       unknowns: decision.dimensionsUnknown.map((d) => `unknown_dimension:${d}`),
       contradictions: decision.conflictDimensions.map((d) => `conflict_dimension:${d}`),
       collectionFailures: [],
-      evidenceRefs: [],
+      evidenceRefs: [...evidenceRefs],
       inputSnapshot: snapshot,
       correlationId: null,
       idempotencyKey: buildAssessmentDigest({
@@ -331,6 +358,10 @@ export async function evaluateCommercialBrain(
         n13GateVerdict: N13_REQUIRED_VERDICT,
         n13GateFilterVersion: N13_REQUIRED_FILTER_VERSION,
         n13AssessmentId: n13.assessment?.assessment_id ?? null,
+        evidenceSignalsTransported: evidenceRefs.length > 0,
+        evidenceRefsUsed: [...evidenceRefs],
+        evidenceAmbiguousFields: [...evidenceAmbiguity],
+        evidenceSignalProvenance: EVIDENCE_SIGNAL_PROVENANCE,
       },
     });
 
