@@ -119,6 +119,8 @@ export interface ShopeeProductLookupResult {
   readonly name: string | null;
   readonly priceMinorUnits: number | null;
   readonly productLink: string | null;
+  /** Status HTTP observado; null quando não houve resposta HTTP utilizável. */
+  readonly httpStatus: number | null;
   readonly raw: unknown;
   /** Error somente quando status === "error" — sempre com kind catalogado. */
   readonly error: ShopeeClientError | null;
@@ -157,6 +159,7 @@ export class ShopeeClientError extends Error {
   constructor(
     readonly kind: ShopeeErrorKind,
     readonly detail?: string,
+    readonly httpStatus: number | null = null,
   ) {
     // Mensagem determinística e sem valores sensíveis (fail-closed).
     super(`shopee_client_error:${kind}${detail ? `:${detail}` : ""}`);

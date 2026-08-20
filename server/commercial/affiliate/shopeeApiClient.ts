@@ -83,7 +83,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
    *   HTTP não-2xx / GraphQL errors / payload fora do envelope → erro
    *   catalogado (jamais URL derivada, jamais exceção não catalogada).
    */
-  async function signedGraphqlPost(body: { query: string; variables: Record<string, unknown> }): Promise<unknown> {
+  async function signedGraphqlPost(body: { query: string; variables: Record<string, unknown> }): Promise<{ json: unknown; httpStatus: number }> {
     const payload = JSON.stringify(body);
     // Timestamp em segundos Unix (janela oficial ~5 minutos).
     const timestamp = Math.floor(clock() / 1000).toString();
@@ -118,34 +118,34 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
         clearTimeout(timer);
       }
       if (response.status === 401) {
-        throw new ShopeeClientError("SHOPEE_AUTH_ERROR", "http_401");
+        throw new ShopeeClientError("SHOPEE_AUTH_ERROR", "http_401", response.status);
       }
       if (response.status === 403) {
-        throw new ShopeeClientError("SHOPEE_FORBIDDEN", "http_403");
+        throw new ShopeeClientError("SHOPEE_FORBIDDEN", "http_403", response.status);
       }
       if (!response.ok) {
         // 429 = rate limit oficial (transitório); demais 4xx/5xx = permanente.
         if (response.status === 429) {
-          throw new ShopeeClientError("SHOPEE_RATE_LIMITED", "http_429");
+          throw new ShopeeClientError("SHOPEE_RATE_LIMITED", "http_429", response.status);
         }
-        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", `http_${response.status}`);
+        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", `http_${response.status}`, response.status);
       }
       let json: unknown;
       try {
         json = await response.json();
       } catch {
-        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "body_not_json");
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "body_not_json", response.status);
       }
       if (!json || typeof json !== "object") {
-        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object", response.status);
       }
       const data = json as Record<string, unknown>;
       // Erros oficiais da Shopee (HTTP 200 + payload de erro) — catalogados
       // por código oficial; jamais viram sucesso.
       if (Array.isArray(data.errors) && data.errors.length > 0) {
-        throw shopeeGraphqlErrorsToError(data.errors);
+        throw shopeeGraphqlErrorsToError(data.errors, response.status);
       }
-      return json;
+      return { json, httpStatus: response.status };
     } catch (err) {
       if (err instanceof ShopeeClientError) throw err;
       // Qualquer exceção não catalogada = FAIL-CLOSED (unknown).
@@ -159,13 +159,13 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
    *   10030 = rate limit       → RATE_LIMITED (transitório)
    *   demais                    → GRAPHQL_ERROR (permanente, fail-closed)
    */
-  function shopeeGraphqlErrorsToError(errors: unknown[]): ShopeeClientError {
+  function shopeeGraphqlErrorsToError(errors: unknown[], httpStatus: number | null = null): ShopeeClientError {
     const first = errors[0] as Record<string, unknown> | undefined;
     const code = typeof first?.code === "number" ? first.code
       : typeof first?.code === "string" ? first.code
         : "unknown";
     const kind: ReturnType<typeof kindFromCode> = kindFromCode(code);
-    return new ShopeeClientError(kind, `code_${code}`);
+    return new ShopeeClientError(kind, `code_${code}`, httpStatus);
   }
 
   function kindFromCode(code: number | string): import("./shopeeClientContracts").ShopeeErrorKind {
@@ -208,13 +208,13 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
    */
   async function lookupProduct(params: { shopId?: string | null; itemId?: string | null }): Promise<ShopeeProductLookupResult> {
     try {
-      const json = await signedGraphqlPost(offerQueryBody(params));
-      return parseProductLookup(json, params.shopId ?? null, params.itemId ?? null);
+      const response = await signedGraphqlPost(offerQueryBody(params));
+      return parseProductLookup(response.json, params.shopId ?? null, params.itemId ?? null, response.httpStatus);
     } catch (err) {
       if (err instanceof ShopeeClientError) {
-        return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: null, error: err };
+        return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus: err.httpStatus, raw: null, error: err };
       }
-      return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+      return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
     }
   }
 
@@ -229,8 +229,8 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       try {
-        const json = await signedGraphqlPost(offerQueryBody(params));
-        return parseAffiliateAcquisition(json, params.shopId ?? null, params.itemId ?? null);
+        const response = await signedGraphqlPost(offerQueryBody(params));
+        return parseAffiliateAcquisition(response.json, params.shopId ?? null, params.itemId ?? null);
       } catch (err) {
         lastError = err;
         if (!(err instanceof ShopeeClientError)) {
@@ -249,17 +249,17 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
   }
 
-  function parseProductLookup(json: unknown, wantShop: string | null, wantItem: string | null): ShopeeProductLookupResult {
+  function parseProductLookup(json: unknown, wantShop: string | null, wantItem: string | null, httpStatus: number | null): ShopeeProductLookupResult {
     const nodes = extractOfferNodes(json);
     if (nodes.length === 0) {
-      return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: json, error: null };
+      return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus, raw: json, error: null };
     }
     // Match estrito — o primeiro nó só vale se coincide com o identificador
     // procurado; se não há identificadores, a fonte não localizou o produto
     // com precisão → fail-closed (not_found, sem presumir).
     const node = matchNode(nodes, wantShop, wantItem);
     if (!node) {
-      return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, raw: json, error: null };
+      return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus, raw: json, error: null };
     }
     return {
       status: "found",
@@ -268,6 +268,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       name: node.name,
       priceMinorUnits: node.price,
       productLink: node.productLink,
+      httpStatus,
       raw: json,
       error: null,
     };
@@ -412,20 +413,20 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       if (response.status === 403) throw new ShopeeClientError("SHOPEE_FORBIDDEN", "http_403");
       if (!response.ok) {
         if (response.status === 429) throw new ShopeeClientError("SHOPEE_RATE_LIMITED", "http_429");
-        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", `http_${response.status}`);
+        throw new ShopeeClientError("SHOPEE_NETWORK_ERROR", `http_${response.status}`, response.status);
       }
       let json: unknown;
       try {
         json = await response.json();
       } catch {
-        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "body_not_json");
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "body_not_json", response.status);
       }
       if (!json || typeof json !== "object") {
-        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
+        throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object", response.status);
       }
       const data = json as Record<string, unknown>;
       if (Array.isArray(data.errors) && data.errors.length > 0) {
-        throw shopeeGraphqlErrorsToError(data.errors);
+        throw shopeeGraphqlErrorsToError(data.errors, response.status);
       }
       return json;
     } catch (err) {
