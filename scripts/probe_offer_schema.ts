@@ -27,8 +27,26 @@ const SHOP_ID = "1530442944";
 // GraphQL ignora campos inexistentes na seleção, então campos rejeitados
 // revelam ausência do contrato; campos aceitos revelam o shape real.
 // Nenhum valor é registrado no output.
-const PROBE_QUERY =
-  `{ productOfferV2(itemId: ${ITEM_ID}, shopId: ${SHOP_ID}, limit: 1) { nodes { itemId shopId productName price productLink offerLink stockInfo seller sellerId sellerName sellerRating } } }`;
+// Subset de campos: --base | --extra | --all (default: --all)
+// --base: seleção comprovada da Fase 15/17 (regressão de contrato)
+// --extra: campos candidatos às dimensões N14
+// --all: união (descoberta)
+const PROBE_QUERY = `
+  { productOfferV2(itemId: ${ITEM_ID}, shopId: ${SHOP_ID}, limit: 1) { nodes { ${selectionSet()} } } }
+`;
+
+function selectionSet(): string {
+  const args = process.argv.slice(2);
+  const wantBase = args.includes("--base");
+  const wantExtra = args.includes("--extra");
+  const all = !wantBase && !wantExtra;
+  const base = "itemId shopId productName price productLink offerLink";
+  const extra = "stockInfo seller sellerId sellerName sellerRating";
+  if (all) return `${base} ${extra}`;
+  if (wantBase && wantExtra) return `${base} ${extra}`;
+  if (wantBase) return base;
+  return extra;
+}
 
 function envSanitize(v: string): boolean {
   return !!v && !/[\s]/.test(v);
