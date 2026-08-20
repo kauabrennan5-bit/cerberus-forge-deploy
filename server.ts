@@ -46,7 +46,6 @@ import { setCycleClient } from "./server/commercial/cycle/cycleRepository";
 import { registerN2SourceConnectors } from "./server/commercial/sourceConnector/registerN2SourceConnectors";
 import { setPublicationExecutionsClient } from "./server/repositories/publicationExecutionsRepository";
 import { registerPublicationN16Routes, setN16PublicationProvider } from "./server/routes/publicationN16Routes";
-import { registerShopeePriceShapeProbeRoutes } from "./server/routes/shopeePriceShapeProbeRoutes";
 import { FakePublicationProvider, type FakePublicationProviderMode } from "./server/commercial/publication/n16Provider";
 
 dotenv.config();
@@ -1129,8 +1128,6 @@ NUNCA modifique ou invente preços ou imagens.`,
     setAffiliateApiSource(null);
   }
   registerAffiliateRoutes(app, requireAdminAuth);
-  // INFRA-03 Fase 17 — probe temporária read-only; remover após uma única chamada real.
-  registerShopeePriceShapeProbeRoutes({ app, requireAdminAuth });
   // Bloco N13 — Filtro / Curadoria Cerberus (Fase 1): curadoria estrutural
   // PASS/FAIL/BLOCKED. READ-ONLY: não cria produto, link, job ou publicação.
   registerCurationRoutes(app, requireAdminAuth);
