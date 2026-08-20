@@ -249,6 +249,80 @@ describe("SHOPEE-05 consulta oficial por produto (match estrito)", () => {
     });
   });
 
+  // D-SHOPEE-1 (PHASE14_SCHEMA_PROBE_20260820): o shape real da API
+  // devolve `price` como string decimal pura; o parser aceita a FORMA
+  // observada. A ESCALA/SEMÂNTICA continua UNVERIFIED (NÃO é
+  // "priceMinorUnits" comprovado) — isso é sinalizado no Evidence Bridge
+  // (quality=UNKNOWN, unit=string_price_unscaled, note SCALE_UNVERIFIED).
+  it("aceita a forma decimal pura observada no shape real (escala UNVERIFIED, não é minor_units comprovado)", () => {
+    const handle = makeMockTransport(() => ({
+      status: 200,
+      body: officialOk([{ ...NODE_ITEM_OFFER, price: "9900" }]),
+    }));
+    const client = createShopeeApiClient({
+      appId: APP_ID,
+      secret: APP_SECRET,
+      transport: handle.transport,
+    });
+    return client.lookupProduct({ shopId: "715084914", itemId: "23794344926" }).then((r) => {
+      assert.equal(r.status, "found");
+      // Forma decimal pura aceita (shape real observado).
+      // SEMÂNTICA de minor units NÃO comprovada — escala UNVERIFIED.
+      assert.equal(r.priceMinorUnits, 9900);
+    });
+  });
+
+  it("aceita string decimal plausível na forma observada (escala UNVERIFIED, não é minor_units comprovado)", () => {
+    const handle = makeMockTransport(() => ({
+      status: 200,
+      body: officialOk([{ ...NODE_ITEM_OFFER, price: "99.00" }]),
+    }));
+    const client = createShopeeApiClient({
+      appId: APP_ID,
+      secret: APP_SECRET,
+      transport: handle.transport,
+    });
+    return client.lookupProduct({ shopId: "715084914", itemId: "23794344926" }).then((r) => {
+      assert.equal(r.status, "found");
+      // Forma decimal aceita (shape real observado).
+      // SEMÂNTICA de minor units NÃO comprovada — escala UNVERIFIED.
+      assert.equal(r.priceMinorUnits, 99);
+    });
+  });
+
+  it("mantém UNKNOWN para string inválida", () => {
+    const handle = makeMockTransport(() => ({
+      status: 200,
+      body: officialOk([{ ...NODE_ITEM_OFFER, price: "not-a-price" }]),
+    }));
+    const client = createShopeeApiClient({
+      appId: APP_ID,
+      secret: APP_SECRET,
+      transport: handle.transport,
+    });
+    return client.lookupProduct({ shopId: "715084914", itemId: "23794344926" }).then((r) => {
+      assert.equal(r.status, "found");
+      assert.equal(r.priceMinorUnits, null);
+    });
+  });
+
+  it("mantém UNKNOWN para string vazia e ausência de price", async () => {
+    for (const priceNode of [{ ...NODE_ITEM_OFFER, price: "" }, (() => {
+      const { price: _ignored, ...withoutPrice } = NODE_ITEM_OFFER;
+      return withoutPrice;
+    })()]) {
+      const handle = makeMockTransport(() => ({ status: 200, body: officialOk([priceNode]) }));
+      const client = createShopeeApiClient({
+        appId: APP_ID,
+        secret: APP_SECRET,
+        transport: handle.transport,
+      });
+      const result = await client.lookupProduct({ shopId: "715084914", itemId: "23794344926" });
+      assert.equal(result.status, "found");
+      assert.equal(result.priceMinorUnits, null);
+    }
+  });
+
   it("not_found quando o nó oficial não corresponde aos identificadores (sem presumir o 1º nó)", () => {
     const handle = makeMockTransport(() => ({ status: 200, body: officialOk() }));
     const client = createShopeeApiClient({

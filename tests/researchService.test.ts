@@ -338,12 +338,20 @@ test("startResearch — Shopee SUCCESS usa API oficial e persiste proveniência 
   assert.equal(result.fields.length, 8);
   assert.equal(result.unknowns, 6);
   assert.equal(evidenceCount(), 9);
-  const price = getCandidatesEvidenceStore().find(r => r.field_name === "price");
-  assert.equal(price?.source_type, "api");
-  assert.equal(price?.collection_method, "API");
-  assert.equal(price?.field_state, "KNOWN");
-  assert.equal((price?.field_value as Record<string, unknown>)?.value, 3590);
-  assert.equal(price?.quality, "HIGH");
+  // A store em memória é compartilhada entre testes: filtrar pelo
+  // candidate_id deste teste para não ler o registro de outro teste.
+  const priceShopee = getCandidatesEvidenceStore().find(r => String(r.field_name) === "price" && String(r.candidate_id) === candidateId);
+  assert.equal(priceShopee?.source_type, "api");
+  assert.equal(priceShopee?.collection_method, "API");
+  // D-SHOPEE-1 (PHASE14_SCHEMA_PROBE_20260820): price vem da forma
+  // decimal pura observada na API real; a forma é KNOWN, mas a ESCALA
+  // não é contratualmente comprovada — quality=UNKNOWN e
+  // unit=string_price_unscaled (jamais "minor_units" comprovado).
+  assert.equal(priceShopee?.field_state, "KNOWN");
+  assert.equal((priceShopee?.field_value as Record<string, unknown>)?.value, 3590);
+  assert.equal(priceShopee?.quality, "UNKNOWN");
+  assert.equal(priceShopee?.unit, "string_price_unscaled");
+  assert.equal(priceShopee?.evidence_note, "OBSERVED_STRING_PRICE_SHAPE; SCALE_UNVERIFIED_CONTRACT_UNSPECIFIED");
 });
 
 test("startResearch — Shopee COLLECTION_FAILED persiste todos os campos como falha", async () => {

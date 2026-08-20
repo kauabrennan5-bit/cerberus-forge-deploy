@@ -165,6 +165,10 @@ function observeSchema(json: unknown): {
   fields: ReadonlyArray<{ path: string; type: string; present: boolean }>;
   nodeCount: number;
   identityMatch: boolean;
+  errorCodes: ReadonlyArray<string>;
+  errorKeyCount: number;
+  topKeys: ReadonlyArray<string>;
+  dataKeys: ReadonlyArray<string>;
 } {
   const fields: { path: string; type: string; present: boolean }[] = [];
   let nodeCount = 0;
@@ -186,20 +190,23 @@ function observeSchema(json: unknown): {
   const errors = ((json as { errors?: unknown[] })?.errors) ?? [];
   const errorCodes: string[] = Array.isArray(errors)
     ? errors
-        .map((e) => {
+        .map((e): string => {
           if (!e || typeof e !== "object") return "<no_code>";
           const obj = e as Record<string, unknown>;
-          const candidate = obj.code ?? obj.errorCode ?? obj.extensions?.code ?? "<no_code>";
-          return String(candidate);
+          const candidate = obj?.code ?? obj?.errorCode ?? (obj?.extensions as Record<string, unknown> | undefined)?.code ?? "<no_code>";
+          return String(candidate ?? "<no_code>");
         })
         .filter((c) => /^\d+$|^[A-Z_]+$|^<no_code>$/.test(c))
         .slice(0, 10)
     : [];
   const errorKeyCount = Array.isArray(errors) ? errors.length : 0;
-  const topKeys = json && typeof json === "object" ? Object.keys(json as Record<string, unknown>).sort() : [];
-  const dataKeys =
+  const topKeys: string[] =
     json && typeof json === "object"
-      ? Object.keys((json as { data?: Record<string, unknown> }).data ?? {}).sort()
+      ? Object.keys(json as Record<string, unknown>).sort()
+      : [];
+  const dataKeys: string[] =
+    json && typeof json === "object"
+      ? Object.keys(((json as { data?: Record<string, unknown> }).data ?? {}) as Record<string, unknown>).sort()
       : [];
   const ok = nodeCount > 0 && fields.length > 0 && errors.length === 0;
   return { ok, fields, nodeCount, identityMatch, errorCodes, errorKeyCount, topKeys, dataKeys };
@@ -209,7 +216,7 @@ function describeType(value: unknown): string {
   if (value === null || value === undefined) return "null";
   const t = typeof value;
   if (t === "string") {
-    const isUrl = /^https?:\/\//i.test(value);
+    const isUrl = /^https?:\/\//i.test(String(value));
     return isUrl ? "string(url-like)" : value === "" ? "string(empty)" : "string(non-empty)";
   }
   if (t === "number") return "number";

@@ -466,6 +466,35 @@ interface OfferNode {
   offerLink: string | null;
 }
 
+/**
+ * D-SHOPEE-1 (Fase 17/14, 2026-08-20): a API oficial retorna
+ * `price` como STRING(non-empty) — provado em chamada real no runtime
+ * (PHASE14_SCHEMA_PROBE_20260820). A documentação oficial NÃO
+ * especifica moeda/escala (BLOCKED — CONTRACT UNSPECIFIED, Fase 19),
+ * portanto esta normalização é puramente de FORMA (string → número
+ * decimal puro), SEM inventar unidade, moeda, locale ou escala:
+ *   - aceita APENAS dígitos opcionais + ponto decimal + dígitos (ex.:
+ *     "129.90", "0.5", "3"); sem separador de milhar, sem vírgula
+ *     decimal, sem símbolo, sem espaço;
+ *   - rejeita: strings vazias, NaN, Infinity, exponenciais, vírgulas,
+ *     moedas embutidas, sinais (+/-) e qualquer outra forma ambígua → null;
+ *   - price já number passa inalterado; price ausente/não-string → null.
+ * Resultado null = dimensão PRICE permanece UNKNOWN no Evidence Bridge
+ * (fail-closed: nunca promover valor ambíguo).
+ */
+export function parseShopeePriceString(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  // Forma estrita: opcionalmente dígitos, opcional parte decimal com ponto.
+  if (!/^\d+(\.\d+)?$|^\.\d+$/.test(trimmed)) return null;
+  const num = Number(trimmed);
+  return Number.isFinite(num) ? num : null;
+}
+
 function extractOfferNodes(json: unknown): OfferNode[] {
   if (!json || typeof json !== "object") {
     throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
@@ -497,7 +526,7 @@ function extractOfferNodes(json: unknown): OfferNode[] {
           shopId: typeof obj.shopId === "number" ? String(obj.shopId) : typeof obj.shopId === "string" ? obj.shopId : null,
           itemId: typeof obj.itemId === "number" ? String(obj.itemId) : typeof obj.itemId === "string" ? obj.itemId : null,
           name,
-          price: typeof obj.price === "number" ? obj.price : null,
+          price: parseShopeePriceString(obj.price),
           productLink: typeof obj.productLink === "string" ? obj.productLink : null,
           offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
         };

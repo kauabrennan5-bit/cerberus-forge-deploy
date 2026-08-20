@@ -26,6 +26,19 @@ import {
 
 const KNOWN_QUALITY = "HIGH" as const;
 const UNKNOWN_QUALITY = "UNKNOWN" as const;
+/**
+ * D-SHOPEE-1 (PHASE14_SCHEMA_PROBE_20260820): a API oficial retorna
+ * `price` como string decimal pura (shape real observado). A forma é
+ * aceitada no parsing, mas a SEMÂNTICA (moeda/unidade/escala) NÃO é
+ * especificada oficialmente (BLOCKED — CONTRACT UNSPECIFIED, Fase 19).
+ * Quando o valor vem do string real, a dimensão é promovida a KNOWN
+ * apenas na FORMA: quality=UNKNOWN e unit=string_price_unscaled sinalizam
+ * ao N14 que a ESCALA permanece UNVERIFIED — jamais é tratada como
+ * "minor units" comprovados.
+ */
+const STRING_PRICE_UNSCALED_UNIT = "string_price_unscaled" as const;
+const SCALE_UNVERIFIED_NOTE =
+  "OBSERVED_STRING_PRICE_SHAPE; SCALE_UNVERIFIED_CONTRACT_UNSPECIFIED" as const;
 const HTTPS_SHOPEE_HOSTS = ["shopee.com.br", "shopee.com", "shope.ee"] as const;
 
 function isNonEmpty(value: unknown): value is string {
@@ -118,8 +131,18 @@ function fieldValueFor(
   if (fieldName === "title" && isNonEmpty(result.name)) {
     return { value: result.name, state: "KNOWN", quality: KNOWN_QUALITY, unit: null };
   }
+  // price: o número só é promovido se vier de forma decimal pura
+  // (parseShopeePriceString já rejeitou ambíguos — fail-closed).
   if (fieldName === "price" && typeof result.priceMinorUnits === "number" && Number.isFinite(result.priceMinorUnits)) {
-    return { value: result.priceMinorUnits, state: "KNOWN", quality: KNOWN_QUALITY, unit: "minor_units" };
+    // A unidade "minor_units" pressupõe escala contratada (não comprovada);
+    // a dimensão entra no N14 como KNOWN (forma observada) porém com
+    // quality UNKNOWN e unit string_price_unscaled (escala UNVERIFIED).
+    return {
+      value: result.priceMinorUnits,
+      state: "KNOWN",
+      quality: UNKNOWN_QUALITY,
+      unit: STRING_PRICE_UNSCALED_UNIT,
+    };
   }
   return { value: null, state: "UNKNOWN", quality: UNKNOWN_QUALITY, unit: null };
 }
@@ -158,9 +181,12 @@ function buildFields(
       evidence_hash: fieldEvidenceHash,
       quality: field.quality,
       unit: field.unit,
-      evidence_note: field.state === "KNOWN"
-        ? "OBSERVED_FROM_OFFICIAL_SHOPEE_API"
-        : "UNKNOWN_NOT_RETURNED_BY_OFFICIAL_SHOPEE_OPERATION",
+      evidence_note:
+        fieldName === "price" && field.state === "KNOWN"
+          ? SCALE_UNVERIFIED_NOTE
+          : field.state === "KNOWN"
+            ? "OBSERVED_FROM_OFFICIAL_SHOPEE_API"
+            : "UNKNOWN_NOT_RETURNED_BY_OFFICIAL_SHOPEE_OPERATION",
       metadata: {
         marketplace: OFFICIAL_SHOPEE_MARKETPLACE,
         operation: OFFICIAL_SHOPEE_OPERATION,

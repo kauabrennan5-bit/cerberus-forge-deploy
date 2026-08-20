@@ -249,7 +249,7 @@ async function registerLinkFor(providerId: string, overrides: { candidate_id?: s
 test("N6-Q: catálogos fechados existem e são estáveis", () => {
   assert.deepEqual([...PROVIDER_STATUSES], ["ACTIVE", "INACTIVE", "PENDING_REVIEW", "WITHDRAWN"]);
   assert.deepEqual([...VALIDATION_STATES], ["UNVALIDATED", "VALID", "INVALID", "INCONCLUSIVE", "PENDING_EXTERNAL"]);
-  assert.deepEqual([...LINK_PROVENANCES], ["admin:manual"]);
+  assert.deepEqual([...LINK_PROVENANCES], ["admin:manual", "n17:api"]);
   assert.deepEqual([...AFFILIATE_MARKETPLACES], ["MercadoLivre", "Shopee"]);
   assert.deepEqual([...RESOLUTION_METHODS], ["MANUAL", "IMPORT", "PORTAL", "API"]);
 });
