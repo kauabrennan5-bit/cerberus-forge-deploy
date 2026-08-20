@@ -102,6 +102,8 @@ async function run() {
     nodeCount: schema.nodeCount,
     identityMatch: schema.identityMatch,
     errorCodes: schema.errorCodes,
+    errorKeyCount: schema.errorKeyCount,
+    topKeys: schema.topKeys,
     dataKeys: schema.dataKeys,
     httpStatus,
     presence,
@@ -148,12 +150,14 @@ function observeSchema(json: unknown): {
         .filter((c) => /^\d{3}|^[A-Z_]+$/i.test(c) || c === "<no_code>")
         .slice(0, 10)
     : [];
+  const errorKeyCount = Array.isArray(errors) ? errors.length : 0;
+  const topKeys = json && typeof json === "object" ? Object.keys(json as Record<string, unknown>).sort() : [];
   const dataKeys =
     json && typeof json === "object"
       ? Object.keys((json as { data?: Record<string, unknown> }).data ?? {}).sort()
       : [];
   const ok = nodeCount > 0 && fields.length > 0 && errors.length === 0;
-  return { ok, fields, nodeCount, identityMatch, errorCodes, dataKeys };
+  return { ok, fields, nodeCount, identityMatch, errorCodes, errorKeyCount, topKeys, dataKeys };
 }
 
 function describeType(value: unknown): string {
