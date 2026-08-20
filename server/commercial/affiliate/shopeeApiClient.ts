@@ -495,7 +495,13 @@ export function parseShopeePriceString(value: unknown): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
-function extractOfferNodes(json: unknown): OfferNode[] {
+/**
+ * Fase 23 (2026-08-20): exportado para consumo read-only de rotas que
+ * precisam dos campos oficiais do nó de oferta (ex.: preview Telegram).
+ * Cada campo segue a normalização fail-closed existente; o price continua
+ * com escala NÃO verificada (parseShopeePriceString, Fase 19).
+ */
+export function extractOfferNodes(json: unknown): OfferNode[] {
   if (!json || typeof json !== "object") {
     throw new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object");
   }

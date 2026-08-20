@@ -85,12 +85,37 @@ function writeUserStatesToFile(states: Record<string, UserState>): void {
   }
 }
 
+// --- HOOKS DE TESTE CONTROLADO (padrão setXForTests da codebase) ---
+// Fase 23 (2026-08-20): substitui a persistência SOMENTE em testes unitários
+// (sem tocar em Supabase/arquivo). NUNCA usar em produção — os overrides são
+// null por padrão e devem ser restaurados ao final de cada teste.
+let testOverrideSavePendingReview: ((review: PendingReview) => Promise<void>) | null = null;
+let testOverrideGetPendingReview: ((reviewId: string) => Promise<PendingReview | null>) | null = null;
+
+/** Substitui savePendingReview em testes unitários; null restaura o real. */
+export function setTestSavePendingReview(
+  override: ((review: PendingReview) => Promise<void>) | null,
+): void {
+  testOverrideSavePendingReview = override;
+}
+
+/** Substitui getPendingReview em testes unitários; null restaura o real. */
+export function setTestGetPendingReview(
+  override: ((reviewId: string) => Promise<PendingReview | null>) | null,
+): void {
+  testOverrideGetPendingReview = override;
+}
+
 // --- MÉTODOS PÚBLICOS DE PERSISTÊNCIA ---
 
 /**
  * Salva ou atualiza uma revisão pendente (no arquivo e Supabase)
  */
 export async function savePendingReview(review: PendingReview): Promise<void> {
+  if (testOverrideSavePendingReview) {
+    await testOverrideSavePendingReview(review);
+    return;
+  }
   const createdAt = review.createdAt || Date.now();
   const expiresAt = review.expiresAt || (createdAt + SESSION_EXPIRATION_MS);
   const status = review.status || "pending";
@@ -135,6 +160,9 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
  * Obtém uma revisão pendente por ID (marca como expirada se passou de 1 hora, sem apagar do banco)
  */
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
+  if (testOverrideGetPendingReview) {
+    return testOverrideGetPendingReview(reviewId);
+  }
   let review: PendingReview | null = null;
 
   // 1. Tenta buscar no Supabase

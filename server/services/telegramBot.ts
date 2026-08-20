@@ -1079,6 +1079,36 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
+    // DECISION != ACTION — Fase 23 (2026-08-20): "approve_only" registra a
+    // decisão humana de aprovar SOMENTE no repositório de review
+    // (status="published") para encaminhamento à publicação manual. NUNCA
+    // executa pipeline.publish, acquisition mutation, N13/N14/N15, scraping,
+    // Seller API ou qualquer alteração do catálogo canônico.
+    if (data.startsWith("approve_only:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("approve_only", reviewId, chatId, review);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, validation.reason, true);
+        if (chatId) await sendTelegramMessage(chatId, `⚠️ ${validation.reason}`);
+        return;
+      }
+      // Registro governado: approval registrado no repositório de review,
+      // fonte da aprovação marcada para auditoria (manual affiliate preview).
+      review.status = "published";
+      review.descricao = `${review.descricao ?? ""} · approved_by=approve_only · approved_at=${new Date().toISOString()}`.trim();
+      await telegramRepo.savePendingReview(review);
+      await telegramRepo.deleteUserState(senderId);
+      const isPreview = (review.categoria || "").startsWith("affiliate_preview") || review.existingProduct?.source === "affiliate_preview";
+      const feedback = isPreview
+        ? "✅ <b>PREVIEW APROVADO — DECISÃO REGISTRADA</b>\n\nSem automação nesta fase: o encaminhamento à publicação manual segue o fluxo existente. Nenhuma publicação, aquisição ou mutation foi executada."
+        : "✅ <b>APROVAÇÃO REGISTRADA (approve_only)</b>\n\nEncaminhado à publicação manual — nenhuma automação de publicação foi executada.";
+      await answerCallbackQuery(callbackId, "Decisão registrada — encaminhado à publicação manual.");
+      if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, feedback);
+      else if (chatId) await sendTelegramMessage(chatId, feedback);
+      logTelegramEvent("approve_only", { chat_id: chatId, review_id: reviewId, source: isPreview ? "affiliate_preview" : "manual" });
+      return;
+    }
     if (data.startsWith("confirm_pub:")) {
       const reviewId = data.split(":")[1];
       await answerCallbackQuery(callbackId, "⏳ Publicando...");

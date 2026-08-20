@@ -48,6 +48,9 @@ import {
 } from "./server/commercial/affiliate/acquisitionService";
 import { createShopeeAffiliateProvider } from "./server/commercial/affiliate/shopeeAffiliateProvider";
 import { registerCycleRoutes } from "./server/routes/cycleRoutes";
+// Fase 23 — PREVIEW != PUBLICATION: rota de preview manual Shopee Affiliate →
+// Telegram com decisão humana registrada (approve_only), sem automação de publicação.
+import { setupPreviewTelegramRoutes } from "./server/routes/previewTelegramRoutes";
 import { setCycleClient } from "./server/commercial/cycle/cycleRepository";
 import { registerN2SourceConnectors } from "./server/commercial/sourceConnector/registerN2SourceConnectors";
 import { setPublicationExecutionsClient } from "./server/repositories/publicationExecutionsRepository";
@@ -1013,6 +1016,9 @@ NUNCA modifique ou invente preços ou imagens.`,
     setPolicyJournalClient(productsRepository.supabase as any);
   }
   registerCommercialBrainRoutes({ app, requireAdminAuth });
+  // Fase 23 — PREVIEW != PUBLICATION · DECISION != ACTION: a rota registra
+  // a decisão manual sem executar pipeline de publicação.
+  setupPreviewTelegramRoutes({ app, requireAdminAuth });
   // Bloco 15 — Fase D: superfície read-only de avaliação de política.
   // POLICY != EXECUTION — nenhuma rota write de execução é criada aqui.
   registerPolicyEngineRoutes({ app, requireAdminAuth });
