@@ -62,6 +62,8 @@ function selectionSet(): string {
   for (const [flag, field] of Object.entries(singles)) {
     if (args.includes(flag)) return `${base} ${field}`;
   }
+  // Campo INVENTADO — teste de rejeição pré-análise vs. por campo.
+  if (args.includes("--fake")) return `${base} fakeAvailability`;
   return `${base} ${x1} ${x2}`;
 }
 
