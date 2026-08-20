@@ -684,6 +684,17 @@ test("deriveSignalsFromCandidate: source candidate: e provenance herdada", () =>
   assert.equal(signals.competition, undefined);
 });
 
+test("deriveSignalsFromCandidate: metadata.provenance canônico vence metadata.source", () => {
+  const candidate = {
+    ...baseCandidate,
+    metadata: { source: "marketplace_page", provenance: "n10:discovery" },
+  };
+  const signals = deriveSignalsFromCandidate(candidate as never);
+  assert.equal(signals.price?.provenance, "n10:discovery");
+  assert.equal(signals.seller?.provenance, "n10:discovery");
+  assert.equal(signals.availability?.provenance, "n10:discovery");
+});
+
 test("deriveSignalsFromCandidate: campos ausentes → UNKNOWN (nunca 0)", () => {
   const candidate = { ...baseCandidate, observed_price: null, observed_rating: null, observed_rating_count: null, observed_availability: null } as unknown as Record<string, unknown>;
   const signals = deriveSignalsFromCandidate(candidate as never);

@@ -833,6 +833,14 @@ test("S1 — buildCandidateSnapshot determinístico: mesmas entradas → mesmo s
 // ---------------------------------------------------------------------------
 // Digests baixos
 // ---------------------------------------------------------------------------
+test("S2 — buildCandidateSnapshot prioriza metadata.provenance sobre metadata.source", () => {
+  const candidate = baseCandidate({
+    metadata: { source: "marketplace_page", provenance: "n10:discovery" },
+  });
+  const snapshot = buildCandidateSnapshot({ candidate, n13: null, n14: null });
+  assert.equal(snapshot.provenance, "n10:discovery");
+});
+
 test("D1 — digestString SHA-256 estável", () => {
   const a = digestString("payload");
   const b = `sha256:${createHash("sha256").update("payload").digest("hex")}`;

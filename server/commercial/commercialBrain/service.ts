@@ -106,14 +106,21 @@ async function resolveN13Gate(
  * Deriva sinais comerciais iniciais dos campos observados do candidato
  * (dados de descoberta real do funil N1/N10/N12). Sinais derivados são
  * marcados com source "candidate:<campo>" e provenance herdada do
- * metadata.source do candidato (rastreável ao N10). Campos ausentes/
+ * metadata.provenance canônico do candidato. O metadata.source é origem
+ * de campo e só serve como fallback para candidatos legados sem provenance.
+ * Campos ausentes/
  * inválidos permanecem UNKNOWN — nunca viram 0.
  */
 export function deriveSignalsFromCandidate(
   candidate: CandidateRecord,
 ): CommercialSignalsInput {
   const metadata = (candidate.metadata ?? {}) as Record<string, unknown>;
-  const sourceProvenance = typeof metadata.source === "string" ? metadata.source : null;
+  const sourceProvenance =
+    typeof metadata.provenance === "string"
+      ? metadata.provenance
+      : typeof metadata.source === "string"
+        ? metadata.source
+        : null;
   const observedAt = typeof candidate.observed_at === "string" && candidate.observed_at.length > 0
     ? candidate.observed_at
     : null;

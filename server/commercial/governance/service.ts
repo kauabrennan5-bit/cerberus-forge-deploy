@@ -172,11 +172,12 @@ export function buildCandidateSnapshot(params: {
     external_listing_id: externalListingId === "" ? null : externalListingId,
     title: candidate.title ?? null,
     category: candidate.category ?? null,
-    // Proveniência herdada do N10 (metadata.source) — padrão validado
-    // pelos services N14 (deriveSignalsFromCandidate) e N13.
+    // Proveniência operacional canônica. metadata.source identifica a
+    // origem de um campo e só é fallback para candidatos legados sem
+    // metadata.provenance; nunca deve substituir a proveniência do funil.
     provenance:
-      (candidateMetadata.source as string | undefined) ??
       (candidateMetadata.provenance as string | undefined) ??
+      (candidateMetadata.source as string | undefined) ??
       (candidate.provenance as string | undefined) ??
       null,
     evidence_count: evidenceCount,
