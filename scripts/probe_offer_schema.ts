@@ -51,6 +51,17 @@ function selectionSet(): string {
   if (wantBase) return base;
   if (args.includes("--x1")) return `${base} ${x1}`;
   if (args.includes("--x2")) return `${base} ${x2}`;
+  // Campos isolados (base + 1 campo extra) — isolamento exato do 10010.
+  const singles: Record<string, string> = {
+    "--s1": "stockInfo",
+    "--s2": "seller",
+    "--s3": "sellerId",
+    "--s4": "sellerName",
+    "--s5": "sellerRating",
+  };
+  for (const [flag, field] of Object.entries(singles)) {
+    if (args.includes(flag)) return `${base} ${field}`;
+  }
   return `${base} ${x1} ${x2}`;
 }
 
