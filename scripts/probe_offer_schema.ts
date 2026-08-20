@@ -54,7 +54,10 @@ async function run() {
   }
 
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signatureInput = [appId, timestamp, PROBE_QUERY, secret].join("");
+  // Contrato oficial: assinar o PAYLOAD JSON completo (body serializado),
+  // exatamente como o cliente oficial (shopeeApiClient.ts).
+  const payload = JSON.stringify({ query: PROBE_QUERY, variables: {} });
+  const signatureInput = [appId, timestamp, payload, secret].join("");
   const signature = createHash("sha256").update(signatureInput).digest("hex");
   const authorization = `SHA256 Credential=${appId}, Timestamp=${timestamp}, Signature=${signature}`;
 
@@ -67,7 +70,7 @@ async function run() {
     const response = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: authorization },
-      body: JSON.stringify({ query: PROBE_QUERY, variables: {} }),
+      body: payload,
       signal: controller.signal,
     });
     httpStatus = response.status;
@@ -146,8 +149,13 @@ function observeSchema(json: unknown): {
   const errors = ((json as { errors?: unknown[] })?.errors) ?? [];
   const errorCodes: string[] = Array.isArray(errors)
     ? errors
-        .map((e) => (e && typeof e === "object" ? String((e as { code?: unknown; message?: unknown })?.code ?? "<no_code>") : "<no_code>"))
-        .filter((c) => /^\d{3}|^[A-Z_]+$/i.test(c) || c === "<no_code>")
+        .map((e) => {
+          if (!e || typeof e !== "object") return "<no_code>";
+          const obj = e as Record<string, unknown>;
+          const candidate = obj.code ?? obj.errorCode ?? obj.extensions?.code ?? "<no_code>";
+          return String(candidate);
+        })
+        .filter((c) => /^\d+$|^[A-Z_]+$|^<no_code>$/.test(c))
         .slice(0, 10)
     : [];
   const errorKeyCount = Array.isArray(errors) ? errors.length : 0;
