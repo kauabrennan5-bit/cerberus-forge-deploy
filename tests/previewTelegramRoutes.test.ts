@@ -405,6 +405,58 @@ test("approve_only registra a decisão como published SEM publicar no site", asy
   assert.equal(saved.lifecycle, undefined);
 });
 
+test("approve_only e cancel_rev entregam FEEDBACK VISÍVEL via sendMessage (card de preview é texto, não caption)", async () => {
+  const reviewId = "affprev-feedback-test";
+  installFakeTelegramRepo();
+  installFakeAffiliateFetch({ status: "link_acquired", nodes: DEFAULT_NODES, httpStatus: 200 });
+  reviewsById.set(reviewId, {
+    id: reviewId,
+    chatId: Number(TELEGRAM_ALLOWED_USERS),
+    senderId: Number(TELEGRAM_ALLOWED_USERS),
+    firstName: "admin",
+    username: "admin",
+    createdAt: Date.now(),
+    produto: "Camiseta Oversized Teste",
+    categoria: "affiliate_preview",
+    preco: 99,
+    imagens: [],
+    normalizedUrl: "https://shopee.com.br/produto-xpto-i.1530442944.23794344926",
+    descricao: "affiliate_preview · source=affiliate_preview",
+    status: "pending",
+    existingProduct: { source: "affiliate_preview", priceScaleVerified: false },
+  } as unknown as FakeReview);
+
+  // Approve_only: o feedback DEVE chegar ao chat via sendMessage (texto),
+  // nunca depender de editMessageCaption (inválido para card de texto).
+  await handleTelegramWebhookUpdate({
+    callback_query: {
+      id: "cb-feedback-1",
+      from: { id: Number(TELEGRAM_ALLOWED_USERS) },
+      data: `approve_only:${reviewId}`,
+      message: { chat: { id: Number(TELEGRAM_ALLOWED_USERS) }, message_id: 20 },
+    },
+  });
+  const approvalFeedbackSent = fetchCallLog.some(
+    (url) => url.includes("sendMessage") && url.includes("api.telegram.org"),
+  );
+  assert.ok(approvalFeedbackSent, "feedback do approve_only enviado ao chat via sendMessage");
+  // Nenhum editMessageCaption no caminho de preview (garantia da correção).
+  const captionEditAfterApproval = fetchCallLog.filter((url) => url.includes("editMessageCaption"));
+  assert.equal(captionEditAfterApproval.length, 0, "approve_only não edita caption (card é texto)");
+
+  // Cancel_rev: feedback visível também via sendMessage.
+  await handleTelegramWebhookUpdate({
+    callback_query: {
+      id: "cb-feedback-2",
+      from: { id: Number(TELEGRAM_ALLOWED_USERS) },
+      data: `cancel_rev:${reviewId}`,
+      message: { chat: { id: Number(TELEGRAM_ALLOWED_USERS) }, message_id: 20 },
+    },
+  });
+  const cancelFeedbackSent = fetchCallLog.some((url) => url.includes("sendMessage") && url.includes("api.telegram.org"));
+  assert.ok(cancelFeedbackSent, "feedback do cancel_rev enviado ao chat via sendMessage");
+});
+
 test("approve_only recusa review inexistente", async () => {
   installFakeTelegramRepo();
   await handleTelegramWebhookUpdate({

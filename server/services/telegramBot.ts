@@ -1104,9 +1104,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         ? "✅ <b>PREVIEW APROVADO — DECISÃO REGISTRADA</b>\n\nSem automação nesta fase: o encaminhamento à publicação manual segue o fluxo existente. Nenhuma publicação, aquisição ou mutation foi executada."
         : "✅ <b>APROVAÇÃO REGISTRADA (approve_only)</b>\n\nEncaminhado à publicação manual — nenhuma automação de publicação foi executada.";
       await answerCallbackQuery(callbackId, "Decisão registrada — encaminhado à publicação manual.");
-      if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, feedback);
-      else if (chatId) await sendTelegramMessage(chatId, feedback);
-      logTelegramEvent("approve_only", { chat_id: chatId, review_id: reviewId, source: isPreview ? "affiliate_preview" : "manual" });
+      // O card de affiliate preview é enviado como MENSAGEM DE TEXTO
+      // (sendTelegramMessage), não como foto com caption — editCaption falharia
+      // silenciosamente. Garantia de feedback visível: nova mensagem ao chat.
+      if (chatId) await sendTelegramMessage(chatId, feedback);
+      logTelegramEvent("approve_only", { chat_id: chatId, review_id: reviewId, source: isPreview ? "affiliate_preview" : "manual", feedback_delivered: true });
       return;
     }
     if (data.startsWith("confirm_pub:")) {
@@ -1222,7 +1224,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       await telegramRepo.deleteUserState(senderId);
       await answerCallbackQuery(callbackId, "❌ Cancelado.");
-      if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, "❌ Cadastro cancelado.");
+      // O card pode ser foto (caption) ou texto — garantia de feedback visível.
+      if (chatId) await sendTelegramMessage(chatId, "❌ <b>DECISÃO REGISTRADA — DESCARTADO</b>\n\nA proposta foi descartada e nenhuma publicação ou aquisição foi executada.");
+      logTelegramEvent("cancel_rev", { chat_id: chatId, review_id: reviewId });
       return;
     }
   }
