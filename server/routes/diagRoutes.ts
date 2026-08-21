@@ -1,5 +1,6 @@
 import { Router } from "express";
 import axios from "axios";
+import { GoogleGenAI } from "@google/genai";
 import { searchShopeeProductsDDG } from "../services/shopeeSearchProvider";
 import { discoverShopeeProducts } from "../services/shopeeDiscovery";
 
@@ -28,9 +29,27 @@ router.get("/diag/search-raw", async (req, res) => {
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
       }
     });
+    // Teste de descoberta Gemini 3.6 Flash com Grounding
+    const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+    let geminiDiscovery: any = null;
+    try {
+      const result = await (genAI as any).models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: [{ role: "user", parts: [{ text: `Encontre 3 links de produtos reais da Shopee Brasil para "${query}". Retorne apenas os links no formato https://shopee.com.br/product/SHOPID/ITEMID` }] }],
+        tools: [{ googleSearchRetrieval: {} }]
+      });
+      geminiDiscovery = {
+        text: result.text,
+        grounding: result.candidates?.[0]?.groundingMetadata
+      };
+    } catch (e: any) {
+      geminiDiscovery = { error: e.message };
+    }
+
     res.send({
       status: response.status,
       headers: response.headers,
+      geminiDiscovery,
       html: response.data
     });
   } catch (error: any) {
