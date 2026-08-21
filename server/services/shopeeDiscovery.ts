@@ -51,7 +51,7 @@ Retorne apenas URLs válidas de produtos que sigam o padrão https://shopee.com.
 Não invente URLs. Retorne apenas resultados que você encontrar via busca real.`;
 
     const result = await ai.models.generateContent({
-      model: "gemini-1.5-flash", // Usando o modelo estável da codebase
+      model: "gemini-2.0-flash-exp", // Corrigido para modelo disponível no ambiente
       contents: prompt,
       config: {
         systemInstruction: "Você é um assistente de descoberta de produtos. Sua tarefa é encontrar URLs reais de produtos na Shopee Brasil. Retorne os resultados em formato JSON.",
