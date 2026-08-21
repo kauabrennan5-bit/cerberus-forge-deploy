@@ -554,6 +554,11 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     const roundQuery = discoveryQueryForRound(parsed.query, round);
     const remainingCapacity = Math.min(candidateTarget, MAX_DISCOVERY_CANDIDATES - directUrls.length);
     const official = await searchOfficialShopeeOffers({ client, query: roundQuery, limit: remainingCapacity });
+    if (official.candidates.length === 0) {
+      console.info(
+        `[SHOPEE LOT] lot=${lotId} discovery_round=${round} stage=official_search outcome=${official.sourceResponded ? "empty" : "unavailable"} reason=${official.error ?? "no_candidates"}`,
+      );
+    }
     const discoveredUrls = [...official.candidates];
     let externalDiscoveryUsed = false;
     if (discoveredUrls.length === 0) {

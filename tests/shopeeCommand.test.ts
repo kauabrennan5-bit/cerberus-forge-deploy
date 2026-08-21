@@ -18,7 +18,7 @@ function buildSearchResponse(nodes: Record<string, unknown>[]): Response {
   return {
     ok: true,
     status: 200,
-    json: () => Promise.resolve({ data: { productOfferSearch: { nodes } } }),
+    json: () => Promise.resolve({ data: { productOfferV2: { nodes } } }),
   } as unknown as Response;
 }
 
@@ -51,6 +51,10 @@ function makeTermFetch(acquireResponse: unknown = AFFILIATE_RESPONSE): any {
     const input = iargs[0];
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("open-api.affiliate.shopee")) {
+      const init = iargs[1] as { body?: string } | undefined;
+      if (init?.body?.includes("productOfferV2(keyword:")) {
+        return buildSearchResponse([]) as unknown as Response;
+      }
       return acquireResponse as unknown as Response;
     }
     throw new Error(`fetch inesperado no modo termo: ${url}`);
@@ -461,7 +465,7 @@ describe("runShopeeCommand — lote completo", () => {
     const result = await runShopeeCommand("3 cozinha");
     assert.equal(result.ok, 0);
     assert.equal(result.poolLocalExhausted, true);
-    assert.equal(result.sourceExhausted, false);
+    assert.equal(result.sourceExhausted, true);
     assert.equal(result.budgetExhausted, true);
     assert.equal(result.discoveryRounds, 3);
     assert.equal(calls, 3);

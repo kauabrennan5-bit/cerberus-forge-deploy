@@ -458,12 +458,10 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
 
   // -------------------------------------------------------------------------
   // Busca oficial por palavra-chave (descoberta autorizada do modo /shopee
-  // por termo — Fase 26, 2026-08-21). `productOfferSearch` é operação oficial
-  // da plataforma de afiliados BR (listada no contrato interno
-  // SHOPEE_OPERATIONS e confirmada na documentação da plataforma):
-  //   productOfferSearch(keyword: String, limit: Int) → { nodes: [ShopeeOfferV2] }
-  // com os mesmos campos de produto da fonte oficial de oferta
-  // (itemId, shopId, productName, price, productLink, offerLink).
+  // por termo). A operação pública da plataforma de afiliados BR é
+  // `productOfferV2`, com keyword/listType/sortType/page/limit e nós de
+  // produtos. A consulta de item específico também usa productOfferV2, mas
+  // exige match estrito em acquireAffiliateLink antes de criar qualquer card.
   // GOVERNANÇA: descoberta != aquisição — a presença do item na busca NÃO
   // significa link de afiliado adquirido; a aquisição continua via
   // acquireAffiliateLink por item (fail-closed, nada derivado).
@@ -516,8 +514,6 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
    * resposta sem nós → ok=true, items=[] (descoberta vazia, lote fecha
    * fail-closed no orquestrador sem inventar itens).
    * 
-   * @deprecated Esta operação não retorna resultados consistentes no App atual.
-   * Usar shopeeSearchProvider (DDG/Gemini) para descoberta resiliente.
    */
   async function searchOffers(params: { query: string; limit?: number }): Promise<SearchOffersResult> {
     const keyword = sanitizeSearchKeyword(params.query);
@@ -536,7 +532,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     );
     try {
       const response = await signedGraphqlPost({
-        query: `{ productOfferSearch(keyword: ${JSON.stringify(keyword)}, limit: ${limit}) { nodes { itemId shopId productName price productLink offerLink } } }`,
+        query: `{ productOfferV2(keyword: ${JSON.stringify(keyword)}, listType: 0, sortType: 1, page: 1, limit: ${limit}) { nodes { itemId shopId productName price productLink offerLink } } }`,
         variables: {},
       });
       return parseSearchResponse(response.json, response.httpStatus);
@@ -562,8 +558,8 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
 
   /**
    * Parse da resposta de busca oficial — mesmo contrato de nós da oferta
-   * (extractOfferNodes lê productOfferV2; a busca usa envelope próprio
-   * productOfferSearch — extração local, determinística, sem presumir).
+   * productOfferV2 — extração local, determinística, sem presumir que o
+   * resultado de discovery por si só autoriza o link de afiliado.
    */
   function parseSearchResponse(json: unknown, httpStatus: number | null): SearchOffersResult {
     if (!json || typeof json !== "object") {
@@ -573,7 +569,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     if (!data || typeof data !== "object") {
       return { ok: false, reason: "SHOPEE_INVALID_RESPONSE", items: [], httpStatus, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_data_envelope") };
     }
-    const search = (data as Record<string, unknown>).productOfferSearch;
+    const search = (data as Record<string, unknown>).productOfferV2;
     if (!search || typeof search !== "object" || !Array.isArray((search as Record<string, unknown>).nodes)) {
       return { ok: false, reason: "search_operation_unavailable", items: [], httpStatus, error: new ShopeeClientError("SHOPEE_GRAPHQL_ERROR", "no_search_nodes") };
     }

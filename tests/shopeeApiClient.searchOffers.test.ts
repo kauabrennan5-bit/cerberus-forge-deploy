@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { createShopeeApiClient } from "../server/commercial/affiliate/shopeeApiClient";
+
+test("searchOffers usa productOfferV2 com keyword e extrai candidatos oficiais", async () => {
+  let payload = "";
+  const client = createShopeeApiClient({
+    appId: "test-app",
+    secret: "test-secret",
+    clock: () => 1_700_000_000_000,
+    transport: async (_url, init) => {
+      payload = init.body;
+      return new Response(JSON.stringify({
+        data: {
+          productOfferV2: {
+            nodes: [{
+              shopId: 1530442944,
+              itemId: 23794344926,
+              productName: "Luminária Bauhaus",
+              price: "79.90",
+              productLink: "https://shopee.com.br/product/1530442944/23794344926",
+              offerLink: "https://s.shopee.com.br/teste",
+            }],
+          },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const result = await client.searchOffers({ query: "luminária bauhaus", limit: 2 });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0]?.shopId, "1530442944");
+  assert.equal(result.items[0]?.itemId, "23794344926");
+  assert.match(payload, /productOfferV2\(keyword:/);
+  assert.match(payload, /listType: 0/);
+  assert.doesNotMatch(payload, /productOfferSearch/);
+});
