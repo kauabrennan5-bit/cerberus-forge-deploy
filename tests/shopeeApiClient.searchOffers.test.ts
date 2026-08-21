@@ -38,3 +38,29 @@ test("searchOffers usa productOfferV2 com keyword e extrai candidatos oficiais",
   assert.match(payload, /listType: 0/);
   assert.doesNotMatch(payload, /productOfferSearch/);
 });
+
+test("acquireAffiliateLink preserva o preço atual retornado para o item oficial exato", async () => {
+  const client = createShopeeApiClient({
+    appId: "test-app",
+    secret: "test-secret",
+    transport: async () => new Response(JSON.stringify({
+      data: {
+        productOfferV2: {
+          nodes: [{
+            shopId: 1530442944,
+            itemId: 23794344926,
+            productName: "Luminária Bauhaus",
+            price: "79.90",
+            productLink: "https://shopee.com.br/product/1530442944/23794344926",
+            offerLink: "https://s.shopee.com.br/teste",
+          }],
+        },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+
+  const result = await client.acquireAffiliateLink({ shopId: "1530442944", itemId: "23794344926" });
+
+  assert.equal(result.status, "link_acquired");
+  assert.equal(result.price, 79.9);
+});

@@ -498,29 +498,37 @@ function tryStrategy1JsonLd(content: string, preParsedJsonLdPrice: number | null
 
 /** 2. Dados Internos da Página (script tags, window state, JSON objects) */
 function tryStrategy2InternalData(content: string): number | null {
-  const scriptMatches = content.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi);
-  for (const m of scriptMatches) {
-    const scriptBody = m[1];
+  // A Shopee pode serializar o estado como JSON normal ou como JSON escapado
+  // dentro de um script. Leitura do documento inteiro evita perder o preço
+  // atual quando o SSR muda apenas o encapsulamento dos dados.
+  const sources = [content, ...Array.from(content.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)).map((m) => m[1] ?? "")];
+  for (const scriptBody of sources) {
     if (!scriptBody || scriptBody.length < 10) continue;
 
-    // Shopee JSON state (price_min / price / price_before_discount em micro-centavos ou formato decimal)
-    const shopeePriceMatch = scriptBody.match(/"price_min"\s*:\s*(\d+)/i) || scriptBody.match(/"price"\s*:\s*(\d+)/i);
-    if (shopeePriceMatch && shopeePriceMatch[1]) {
-      let rawNum = parseFloat(shopeePriceMatch[1]);
+    // `price_min` é o menor preço efetivamente exibido para uma variante e
+    // tem precedência sobre `price`. Aceita número, string decimal e JSON
+    // escapado; valores sem forma numérica continuam inválidos.
+    const shopeePriceMatch = scriptBody.match(/(?:\\?"price_min\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i) ||
+      scriptBody.match(/(?:\\?"price\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i) ||
+      // Sem preço promocional/atual no estado, o preço regular ainda é uma
+      // observação real do anúncio e é preferível à ausência total de valor.
+      scriptBody.match(/(?:\\?"price_before_discount\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i);
+    if (shopeePriceMatch?.[1]) {
+      let rawNum = Number(shopeePriceMatch[1]);
       if (rawNum > 10000000) rawNum = rawNum / 100000000;
       else if (rawNum > 100000) rawNum = rawNum / 100000;
       else if (rawNum > 10000) rawNum = rawNum / 100;
-      
-      if (rawNum > 0 && rawNum < 100000) {
+
+      if (Number.isFinite(rawNum) && rawNum > 0 && rawNum < 100000) {
         console.log(`[Scraper Price Log] Preço R$ ${rawNum.toFixed(2)} localizado via ESTRATÉGIA_2_DADOS_INTERNOS (Shopee JSON)`);
         return rawNum;
       }
     }
 
-    // Mercado Livre / E-Commerce JSON state ("price": 249.9)
-    const genericJson = scriptBody.match(/"current_price"\s*:\s*([0-9\.]+)/i) ||
-                        scriptBody.match(/"sale_price"\s*:\s*([0-9\.]+)/i) ||
-                        scriptBody.match(/"price"\s*:\s*([0-9\.]+)/i);
+    // Mercado Livre / E-Commerce JSON state (aceita 249.9 e "249.90").
+    const genericJson = scriptBody.match(/"current_price"\s*:\s*"?([0-9\.]+)"?/i) ||
+                        scriptBody.match(/"sale_price"\s*:\s*"?([0-9\.]+)"?/i) ||
+                        scriptBody.match(/"price"\s*:\s*"?([0-9\.]+)"?/i);
     if (genericJson && genericJson[1]) {
       const num = parseFloat(genericJson[1]);
       if (!isNaN(num) && num > 0 && num < 100000) {

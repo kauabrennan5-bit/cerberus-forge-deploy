@@ -235,6 +235,55 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(result.items[0]?.status, "ok");
   });
 
+  it("usa o preço atual da Affiliate API quando o SSR da Shopee não expõe preço ao scraper", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async () => ({
+      success: true,
+      data: {
+        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
+        imagens: ["https://img.test/1.webp"],
+        preco: null,
+        produto: "Luminária Bauhaus",
+      },
+    }));
+    let capturedCaption = "";
+    telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption) => {
+      capturedCaption = String(caption);
+      return { ok: true };
+    });
+    shopeeCmdTopo.setTestShopeeClient({
+      searchOffers: async () => ({
+        ok: true,
+        items: [{
+          shopId: "1530442944",
+          itemId: "23794344926",
+          name: "Luminária Bauhaus",
+          price: 79.9,
+          productLink: "https://shopee.com.br/product/1530442944/23794344926",
+          offerLink: "https://s.shopee.com.br/TESTE",
+        }],
+        httpStatus: 200,
+        error: null,
+      }),
+      acquireAffiliateLink: async () => ({
+        status: "link_acquired",
+        shopId: "1530442944",
+        itemId: "23794344926",
+        name: "Luminária Bauhaus",
+        price: 79.9,
+        productLink: "https://shopee.com.br/product/1530442944/23794344926",
+        affiliateUrl: "https://s.shopee.com.br/TESTE",
+      }),
+    } as any);
+
+    const result = await runShopeeCommand("1 luminária bauhaus");
+
+    assert.equal(result.ok, 1);
+    assert.match(capturedCaption, /Preço atual:<\/b> R\$\s*79,90/);
+    assert.match(capturedCaption, /Shopee Affiliate API/);
+    assert.equal(savedReviews[0]?.preco, 79.9);
+  });
+
   it("deduplica candidatos repetidos sem criar cards duplicados", async () => {
     const captured: string[] = [];
     telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { captured.push(String(text)); return { ok: true }; }, async (chatId: any, photoUrl: any, caption: any) => { captured.push(String(caption)); return { ok: true }; });

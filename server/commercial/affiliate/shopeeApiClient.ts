@@ -241,7 +241,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       } catch (err) {
         lastError = err;
         if (!(err instanceof ShopeeClientError)) {
-          return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+          return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
         }
         // Permanentes e definitivamente catalogados nunca retentam (fail-closed).
         const transient = err.kind === "SHOPEE_RATE_LIMITED" || err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR";
@@ -253,7 +253,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     }
     // Inacessível: última tentativa falhou; retorna o último erro mapeado.
     if (lastError instanceof ShopeeClientError) return mapKindToStatus(lastError);
-    return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+    return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
   }
 
   function parseProductLookup(json: unknown, wantShop: string | null, wantItem: string | null, httpStatus: number | null): ShopeeProductLookupResult {
@@ -284,17 +284,17 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
   function parseAffiliateAcquisition(json: unknown, wantShop: string | null, wantItem: string | null): ShopeeAffiliateAcquisitionResult {
     const nodes = extractOfferNodes(json);
     if (nodes.length === 0) {
-      return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: json, error: null };
+      return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: json, error: null };
     }
     const node = matchNode(nodes, wantShop, wantItem);
     if (!node) {
-      return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: json, error: null };
+      return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: json, error: null };
     }
     // Elegibilidade explícita: a fonte oficial devolve o link de afiliado
     // no campo offerLink do nó. Sem ele → não elegível (jamais derivar).
     const url = node.offerLink;
     if (!url || typeof url !== "string") {
-      return { status: "not_eligible", affiliateUrl: null, productLink: node.productLink, shopId: node.shopId, itemId: node.itemId, name: node.name, raw: json, error: null };
+      return { status: "not_eligible", affiliateUrl: null, productLink: node.productLink, shopId: node.shopId, itemId: node.itemId, name: node.name, price: node.price, raw: json, error: null };
     }
     return {
       status: "link_acquired",
@@ -303,6 +303,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       shopId: node.shopId,
       itemId: node.itemId,
       name: node.name,
+      price: node.price,
       raw: json,
       error: null,
     };
@@ -444,16 +445,16 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
 
   function mapKindToStatus(err: ShopeeClientError): ShopeeAffiliateAcquisitionResult {
     if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") {
-      return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+      return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
     }
     if (err.kind === "SHOPEE_RATE_LIMITED") {
-      return { status: "rate_limited", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+      return { status: "rate_limited", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
     }
     if (err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR") {
-      return { status: "transient", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+      return { status: "transient", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
     }
     // GRAPHQL_ERROR / INVALID_RESPONSE / NOT_CONFIGURED / UNKNOWN → permanent.
-    return { status: "permanent", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
+    return { status: "permanent", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
   }
 
   // -------------------------------------------------------------------------

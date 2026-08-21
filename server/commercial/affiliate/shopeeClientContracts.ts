@@ -146,6 +146,9 @@ export interface ShopeeAffiliateAcquisitionResult {
   readonly shopId: string | null;
   readonly itemId: string | null;
   readonly name: string | null;
+  /** Preço atual retornado no mesmo nó oficial productOfferV2 do item exato.
+   * null quando a fonte não o fornece ou a forma é inválida. */
+  readonly price: number | null;
   readonly raw: unknown;
   readonly error: ShopeeClientError | null;
 }

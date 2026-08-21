@@ -247,12 +247,17 @@ async function enrichWithExistingScraper(params: {
 }
 
 // ---------------------------------------------------------------
-// Formatação do preço com escala NÃO verificada
+// Formatação de preço de fonte oficial brasileira ou de observação do anúncio.
 // ---------------------------------------------------------------
 function formatPreviewPrice(value: number | null): string | null {
   if (value === null || value === undefined) return null;
-  if (!Number.isFinite(value)) return null;
-  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2).replace(".", ",");
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
 }
 
 // ---------------------------------------------------------------
@@ -274,10 +279,10 @@ function buildShopeeCardText(params: {
   const priceInfo = formatPreviewPrice(params.price);
   const priceSourceNote =
     params.priceSource === "scraper_observacional"
-      ? " (observacional — escala não verificada — não tratar como moeda)"
-      : " (escala não verificada — não tratar como moeda)";
+      ? " <i>(preço exibido no anúncio)</i>"
+      : " <i>(Shopee Affiliate API)</i>";
   const priceLine = priceInfo
-    ? `💰 <b>Preço:</b> ${priceInfo}<i>${priceSourceNote}</i>`
+    ? `💰 <b>Preço atual:</b> ${priceInfo}${priceSourceNote}`
     : `⚠️ <b>Preço:</b> não retornado por nenhuma das fontes`;
   const affiliateLine = params.affiliateUrl
     ? `<b>Link de afiliado:</b> <code>${params.affiliateUrl}</code>`
@@ -697,10 +702,22 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       enriched.scraperPrice !== null &&
       Number.isFinite(enriched.scraperPrice) &&
       enriched.scraperPrice > 0;
-    const displayPrice = hasScrapedPrice ? enriched.scraperPrice : 0;
+    const hasOfficialPrice =
+      acquisition.price !== null &&
+      Number.isFinite(acquisition.price) &&
+      acquisition.price > 0;
+    // Prioridade: preço exibido no anúncio; se a página SSR não expuser preço,
+    // preservar o preço atual do mesmo item retornado pela Affiliate API oficial.
+    const displayPrice = hasScrapedPrice
+      ? enriched.scraperPrice
+      : hasOfficialPrice
+        ? acquisition.price
+        : 0;
     const provenanceNote = hasScrapedPrice
-      ? "preço exibido observacional (scraper_observacional) · escala não verificada"
-      : "preço com escala não verificada";
+      ? "preço exibido no anúncio (scraper_observacional)"
+      : hasOfficialPrice
+        ? "preço atual retornado pela Shopee Affiliate API"
+        : "preço não retornado por nenhuma fonte";
     const review: PendingReview = {
       id: reviewId,
       chatId,
@@ -741,8 +758,8 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     // 6. Card no Telegram
     const text = buildShopeeCardText({
       name: enriched.curatedTitle ?? acquisition.name ?? null,
-      price: enriched.scraperPrice ?? null,
-      priceSource: enriched.scraperPrice !== null ? "scraper_observacional" : "affiliate_api",
+      price: hasScrapedPrice ? enriched.scraperPrice : hasOfficialPrice ? acquisition.price : null,
+      priceSource: hasScrapedPrice ? "scraper_observacional" : "affiliate_api",
       productLink: acquisition.productLink,
       affiliateUrl: acquisition.affiliateUrl,
       shopId: acquisition.shopId,

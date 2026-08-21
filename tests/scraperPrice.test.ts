@@ -36,3 +36,25 @@ test("descarta preço original riscado e aceita o valor de venda", () => {
 
   assert.equal(extractCorrectPrice(html, null, null), 426);
 });
+
+test("Shopee extrai o menor preço atual em micro-unidades", () => {
+  const html = `<script>window.__STATE__ = {"price_min":"7990000000","price_before_discount":"9990000000"};</script>`;
+
+  assert.equal(extractCorrectPrice(html, null, null), 79.9);
+});
+
+test("Shopee extrai preço atual quando o estado está serializado de forma escapada", () => {
+  const html = `<script>window.__STATE__ = "{\\"price\\":\\"129.90\\"}";</script>`;
+
+  assert.equal(extractCorrectPrice(html, null, null), 129.9);
+});
+
+test("Shopee usa preço regular real quando não há preço atual ou promocional", () => {
+  const html = `<script>window.__STATE__ = {"price_before_discount":9900000000};</script>`;
+
+  assert.equal(extractCorrectPrice(html, null, null), 99);
+});
+
+test("Shopee não inventa preço quando nenhuma fonte da publicação contém valor", () => {
+  assert.equal(extractCorrectPrice(`<main>Produto sem valor</main>`, null, null), null);
+});
