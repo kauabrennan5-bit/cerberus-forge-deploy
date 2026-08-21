@@ -18,6 +18,8 @@ O orquestrador agora solicita até `min(N × 3, 30)` candidatos para buscas por 
 
 A deduplicação ocorre por `shopId:itemId` quando extraíveis, com fallback para a URL canônica. O relatório final passou a distinguir `candidatos rejeitados`, `candidatos avaliados` e `busca esgotada antes de completar o lote`. Os logs passam a emitir uma matriz sanitizada por candidato: lote, índice, etapa, resultado e motivo técnico controlado; nenhum token, URL de afiliado ou dado pessoal é registrado.
 
+O provider de fallback Gemini também passou a coletar URLs Shopee do texto da resposta **e** das citações `groundingChunks` retornadas pela mesma chamada. Isso amplia o pool disponível sem fazer chamadas adicionais ao modelo, sem aceitar domínios externos e sem dispensar a validação canônica de `shopId:itemId`.
+
 ## Evidências de validação local
 
 | Validação | Resultado | Evidência |
@@ -25,6 +27,7 @@ A deduplicação ocorre por `shopId:itemId` quando extraíveis, com fallback par
 | Replacement | Aprovado | teste com primeiro candidato `not_found` e segundo elegível: 1 card criado após 2 candidatos avaliados |
 | Over-fetch | Aprovado | para `/shopee 1 cozinha`, a descoberta foi chamada com limite 3 |
 | Deduplicação | Aprovado | nove candidatos repetidos produziram um único card e oito rejeições `duplicate_candidate` |
+| Citações Grounding | Aprovado | teste reúne URLs do texto e de `groundingChunks`, deduplicando e ignorando domínio externo |
 | Fail-closed sem resultado | Aprovado | ausência/erro de descoberta não cria card e mantém a meta não preenchida explícita |
 | Testes focados | Aprovado | `tests/shopeeCommand.test.ts`: 10/10 testes aprovados |
 | TypeScript | Aprovado | `npm run lint` concluído sem erro |

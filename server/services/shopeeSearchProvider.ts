@@ -10,6 +10,19 @@ export interface ShopeeSearchCandidate {
   rawTitle: string;
 }
 
+/** Coleta URLs Shopee do texto e das citações Grounding retornadas na mesma consulta Gemini. */
+export function collectGroundedShopeeUrls(result: any): string[] {
+  const chunks = result?.candidates?.flatMap((candidate: any) =>
+    candidate?.groundingMetadata?.groundingChunks ?? [],
+  ) ?? [];
+  const sources = [result?.text, ...chunks.map((chunk: any) => chunk?.web?.uri)]
+    .filter((value): value is string => typeof value === "string");
+  const urls = sources.flatMap((source) =>
+    source.match(/https:\/\/shopee\.com\.br\/[^\s<>"'`\])}]+/g) ?? [],
+  );
+  return Array.from(new Set(urls));
+}
+
 /**
  * Provedor de busca via DuckDuckGo HTML (sem JS).
  * Fonte de descoberta N2 para candidatos Shopee.
@@ -75,7 +88,7 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
           tools: [{ googleSearchRetrieval: {} }]
         });
         
-        const links = result.text.match(/https:\/\/shopee\.com\.br\/product\/\d+\/\d+/g) || [];
+        const links = collectGroundedShopeeUrls(result);
         for (const link of links) {
           const identity = extractShopeeIdentity(link);
           if (identity.shopId && identity.itemId) {
@@ -118,7 +131,7 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
           tools: [{ googleSearchRetrieval: {} }]
         });
         
-        const links = result.text.match(/https:\/\/shopee\.com\.br\/product\/\d+\/\d+/g) || [];
+        const links = collectGroundedShopeeUrls(result);
         const geminiCandidates: ShopeeSearchCandidate[] = [];
         for (const link of links) {
           const identity = extractShopeeIdentity(link);
