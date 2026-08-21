@@ -25,6 +25,7 @@ export interface LifecycleRecord {
   curation: ProductCuration;
   audit: ProductLifecycleEvent[];
   publishedProductId?: string;
+  publishedProduct?: Product;
   operationId?: string;
   error?: ProductPipelineError | OperationalFailureCode;
   diagnostic?: OperationalDiagnostic;
@@ -151,6 +152,7 @@ export class ProductPipeline {
       record.operationId = operationId;
       const product = await this.adapters.createCanonicalProduct(record.candidate);
       record.publishedProductId = product.id;
+      record.publishedProduct = product;
       const verification = await this.adapters.syncAndValidatePublication(product, operationId);
       if (!verification.success) {
         const verificationOperationId = verification.operationId || operationId;

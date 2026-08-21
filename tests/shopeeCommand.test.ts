@@ -247,8 +247,10 @@ describe("runShopeeCommand — lote completo", () => {
       },
     }));
     let capturedCaption = "";
-    telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption) => {
+    let capturedKeyboard: any = null;
+    telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption, keyboard) => {
       capturedCaption = String(caption);
+      capturedKeyboard = keyboard;
       return { ok: true };
     });
     shopeeCmdTopo.setTestShopeeClient({
@@ -282,6 +284,7 @@ describe("runShopeeCommand — lote completo", () => {
     assert.match(capturedCaption, /Preço atual:<\/b> R\$\s*79,90/);
     assert.match(capturedCaption, /Shopee Affiliate API/);
     assert.equal(savedReviews[0]?.preco, 79.9);
+    assert.match(String(capturedKeyboard?.inline_keyboard?.[0]?.[0]?.callback_data), /^confirm_pub:/);
   });
 
   it("deduplica candidatos repetidos sem criar cards duplicados", async () => {

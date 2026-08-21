@@ -10,7 +10,7 @@
  *   → enriquecimento pelo SCRAPER EXISTENTE (imagens + preço observacional)
  *   → verificação determinística de identidade (shopId + itemId)
  *   → PendingReview (Supabase · status=pending · TTL 24h)
- *   → card no Telegram (foto quando há imagem real · approve_only/cancel_rev)
+ *   → card no Telegram (foto quando há imagem real · confirm_pub/cancel_rev)
  *
  * REGRAS DE SEGURANÇA (contrato desta fase):
  * - ZERO mutation de catálogo, N13, N14, N15, N16, N17 (estado), N18.
@@ -308,7 +308,10 @@ function buildShopeeCardText(params: {
 function buildPreviewKeyboard(reviewId: string) {
   return {
     inline_keyboard: [
-      [{ text: "✅ PUBLICAR", callback_data: `approve_only:${reviewId}` }],
+      // PUBLICAR é uma aprovação humana explícita. O callback canônico executa
+      // o lifecycle de publicação e só confirma sucesso após Supabase, sync e
+      // validação da vitrine pública.
+      [{ text: "✅ PUBLICAR", callback_data: `confirm_pub:${reviewId}` }],
       [{ text: "❌ DESCARTAR", callback_data: `cancel_rev:${reviewId}` }],
     ],
   };
@@ -800,8 +803,8 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
         `❌ Candidatos rejeitados (fail-closed, nada inventado): <b>${items.length - okCount}</b>\n` +
         `🔎 Candidatos avaliados: <b>${items.length}</b> · pool: <b>${directUrls.length}</b> · rounds: <b>${discoveryRounds}</b>\n` +
         `${poolLocalExhausted ? "⚠️ Pool local esgotado." : "✅ Meta atingida antes de esgotar o pool."}${budgetExhausted ? " Orçamento de discovery esgotado." : ""}${sourceExhausted ? " Fonte explícita de URLs esgotada." : ""}\n\n` +
-        `Cada card tem decisão independente: ✅ PUBLICAR registra a decisão · ❌ DESCARTAR cancela.\n` +
-        `<i>Nenhuma publicação ou aquisição adicional foi executada.</i>`,
+        `Cada card tem decisão independente: ✅ PUBLICAR inicia a publicação canônica após aprovação humana · ❌ DESCARTAR cancela.\n` +
+        `<i>Nenhuma publicação é executada antes do clique explícito em PUBLICAR.</i>`,
     ).catch(() => undefined);
   }
 

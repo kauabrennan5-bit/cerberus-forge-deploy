@@ -260,7 +260,7 @@ export interface PendingReview {
   imagens: string[];
   normalizedUrl: string;
   descricao?: string;
-  status?: "pending" | "published" | "cancelled" | "expired" | "rejected" | "error";
+  status?: "pending" | "publishing" | "published" | "cancelled" | "expired" | "rejected" | "error";
   cardMessageId?: number;
   existingProduct?: any;
   lifecycle?: LifecycleRecord;
@@ -331,6 +331,9 @@ function logAndValidateReviewCallback(
   } else if (statusStr === "published") {
     valid = false;
     reason = "Esta revisão já foi publicada.";
+  } else if (statusStr === "publishing") {
+    valid = false;
+    reason = "Esta revisão já está em publicação.";
   } else if (statusStr === "cancelled") {
     valid = false;
     reason = "Esta revisão foi cancelada.";
@@ -1182,6 +1185,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         return;
       }
       try {
+        // Trava a mesma review antes de qualquer persistência canônica: um
+        // segundo toque no botão não pode criar um produto duplicado enquanto
+        // Supabase → GitHub → catálogo público está em andamento.
+        review.status = "publishing";
+        await telegramRepo.savePendingReview(review);
         const pipeline = createProductionProductPipeline();
         // FASE 25C (Commit 3) — link do produto: autoridade é o affiliate link oficial da
         // review (Affiliate API); sem ele, a URL pública normalizada oficial é o fallback.
@@ -1214,16 +1222,20 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           if (chatId) await sendTelegramMessage(chatId, `❌ <b>PUBLICAÇÃO NÃO CONCLUÍDA</b>\n\n${diagnosticText}`);
           return;
         }
-        const publishedProduct = await productsRepository.getProductByIdOrSlug(lifecycle.publishedProductId);
+        const publishedProduct = lifecycle.publishedProduct ?? await productsRepository.getProductByIdOrSlug(lifecycle.publishedProductId);
         if (!publishedProduct) throw new Error("PERSISTENCE_ERROR");
         review.status = "published";
         await telegramRepo.savePendingReview(review);
         await telegramRepo.deleteUserState(senderId);
 
-        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço: R$ ${review.preco.toFixed(2)}`;
-        if (chatId && messageId) await editTelegramMessageCaption(chatId, messageId, successText);
-        else if (chatId) await sendTelegramMessage(chatId, successText);
+        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço: R$ ${publishedProduct.preco.toFixed(2).replace(".", ",")}\n🆔 Operação: <code>${lifecycle.operationId || "confirmada"}</code>\n\nSupabase gravado, catálogo sincronizado e vitrine pública validada.`;
+        // O card Shopee pode ser foto ou texto. Uma nova mensagem funciona em
+        // ambos os casos; editMessageCaption falha para cards enviados como
+        // texto e não pode ser a única confirmação de publicação.
+        if (chatId) await sendTelegramMessage(chatId, successText);
       } catch (err: any) {
+        review.status = "error";
+        await telegramRepo.savePendingReview(review).catch(() => undefined);
         if (chatId) await sendTelegramMessage(chatId, "❌ <b>PERSISTENCE_ERROR</b>\n\nNão foi possível concluir a persistência canônica. Consulte o Operator para diagnóstico e operation ID.");
       }
       return;

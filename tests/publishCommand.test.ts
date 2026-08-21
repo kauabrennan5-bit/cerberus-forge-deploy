@@ -394,8 +394,8 @@ test("confirm_pub publica com o affiliate link oficial como link do produto e de
     createCanonicalProduct: async (candidate: any) => {
       capturedCandidate = candidate;
       return {
-        id: `mem_${candidate.produto?.slice(0, 10)}_${Date.now()}`,
         ...candidate,
+        id: `mem_${candidate.produto?.slice(0, 10)}_${Date.now()}`,
         status: "approved",
         ref: "MEMREF",
       };
@@ -426,6 +426,10 @@ test("confirm_pub publica com o affiliate link oficial como link do produto e de
     );
     assert.equal(capturedCandidate.descricao, "", "descrição pública vazia quando o conteúdo é proveniência raw");
     assert.equal(capturedCandidate.categoria, "Afiliado", "categoria interna 'affiliate_preview' mapeada para a apresentação pública");
+    assert.ok(
+      sentMessages.some((message) => /PEÇA PUBLICADA COM SUCESSO/i.test(message.text)),
+      "confirmação de sucesso é enviada como nova mensagem tanto para card de foto quanto de texto",
+    );
   } finally {
     setTestProductPipeline(null);
     cleanup();
@@ -446,7 +450,7 @@ test("descricao legítima (não-proveniência) é preservada intacta na publica�
     getProducts: async () => [],
     createCanonicalProduct: async (candidate: any) => {
       capturedCandidate = candidate;
-      return { id: `mem_${Date.now()}`, ...candidate, status: "approved", ref: "MEMREF" };
+      return { ...candidate, id: `mem_${Date.now()}`, status: "approved", ref: "MEMREF" };
     },
     syncAndValidatePublication: async (product: any, operationId: string) => ({ success: true, operationId, diagnostic: undefined }),
     pauseCanonicalProduct: async () => {},
@@ -464,6 +468,56 @@ test("descricao legítima (não-proveniência) é preservada intacta na publica�
       "Organizador de talheres em madeira nobre com suporte de vidro. Peça elegante para mesas postas.",
       "descrição legítima preservada — fail-closed nunca inventa nem apaga conteúdo real",
     );
+  } finally {
+    setTestProductPipeline(null);
+    cleanup();
+  }
+});
+
+test("confirm_pub bloqueia novo clique enquanto a mesma review está em publicação", async () => {
+  const cleanup = installFakeTelegramTransport();
+  const reviewId = "affprev-publishing-lock";
+  reviewsById.set(reviewId, buildPendingReview({ id: reviewId, status: "publishing" }));
+  try {
+    await handleTelegramWebhookUpdate({
+      callback_query: {
+        from: { id: adminUserId },
+        message: { chat: { id: adminUserId }, message_id: 52, text: "placeholder" },
+        data: `confirm_pub:${reviewId}`,
+      } as any,
+    });
+    assert.equal(saveCallCount, 0, "nenhuma persistência canônica inicia em clique concorrente");
+    assert.ok(sentMessages.some((message) => /já está em publicação/i.test(message.text)));
+  } finally {
+    cleanup();
+  }
+});
+
+test("confirm_pub marca review como erro e informa falha quando a sincronização não é confirmada", async () => {
+  const cleanup = installFakeTelegramTransport();
+  const reviewId = "affprev-sync-failure";
+  reviewsById.set(reviewId, buildPendingReview({ id: reviewId, status: "pending" }));
+  setTestProductPipeline(() => new ProductPipeline({
+    getProducts: async () => [],
+    createCanonicalProduct: async (candidate: any) => ({ ...candidate, id: "mem-sync-failure", ref: "MEMREF", status: "approved" }),
+    syncAndValidatePublication: async (_product: any, operationId: string) => ({
+      success: false,
+      operationId,
+      error: "GITHUB_SYNC_ERROR",
+    }),
+    pauseCanonicalProduct: async () => {},
+  }));
+  try {
+    await handleTelegramWebhookUpdate({
+      callback_query: {
+        from: { id: adminUserId },
+        message: { chat: { id: adminUserId }, message_id: 53, text: "placeholder" },
+        data: `confirm_pub:${reviewId}`,
+      } as any,
+    });
+    assert.equal(reviewsById.get(reviewId)?.status, "error");
+    assert.ok(sentMessages.some((message) => /PUBLICAÇÃO NÃO CONCLUÍDA/i.test(message.text)));
+    assert.ok(!sentMessages.some((message) => /PEÇA PUBLICADA COM SUCESSO/i.test(message.text)));
   } finally {
     setTestProductPipeline(null);
     cleanup();
