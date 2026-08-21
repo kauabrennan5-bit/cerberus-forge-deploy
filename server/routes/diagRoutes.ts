@@ -31,7 +31,7 @@ router.get("/diag/search-raw", async (req, res) => {
     res.send({
       status: response.status,
       headers: response.headers,
-      htmlSample: response.data.substring(0, 2000)
+      html: response.data
     });
   } catch (error: any) {
     res.status(500).json({
