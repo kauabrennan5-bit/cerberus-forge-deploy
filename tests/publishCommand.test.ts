@@ -378,6 +378,98 @@ test("/publicar é rejeitado para usuário não autorizado", async () => {
   }
 });
 
+test("confirm_pub publica com o affiliate link oficial como link do produto e descrição pública limpa", async () => {
+  const cleanup = installFakeTelegramTransport();
+  const reviewId = "affprev-affiliate";
+  const affiliateUrl = "https://s.shopee.com.br/40ftCq9rTu";
+  reviewsById.set(reviewId, buildPendingReview({
+    id: reviewId,
+    status: "pending",
+    descricao: "affiliate_preview · source=/shopee · batch=shopee-test · link oficial retornado pela Affiliate API: " + affiliateUrl,
+    existingProduct: { source: "affiliate_preview", affiliateUrl, priceScaleVerified: false },
+  }));
+  let capturedCandidate: any = null;
+  setTestProductPipeline(() => new ProductPipeline({
+    getProducts: async () => [],
+    createCanonicalProduct: async (candidate: any) => {
+      capturedCandidate = candidate;
+      return {
+        id: `mem_${candidate.produto?.slice(0, 10)}_${Date.now()}`,
+        ...candidate,
+        status: "approved",
+        ref: "MEMREF",
+      };
+    },
+    syncAndValidatePublication: async (product: any, operationId: string) => ({ success: true, operationId, diagnostic: undefined }),
+    pauseCanonicalProduct: async () => {},
+  }));
+  try {
+    // Simula o callback canônico confirm_pub via handleTelegramWebhookUpdate
+    // (o mesmo caminho executado pelo botão [✅ Confirmar & Publicar]).
+    await handleTelegramWebhookUpdate({
+      callback_query: {
+        from: { id: adminUserId },
+        message: { chat: { id: adminUserId }, message_id: 50, text: "placeholder" },
+        data: `confirm_pub:${reviewId}`,
+      } as any,
+    });
+    assert.ok(capturedCandidate, "candidate foi persistido pelo publish canônico");
+    assert.equal(
+      capturedCandidate.link,
+      affiliateUrl,
+      "link do produto = affiliate link oficial da review (autoridade)",
+    );
+    assert.equal(
+      capturedCandidate.normalizedUrl,
+      "https://shopee.com.br/product/1530442944/23794344926",
+      "URL pública canônica preservada em normalizedUrl para auditoria/deduplicação",
+    );
+    assert.equal(capturedCandidate.descricao, "", "descrição pública vazia quando o conteúdo é proveniência raw");
+    assert.equal(capturedCandidate.categoria, "Afiliado", "categoria interna 'affiliate_preview' mapeada para a apresentação pública");
+  } finally {
+    setTestProductPipeline(null);
+    cleanup();
+  }
+});
+
+test("descricao legítima (não-proveniência) é preservada intacta na publicação", async () => {
+  const cleanup = installFakeTelegramTransport();
+  const reviewId = "affprev-legit";
+  reviewsById.set(reviewId, buildPendingReview({
+    id: reviewId,
+    status: "pending",
+    descricao: "Organizador de talheres em madeira nobre com suporte de vidro. Peça elegante para mesas postas.",
+    existingProduct: { source: "affiliate_preview", affiliateUrl: "https://s.shopee.com.br/legit", priceScaleVerified: false },
+  }));
+  let capturedCandidate: any = null;
+  setTestProductPipeline(() => new ProductPipeline({
+    getProducts: async () => [],
+    createCanonicalProduct: async (candidate: any) => {
+      capturedCandidate = candidate;
+      return { id: `mem_${Date.now()}`, ...candidate, status: "approved", ref: "MEMREF" };
+    },
+    syncAndValidatePublication: async (product: any, operationId: string) => ({ success: true, operationId, diagnostic: undefined }),
+    pauseCanonicalProduct: async () => {},
+  }));
+  try {
+    await handleTelegramWebhookUpdate({
+      callback_query: {
+        from: { id: adminUserId },
+        message: { chat: { id: adminUserId }, message_id: 51, text: "placeholder" },
+        data: `confirm_pub:${reviewId}`,
+      } as any,
+    });
+    assert.equal(
+      capturedCandidate.descricao,
+      "Organizador de talheres em madeira nobre com suporte de vidro. Peça elegante para mesas postas.",
+      "descrição legítima preservada — fail-closed nunca inventa nem apaga conteúdo real",
+    );
+  } finally {
+    setTestProductPipeline(null);
+    cleanup();
+  }
+});
+
 test("/publicar preserva escala não verificada no preço exibido", async () => {
   const cleanup = installFakeTelegramTransport();
   const reviewId = "affprev-scale";

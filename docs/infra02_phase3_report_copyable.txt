@@ -1,0 +1,394 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INFRA-02 — FASE 3 — RELATÓRIO FINAL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. STATUS
+
+INFRA-02 — FASE 3 SKIPPED — DEPENDÊNCIA EXTERNA
+
+ADAPTADOR LOCAL PERMANECE VALIDADO
+INTEGRAÇÃO REAL NÃO CONFIRMADA
+N13–N16 INTACTOS
+N17 NÃO INICIADO
+SEM BYPASS
+SEM COMMIT
+SEM PUSH
+SEM DEPLOY
+
+A Fase 3 não recebeu access token Mercado Livre legítimo nem configuração segura de aplicação/scopes/permissões no ambiente de execução. Portanto nenhuma chamada autenticada real foi executada e nenhum PASS real foi fabricado.
+
+2. PROOF_RUN_ID
+
+INFRA02_PHASE3_20260819T224500Z
+
+3. SHA ANTES E DEPOIS
+
+SHA antes:
+44a31d687ae06d2398e6651ad1009e3acfbeefbd
+
+SHA depois:
+44a31d687ae06d2398e6651ad1009e3acfbeefbd
+
+origin/main antes/depois:
+44a31d687ae06d2398e6651ad1009e3acfbeefbd
+
+Nenhuma alteração de código foi feita na Fase 3.
+
+4. AMBIENTE UTILIZADO
+
+A validação foi executada no sandbox local do projeto, branch main, com working tree contendo os artefatos não rastreados já registrados nas Fases anteriores e os arquivos locais do INFRA-02.
+
+A saúde pública do backend Render foi verificada por IPv4:
+
+HTTP_STATUS=200
+
+A configuração local não apresentou nenhuma variável de ambiente com prefixo MERCADO, MELI, ML ou MERCADOLIVRE. Não foi solicitado que o usuário colasse token, não foi lido token de arquivo e não foi consultada nenhuma sessão de navegador.
+
+5. ENDPOINT OFICIAL
+
+Endpoint documentado para o adaptador:
+
+GET https://api.mercadolibre.com/items?ids={ITEM_ID}&attributes=id,site_id,title,seller_id,category_id,price,currency_id,initial_quantity,available_quantity,date_created,last_updated
+
+O endpoint não foi chamado na Fase 3 porque faltava autenticação OAuth legítima. A API pública foi tratada somente como contrato documental nesta etapa; não houve chamada não autenticada repetida como substituto da validação real.
+
+6. ITEM TESTADO
+
+Nenhum ITEM_ID real foi testado na Fase 3.
+
+O adaptador local possui fixtures marcadas MOCK/FIXTURE/NOT PRODUCTION, incluindo um identificador sintético para testes de contrato. Esse identificador não foi apresentado como item real nem usado para declarar validação da API.
+
+Não houve seleção de item real, pois a regra do prompt exige item legítimo e credencial/permissão compatível.
+
+7. MÉTODO DE AUTENTICAÇÃO
+
+O adaptador está preparado para OAuth oficial com:
+
+Authorization: Bearer <access token>
+Accept: application/json
+
+O método não foi exercitado contra a API real por ausência de access token legítimo. O cenário local AUTH_REQUIRED já foi validado na Fase 2, mas não é contado como autenticação real.
+
+Nenhum token, refresh token, client secret, App ID ou App Secret foi impresso, persistido ou incluído no relatório.
+
+8. HTTP STATUS E RESPOSTA OBSERVADA
+
+Chamada real autenticada:
+SKIPPED — não executada por ausência de credencial/permissão segura.
+
+HTTP status real do endpoint Mercado Livre:
+UNKNOWN nesta Fase 3 — nenhuma chamada real foi feita.
+
+Resposta real:
+UNKNOWN nesta Fase 3 — nenhuma resposta real foi recebida.
+
+O HTTP 200 registrado no preflight refere-se somente ao endpoint /health do backend Cerberus no Render, não à API de itens do Mercado Livre.
+
+9. CENÁRIOS EXECUTADOS
+
+Foram executados:
+
+- preflight de branch, SHA, origin/main e working tree;
+- verificação de configuração por nomes de variáveis, sem valores;
+- health check read-only do backend Render;
+- consulta read-only de baseline Supabase antes da decisão;
+- typecheck;
+- suíte completa de testes;
+- build local;
+- git diff --check;
+- secret scan redigido dos novos arquivos;
+- auditoria estática de referências a N13–N17 e camadas de persistência;
+- consulta read-only de baseline Supabase após os gates.
+
+Não foi executada chamada real Mercado Livre, pois isso exigiria credencial oficial disponível e legítima.
+
+10. CENÁRIOS SKIPPED
+
+Autenticação real: SKIPPED — access token ausente.
+
+Autorização real: SKIPPED — aplicação, scope e permissão de owner não confirmados.
+
+Identidade real do item: SKIPPED — sem resposta real não há body.id a comparar.
+
+Contrato de resposta real: SKIPPED — sem envelope real.
+
+Normalização real: SKIPPED — somente a normalização local com fixtures foi validada na Fase 2.
+
+Provenance real: SKIPPED — não houve observed_at/http_status/response_digest de API real.
+
+Repetição controlada: SKIPPED — não repetir chamada inexistente nem simular idempotência real.
+
+Erros reais 401/403/429/5xx: SKIPPED — não provocar bloqueio, rate limit ou falha de acesso.
+
+Ausência de token real: não foi enviada requisição não autenticada nesta Fase 3; o comportamento local AUTH_REQUIRED já foi validado na Fase 2.
+
+11. CAMPOS KNOWN E UNKNOWN
+
+Para uma coleta real na Fase 3:
+
+KNOWN: não aplicável, pois não houve payload real.
+
+UNKNOWN: item_id real, site_id, title, seller_id, category_id, price, currency_id, initial_quantity, available_quantity, date_created, last_updated e todos os campos derivados.
+
+Os estados KNOWN/UNKNOWN observados nas fixtures da Fase 2 não são evidência real e não são promovidos neste relatório.
+
+12. PROVENANCE
+
+Provenance real:
+SKIPPED — nenhuma coleta API real.
+
+Contrato local preparado:
+
+source_type=api
+collection_method=API
+external_listing_id=confirmado somente a partir do body.id real
+observed_at=UTC
+http_status=status real
+response_digest=SHA-256 do conteúdo observado
+field_state=estado governado
+
+Nenhum desses valores foi fabricado para uma coleta real nesta Fase 3.
+
+13. RESPONSE_DIGEST
+
+Digest real:
+SKIPPED — não houve payload real.
+
+O algoritmo local permanece validado pela Fase 2: serialização canônica determinística, ordenação de propriedades, arrays preservados, SHA-256 do conteúdo observado e exclusão de token, headers e timestamps dinâmicos.
+
+Esse resultado local não é apresentado como digest de resposta Mercado Livre.
+
+14. ERROS OBSERVADOS
+
+Não houve erro real do Mercado Livre porque não houve chamada real.
+
+A condição bloqueadora foi:
+
+AUTH_REQUIRED / DEPENDÊNCIA EXTERNA — access token legítimo não disponível no ambiente seguro.
+
+O adaptador não tentou fallback, scraping, browser, cookies, User-Agent alternativo, headers artificiais, proxy, rotação de IP ou endpoint privado.
+
+15. FAIL-CLOSED
+
+PASS no comportamento local previamente validado:
+
+- ausência de token não realiza request;
+- resposta não autenticada não é convertida em KNOWN;
+- erros HTTP são classificados e encerrados;
+- timeout e rede são classificados;
+- schema inválido falha fechado;
+- identidade divergente falha fechado;
+- nenhum erro cria evidence, candidate, assessment, authorization ou publication.
+
+Validação fail-closed real da API:
+SKIPPED — sem chamada real.
+
+16. SECRET SCAN
+
+Resultado nos novos arquivos INFRA-02:
+
+FILES_SCANNED=2
+CONFIG_NAME_OR_CODE_HITS=17
+EXPLICIT_PLACEHOLDER_OR_FIXTURE_HITS=55
+POSSIBLE_REAL_SECRET_PATTERN_HITS=0
+
+Os hits de configuração correspondem a nomes de campos, tipos e headers. Os hits de fixture correspondem a marcadores MOCK/FIXTURE/NOT PRODUCTION. Nenhum padrão compatível com segredo real foi encontrado nos arquivos novos.
+
+Nenhum token apareceu em response, exception, assertion, fixture, log persistente, relatório, diff ou banco.
+
+17. ISOLAMENTO
+
+O adaptador permaneceu fonte isolada.
+
+Não houve chamada a N13, N14, N15, N16 ou N17.
+
+Não houve criação ou alteração de product, candidate, candidate_evidence, candidate_assessment, affiliate_link, job, publication_execution ou commercial_cycle.
+
+Não houve Telegram, scheduler, agents ou publicação.
+
+O adaptador não possui acesso runtime ao banco. A referência a candidateEvidenceRepository é somente import type para reutilização do catálogo FieldState e não produz acesso de persistência no JavaScript executado.
+
+18. BASELINE ANTES E DEPOIS
+
+Baseline antes:
+
+products=13
+candidates=0
+candidate_evidence=0
+candidate_assessment=0
+affiliate_links=0
+job_queue=0
+publication_executions=0
+commercial_cycles=0
+
+Baseline depois:
+
+products=13
+candidates=0
+candidate_evidence=0
+candidate_assessment=0
+affiliate_links=0
+job_queue=0
+publication_executions=0
+commercial_cycles=0
+
+As duas consultas foram somente leitura, limitadas e retornaram o mesmo baseline.
+
+19. CLEANUP
+
+Nenhum dado temporário ou artificial foi criado na Fase 3.
+
+Não foi necessário DELETE.
+Não foi usado TRUNCATE.
+Não foi usado DELETE amplo.
+Não foi necessário alterar env, configuração ou banco.
+
+20. TESTES FINAIS
+
+npm test:
+PASS — 1341/1341 testes, 0 falhas.
+
+npx tsc --noEmit:
+PASS — 0 erros.
+
+npm run build:
+PASS.
+
+Durante o build, a projeção local consultou o endpoint público de produtos do backend e confirmou 13 produtos; não houve alteração persistente no catálogo nem alteração no working tree rastreado.
+
+git diff --check:
+PASS.
+
+secret scan:
+PASS para os novos arquivos; zero padrões compatíveis com segredo real.
+
+auditoria N13–N17:
+PASS — nenhuma integração operacional encontrada no adaptador. O único vínculo textual é a referência de tipo compartilhado e asserções de isolamento dos testes.
+
+21. LIMITAÇÕES
+
+A API oficial do Mercado Livre não foi validada com resposta real nesta Fase 3 porque não havia credencial oficial segura disponível.
+
+Não foi possível confirmar autenticação, autorização, owner, scopes, resposta multiget real, identidade real, campos reais, provenance real ou digest real.
+
+A implementação continua local e não está conectada ao N3/N13.
+
+Não é permitido classificar a integração como operacional.
+
+22. DÍVIDAS
+
+Permanece pendente obter, por meio legítimo e seguro, aplicação Mercado Livre, access token, scopes e autorização compatível para uma futura prova real controlada.
+
+A eventual integração API → evidence → N13 deverá ser tratada em fase própria, com revisão arquitetural, testes, provenance e autorização explícita. Não faz parte desta Fase 3.
+
+A dívida preexistente de possíveis secrets em arquivos fora do escopo continua não tratada e não foi reaberta nesta prova.
+
+23. DECISÃO FINAL
+
+INFRA-02 — FASE 3 SKIPPED —
+DEPENDÊNCIA EXTERNA —
+ADAPTADOR LOCAL PERMANECE VALIDADO —
+INTEGRAÇÃO REAL NÃO CONFIRMADA —
+N13–N16 INTACTOS —
+N17 NÃO INICIADO
+
+A ausência de credenciais foi tratada de modo fail-closed. Nenhuma fixture foi usada para declarar validação real. Nenhuma resposta, identidade, provenance, digest ou evidência foi fabricada.
+
+Aguardar nova autorização. Não fazer commit, push, deploy ou integração com N13–N16 nesta etapa.
+
+24. REFERÊNCIAS OFICIAIS
+
+[1] Mercado Livre Developers — Itens e Buscas: https://developers.mercadolivre.com.br/pt_br/itens-e-buscas
+
+[2] Mercado Livre Developers — OAuth: https://developers.mercadolivre.com.br/pt_br/autenticacao-e-autorizacao
+
+[3] Mercado Livre Developers — Permissões funcionais: https://developers.mercadolivre.com.br/pt_br/permissoes-funcionais
+
+[4] Mercado Livre Developers — Erro 403: https://developers.mercadolivre.com.br/pt_br/erro-403
+
+[5] Mercado Livre API — recurso oficial de itens: https://api.mercadolibre.com/items
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIM DO RELATÓRIO — INFRA-02 FASE 3
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ANEXO A — SNAPSHOT DE AUDITORIA E PREFLIGHT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PROOF_RUN_ID=INFRA02_PHASE3_20260819T224500Z
+BRANCH=main
+HEAD=44a31d687ae06d2398e6651ad1009e3acfbeefbd
+ORIGIN_MAIN=44a31d687ae06d2398e6651ad1009e3acfbeefbd
+
+WORKING TREE NO PREFLIGHT:
+
+?? docs/infra01_preflight_snapshot.md
+?? docs/infra01_report.md
+?? docs/infra02_phase1_design.md
+?? docs/infra02_phase2_report.md
+?? docs/n16_phase2_external_sources.md
+?? docs/n16_phase2_report.md
+?? docs/n16_phase3_preproof_snapshot.md
+?? docs/n16_phase3_report.md
+?? docs/n16_phase4_final_report.md
+?? docs/n16_phase4_final_report_copyable.txt
+?? docs/n16_phase4_preflight_snapshot.md
+?? server/commercial/sources/
+?? tests/mercadoLivreOfficialAdapter.test.ts
+
+DIFF_NAMES:
+
+Nenhum arquivo rastreado apareceu em git diff --name-only no preflight.
+
+CONFIG_KEY_NAMES:
+
+Nenhuma variável de ambiente local com prefixo MERCADO, MELI, ML ou MERCADOLIVRE foi encontrada. Os valores de ambiente nunca foram impressos.
+
+HEALTH CHECK:
+
+HTTP_STATUS=200
+TOTAL_TIME=7.180772
+
+O status 200 pertence ao endpoint público /health do backend Cerberus no Render e não à API de itens do Mercado Livre.
+
+ADAPTER_DB_IMPORT_SCAN:
+
+server/commercial/sources/mercadoLivre/contracts.ts:1:import type { FieldState } from "../../../repositories/candidateEvidenceRepository";
+
+tests/mercadoLivreOfficialAdapter.test.ts:250:  assert.equal(JSON.stringify(result).includes("candidate"), false);
+tests/mercadoLivreOfficialAdapter.test.ts:251:  assert.equal(JSON.stringify(result).includes("publication"), false);
+tests/mercadoLivreOfficialAdapter.test.ts:253:  assert.equal(JSON.stringify(result).includes("telegram"), false);
+tests/mercadoLivreOfficialAdapter.test.ts:254:  assert.equal(JSON.stringify(result).includes("scheduler"), false);
+tests/mercadoLivreOfficialAdapter.test.ts:255:  assert.equal(JSON.stringify(result).includes("agent"), false);
+
+INTERPRETAÇÃO DO SCAN:
+
+A referência a candidateEvidenceRepository é import type, utilizada apenas para compartilhar o tipo FieldState; ela é removida no JavaScript final e não representa acesso de runtime ao banco.
+
+As referências restantes são asserções dos testes para confirmar que a saída do adaptador não contém destinos operacionais ou efeitos colaterais.
+
+GATES REGISTRADOS APÓS O PREFLIGHT:
+
+npm test: PASS — 1341/1341.
+npx tsc --noEmit: PASS — 0 erros.
+npm run build: PASS.
+git diff --check: PASS.
+secret scan: PASS nos novos arquivos, com POSSIBLE_REAL_SECRET_PATTERN_HITS=0.
+
+BASELINE READ-ONLY ANTES E DEPOIS:
+
+products=13
+candidates=0
+candidate_evidence=0
+candidate_assessment=0
+affiliate_links=0
+job_queue=0
+publication_executions=0
+commercial_cycles=0
+
+Nenhum request real Mercado Livre foi executado, pois não havia credencial oficial legítima disponível. Nenhum dado foi criado e nenhum cleanup foi necessário.
+
+FIM DO ANEXO A
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -1,0 +1,20 @@
+N17 — FASE 8 — PREFLIGHT SNAPSHOT
+Captured at: 2026-08-20 (sandbox local time)
+
+Repository:
+LOCAL_HEAD=458b10878112d6b96d513e68e3929875cf5db497
+ORIGIN_MAIN=458b10878112d6b96d513e68e3929875cf5db497
+
+Render:
+URL=https://cerberus-forge-deploy-backend.onrender.com/health
+HTTP=200
+status=ok
+service=cerberus-forge-deploy
+version=458b10878112d6b96d513e68e3929875cf5db497
+
+Working tree before Phase 8 operations:
+Existing unrelated uncommitted changes were present in tests/affiliateProvidersLinks.test.ts, tests/shopeeAffiliateIntegration.test.ts, server/commercial/sources/mercadoLivre/, tests/mercadoLivreOfficialAdapter.test.ts, and multiple historical docs under docs/. These were not modified or staged as part of the Phase 8 preflight.
+
+Safety:
+No secrets or credential values recorded.
+No discovery call, candidate creation, evidence persistence, assessment, authorization, acquisition, publication, or N18+ execution performed in this snapshot.

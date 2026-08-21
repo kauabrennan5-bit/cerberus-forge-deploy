@@ -1,0 +1,4 @@
+{
+  "project_id": "juiychcfdqxgnatffnla",
+  "query": "SELECT (SELECT count(*) FROM products) AS products, (SELECT count(*) FROM candidates) AS candidates, (SELECT count(*) FROM candidate_evidence) AS candidate_evidence, (SELECT count(*) FROM candidate_assessment) AS candidate_assessment, (SELECT count(*) FROM affiliate_links) AS affiliate_links, (SELECT count(*) FROM publication_executions) AS publication_executions, (SELECT count(*) FROM commercial_cycles) AS commercial_cycles, (SELECT count(*) FROM job_queue) AS job_queue"
+}

@@ -1,0 +1,76 @@
+PROOF_RUN_ID=N17_PHASE10_FINAL_20260820
+HEAD=458b10878112d6b96d513e68e3929875cf5db497
+ORIGIN_MAIN=458b10878112d6b96d513e68e3929875cf5db497
+STATUS:
+ [31mM[m server/commercial/commercialBrain/service.ts
+ [31mM[m server/commercial/governance/service.ts
+ [31mM[m tests/affiliateProvidersLinks.test.ts
+ [31mM[m tests/commercialBrainN14.test.ts
+ [31mM[m tests/governanceN15.test.ts
+ [31mM[m tests/shopeeAffiliateIntegration.test.ts
+[31m??[m docs/infra01_preflight_snapshot.md
+[31m??[m docs/infra01_report.md
+[31m??[m docs/infra02_phase1_design.md
+[31m??[m docs/infra02_phase2_report.md
+[31m??[m docs/infra02_phase3_report.md
+[31m??[m docs/infra02_phase3_report_copyable.txt
+[31m??[m docs/infra03_credential_check.md
+[31m??[m docs/infra03_phase10_provenance.md
+[31m??[m docs/infra03_phase11_controlled_validation.md
+[31m??[m docs/infra03_phase12_n14_validation.md
+[31m??[m docs/infra03_phase13_source_coverage.md
+[31m??[m docs/infra03_phase14_price_validation.md
+[31m??[m docs/infra03_phase15_runtime_probe.md
+[31m??[m docs/infra03_phase16_price_parser_diagnosis.md
+[31m??[m docs/infra03_phase17_price_shape_probe.md
+[31m??[m docs/infra03_phase18_price_parser_correction.md
+[31m??[m docs/infra03_phase19_price_contract.md
+[31m??[m docs/infra03_phase1_audit.md
+[31m??[m docs/infra03_phase20_commercial_coverage_audit.md
+[31m??[m docs/infra03_phase21_availability_contract.md
+[31m??[m docs/infra03_phase22_commission_audit.md
+[31m??[m docs/infra03_phase23_competition_audit.md
+[31m??[m docs/infra03_phase24_market_audit.md
+[31m??[m docs/infra03_phase25_shopee_commercial_coverage.md
+[31m??[m docs/infra03_phase3_report.md
+[31m??[m docs/infra03_phase4_real_api.md
+[31m??[m docs/infra03_phase5_bridge_deploy.md
+[31m??[m docs/infra03_phase6_integration.md
+[31m??[m docs/infra03_phase7_controlled_proof.md
+[31m??[m docs/infra03_phase8_controlled_proof.md
+[31m??[m docs/infra03_phase9_controlled_validation.md
+[31m??[m docs/infra03_render_env_check.md
+[31m??[m docs/infra03_runtime_propagation.md
+[31m??[m docs/n16_phase2_external_sources.md
+[31m??[m docs/n16_phase2_report.md
+[31m??[m docs/n16_phase3_preproof_snapshot.md
+[31m??[m docs/n16_phase3_report.md
+[31m??[m docs/n16_phase4_final_report.md
+[31m??[m docs/n16_phase4_final_report_copyable.txt
+[31m??[m docs/n16_phase4_preflight_snapshot.md
+[31m??[m docs/n17_phase10_preflight_snapshot.txt
+[31m??[m docs/n17_phase7_report.md
+[31m??[m docs/n17_phase8_discovery_result.json
+[31m??[m docs/n17_phase8_n13_result.json
+[31m??[m docs/n17_phase8_n14_result.json
+[31m??[m docs/n17_phase8_preflight_snapshot.txt
+[31m??[m docs/n17_phase8_report.md
+[31m??[m docs/n17_phase8_research_result.json
+[31m??[m docs/n17_phase9_report.md
+[31m??[m server/commercial/sources/mercadoLivre/
+[31m??[m tests/mercadoLivreOfficialAdapter.test.ts
+DIFF_NAME_STATUS:
+M	server/commercial/commercialBrain/service.ts
+M	server/commercial/governance/service.ts
+M	tests/affiliateProvidersLinks.test.ts
+M	tests/commercialBrainN14.test.ts
+M	tests/governanceN15.test.ts
+M	tests/shopeeAffiliateIntegration.test.ts
+CACHED_NAME_STATUS:
+AUTHORIZED_TRACKED_DIFF_STATS:
+ server/commercial/commercialBrain/service.ts | 11 [32m+++++++++[m[31m--[m
+ server/commercial/governance/service.ts      |  7 [32m++++[m[31m---[m
+ tests/commercialBrainN14.test.ts             | 11 [32m+++++++++++[m
+ tests/governanceN15.test.ts                  |  8 [32m++++++++[m
+ 4 files changed, 32 insertions(+), 5 deletions(-)
+UNAUTHORIZED_MODIFIED_PATHS:

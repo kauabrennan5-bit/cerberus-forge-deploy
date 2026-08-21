@@ -9,6 +9,7 @@ import * as cerberusOperator from "./cerberusOperator";
 import { createProductionProductPipeline, restoreLifecycleRecord, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { detectMarketplace } from "./marketplace";
+import { stripRawAffiliateProvenance } from "./productLifecycle";
 import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
 import * as commercialCockpit from "./commercialCockpit";
@@ -1145,13 +1146,17 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       try {
         const pipeline = createProductionProductPipeline();
+        // FASE 25C (Commit 3) — link do produto: autoridade é o affiliate link oficial da
+        // review (Affiliate API); sem ele, a URL pública normalizada oficial é o fallback.
+        const affiliateLink = (review.existingProduct?.affiliateUrl || "").trim();
         let lifecycle = review.lifecycle ? restoreLifecycleRecord(review.lifecycle) : await pipeline.evaluate({
           produto: review.produto,
           categoria: review.categoria,
           preco: review.preco,
           imagens: review.imagens,
           normalizedUrl: review.normalizedUrl,
-          descricao: review.descricao,
+          link: affiliateLink || review.normalizedUrl,
+          descricao: stripRawAffiliateProvenance(review.descricao),
           marketplace: detectMarketplace(review.normalizedUrl),
         });
         if (lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {

@@ -1,0 +1,19 @@
+{
+  "proof_run_id": "N17_PHASE8_LIVE_20260820T174500Z",
+  "http": 200,
+  "ok": true,
+  "outcome": "evaluated",
+  "candidate_id": "can-ece13fcbc69dad6e46eb8abe",
+  "score": null,
+  "band": "INSUFFICIENT",
+  "confidence": "LOW",
+  "coverage": 0,
+  "dimensions_used": [],
+  "dimensions_unknown": ["availability","commission","competition","market","price","seller"],
+  "risk_penalty": 1,
+  "rationale": "unknown:price:price_unknown_value;unknown:commission:commission_unknown_value;unknown:availability:availability_unknown;unknown:market:market_unknown;unknown:seller:seller_rating_unknown;unknown:competition:competition_unknown;insufficient:dimensoes_conhecidas=0;minimo=2",
+  "digest": "sha256:7eb0e516b114fb9b62f6c08992400e71fa437fb0ef1fcfefd5d81c0a9febd087",
+  "idempotency_key": "cb-7eb0e516b114fb9b62f6c08992400e71fa437fb0ef1fcfefd5d81c0a9febd087",
+  "weights_version": "cb_weights_v1",
+  "note": "Official N14 Commercial Brain result. No product, link, publication, job, or downstream effect was created by this route."
+}

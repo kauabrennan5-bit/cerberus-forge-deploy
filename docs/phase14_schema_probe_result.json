@@ -1,0 +1,10 @@
+{
+  "proofRunId": "PHASE14_SCHEMA_PROBE_20260820",
+  "observedAt": "2026-08-20T21:29:22.767Z",
+  "status": "SKIPPED",
+  "reason": "credential_absent_in_execution_runtime",
+  "presence": {
+    "SHOPEE_AFFILIATE_APP_ID": "ABSENT",
+    "SHOPEE_AFFILIATE_APP_SECRET": "ABSENT"
+  }
+}

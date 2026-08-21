@@ -18,6 +18,8 @@ export interface ProductLifecycleEvent {
 
 export interface ProductCandidate {
   normalizedUrl: string;
+  /** Link oficial de aquisição (affiliate link da Affiliate API, quando disponível). */
+  link?: string;
   externalId?: string;
   marketplace: string;
   produto: string;
@@ -91,6 +93,39 @@ export function containsRawPayloadMarkers(value: unknown): boolean {
   return RAW_PAYLOAD_MARKERS.some(marker => normalized.includes(marker));
 }
 
+/**
+ * FASE 25C (Commit 3) — remove metadado de proveniência interna do preview de
+ * afiliado antes de torná-lo conteúdo público do produto.
+ * Regras: determinística e fail-closed — somente descarta quando a descrição
+ * inicia com o prefixo oficial de proveniência do orquestrador Shopee
+ * ("affiliate_preview"), que representa auditoria interna (batch, source,
+ * link oficial, enriquecimento do scraper, identidade). Qualquer outra
+ * descrição é preservada intacta: nunca inventar, nunca editar conteúdo real.
+ * A proveniência completa permanece armazenada no registro (auditoria).
+ */
+const RAW_AFFILIATE_PROVENANCE_PREFIX = "affiliate_preview";
+export function stripRawAffiliateProvenance(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (trimmed === "") return "";
+  if (trimmed.toLowerCase().startsWith(RAW_AFFILIATE_PROVENANCE_PREFIX)) return "";
+  return value;
+}
+
+/**
+ * FASE 25C (Commit 3) — mapeia categorias internas do fluxo de afiliado para a
+ * apresentação pública. O storage interno permanece inalterado (auditoria,
+ * decisões do bot e proveniência usam "affiliate_preview"); apenas a vitrine
+ * exibe a categoria legível.
+ */
+const PUBLIC_CATEGORY_MAP: Record<string, string> = {
+  affiliate_preview: "Afiliado",
+};
+export function publicCategoryMapping(category: string | undefined | null): string {
+  if (!category || category.trim() === "") return "";
+  return PUBLIC_CATEGORY_MAP[category.trim()] ?? category;
+}
+
 export function normalizeCandidate(input: Partial<ProductCandidate> & { normalizedUrl?: string; link?: string }): ProductCandidate {
   const rawUrl = (input.normalizedUrl || input.link || "").trim();
   let normalizedUrl = rawUrl;
@@ -107,13 +142,19 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
   const produto = (input.produto || "").replace(/\s+/g, " ").trim();
   const rawDescription = (input.descricao || "").trim();
   const marketplace = (input.marketplace || detectMarketplace(normalizedUrl)).trim();
+  // FASE 25C (Commit 3): quando o fluxo de afiliado passa o link oficial
+  // (affiliate) explicitamente, ele é preservado como candidate.link para o
+  // adaptador de publicação; a URL pública normalizada permanece em
+  // normalizedUrl para auditoria e deduplicação.
+  const explicitLink = (input.link || "").trim();
   return {
     normalizedUrl,
+    link: explicitLink && input.normalizedUrl ? explicitLink : input.link,
     externalId: input.externalId || extractExternalId(normalizedUrl),
     marketplace,
     produto,
-    descricao: containsRawPayloadMarkers(rawDescription) ? "" : rawDescription,
-    categoria: (input.categoria || "").trim(),
+    descricao: containsRawPayloadMarkers(rawDescription) ? "" : stripRawAffiliateProvenance(rawDescription),
+    categoria: publicCategoryMapping((input.categoria || "").trim()),
     preco: typeof input.preco === "number" && Number.isFinite(input.preco) ? input.preco : null,
     precoAntigo: typeof input.precoAntigo === "number" ? input.precoAntigo : null,
     imagens: Array.isArray(input.imagens) ? input.imagens.filter(image => typeof image === "string" && /^https?:\/\//i.test(image)) : [],

@@ -1,0 +1,4 @@
+{
+  "project_id": "juiychcfdqxgnatffnla",
+  "query": "SELECT 'BEFORE' AS phase, t AS tbl, n FROM (SELECT 'products' AS t, count(*) AS n FROM products UNION ALL SELECT 'candidates' AS t, count(*) AS n FROM candidates UNION ALL SELECT 'candidate_evidence' AS t, count(*) AS n FROM candidate_evidence UNION ALL SELECT 'candidate_assessment' AS t, count(*) AS n FROM candidate_assessment UNION ALL SELECT 'affiliate_links' AS t, count(*) AS n FROM affiliate_links UNION ALL SELECT 'publication_executions' AS t, count(*) AS n FROM publication_executions UNION ALL SELECT 'commercial_cycles' AS t, count(*) AS n FROM commercial_cycles UNION ALL SELECT 'job_queue' AS t, count(*) AS n FROM job_queue) s"
+}

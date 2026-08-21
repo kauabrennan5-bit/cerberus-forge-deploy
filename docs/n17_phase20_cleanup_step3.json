@@ -1,0 +1,4 @@
+{
+  "project_id": "juiychcfdqxgnatffnla",
+  "query": "DELETE FROM candidate_assessment WHERE candidate_id = 'can-044a25b735cb3c468b36cdce' RETURNING assessment_id"
+}
