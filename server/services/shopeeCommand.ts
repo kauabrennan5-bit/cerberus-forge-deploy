@@ -211,6 +211,9 @@ async function enrichWithExistingScraper(params: {
   failureReason: string | null;
   images: string[];
   scraperPrice: number | null;
+  scraperPriceMax: number | null;
+  scraperCheckoutPrice: number | null;
+  scraperCheckoutPriceCondition: "pix" | "pix_with_coupon" | null;
   curatedTitle: string | null;
 }> {
   try {
@@ -221,6 +224,9 @@ async function enrichWithExistingScraper(params: {
         failureReason: result.error ?? "scraper_extraction_failed",
         images: [],
         scraperPrice: null,
+        scraperPriceMax: null,
+        scraperCheckoutPrice: null,
+        scraperCheckoutPriceCondition: null,
         curatedTitle: null,
       };
     }
@@ -232,17 +238,20 @@ async function enrichWithExistingScraper(params: {
       extracted.shopId === params.officialShopId &&
       extracted.itemId === params.officialItemId;
     if (!identityMatches) {
-      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, curatedTitle: null };
+      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, curatedTitle: null };
     }
     return {
       ok: true,
       failureReason: null,
       images: data.imagens ?? [],
       scraperPrice: data.preco ?? null,
+      scraperPriceMax: data.precoMaximo ?? null,
+      scraperCheckoutPrice: data.precoCheckout ?? null,
+      scraperCheckoutPriceCondition: data.condicaoPrecoCheckout ?? null,
       curatedTitle: data.produto ?? null,
     };
   } catch {
-    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, curatedTitle: null };
+    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, curatedTitle: null };
   }
 }
 
@@ -266,7 +275,10 @@ function formatPreviewPrice(value: number | null): string | null {
 function buildShopeeCardText(params: {
   name: string | null;
   price: number | null;
+  priceMax: number | null;
   priceSource: "affiliate_api" | "scraper_observacional";
+  checkoutPrice: number | null;
+  checkoutPriceCondition: "pix" | "pix_with_coupon" | null;
   productLink: string | null;
   affiliateUrl: string | null;
   shopId: string | null;
@@ -281,9 +293,22 @@ function buildShopeeCardText(params: {
     params.priceSource === "scraper_observacional"
       ? " <i>(preço exibido no anúncio)</i>"
       : " <i>(Shopee Affiliate API)</i>";
+  const priceRange = priceInfo && params.priceMax && params.priceMax > (params.price ?? 0)
+    ? ` · <b>Faixa por variante:</b> ${priceInfo}–${formatPreviewPrice(params.priceMax)}`
+    : "";
   const priceLine = priceInfo
-    ? `💰 <b>Preço atual:</b> ${priceInfo}${priceSourceNote}`
+    ? `💰 <b>Preço do anúncio:</b> ${priceInfo}${priceSourceNote}${priceRange}`
     : `⚠️ <b>Preço:</b> não retornado por nenhuma das fontes`;
+  const checkoutPriceInfo = formatPreviewPrice(params.checkoutPrice);
+  const checkoutLine = params.checkoutPriceCondition === "pix_with_coupon"
+    ? checkoutPriceInfo
+      ? `🏷️ <b>Preço no Pix com cupom:</b> ${checkoutPriceInfo}\n<i>Condição exibida no anúncio; cupom e elegibilidade devem ser confirmados no checkout.</i>`
+      : `🏷️ <b>Condição observada:</b> desconto no Pix com cupom pode estar disponível no checkout.\n<i>Não foi calculado nem prometido nenhum valor.</i>`
+    : params.checkoutPriceCondition === "pix"
+      ? checkoutPriceInfo
+        ? `🏷️ <b>Preço no Pix:</b> ${checkoutPriceInfo}\n<i>Condição exibida no anúncio; confirme a elegibilidade no checkout.</i>`
+        : `🏷️ <b>Condição observada:</b> desconto no Pix pode estar disponível no checkout.\n<i>Não foi calculado nem prometido nenhum valor.</i>`
+      : `ℹ️ <i>Pix, cupons, frete e elegibilidade podem alterar o total no checkout; este card não estima descontos.</i>`;
   const affiliateLine = params.affiliateUrl
     ? `<b>Link de afiliado:</b> <code>${params.affiliateUrl}</code>`
     : `<b>Link de afiliado:</b> <i>não elegível (fonte oficial não retornou offerLink)</i>`;
@@ -296,6 +321,7 @@ function buildShopeeCardText(params: {
     `🛡️ <b>CERBERUS FINDS — PREVIEW SHOPEE AFFILIATE</b>\n\n` +
     `🏷️ <b>Produto:</b> ${params.name ?? "<i>sem nome retornado</i>"}\n` +
     priceLine + `\n` +
+    checkoutLine + `\n` +
     `🔗 <b>URL original:</b> <code>${params.productLink ?? "?"}</code>\n` +
     `${affiliateLine}\n` +
     `${imageLine}\n` +
@@ -762,7 +788,10 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     const text = buildShopeeCardText({
       name: enriched.curatedTitle ?? acquisition.name ?? null,
       price: hasScrapedPrice ? enriched.scraperPrice : hasOfficialPrice ? acquisition.price : null,
+      priceMax: hasScrapedPrice ? enriched.scraperPriceMax : null,
       priceSource: hasScrapedPrice ? "scraper_observacional" : "affiliate_api",
+      checkoutPrice: enriched.scraperCheckoutPrice,
+      checkoutPriceCondition: enriched.scraperCheckoutPriceCondition,
       productLink: acquisition.productLink,
       affiliateUrl: acquisition.affiliateUrl,
       shopId: acquisition.shopId,

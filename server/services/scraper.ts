@@ -6,6 +6,12 @@ dotenv.config();
 export interface ExtractedProductData {
   title: string | null;
   price: number | null;
+  /** Maior preço de variante observado no mesmo estado do anúncio. */
+  priceMax: number | null;
+  /** Preço de checkout somente quando o próprio anúncio associa o valor a Pix. */
+  checkoutPrice: number | null;
+  /** Condição explícita que acompanha checkoutPrice; nunca inferida. */
+  checkoutPriceCondition: "pix" | "pix_with_coupon" | null;
   images: string[];
   rawContent: string;
 }
@@ -163,6 +169,8 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
 
   // 5. EXTRAÇÃO E SELEÇÃO DE PREÇO
   const price = extractCorrectPrice(combinedContent, jsonLdResult.price, ogResult.price);
+  const priceMax = extractShopeeVariantPriceMax(combinedContent, price);
+  const checkoutOffer = extractShopeeCheckoutPriceOffer(combinedContent);
 
   // LOG DE DEBUG SOLICITADO
   printScraperDebugLog({
@@ -204,9 +212,60 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
   return {
     title,
     price,
+    priceMax,
+    checkoutPrice: checkoutOffer.price,
+    checkoutPriceCondition: checkoutOffer.condition,
     images,
     rawContent: fullRawContent
   };
+}
+
+/**
+ * Extrai a faixa de variantes somente do estado serializado da Shopee.
+ * `price_max` sem `price_min` não é usado como preço atual. Ele é apresentado
+ * apenas como faixa, e somente quando for maior que o preço de entrada já
+ * confirmado por outra estratégia.
+ */
+export function extractShopeeVariantPriceMax(content: string, priceMin: number | null): number | null {
+  if (priceMin === null || !Number.isFinite(priceMin) || priceMin <= 0) return null;
+  const match = content.match(/(?:\\?"price_max\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i);
+  if (!match?.[1]) return null;
+  const converted = normalizeShopeePriceScale(match[1]);
+  return converted !== null && converted > priceMin ? converted : null;
+}
+
+/**
+ * Captura somente um preço que esteja textualmente vinculado à condição Pix
+ * dentro do próprio anúncio. Um cupom genérico, percentual promocional ou a
+ * mera palavra "Pix" não geram preço estimado. A elegibilidade permanece
+ * dependente de checkout, conta, disponibilidade e regras vigentes da Shopee.
+ */
+export function extractShopeeCheckoutPriceOffer(content: string): {
+  price: number | null;
+  condition: "pix" | "pix_with_coupon" | null;
+} {
+  const normalized = content.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ");
+  const conditions: Array<{
+    condition: "pix" | "pix_with_coupon";
+    pattern: RegExp;
+  }> = [
+    {
+      condition: "pix_with_coupon",
+      pattern: /(?:R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)[^R$]{0,120}?(?:no\s+pix\s+com\s+cupom|pix\s+com\s+cupom)|(?:no\s+pix\s+com\s+cupom|pix\s+com\s+cupom)[^R$]{0,120}?R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?))/i,
+    },
+    {
+      condition: "pix",
+      pattern: /(?:R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?)[^R$]{0,120}?(?:no\s+pix)(?!\s+com\s+cupom)|(?:no\s+pix)(?!\s+com\s+cupom)[^R$]{0,120}?R\$\s*([0-9]+(?:[\.,][0-9]{1,2})?))/i,
+    },
+  ];
+  for (const candidate of conditions) {
+    const match = normalized.match(candidate.pattern);
+    const raw = match?.[1] ?? match?.[2];
+    if (!raw) continue;
+    const price = parseBrlNumber(raw);
+    if (price > 0 && price < 100000) return { price, condition: candidate.condition };
+  }
+  return { price: null, condition: null };
 }
 
 /**
@@ -514,12 +573,9 @@ function tryStrategy2InternalData(content: string): number | null {
       // observação real do anúncio e é preferível à ausência total de valor.
       scriptBody.match(/(?:\\?"price_before_discount\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i);
     if (shopeePriceMatch?.[1]) {
-      let rawNum = Number(shopeePriceMatch[1]);
-      if (rawNum > 10000000) rawNum = rawNum / 100000000;
-      else if (rawNum > 100000) rawNum = rawNum / 100000;
-      else if (rawNum > 10000) rawNum = rawNum / 100;
+      const rawNum = normalizeShopeePriceScale(shopeePriceMatch[1]);
 
-      if (Number.isFinite(rawNum) && rawNum > 0 && rawNum < 100000) {
+      if (rawNum !== null && rawNum > 0 && rawNum < 100000) {
         console.log(`[Scraper Price Log] Preço R$ ${rawNum.toFixed(2)} localizado via ESTRATÉGIA_2_DADOS_INTERNOS (Shopee JSON)`);
         return rawNum;
       }
@@ -538,6 +594,15 @@ function tryStrategy2InternalData(content: string): number | null {
     }
   }
   return null;
+}
+
+function normalizeShopeePriceScale(raw: string): number | null {
+  let value = Number(raw);
+  if (!Number.isFinite(value)) return null;
+  if (value > 10000000) value /= 100000000;
+  else if (value > 100000) value /= 100000;
+  else if (value > 10000) value /= 100;
+  return Number.isFinite(value) ? value : null;
 }
 
 /** 3. OpenGraph / Twitter Cards */

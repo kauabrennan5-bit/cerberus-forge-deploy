@@ -281,10 +281,40 @@ describe("runShopeeCommand — lote completo", () => {
     const result = await runShopeeCommand("1 luminária bauhaus");
 
     assert.equal(result.ok, 1);
-    assert.match(capturedCaption, /Preço atual:<\/b> R\$\s*79,90/);
+    assert.match(capturedCaption, /Preço do anúncio:<\/b> R\$\s*79,90/);
     assert.match(capturedCaption, /Shopee Affiliate API/);
+    assert.match(capturedCaption, /este card não estima descontos/);
     assert.equal(savedReviews[0]?.preco, 79.9);
     assert.match(String(capturedKeyboard?.inline_keyboard?.[0]?.[0]?.callback_data), /^confirm_pub:/);
+  });
+
+  it("mostra Pix com cupom apenas quando o scraper devolve valor e condição explícitos", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async () => ({
+      success: true,
+      data: {
+        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
+        imagens: ["https://img.test/1.webp"],
+        preco: 519,
+        precoMaximo: 599,
+        precoCheckout: 460,
+        condicaoPrecoCheckout: "pix_with_coupon",
+        produto: "Luminária Bauhaus",
+      },
+    }));
+    let capturedCaption = "";
+    telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption) => {
+      capturedCaption = String(caption);
+      return { ok: true };
+    });
+
+    const result = await runShopeeCommand("1 luminária bauhaus");
+
+    assert.equal(result.ok, 1);
+    assert.match(capturedCaption, /Preço do anúncio:<\/b> R\$\s*519,00/);
+    assert.match(capturedCaption, /Faixa por variante:<\/b> R\$\s*519,00–R\$\s*599,00/);
+    assert.match(capturedCaption, /Preço no Pix com cupom:<\/b> R\$\s*460,00/);
+    assert.match(capturedCaption, /devem ser confirmados no checkout/);
   });
 
   it("deduplica candidatos repetidos sem criar cards duplicados", async () => {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert";
-import { extractCorrectPrice } from "../server/services/scraper";
+import { extractCorrectPrice, extractShopeeCheckoutPriceOffer, extractShopeeVariantPriceMax } from "../server/services/scraper";
 
 test("Mercado Livre prioriza o preço de venda e ignora preço original e parcela", () => {
   const html = `
@@ -57,4 +57,22 @@ test("Shopee usa preço regular real quando não há preço atual ou promocional
 
 test("Shopee não inventa preço quando nenhuma fonte da publicação contém valor", () => {
   assert.equal(extractCorrectPrice(`<main>Produto sem valor</main>`, null, null), null);
+});
+
+test("Shopee preserva faixa de variante somente quando price_max é maior que o preço confirmado", () => {
+  const html = `<script>window.__STATE__ = {"price_min":"7990000000","price_max":"11990000000"};</script>`;
+  assert.equal(extractShopeeVariantPriceMax(html, 79.9), 119.9);
+  assert.equal(extractShopeeVariantPriceMax(html, 129), null);
+});
+
+test("Shopee extrai preço no Pix com cupom somente quando valor e condição estão juntos no anúncio", () => {
+  const offer = extractShopeeCheckoutPriceOffer(`<div>R$ 460,00 no Pix com cupom</div>`);
+  assert.deepEqual(offer, { price: 460, condition: "pix_with_coupon" });
+});
+
+test("Shopee não calcula cupom genérico ou desconto Pix sem preço explicitamente vinculado", () => {
+  assert.deepEqual(
+    extractShopeeCheckoutPriceOffer(`<div>Cupons disponíveis. Economize no Pix ao finalizar a compra.</div>`),
+    { price: null, condition: null },
+  );
 });

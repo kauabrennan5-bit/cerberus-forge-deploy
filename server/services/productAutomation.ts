@@ -331,6 +331,9 @@ export interface ExtractedReviewData {
   produto: string;
   categoria: string;
   preco: number | null;
+  precoMaximo?: number | null;
+  precoCheckout?: number | null;
+  condicaoPrecoCheckout?: "pix" | "pix_with_coupon" | null;
   imagens: string[];
   descricao: string;
   existingProduct: Product | null;
@@ -377,6 +380,9 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     const scraped = await fetchProductDataFromUrl(normalizedUrl, rawTextOverride);
     let scrapedTitle = scraped.title;
     const scrapedPrice = scraped.price;
+    const scrapedPriceMax = scraped.priceMax;
+    const scrapedCheckoutPrice = scraped.checkoutPrice;
+    const scrapedCheckoutPriceCondition = scraped.checkoutPriceCondition;
     const scrapedImages = scraped.images || [];
     const rawContent = scraped.rawContent;
 
@@ -513,6 +519,9 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
         produto: curatedTitle,
         categoria: curatedCategory,
         preco: scrapedPrice,
+        precoMaximo: scrapedPriceMax,
+        precoCheckout: scrapedCheckoutPrice,
+        condicaoPrecoCheckout: scrapedCheckoutPriceCondition,
         imagens: scrapedImages,
         descricao: curatedDescription,
         existingProduct
