@@ -26,9 +26,8 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
       }
     });
 
-    if (response.status !== 200) {
+    if (response.status !== 200 && response.status !== 202) {
       console.error(`[DDG Search] Erro HTTP: ${response.status}`);
-      // Se for 202, o DDG está pedindo para aguardar ou redirecionar, mas no modo HTML isso é raro.
       return [];
     }
 
@@ -36,23 +35,44 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
     const candidates: ShopeeSearchCandidate[] = [];
 
     // DuckDuckGo Lite usa a classe 'result-link' para os links de resultados
-    $(".result-link").each((_, element) => {
-      const href = $(element).attr("href");
-      const title = $(element).text().trim();
+    // Mas também pode estar em seletores genéricos se o layout mudar
+    const linkSelectors = [".result-link", "a.result-link", ".links_main a", ".result__a"];
 
-      if (href) {
-        // O DDG pode retornar URLs de redirecionamento ou diretas
-        // Vamos tentar extrair a URL real da Shopee
-        const shopeeMatch = href.match(/https:\/\/shopee\.com\.br\/product\/(\d+)\/(\d+)/);
-        if (shopeeMatch) {
-          candidates.push({
-            url: `https://shopee.com.br/product/${shopeeMatch[1]}/${shopeeMatch[2]}`,
-            shopId: shopeeMatch[1],
-            itemId: shopeeMatch[2],
-            rawTitle: title
-          });
+    linkSelectors.forEach(selector => {
+      $(selector).each((_, element) => {
+        const href = $(element).attr("href");
+        const title = $(element).text().trim();
+
+        if (href) {
+          // O DDG pode retornar URLs de redirecionamento ou diretas
+          // Vamos tentar extrair a URL real da Shopee
+          // Padrão 1: URL direta
+          const shopeeMatch = href.match(/https:\/\/shopee\.com\.br\/product\/(\d+)\/(\d+)/);
+          if (shopeeMatch) {
+            candidates.push({
+              url: `https://shopee.com.br/product/${shopeeMatch[1]}/${shopeeMatch[2]}`,
+              shopId: shopeeMatch[1],
+              itemId: shopeeMatch[2],
+              rawTitle: title
+            });
+          } else if (href.includes("shopee.com.br/product")) {
+            // Padrão 2: URL com parâmetros ou formatada diferentemente
+            const parts = href.split("shopee.com.br/product/")[1]?.split("/");
+            if (parts && parts.length >= 2) {
+              const shopId = parts[0].split("?")[0];
+              const itemId = parts[1].split("?")[0];
+              if (/^\d+$/.test(shopId) && /^\d+$/.test(itemId)) {
+                candidates.push({
+                  url: `https://shopee.com.br/product/${shopId}/${itemId}`,
+                  shopId,
+                  itemId,
+                  rawTitle: title
+                });
+              }
+            }
+          }
         }
-      }
+      });
     });
 
     // Deduplicação por shopId e itemId
