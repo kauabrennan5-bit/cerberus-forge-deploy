@@ -1,23 +1,35 @@
 // ============================================================================
-// Fase 23 — Preview manual Shopee Affiliate → Telegram (admin-only).
+// Fase 23 + 24 — Preview manual Shopee Affiliate → Scraper → Telegram
+// (admin-only). FASE 24: o Scraper EXISTENTE (productAutomation scraper +
+// Gemini, já usado pelo fluxo de link do bot) enriquece o produto
+// confirmado pela Affiliate API com imagens e preço exibido ANTES da
+// montagem do card — NÃO cria scraper novo nem rota paralela.
 //
 // POST /api/commercial/preview-telegram
 // Fluxo operacional básico de afiliado, SEM pipeline de publicação:
 //   URL pública Shopee → identity (extractShopeeIdentifiers)
 //   → acquireAffiliateLink (1 chamada oficial READ-ONLY à productOfferV2,
 //     que traz name, price, productLink e o offerLink oficial da conta)
+//   → extractProductForReview (scraper existente) sobre a URL canônica
+//     oficial + verificação determinística de identidade (shop_id/item_id)
+//   → merge com proveniência explícita (affiliate = autoridade para IDs
+//     e offerLink; scraper = fonte observacional de imagens/preço exibido)
 //   → PendingReview existente (status "pending", meta source "affiliate_preview")
-//   → card Telegram com teclado [✅ PUBLICAR] [❌ DESCARTAR].
+//   → card Telegram (FOTO quando o scraper observou imagens) com teclado
+//     [✅ PUBLICAR] [❌ DESCARTAR].
 //
 // PREVIEW != PUBLICATION · DECISION != ACTION:
 //   - NUNCA executa pipeline.publish, generateShortLink, N13/N14/N15,
-//     scraping, Seller API ou qualquer mutation Shopee.
+//     Seller API ou qualquer mutation Shopee.
 //   - O callback [✅ PUBLICAR] é tratado pelo bot como approve_only:
 //     somente REGISTRA a decisão (status "published" no repositório de
 //     review), encaminhando à publicação manual — publicação automática
 //     exige o fluxo de review canônico existente (confirm_pub).
-//   - Preço exibido com escala explicitamente NÃO verificada (jamais "R$").
-//   - Imagem não é fornecida pela fonte oficial → card informa a ausência.
+//   - Preço do scraper é observacional (proveniência "scraper_observacional",
+//     scale=UNVERIFIED) — jamais rotulado como moeda nem convertido.
+//   - FAIL-CLOSED SCRAPER: se o scraper falhar (bloqueio/timeout/sem dados),
+//     NENHUM card é enviado e NENHUM review é persistido — jamais inventar
+//     imagens ou preço. Divergência de identidade → 424 sem card.
 // ============================================================================
 import type { Request, Response } from "express";
 import {
@@ -30,12 +42,47 @@ import {
   ShopeeApiClient,
 } from "../commercial/affiliate/shopeeApiClient";
 import {
+  extractProductForReview,
+} from "../services/productAutomation";
+import {
   PendingReview,
   sendTelegramMessage,
+  sendTelegramPhoto,
 } from "../services/telegramBot";
 import {
   savePendingReview,
 } from "../repositories/telegramRepository";
+
+/**
+ * Extrai (shop_id, item_id) de uma URL normalizada Shopee em formato
+ * canônico `/product/{shop_id}/{item_id}` — MESMA normalização já usada
+ * pelo fluxo de link do bot (`normalizeProductUrl`). Determinística,
+ * sem heurística de conteúdo: identidade vem da URL, não da página.
+ */
+function extractCanonicalShopeeIds(normalizedUrl: string): {
+  shopId: string | null;
+  itemId: string | null;
+} {
+  let shopId: string | null = null;
+  let itemId: string | null = null;
+  const parsedUrl = normalizedUrl.trim().toLowerCase();
+  if (!parsedUrl.includes("shopee.com.br") && !parsedUrl.includes("shope.ee")) {
+    return { shopId: null, itemId: null };
+  }
+  const m1 = normalizedUrl.match(/\/product\/(\d+)\/(\d+)/i);
+  if (m1) {
+    shopId = m1[1];
+    itemId = m1[2];
+  }
+  if (!shopId) {
+    const m2 = normalizedUrl.match(/i\.(\d+)\.(\d+)/i);
+    if (m2) {
+      shopId = m2[1];
+      itemId = m2[2];
+    }
+  }
+  return { shopId, itemId };
+}
 
 /** Idempotência por URL (mesma URL dentro de 1h retorna o mesmo reviewId). */
 interface PreviewEntry {
@@ -113,20 +160,30 @@ function formatPreviewPrice(value: number | null): {
 function buildPreviewCardText(params: {
   name: string | null;
   price: number | null;
+  priceSource: "affiliate_api" | "scraper_observacional";
   productLink: string | null;
   affiliateUrl: string | null;
   shopId: string | null;
   itemId: string | null;
   status: ShopeeAffiliateAcquisitionResult["status"];
+  imageUrl: string | null;
+  imageCount: number;
 }): string {
   const priceInfo = formatPreviewPrice(params.price);
+  const priceSourceNote =
+    params.priceSource === "scraper_observacional"
+      ? " (observacional — escala não verificada — não tratar como moeda)"
+      : " (escala não verificada — não tratar como moeda)";
   const priceLine = priceInfo.display
-    ? `💰 <b>Preço:</b> ${priceInfo.display} <i>(escala não verificada — não tratar como moeda)</i>`
-    : `⚠️ <b>Preço:</b> não retornado pela fonte oficial`;
+    ? `💰 <b>Preço:</b> ${priceInfo.display}<i>${priceSourceNote}</i>`
+    : `⚠️ <b>Preço:</b> não retornado por nenhuma das fontes`;
   const affiliateLine = params.affiliateUrl
     ? `<b>Link de afiliado:</b> <code>${params.affiliateUrl}</code>`
     : `<b>Link de afiliado:</b> <i>não elegível (fonte oficial não retornou offerLink)</i>`;
-  const imageLine = `🖼️ <b>Imagem:</b> não fornecida pela fonte oficial (a API de Afiliados não inclui imagens no nó de oferta)`;
+  const imageLine =
+    params.imageUrl
+      ? `🖼️ <b>Imagem:</b> ${params.imageCount} imagem(ns) oficial(is) observadas no anúncio (scraper · proveniência do anúncio original)`
+      : `🖼️ <b>Imagem:</b> não observada pelo scraper (nenhuma imagem real foi inventada)`;
   const identityLine = `🔎 <b>Auditoria:</b> shop_id=<code>${params.shopId ?? "?"}</code> · item_id=<code>${params.itemId ?? "?"}</code> · status=<code>${params.status}</code>`;
   return (
     `🛡️ <b>CERBERUS FINDS — PREVIEW SHOPEE AFFILIATE</b>\n\n` +
@@ -158,9 +215,26 @@ async function sendPreviewCard(params: {
   chatId: number;
   text: string;
   keyboard: ReturnType<typeof buildPreviewKeyboard>;
+  /** Primeira imagem oficial observada pelo scraper (pode ser null). */
+  imageUrl?: string | null;
 }): Promise<{ messageId: number | null; ok: boolean; reason?: string }> {
   try {
-    const sent = await sendTelegramMessage(params.chatId, params.text, params.keyboard);
+    let sent: any = null;
+    if (params.imageUrl) {
+      try {
+        sent = await sendTelegramPhoto(
+          params.chatId,
+          params.imageUrl,
+          params.text,
+          params.keyboard,
+        );
+      } catch {
+        sent = null;
+      }
+    }
+    if (!sent) {
+      sent = await sendTelegramMessage(params.chatId, params.text, params.keyboard);
+    }
     const messageId =
       sent && typeof sent === "object" && "message_id" in sent
         ? Number((sent as { message_id?: number }).message_id ?? 0)
@@ -172,8 +246,10 @@ async function sendPreviewCard(params: {
 }
 
 /**
- * Cria o PendingReview a partir do resultado oficial da API (sem scraping,
- * sem lifecycle, sem candidate) e persiste no repositório existente.
+ * Cria o PendingReview a partir do merge Affiliate API (autoridade para
+ * identidade e offerLink) + Scraper existente (imagens e preço exibido,
+ * proveniência "scraper_observacional", scale=UNVERIFIED) e persiste no
+ * repositório existente. SEM lifecycle, SEM candidate — PREVIEW != PUBLICATION.
  */
 async function persistPreviewReview(params: {
   chatId: number;
@@ -183,8 +259,35 @@ async function persistPreviewReview(params: {
   normalizedUrl: string;
   productLink: string | null;
   affiliateUrl: string | null;
+  enriched?: {
+    /** Imagens oficiais observadas pelo scraper (pode estar vazio). */
+    images: string[];
+    /** Preço exibido observado pelo scraper (null quando ausente). */
+    scraperPrice: number | null;
+    /** Título curatorial do scraper/curador (opcional). */
+    curatedTitle?: string | null;
+    /** Categoria curatorial do scraper/curador (opcional). */
+    curatedCategory?: string | null;
+    /** Descrição curatorial do scraper/curador (opcional). */
+    curatedDescription?: string | null;
+  } | null;
 }): Promise<PendingReview> {
   const username = process.env.USER ?? "admin";
+  const images = params.enriched?.images ?? [];
+  const hasScrapedPrice =
+    params.enriched?.scraperPrice !== null &&
+    params.enriched?.scraperPrice !== undefined &&
+    Number.isFinite(params.enriched?.scraperPrice) &&
+    (params.enriched?.scraperPrice ?? 0) > 0;
+  // Precedência de preço: exibir o observado pelo scraper quando válido,
+  // SENÃO o valor bruto da Affiliate API — em ambos os casos a escala
+  // permanece EXPLICITAMENTE não verificada (jamais "R$").
+  const displayPrice = hasScrapedPrice
+    ? (params.enriched?.scraperPrice ?? null)
+    : (params.price ?? null);
+  const provenanceNote = hasScrapedPrice
+    ? `preço exibido observacional (scraper_observacional) · escala não verificada`
+    : `preço com escala não verificada`;
   const review: PendingReview = {
     id: params.reviewId,
     chatId: params.chatId,
@@ -193,14 +296,19 @@ async function persistPreviewReview(params: {
     username,
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-    produto: params.name ?? "(sem nome oficial)",
-    categoria: "affiliate_preview",
-    preco: params.price ?? 0,
-    imagens: [],
+    produto: params.enriched?.curatedTitle ?? params.name ?? "(sem nome oficial)",
+    categoria: params.enriched?.curatedCategory ?? "affiliate_preview",
+    preco: displayPrice ?? 0,
+    imagens: images,
     normalizedUrl: params.productLink ?? params.normalizedUrl,
-    descricao: params.affiliateUrl
-      ? `affiliate_preview · link oficial retornado pela Affiliate API (source=affiliate_preview) · preço com escala não verificada`
-      : `affiliate_preview · link de afiliado não elegível (source=affiliate_preview) · preço com escala não verificada`,
+    descricao: [
+      `affiliate_preview · source=affiliate_preview`,
+      params.affiliateUrl ? `link oficial retornado pela Affiliate API: ${params.affiliateUrl}` : `link de afiliado não elegível`,
+      hasScrapedPrice || images.length > 0 ? `enriquecimento scraper: ${images.length} imagem(ns)${hasScrapedPrice ? ", preço observacional presente" : ""} · ${provenanceNote}` : "enriquecimento scraper: imagens e preço exibido ausentes",
+      params.enriched?.curatedDescription
+        ? `descrição curatorial: ${params.enriched.curatedDescription}`
+        : null,
+    ].filter(Boolean).join(" · "),
     status: "pending",
     existingProduct: {
       source: "affiliate_preview",
@@ -210,6 +318,97 @@ async function persistPreviewReview(params: {
   };
   await savePendingReview(review);
   return review;
+}
+
+/**
+ * Enriquece o produto confirmado pela Affiliate API com o SCRAPER EXISTENTE
+ * (productAutomation: scraper + curadoria Gemini). FAIL-CLOSED estrito:
+ * se o scraper falhar (bloqueio, timeout, sem título/imagens), retorna
+ * failureReason — NENHUM card é enviado e NENHUM review é persistido,
+ * pois o produto seria apresentado como completo sem as evidências reais.
+ * A identidade é verificada deterministicamente contra os IDs oficiais.
+ */
+async function enrichWithExistingScraper(params: {
+  productLink: string | null;
+  officialShopId: string | null;
+  officialItemId: string | null;
+}): Promise<{
+  ok: boolean;
+  failureReason: string | null;
+  images: string[];
+  scraperPrice: number | null;
+  curatedTitle: string | null;
+  curatedCategory: string | null;
+  curatedDescription: string | null;
+} | null> {
+  const link = params.productLink;
+  if (!link) {
+    // Sem URL oficial: o scraper não tem identidade verificável — fail-closed
+    return {
+      ok: false,
+      failureReason: "affiliate_no_product_link",
+      images: [],
+      scraperPrice: null,
+      curatedTitle: null,
+      curatedCategory: null,
+      curatedDescription: null,
+    };
+  }
+  let result: Awaited<ReturnType<typeof extractProductForReview>>;
+  try {
+    result = await extractProductForReview(link);
+  } catch {
+    return {
+      ok: false,
+      failureReason: "scraper_unexpected_error",
+      images: [],
+      scraperPrice: null,
+      curatedTitle: null,
+      curatedCategory: null,
+      curatedDescription: null,
+    };
+  }
+  if (!result.success || !result.data) {
+    return {
+      ok: false,
+      failureReason: result.error ?? "scraper_extraction_failed",
+      images: [],
+      scraperPrice: null,
+      curatedTitle: null,
+      curatedCategory: null,
+      curatedDescription: null,
+    };
+  }
+  const data = result.data;
+  // Verificação determinística de identidade contra a resposta oficial
+  // da Affiliate API (a URL é do productLink oficial, normalizada para
+  // /product/{shop_id}/{item_id} pelo próprio scraper).
+  const extracted = extractCanonicalShopeeIds(data.normalizedUrl);
+  const identityMatches =
+    extracted.shopId !== null &&
+    extracted.itemId !== null &&
+    extracted.shopId === params.officialShopId &&
+    extracted.itemId === params.officialItemId;
+  if (!identityMatches) {
+    return {
+      ok: false,
+      failureReason: "scraper_identity_mismatch",
+      images: [],
+      scraperPrice: null,
+      curatedTitle: null,
+      curatedCategory: null,
+      curatedDescription: null,
+    };
+  }
+  return {
+    ok: true,
+    failureReason: null,
+    images: data.imagens ?? [],
+    scraperPrice: data.preco,
+    curatedTitle: data.produto ?? null,
+    curatedCategory: data.categoria ?? null,
+    curatedDescription: data.descricao ?? null,
+  };
 }
 
 export interface PreviewTelegramResult {
@@ -315,15 +514,44 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
       ) ?? null;
       const parsedPrice = matchedNode?.price ?? null;
 
+      // FASE 24 — enriquecimento pelo SCRAPER EXISTENTE (sem criar scraper novo).
+      // O produto confirmado pela Affiliate API recebe imagens e preço exibido
+      // ANTES da montagem do card. FAIL-CLOSED estrito: scraper falho ou
+      // identidade divergente → 424 SEM card e SEM review persistido (jamais
+      // apresentar o produto como completo sem as evidências reais observadas).
+      const enriched = await enrichWithExistingScraper({
+        productLink: acquisition.productLink,
+        officialShopId: acquisition.shopId,
+        officialItemId: acquisition.itemId,
+      });
+      if (!enriched.ok) {
+        // Sem retry: a falha do scraper é uma condição de mercado (bloqueio
+        // anti-bot, timeout, página sem dados) — reportar e parar.
+        res.status(424).json({
+          ok: false,
+          error: "scraper_enrichment_failed",
+          failureReason: enriched.failureReason,
+          shopId: acquisition.shopId,
+          itemId: acquisition.itemId,
+          affiliateUrl: acquisition.affiliateUrl,
+          note:
+            "o scraper existente não conseguiu enriquecer o produto confirmado pela Affiliate API — nenhum card foi enviado e nenhum review foi persistido (fail-closed)",
+        });
+        return;
+      }
+
       const reviewId = buildPreviewReviewId(trimmedUrl, chatId);
       const text = buildPreviewCardText({
-        name: acquisition.name,
-        price: parsedPrice,
+        name: enriched.curatedTitle ?? acquisition.name,
+        price: enriched.scraperPrice ?? parsedPrice,
+        priceSource: enriched.scraperPrice ? "scraper_observacional" : "affiliate_api",
         productLink: acquisition.productLink,
         affiliateUrl: acquisition.affiliateUrl,
         shopId: acquisition.shopId,
         itemId: acquisition.itemId,
         status: acquisition.status,
+        imageUrl: enriched.images[0] ?? null,
+        imageCount: enriched.images.length,
       });
 
       const persistPromise = persistPreviewReview({
@@ -334,8 +562,20 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
         normalizedUrl: trimmedUrl,
         productLink: acquisition.productLink,
         affiliateUrl: acquisition.affiliateUrl,
+        enriched: {
+          images: enriched.images,
+          scraperPrice: enriched.scraperPrice,
+          curatedTitle: enriched.curatedTitle,
+          curatedCategory: enriched.curatedCategory,
+          curatedDescription: enriched.curatedDescription,
+        },
       });
-      const sendPromise = sendPreviewCard({ chatId, text, keyboard: buildPreviewKeyboard(reviewId) });
+      const sendPromise = sendPreviewCard({
+        chatId,
+        text,
+        keyboard: buildPreviewKeyboard(reviewId),
+        imageUrl: enriched.images[0] ?? null,
+      });
 
       const [review, sendResult] = await Promise.all([persistPromise, sendPromise]);
 
@@ -363,6 +603,8 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
         shopId: acquisition.shopId,
         itemId: acquisition.itemId,
         cardSent: true,
+        cardAsPhoto: Boolean(enriched.images[0] ?? null),
+        extractedImageCount: enriched.images.length,
         cardMessageId: sendResult.messageId,
       });
     } catch (err) {

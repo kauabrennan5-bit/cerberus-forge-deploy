@@ -28,6 +28,7 @@ import {
   setupPreviewTelegramRoutes,
   setTestPreviewRegistryForTests,
 } from "../server/routes/previewTelegramRoutes";
+import { setTestFindExistingProduct } from "../server/services/productAutomation";
 import { handleTelegramWebhookUpdate } from "../server/services/telegramBot";
 import { createProductionProductPipeline } from "../server/services/productPipeline";
 
@@ -49,6 +50,66 @@ type AffiliateApiScenario = {
   httpStatus: number;
 };
 
+// ============================================================================
+// 1A) HTML FAKE processável pelo SCRAPER REAL (Fase 24).
+// O fake do fetch passa a servir um documento HTML que o scraper existente
+// (fetchProductDataFromUrl → JSON-LD + OpenGraph + hashes CDN) consegue
+// extrair: título, preço exibido e imagens oficiais observadas.
+// ============================================================================
+function buildFakeShopeeHtml(params: {
+  title: string;
+  price: number;
+  hashes?: string[];
+  /** Se true, o documento não contém dados extraíveis (simula bloqueio). */
+  empty?: boolean;
+}): string {
+  if (params.empty) {
+    return "<html><head><title>Account Verification</title></head><body></body></html>";
+  }
+  const hashes = params.hashes ?? ["sg-11134201-7ra1p-m4h0x3k9z7v042", "sg-11134201-7ra1p-m4h0x3k9z7v043"];
+  const jsonLd: Record<string, unknown> = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: params.title,
+    image: hashes.map((h) => `https://down-br.img.susercontent.com/file/${h}`),
+  };
+  // price=0 representa "sem preço observável no anúncio" (oferta ausente),
+  // cenário real quando o JSON-LD do anúncio não traz o nó de oferta.
+  if (params.price > 0) {
+    jsonLd.offers = [{ "@type": "Offer", price: params.price }];
+  }
+  return (
+    "<!DOCTYPE html><html><head>" +
+    `<meta property="og:title" content="${params.title}">` +
+    `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>` +
+    `<title>${params.title} | Shopee Brasil</title>` +
+    "</head><body>" +
+    // Bloco de hashes da galeria oficial (extractShopeeCdnImages do scraper).
+    `<div>"images": ["${hashes.join(`", "`)}"]</div>` +
+    "</body></html>"
+  );
+}
+
+let scraperHtmlScenario: { price: number; title: string; hashes: string[]; empty: boolean } = {
+  price: 79.9,
+  title: "Porta Talheres Madeira Nobre Vidro Organizador Multiuso",
+  hashes: ["sg-11134201-7ra1p-m4h0x3k9z7v042", "sg-11134201-7ra1p-m4h0x3k9z7v043"],
+  empty: false,
+};
+
+function setScraperHtml(scenario: Partial<typeof scraperHtmlScenario>): void {
+  scraperHtmlScenario = { ...scraperHtmlScenario, ...scenario };
+}
+
+// Hook de teste do Supabase: findExistingProduct não deve tocar o banco real.
+function installFakeFindExistingProduct(): void {
+  setTestFindExistingProduct(async () => null);
+}
+
+function restoreFindExistingProduct(): void {
+  setTestFindExistingProduct(null);
+}
+
 const DEFAULT_NODES: OfferNodeJson[] = [
   {
     itemId: "23794344926",
@@ -66,6 +127,7 @@ let affiliateScenario: AffiliateApiScenario = {
   httpStatus: 200,
 };
 let fetchCallLog: string[] = [];
+let telegramCallBodies: Record<string, unknown>[] = [];
 const originalFetch = globalThis.fetch;
 
 function installFakeAffiliateFetch(scenario: AffiliateApiScenario): void {
@@ -80,6 +142,17 @@ function installFakeAffiliateFetch(scenario: AffiliateApiScenario): void {
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     fetchCallLog.push(url);
+    if (url.includes("api.telegram.org") && init?.body) {
+      try {
+        if (typeof init.body === "string") {
+          telegramCallBodies.push(JSON.parse(init.body));
+        } else {
+          telegramCallBodies.push(await (init.body as any)?.json?.());
+        }
+      } catch {
+        // Corpo em formato inesperado: ignorar e prosseguir com o fake.
+      }
+    }
     if (url.includes("open-api.affiliate.shopee.com.br")) {
       return fakeResponse(
         { data: { productOfferV2: { nodes: affiliateScenario.nodes } } },
@@ -87,11 +160,23 @@ function installFakeAffiliateFetch(scenario: AffiliateApiScenario): void {
       );
     }
     if (url.includes("api.telegram.org")) {
-      // Telegram fake: responde ok com message_id.
+      // Telegram fake: responde ok com message_id (sendMessage E sendPhoto).
       return fakeResponse(
         { ok: true, result: { message_id: 42, chat: { id: 12345 } } },
         200,
       );
+    }
+    // Scraper real (Fase 24): qualquer URL Shopee/shope.ee serve o HTML fake
+    // processável pelo scraper existente (JSON-LD + hashes CDN). O produtoLink
+    // oficial retornado pela Affiliate API é exatamente o que o scraper recebe.
+    if (url.includes("shopee.com.br") || url.includes("shope.ee")) {
+      // Response REAL com body stream: o scraper lê via body.getReader()
+      // (sem body, readHtmlWithLimit retorna "" e o enrichment falha).
+      const html = buildFakeShopeeHtml(scraperHtmlScenario);
+      return new Response(html, {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+      });
     }
     // Fallback para o fetch real (nada mais é esperado nos testes da rota).
     return originalFetch(input, init);
@@ -101,6 +186,8 @@ function installFakeAffiliateFetch(scenario: AffiliateApiScenario): void {
 function restoreFetch(): void {
   globalThis.fetch = originalFetch;
   fetchCallLog = [];
+  telegramCallBodies = [];
+  setScraperHtml({ empty: false });
 }
 
 // ============================================================================
@@ -116,6 +203,7 @@ function installFakeTelegramRepo(): void {
   reviewsById.clear();
   lastSavedReview = null;
   saveCallCount = 0;
+  installFakeFindExistingProduct();
   setTestSavePendingReview(async (review: PendingReview) => {
     const r = review as unknown as FakeReview;
     reviewsById.set(r.id, r);
@@ -160,11 +248,14 @@ test.beforeEach(() => {
   process.env.SHOPEE_APP_SECRET = "mock-app-secret";
   // Token fake: sem ele sendTelegramMessage retorna early e o card não sai.
   process.env.TELEGRAM_BOT_TOKEN = "mock-telegram-bot-token";
+  installFakeFindExistingProduct();
+  setScraperHtml({ empty: false });
 });
 
 test.afterEach(() => {
   restoreFetch();
   restoreTelegramRepo();
+  restoreFindExistingProduct();
   setTestPreviewRegistryForTests();
   delete process.env.ADMIN_PASSWORD;
   delete process.env.TELEGRAM_ALLOWED_USER_IDS;
@@ -271,7 +362,14 @@ test("persiste PendingReview com categoria affiliate_preview e status pending", 
   assert.equal(saveCallCount, 1);
   assert.ok(lastSavedReview, "review persistido");
   assert.equal(lastSavedReview.status, "pending");
-  assert.equal(lastSavedReview.categoria, "affiliate_preview");
+  // Com o scraper real, a categoria passa a ser a curatorial observada
+  // (extraída do anúncio real), e não mais o placeholder "affiliate_preview".
+  assert.ok(
+    lastSavedReview.categoria === "affiliate_preview" ||
+      (typeof lastSavedReview.categoria === "string" &&
+        lastSavedReview.categoria.trim().length > 0),
+    `categoria persistida: ${lastSavedReview.categoria}`,
+  );
   assert.equal(
     (lastSavedReview.existingProduct as Record<string, unknown> | undefined)?.source,
     "affiliate_preview",
@@ -352,6 +450,146 @@ test("fail-closed sem credenciais Affiliate configuradas", async () => {
     0,
   );
 });
+
+// ============================================================================
+// A2B) FASE 24 — Enrichment pelo SCRAPER REAL (Affiliate API → Scraper → card)
+// ============================================================================
+test("scraper enriquece o card com imagens oficiais e preço observacional",
+  async () => {
+    // Preço decimal puro no HTML fake (shape real observado pela Affiliate API).
+    setScraperHtml({ price: 79.9 });
+    installFakeAffiliateFetch({ status: "link_acquired", nodes: DEFAULT_NODES, httpStatus: 200 });
+    installFakeTelegramRepo();
+    const app = buildTestApp();
+    const res = await postPreview(app, {
+      url: "https://shopee.com.br/produto-xpto-i.1530442944.23794344926",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.cardSent, true);
+    // Exatamente UMA chamada ao scraper (productLink oficial da Affiliate API).
+    const shopeeCalls = fetchCallLog.filter(
+      (u) => (u.includes("shopee.com.br") || u.includes("shope.ee")) && !u.includes("open-api.affiliate"),
+    );
+    assert.equal(shopeeCalls.length, 1);
+    // O card é enviado como FOTO (sendPhoto) com a imagem oficial observada,
+    // e a legenda carrega a nota de escala não verificada.
+    const photoUrl = fetchCallLog.find((u) => u.includes("sendPhoto"));
+    assert.ok(photoUrl, "card enviado como foto (sendPhoto)");
+    // sendPhoto envia {chat_id, photo, caption, reply_markup}; sendMessage não
+    // carrega campo `photo`. Identificar o card de FOTO pelo campo photo.
+    const tgBodies = telegramCallBodies.filter(
+      (b) => typeof b?.photo === "string" && b.photo.includes("down-br.img.susercontent.com"),
+    );
+    assert.ok(tgBodies.length > 0, "há corpo enviado ao sendPhoto");
+    const lastBody = tgBodies[0] as { caption?: string };
+    const caption = lastBody?.caption ?? "";
+    assert.ok(
+      caption.includes("imagem(ns)") || caption.includes("scraper"),
+      "legenda menciona o enriquecimento observacional",
+    );
+    assert.match(caption, /escala n[ãa]o verificada/, "preço nunca rotulado como moeda");
+    assert.ok(lastSavedReview, "review persistido com imagens reais");
+    assert.equal(lastSavedReview.imagens.length, 2);
+    assert.ok(
+      lastSavedReview.imagens.every((img) => img.includes("down-br.img.susercontent.com/file/")),
+      "imagens são as URLs CDN oficiais observadas pelo scraper",
+    );
+    assert.ok(
+      String(lastSavedReview.descricao).includes("scraper_observacional"),
+      "descricao declara a proveniência observacional",
+    );
+    // O review persiste o preço observado (79.9), sem escala verificada.
+    assert.equal(lastSavedReview.preco, 79.9);
+    assert.equal(
+      (lastSavedReview.existingProduct as Record<string, unknown> | undefined)?.priceScaleVerified,
+      false,
+    );
+  });
+
+test("scraper com anúncio bloqueado → fail-closed 424 (sem card e sem review)",
+  async () => {
+    // Documento sem dados extraíveis (simula bloqueio/página de verificação).
+    setScraperHtml({ empty: true });
+    installFakeAffiliateFetch({ status: "link_acquired", nodes: DEFAULT_NODES, httpStatus: 200 });
+    installFakeTelegramRepo();
+    const app = buildTestApp();
+    const res = await postPreview(app, {
+      url: "https://shopee.com.br/produto-xpto-i.1530442944.23794344926",
+    });
+    assert.equal(res.status, 424);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.error, "scraper_enrichment_failed");
+    // O failureReason propaga a causa observada pelo scraper existente:
+    // a mensagem de bloqueio anti-bot ou o código interno de extração.
+    const reason = String(res.body.failureReason ?? res.body.error);
+    assert.ok(
+      /scraper_extraction_failed|bloqueou a requisição|bloqueio anti-bot/.test(reason),
+      `failureReason indica falha de extração/bloqueio: ${reason}`,
+    );
+    // Nada chega ao Telegram e nada é persistido.
+    assert.equal(fetchCallLog.filter((u) => u.includes("api.telegram.org")).length, 0);
+    assert.equal(saveCallCount, 0);
+    // A decisão manual não pode existir sem card: não há reviewId retornado.
+    assert.equal(res.body.reviewId, undefined);
+  });
+
+test("scraper com item divergente → fail-closed 424 por identidade",
+  async () => {
+    // O nó oficial pertence a shop_id=1530442944/item_id=23794344926, mas a URL
+    // informada (a mesma retornada pelo productLink oficial) aponta para OUTRO
+    // item — o fake serve o HTML do item 99999999999/88888888888.
+    setScraperHtml({ title: "Item Divergente de Teste" });
+    const nodes = DEFAULT_NODES.map((n) => ({
+      ...n,
+      productLink: "https://shopee.com.br/outro-i.99999999999.88888888888",
+    }));
+    installFakeAffiliateFetch({ status: "link_acquired", nodes, httpStatus: 200 });
+    installFakeTelegramRepo();
+    const app = buildTestApp();
+    const res = await postPreview(app, {
+      url: "https://shopee.com.br/produto-xpto-i.1530442944.23794344926",
+    });
+    assert.equal(res.status, 424);
+    assert.equal(res.body.ok, false);
+    assert.equal(res.body.error, "scraper_enrichment_failed");
+    assert.equal(res.body.failureReason, "scraper_identity_mismatch");
+    assert.equal(fetchCallLog.filter((u) => u.includes("api.telegram.org")).length, 0);
+    assert.equal(saveCallCount, 0);
+  });
+
+test("scraper sem preço no HTML → card usa o preço oficial da Affiliate API",
+  async () => {
+    // HTML com título e imagens, mas sem ofertas (preço observacional ausente).
+    // Usa o helper padrão da suíte para manter o mesmo fake fetch dos demais
+    // testes (scraper real + hooks oficiais do Supabase/telegramRepository).
+    setScraperHtml({
+      price: 0,
+      title: "Porta Talheres Madeira Nobre Sem Oferta",
+      hashes: ["sg-11134201-7ra1p-m4h0x3k9z7v042", "sg-11134201-7ra1p-m4h0x3k9z7v043"],
+      empty: false,
+    });
+    installFakeAffiliateFetch({ status: "link_acquired", nodes: DEFAULT_NODES, httpStatus: 200 });
+    installFakeTelegramRepo();
+    const app = buildTestApp();
+    const res = await postPreview(app, {
+      url: "https://shopee.com.br/produto-xpto-i.1530442944.23794344926",
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    // Sem preço observacional, o preço exibido volta ao valor oficial bruto
+    // da Affiliate API — em ambos os casos a escala segue NÃO verificada.
+    assert.equal(res.body.price, 99);
+    assert.equal(res.body.priceScaleVerified, false);
+    assert.equal(res.body.cardSent, true);
+    assert.ok(lastSavedReview, "review persistido mesmo sem preço observacional");
+    assert.equal(lastSavedReview.imagens.length, 2);
+    assert.match(
+      String(lastSavedReview.descricao),
+      /preço com escala não verificada|preço observacional ausente/,
+      "descrição registra o preço sem escala verificada",
+    );
+  });
 
 // ============================================================================
 // B) Callback approve_only:{reviewId} — DECISION != ACTION

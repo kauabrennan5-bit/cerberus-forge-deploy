@@ -244,6 +244,28 @@ export function isGenericTitle(title?: string | null): boolean {
   return false;
 }
 
+// --- HOOK DE TESTE CONTROLADO (padrão setXForTests da codebase) ---
+// Fase 24 (2026-08-21): substitui a busca de produto existente SOMENTE em
+// testes unitários (sem tocar no Supabase real). NUNCA usar em produção — o
+// override é null por padrão e deve ser restaurado ao final de cada teste.
+let testOverrideFindExistingProduct: ((
+  normalizedUrl: string,
+  marketplaceId?: string | null,
+  slug?: string | null,
+  cleanedTitle?: string | null,
+) => Promise<Product | null>) | null = null;
+/** Substitui findExistingProduct em testes unitários; null restaura o real. */
+export function setTestFindExistingProduct(
+  override: ((
+    normalizedUrl: string,
+    marketplaceId?: string | null,
+    slug?: string | null,
+    cleanedTitle?: string | null,
+  ) => Promise<Product | null>) | null,
+): void {
+  testOverrideFindExistingProduct = override;
+}
+
 /**
  * Procura um produto existente no repositório por URL, ID de marketplace, slug ou título
  */
@@ -449,7 +471,9 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
 
     const mktId = extractMarketplaceId(normalizedUrl);
     const generatedSlug = generateSlug(curatedTitle);
-    const existingProduct = await findExistingProduct(normalizedUrl, mktId, generatedSlug, curatedTitle);
+    const existingProduct = await (testOverrideFindExistingProduct
+      ? testOverrideFindExistingProduct(normalizedUrl, mktId, generatedSlug, curatedTitle)
+      : findExistingProduct(normalizedUrl, mktId, generatedSlug, curatedTitle));
 
     const priceReason = scrapedPrice !== null
       ? "Preço extraído com sucesso do anúncio."
