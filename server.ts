@@ -14,6 +14,8 @@ import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./server/services/telegramDiagnostics";
+// FASE 25B (Commit 1) — Painel de leitura Telegram: registro do menu via setMyCommands.
+import { registerTelegramCommands } from "./server/services/telegramPanel";
 import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
 import { setCommercialBrainClient } from "./server/repositories/commercialBrainRepository";
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
@@ -1233,6 +1235,21 @@ NUNCA modifique ou invente preços ou imagens.`,
     void startTelegramPolling().catch((error) => {
       console.error("[Telegram] Falha não tratada na inicialização independente:", error?.message || error);
     });
+
+    // FASE 25B (Commit 1) — Registro dos comandos no Telegram (setMyCommands).
+    // Fail-safe: falha da API Telegram não derruba o processo principal e o bot
+    // continua operante (webhook) mesmo sem o menu registrado no cliente.
+    void registerTelegramCommands()
+      .then((result) => {
+        if (result.ok) {
+          console.log("[Telegram] Menu de comandos registrado (setMyCommands).");
+        } else {
+          console.warn(`[Telegram] setMyCommands não registrado: ${result.reason || "erro desconhecido"}`);
+        }
+      })
+      .catch((error) => {
+        console.warn("[Telegram] setMyCommands falhou na inicialização (processo mantido operacional):", error?.message || error);
+      });
 
     // A recuperação do Operator é isolada: falhas entram em SAFE_MODE e não derrubam HTTP/Telegram.
     void cerberusOperator.initializeOperatorState()

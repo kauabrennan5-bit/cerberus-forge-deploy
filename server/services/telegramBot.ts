@@ -15,10 +15,14 @@ import * as commercialCockpit from "./commercialCockpit";
 import { runDiscoverCommand } from "./discoveryCommands";
 // Bloco N11 — porta controlada de batch /discover-batch (somente URLs).
 import { runDiscoverBatchCommand } from "../commercial/facilitator/discoverBatchCommand";
+// FASE 25B (Commit 1) — painel de leitura Telegram (comandos read-only).
+import * as telegramPanel from "./telegramPanel";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
-function getTelegramBotToken(): string {
+// FASE 25B (Commit 1): exportado para o painel de leitura (telegramPanel) reutilizar
+// a chamada oficial da API Telegram sem duplicar o acesso ao token.
+export function getTelegramBotToken(): string {
   return process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
 }
 
@@ -26,7 +30,7 @@ function getTelegramApiBase(): string {
   return `https://api.telegram.org/bot${getTelegramBotToken()}`;
 }
 
-async function telegramApiFetch(method: string, payload: Record<string, unknown>): Promise<Response> {
+export async function telegramApiFetch(method: string, payload: Record<string, unknown>): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
   try {
@@ -1248,6 +1252,35 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: true });
     if (text.startsWith("/")) logTelegramEvent("command", { chat_id: chatId, command: text.split(/\s+/, 1)[0].toLowerCase() });
+
+    // --- FASE 25B (Commit 1) — PAINEL DE LEITURA (READ-ONLY) ---
+    // /menu /status /pendentes /aprovados. ZERO escrita, ZERO publication/acquisition.
+    if (text.startsWith("/menu")) {
+      if (chatId) await sendTelegramMessage(chatId, telegramPanel.renderReadPanelMenu());
+      return;
+    }
+    if (text.startsWith("/status")) {
+      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderStatus());
+      return;
+    }
+    if (text.startsWith("/pendentes")) {
+      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderPendingReviews());
+      return;
+    }
+    if (text.startsWith("/aprovados")) {
+      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderApproved());
+      return;
+    }
+    // /shopee e /publicar são somente comandos futuros: nenhum comportamento
+    // parcial é criado nesta fase. Resposta informativa e fail-safe.
+    if (text.startsWith("/shopee")) {
+      if (chatId) await sendTelegramMessage(chatId, "🛒 <b>/shopee</b> ainda não disponível.\n\nEste comando será implementado em uma fase posterior e seguirá o fluxo: descoberta Shopee → aquisição oficial → validação → PendingReview → decisão humana. Nenhuma ação foi executada.");
+      return;
+    }
+    if (text.startsWith("/publicar")) {
+      if (chatId) await sendTelegramMessage(chatId, "🚀 <b>/publicar</b> ainda não disponível.\n\nEste comando será implementado em uma fase posterior e exigirá confirmação humana antes de encaminhar uma review aprovada ao pipeline canônico. Nenhuma ação foi executada.");
+      return;
+    }
 
     // --- INTERCEPTAÇÃO ABSOLUTA DE /analytics ---
     if (text.startsWith("/analytics")) {
