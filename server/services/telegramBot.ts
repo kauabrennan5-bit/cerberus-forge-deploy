@@ -1316,11 +1316,6 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       return;
     }
-    if (text.startsWith("/publicar")) {
-      if (chatId) await sendTelegramMessage(chatId, "🚀 <b>/publicar</b> ainda não disponível.\n\nEste comando será implementado em uma fase posterior e exigirá confirmação humana antes de encaminhar uma review aprovada ao pipeline canônico. Nenhuma ação foi executada.");
-      return;
-    }
-
     // --- INTERCEPTAÇÃO ABSOLUTA DE /analytics ---
     if (text.startsWith("/analytics")) {
       const parts = text.split(" ");
@@ -1399,6 +1394,102 @@ async function renderCycleState(input: string): Promise<string> {
     return "⚠️ <b>ERRO DE INFRAESTRUTURA</b>\n\nNão foi possível consultar o ciclo (leitura falhou). Sem dados confiáveis, nada é executado (fail-closed).";
   }
 }
+
+
+    // FASE 25C (Commit 3) — /publicar <reviewId>: encaminha uma review pendente
+    // ou aprovada (status=pending|published via approve_only) ao fluxo canônico
+    // de publicação EXIGINDO confirmação humana explícita no card de confirmação.
+    // DECISION ≠ ACTION: NENHUMA publicação é executada aqui; somente o card
+    // de confirmação (confirm_pub) dispara o pipeline canônico.
+    // Este bloco NÃO pertence ao escopo read-only da FASE 25B: ele é o único
+    // ponto onde o painel de leitura conecta a decisão humana ao pipeline
+    // canônico, e a execução do pipeline continua exclusivamente no callback
+    // confirm_pub (que exige o clique em [✅ Confirmar & Publicar]).
+    if (text.startsWith("/publicar")) {
+      const args = text.slice("/publicar".length).trim();
+      const reviewId = args ? args.split(/\s+/)[0] : "";
+      if (!reviewId) {
+        if (chatId) {
+          await sendTelegramMessage(
+            chatId,
+            "📋 <b>Sintaxe:</b> <code>/publicar &lt;reviewId&gt;</code>\n\nO <code>reviewId</code> aparece nos cards do lote <code>/shopee N</code> (linha 🔎 Auditoria) e no comando <code>/pendentes</code>.\n\nEste comando NUNCA publica automaticamente: ele encaminha a review ao card de confirmação humana [✅ Confirmar &amp; Publicar]. Nenhuma publicação, aquisição ou mutation foi executada.",
+          );
+        }
+        return;
+      }
+      const review = await telegramRepo.getPendingReview(reviewId);
+      if (!review) {
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ <b>Review não localizada.</b>\n\nVerifique o <code>reviewId</code> (formato <code>affprev-...</code>) ou use <code>/pendentes</code> para listar as revisões ativas. Nenhuma ação foi executada.");
+        return;
+      }
+      const statusStr = review.status || "pending";
+      if (statusStr === "cancelled" || statusStr === "rejected") {
+        if (chatId) await sendTelegramMessage(chatId, `❌ <b>Review cancelada</b> (status=<code>${statusStr}</code>) — não pode ser encaminhada à publicação. Nenhuma ação foi executada.`);
+        return;
+      }
+      if (statusStr === "error") {
+        if (chatId) await sendTelegramMessage(chatId, "❌ <b>Review em estado de erro.</b>\n\nA última validação canônica falhou — ajuste a review (preço/imagens/categoria) antes de tentar novamente. Nenhuma publicação foi executada.");
+        return;
+      }
+      const now = Date.now();
+      if (review.expiresAt && now > review.expiresAt && statusStr !== "published") {
+        if (chatId) await sendTelegramMessage(chatId, "⏰ <b>Review expirada.</b>\n\nA janela de decisão (24h) encerrou. Envie o link novamente via <code>/shopee</code> ou pela rota de preview. Nenhuma ação foi executada.");
+        return;
+      }
+      // Pré-visualização do estado canônico (read-only preview do lifecycle):
+      // permite ao usuário ver preço inválido/pendências ANTES de confirmar.
+      let previewState: string = "NÃO VALIDADA";
+      let previewOutcome: string = "aguardando";
+      try {
+        const restored = review.lifecycle ? restoreLifecycleRecord(review.lifecycle) : null;
+        let preview: LifecycleRecord;
+        if (restored && (restored.state === "PENDING_APPROVAL" || restored.state === "APPROVED")) {
+          preview = restored;
+        } else {
+          preview = await createProductionProductPipeline().evaluate({
+            produto: review.produto,
+            categoria: review.categoria,
+            preco: review.preco,
+            imagens: review.imagens,
+            normalizedUrl: review.normalizedUrl,
+            descricao: review.descricao,
+            marketplace: detectMarketplace(review.normalizedUrl),
+          });
+        }
+        previewState = preview.state;
+        previewOutcome = preview.validation?.outcome ?? "aguardando";
+        // Persistir a pré-avaliação para o confirm_pub reutilizar (sem reexecutar).
+        if (!review.lifecycle) {
+          review.lifecycle = preview;
+          await telegramRepo.savePendingReview(review);
+        }
+      } catch {
+        // Falha de pré-avaliação NÃO bloqueia o encaminhamento: o confirm_pub
+        // reexecutará a avaliação canônica e aplicará fail-closed.
+        previewState = "PRÉ-AVALIAÇÃO INDISPONÍVEL";
+      }
+      const produto = typeof review.produto === "string" && review.produto.trim() ? review.produto : "(sem nome)";
+      const priceText =
+        review.preco && review.preco > 0
+          ? `${review.preco.toFixed(2).replace(".", ",")} <i>(escala não verificada)</i>`
+          : "<b>AUSENTE</b> — use <b>💰 Alterar Preço</b> antes de confirmar";
+      const keyboard = buildMainReviewKeyboard(reviewId);
+      if (chatId) {
+        await sendTelegramMessage(
+          chatId,
+          `🚀 <b>ENCAMINHAMENTO À PUBLICAÇÃO</b>\n\n` +
+            `📋 Review: <code>${reviewId}</code>\n` +
+            `🏷️ Produto: ${produto}\n` +
+            `💰 Preço: ${priceText}\n` +
+            `🛒 Marketplace: ${detectMarketplace(review.normalizedUrl)}\n` +
+            `📊 Estado canônico prévio: <code>${previewState}</code> · <code>${previewOutcome}</code>\n\n` +
+            `Confirme para executar o pipeline canônico (avaliação → aprovação → publicação). A publicação só ocorre após o clique em <b>✅ Confirmar &amp; Publicar</b>.`,
+          keyboard,
+        );
+      }
+      logTelegramEvent("command", { chat_id: chatId, command: "/publicar", review_id: reviewId, preview_state: previewState });
+      return;
+    }
 
 // --- COMANDOS /start /admin /listar /categorias /help ---
     if (text.startsWith("/start") || text.startsWith("/admin")) {

@@ -36,8 +36,8 @@ test("renderReadPanelMenu retorna menu consolidado sem executar nada", () => {
   assert.match(menu, /status/i);
   assert.match(menu, /pendentes/i);
   assert.match(menu, /aprovados/i);
-  assert.match(menu, /shopee — em breve/i);
-  assert.match(menu, /publicar — em breve/i);
+  assert.match(menu, /shopee/i);
+  assert.match(menu, /publicar/i);
   assert.match(menu, /DECISION ≠ ACTION/i);
 });
 

@@ -4,6 +4,9 @@
  *
  * REGRAS DE SEGURANÇA (contrato desta fase):
  * - ZERO escrita no Supabase causada por qualquer função deste módulo.
+ * - FASE 25C (Commit 3): o /publicar <id> é executado pelo dispatcher do bot
+ *   (telegramBot.ts) e SEMPRE exige confirmação humana no card de confirmação.
+ *   Este módulo continua read-only.
  * - ZERO chamada de publication, N16 execute, N17 acquisition, syncCatalogAndDeploy.
  * - ZERO alteração de produto, PendingReview, lifecycle ou governança.
  * - Dados ausentes são reportados explicitamente como "não disponível".
@@ -19,8 +22,8 @@ import * as productsRepository from "../repositories/productsRepository";
 // ---------------------------------------------------------------
 /**
  * Lista canônica de comandos registrados no Telegram.
- * /shopee e /publicar aparecem no menu MAS o dispatcher responde
- * "ainda não disponíveis" — nenhum comportamento parcial é criado.
+ * /shopee e /publicar estão implementados (Fase 25C): o /publicar exige
+ * confirmação humana explícita antes de qualquer ação do pipeline canônico.
  */
 export const TELEGRAM_PANEL_COMMANDS: Array<{ command: string; description: string }> = [
   { command: "start", description: "Iniciar o bot" },
@@ -29,7 +32,7 @@ export const TELEGRAM_PANEL_COMMANDS: Array<{ command: string; description: stri
   { command: "pendentes", description: "Propostas pendentes de decisão" },
   { command: "aprovados", description: "Reviews aprovadas e catálogo atual" },
   { command: "shopee", description: "Lote Shopee (em breve)" },
-  { command: "publicar", description: "Encaminhar review à publicação (em breve)" },
+  { command: "publicar", description: "Encaminhar review à publicação (confirmação humana)" },
   { command: "listar", description: "Listar produtos do catálogo" },
   { command: "produtos", description: "Catálogo de produtos" },
   { command: "categorias", description: "Gestão de categorias" },
@@ -92,8 +95,8 @@ export function renderReadPanelMenu(): string {
     "/experiments · /agents · /decisions\n" +
     "/recommendations · /affiliates · /cycle\n\n" +
     "🛒 <b>SHOPEE AFFILIATE (PREVIEW)</b>\n" +
-    "/shopee — em breve\n" +
-    "/publicar — em breve\n\n" +
+    "/shopee N — lote Shopee com cards de decisão humana\n" +
+    "/publicar <id> — encaminhar review à publicação (confirmação humana)\n\n" +
     "/start · /help\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
     "DECISION ≠ ACTION · nada é publicado sem decisão humana."
@@ -171,9 +174,9 @@ export async function renderPendingReviews(): Promise<string> {
     const lines = pending.map((r, i) => {
       const nome = typeof r.produto === "string" && r.produto.trim() ? r.produto.slice(0, 40) : "(sem nome)";
       const status = typeof r.status === "string" && r.status ? r.status : "pending";
-      return `<b>${i + 1}.</b> ${nome}\n   status: <code>${status}</code>`;
+      return `<b>${i + 1}.</b> ${nome}\n   ID: <code>${r.id}</code> · status: <code>${status}</code>`;
     });
-    return "⏳ <b>PROPOSTAS PENDENTES</b>\n\n" + lines.join("\n\n") + "\n\nUse o card no Telegram para decidir (✅ PUBLICAR · ❌ DESCARTAR).";
+    return "⏳ <b>PROPOSTAS PENDENTES</b>\n\n" + lines.join("\n\n") + "\n\nUse o card no Telegram para decidir (✅ PUBLICAR · ❌ DESCARTAR) ou encaminhe uma review ao pipeline com <code>/publicar &lt;ID&gt;</code>.";
   } catch {
     return "⚠️ <b>ERRO DE INFRAESTRUTURA</b>\n\nNão foi possível consultar as propostas pendentes (leitura falhou). Nenhum dado foi alterado.";
   }

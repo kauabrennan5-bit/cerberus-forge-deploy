@@ -198,8 +198,19 @@ export function restoreLifecycleRecord(value: LifecycleRecord): LifecycleRecord 
   };
 }
 
+// --- HOOKS DE TESTE CONTROLADO (padrão setXForTests da codebase) ---
+// Substitui a fábrica do pipeline de produção SOMENTE em testes unitários;
+// NUNCA usar em produção. Null restaura o adaptador de Supabase canônico.
+let testPipelineFactory: (() => ProductPipeline) | null = null;
+
+/** Substitui a fábrica do pipeline de produção em testes; null restaura o real. */
+export function setTestProductPipeline(factory: (() => ProductPipeline) | null): void {
+  testPipelineFactory = factory;
+}
+
 /** Adaptador de produção: Supabase continua canônico e a publicação só conclui após syncCatalogAndDeploy. */
 export function createProductionProductPipeline(): ProductPipeline {
+  if (testPipelineFactory) return testPipelineFactory();
   return new ProductPipeline({
     getProducts: () => productsRepository.getProducts(),
     createCanonicalProduct: candidate => productsRepository.createProduct({
