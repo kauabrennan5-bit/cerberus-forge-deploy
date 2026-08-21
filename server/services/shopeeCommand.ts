@@ -37,6 +37,7 @@ import {
   savePendingReview,
 } from "../repositories/telegramRepository";
 import type { PendingReview } from "./telegramBot";
+import { discoverShopeeProducts } from "./shopeeDiscovery";
 
 // ---------------------------------------------------------------
 // Constantes do lote
@@ -337,11 +338,22 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     };
   }
   const discoveryMode: ShopeeDiscoveryMode = parsed.mode ?? "term";
-  const directUrls: string[] = parsed.urls ?? [];
+  let directUrls: string[] = parsed.urls ?? [];
 
   const chatId = Number(
     (process.env.TELEGRAM_ALLOWED_USER_IDS?.split(",")[0] ?? "").trim() || "0",
   );
+
+  // FASE 26: Se o modo for 'term', usamos o Gemini Search Grounding para obter URLs
+  let discoveryError: string | null = null;
+  if (discoveryMode === "term") {
+    const discovery = await discoverShopeeProducts(parsed.query, parsed.count);
+    if (discovery.success && discovery.products.length > 0) {
+      directUrls = discovery.products.map(p => p.url);
+    } else {
+      discoveryError = discovery.error || "no_products_found";
+    }
+  }
   const chatTargetConfigured = chatId > 0;
   const client = buildShopeeClient();
   const affiliateClientAvailable = client !== null;
@@ -416,30 +428,53 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
   for (let position = 1; position <= parsed.count; position += 1) {
     if (position > 1) await new Promise((resolve) => setTimeout(resolve, LOT_PAUSE_MS));
 
-    // 1. Discovery
-    let discoveryError: string | null = null;
-    if (discoveryMode === "urls") {
-      // Modo URL direta: cada posição consome a URL correspondente (determinístico,
-      // sem busca pública — a Shopee bloqueia /search com 403 anti-bot).
+    // 1. Discovery (Fase 26: Gemini Search Grounding ou URL Direta)
+    if (discoveryMode === "urls" || discoveryMode === "term") {
       const url = directUrls[position - 1] ?? null;
       if (!url) {
-        items.push({
-          position,
-          status: "discovery_failed",
-          publicUrl: null,
-          shopId: null,
-          itemId: null,
-          reviewId: null,
-          imageCount: 0,
-          reason: "url_missing_for_position",
-        });
-        if (chatId) {
-          await sendTelegramMessage(
-            chatId,
-            `⚠️ <b>Descoberta indisponível</b> (motivo: <code>url_missing_for_position</code>) — lote fechado sem inventar dados. Envie uma URL por item: <code>/shopee N URL1 [URL2 ...]</code>.`,
-          ).catch(() => undefined);
+        if (discoveryMode === "urls") {
+          items.push({
+            position,
+            status: "discovery_failed",
+            publicUrl: null,
+            shopId: null,
+            itemId: null,
+            reviewId: null,
+            imageCount: 0,
+            reason: "url_missing_for_position",
+          });
+          if (chatId) {
+            await sendTelegramMessage(
+              chatId,
+              `⚠️ <b>Descoberta indisponível</b> (motivo: <code>url_missing_for_position</code>) — lote fechado sem inventar dados. Envie uma URL por item: <code>/shopee N URL1 [URL2 ...]</code>.`,
+            ).catch(() => undefined);
+          }
+          break;
+        } else {
+          // No modo termo, se não houver mais URLs retornadas pelo Gemini
+          if (discoveryError) {
+            while (items.length < parsed.count) {
+              items.push({
+                position: items.length + 1,
+                status: "discovery_failed",
+                publicUrl: null,
+                shopId: null,
+                itemId: null,
+                reviewId: null,
+                imageCount: 0,
+                reason: discoveryError,
+              });
+            }
+            if (chatId) {
+              await sendTelegramMessage(
+                chatId,
+                `⚠️ <b>Descoberta indisponível</b> (motivo: <code>${discoveryError}</code>) — lote fechado sem inventar dados.`,
+              ).catch(() => undefined);
+            }
+            break;
+          }
+          continue;
         }
-        break;
       } else {
         const identity = extractCanonicalShopeeIds(url);
         if (!identity.shopId || !identity.itemId) {
@@ -472,96 +507,10 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
           });
         }
       }
-    } else if (position === 1) {
-      // Busca única por termo via Affiliate API oficial (Fase 26):
-      // a fonte de descoberta é a própria plataforma autoritária — sem
-      // scraping da página pública de busca (que não entrega resultados
-      // no HTML estático — SPA — e é bloqueada por anti-bot). O rate
-      // limit é respeitado: os itens do lote vêm da mesma consulta.
-      const search = await client.searchOffers({ query: parsed.query, limit: parsed.count });
-      if (!search.ok) {
-        discoveryError = search.reason ?? "search_failed";
-      } else if (search.items.length === 0) {
-        discoveryError = "search_empty";
-      } else {
-        for (const item of search.items) {
-          // Identidade oficial retornada pela fonte autoritária (jamais
-          // derivada de URL pública). Item sem identificadores → fail-closed
-          // por item, sem derrubar o lote.
-          if (!item.shopId || !item.itemId) {
-            items.push({
-              position: items.length + 1,
-              status: "discovery_failed",
-              publicUrl: null,
-              shopId: null,
-              itemId: null,
-              reviewId: null,
-              imageCount: 0,
-              reason: "identifiers_not_present_in_official_source",
-            });
-            continue;
-          }
-          items.push({
-            position: items.length + 1,
-            status: "ok",
-            // URL oficial do produto retornado pela fonte autoritária;
-            // se ausente, usa o padrão canônico oficial (shop_id/item_id).
-            publicUrl: item.productLink ?? `https://shopee.com.br/product/${item.shopId}/${item.itemId}`,
-            shopId: item.shopId,
-            itemId: item.itemId,
-            reviewId: null,
-            imageCount: 0,
-            reason: null,
-          });
-        }
-      }
     }
-    // Preenche posições ainda não resolvidas pelo modo ativo.
-    // - modo urls: posições além de directUrls já foram tratadas com break;
-    //   se chegou aqui sem break, a URL foi registrada no items.
-    // - modo term: itens 2..N usam a mesma busca (descoberta única por lote).
-    // No modo urls, só preenche enquanto a posição atual ainda não foi registrada.
-    while (
-      items.length < parsed.count &&
-      discoveryError === null &&
-      (discoveryMode !== "urls" || items.length < position)
-    ) {
-      items.push({
-        position: items.length + 1,
-        status: "discovery_failed",
-        publicUrl: null,
-        shopId: null,
-        itemId: null,
-        reviewId: null,
-        imageCount: 0,
-        reason: "discovery_item_limit_reached",
-      });
-    }
-    if (items.length < parsed.count && discoveryError !== null) {
-      while (items.length < parsed.count) {
-        items.push({
-          position: items.length + 1,
-          status: "discovery_failed",
-          publicUrl: null,
-          shopId: null,
-          itemId: null,
-          reviewId: null,
-          imageCount: 0,
-          reason: discoveryError,
-        });
-      }
-      // Card de falha do lote com o motivo exato (fail-closed, nada inventado).
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `⚠️ <b>Descoberta indisponível</b> (motivo: <code>${discoveryError}</code>) — lote fechado sem inventar dados.<br/>Dica: use <code>/shopee N https://shopee.com.br/product/…</code> para operar por URL direta.`,
-        ).catch(() => undefined);
-      }
-      break;
-    }
-
     // 2. Aquisição oficial + 3. Scraper + 4. Identidade + 5. Review + 6. Card
     const item = items[position - 1];
+    if (!item) continue;
     if (!item.publicUrl || !item.shopId || !item.itemId) {
       item.status = "discovery_failed";
       if (chatId) {
