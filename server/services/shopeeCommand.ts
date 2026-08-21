@@ -5,7 +5,7 @@
  *
  * FLUXO POR ITEM (idêntico ao preview-telegram validado na Fase 24):
  *   discovery — modo URL: extração oficial do padrão canônico ·
- *   modo termo (Fase 26): DuckDuckGo HTML + Gemini 3.6 Flash (normalização)
+ *   modo termo: busca oficial Affiliate por palavra-chave; fallback DDG/Gemini
  *   → aquisição oficial (Affiliate API · acquireAffiliateLink · READ-ONLY)
  *   → enriquecimento pelo SCRAPER EXISTENTE (imagens + preço observacional)
  *   → verificação determinística de identidade (shopId + itemId)
@@ -163,6 +163,27 @@ function discoveryQueryForRound(query: string, round: number): string {
   if (round === 1) return query;
   if (round === 2) return `${query} Shopee Brasil`;
   return `${query} produto Shopee`;
+}
+
+/** Converte resultados oficiais em URLs canônicas sem derivar links. */
+async function searchOfficialShopeeOffers(params: {
+  client: ShopeeApiClient;
+  query: string;
+  limit: number;
+}): Promise<{ candidates: string[]; sourceResponded: boolean; error: string | null }> {
+  try {
+    const result = await params.client.searchOffers({ query: params.query, limit: params.limit });
+    if (!result.ok) return { candidates: [], sourceResponded: false, error: result.reason ?? "official_search_failed" };
+    const candidates = result.items.flatMap((item) => {
+      if (!item.productLink || !item.shopId || !item.itemId) return [];
+      const identity = extractCanonicalShopeeIds(item.productLink);
+      if (identity.shopId !== item.shopId || identity.itemId !== item.itemId) return [];
+      return [`https://shopee.com.br/product/${item.shopId}/${item.itemId}`];
+    });
+    return { candidates, sourceResponded: true, error: null };
+  } catch {
+    return { candidates: [], sourceResponded: false, error: "official_search_unexpected_error" };
+  }
 }
 
 export function buildShopeeBatchId(): string {
@@ -530,19 +551,30 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     }
     const round = discoveryRounds + 1;
     discoveryRounds = round;
-    geminiCalls += 1;
-    const discovery = await discoverShopeeProducts(
-      discoveryQueryForRound(parsed.query, round),
-      Math.min(candidateTarget, MAX_DISCOVERY_CANDIDATES - directUrls.length),
-    );
-    if (!discovery.success) {
-      discoveryError = discovery.error || "discovery_round_failed";
-      if (/quota|auth|credential/i.test(discoveryError)) budgetExhausted = true;
-      return 0;
+    const roundQuery = discoveryQueryForRound(parsed.query, round);
+    const remainingCapacity = Math.min(candidateTarget, MAX_DISCOVERY_CANDIDATES - directUrls.length);
+    const official = await searchOfficialShopeeOffers({ client, query: roundQuery, limit: remainingCapacity });
+    const discoveredUrls = [...official.candidates];
+    let externalDiscoveryUsed = false;
+    if (discoveredUrls.length === 0) {
+      if (geminiCalls >= MAX_GEMINI_CALLS) {
+        budgetExhausted = true;
+        discoveryError = official.error ?? "external_discovery_budget_exhausted";
+        return 0;
+      }
+      geminiCalls += 1;
+      externalDiscoveryUsed = true;
+      const discovery = await discoverShopeeProducts(roundQuery, remainingCapacity);
+      if (!discovery.success) {
+        discoveryError = discovery.error || official.error || "discovery_round_failed";
+        if (/quota|auth|credential/i.test(discoveryError)) budgetExhausted = true;
+        return 0;
+      }
+      discoveredUrls.push(...discovery.products.map((product) => product.url));
+      if (official.sourceResponded && discovery.products.length === 0) sourceExhausted = true;
     }
     let added = 0;
-    for (const product of discovery.products) {
-      const url = product.url;
+    for (const url of discoveredUrls) {
       const discoveryKey = url ? discoveryKeyForUrl(url) : "";
       if (!url || !discoveryKey || seenDiscoveryKeys.has(discoveryKey)) continue;
       seenDiscoveryKeys.add(discoveryKey);
@@ -559,7 +591,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
         discoveryRound: round,
         stage: "discovery",
         outcome: "found",
-        reason: "candidate_added",
+        reason: externalDiscoveryUsed ? "external_candidate_added" : "official_affiliate_candidate_added",
       });
     }
     if (added > 0) poolLocalExhausted = false;

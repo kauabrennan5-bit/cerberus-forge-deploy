@@ -191,6 +191,46 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(capturedPhoto.caption.includes("item_id=<code>23794344926</code>"), true);
   });
 
+  it("usa busca oficial por termo antes do fallback externo e entrega card sem URL do administrador", async () => {
+    let officialSearchCalls = 0;
+    shopeeCmdTopo.setTestShopeeClient({
+      searchOffers: async () => {
+        officialSearchCalls += 1;
+        return {
+          ok: true,
+          items: [{
+            shopId: "1530442944",
+            itemId: "23794344926",
+            name: "Luminária Bauhaus",
+            price: 79.9,
+            productLink: "https://shopee.com.br/product/1530442944/23794344926",
+            offerLink: "https://s.shopee.com.br/TESTE",
+          }],
+          httpStatus: 200,
+          error: null,
+        };
+      },
+      acquireAffiliateLink: async () => ({
+        status: "link_acquired",
+        shopId: "1530442944",
+        itemId: "23794344926",
+        name: "Luminária Bauhaus",
+        productLink: "https://shopee.com.br/product/1530442944/23794344926",
+        affiliateUrl: "https://s.shopee.com.br/TESTE",
+      }),
+    } as any);
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
+      throw new Error("fallback externo não deveria ser chamado");
+    });
+
+    const result = await runShopeeCommand("1 luminária bauhaus");
+
+    assert.equal(result.ok, 1);
+    assert.equal(result.discoveryRounds, 1);
+    assert.equal(officialSearchCalls, 1);
+    assert.equal(result.items[0]?.status, "ok");
+  });
+
   it("deduplica candidatos repetidos sem criar cards duplicados", async () => {
     const captured: string[] = [];
     telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { captured.push(String(text)); return { ok: true }; }, async (chatId: any, photoUrl: any, caption: any) => { captured.push(String(caption)); return { ok: true }; });
