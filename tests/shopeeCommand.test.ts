@@ -6,6 +6,7 @@ import {
   buildShopeeBatchId,
   buildShopeeReviewId,
   runShopeeCommand,
+  setTestShopeeLotPauseMs,
 } from "../server/services/shopeeCommand";
 import * as shopeeCmdTopo from "../server/services/shopeeCommand";
 import * as telegramBotModule from "../server/services/telegramBot";
@@ -163,6 +164,7 @@ describe("runShopeeCommand — lote completo", () => {
     }));
 
     globalThis.fetch = makeTermFetch() as unknown as typeof globalThis.fetch;
+    setTestShopeeLotPauseMs(0);
   });
 
   afterEach(() => {
@@ -172,6 +174,7 @@ describe("runShopeeCommand — lote completo", () => {
     telegramModule.setTestTelegramSenders(null, null);
     shopeeDiscoveryModule.setTestDiscoveryOverride(null);
     shopeeCmdTopo.setTestShopeeClient(null);
+    setTestShopeeLotPauseMs(null);
   });
 
   it("envia card do item como foto quando o scraper retorna imagens", async () => {
@@ -206,7 +209,8 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(r.ok, 1);
     assert.equal(r.searchExhausted, true);
     assert.equal(savedReviews.length, 1);
-    assert.equal(r.items.filter((item) => item.reason === "duplicate_candidate").length, 8);
+    assert.equal(r.items.filter((item) => item.reason === "duplicate_candidate").length, 0);
+    assert.equal(r.poolCandidates, 1);
   });
 
   it("faz over-fetch e substitui candidato não elegível pelo próximo candidato válido", async () => {
@@ -266,5 +270,245 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(r.ok, 0);
     assert.equal(r.failed, 3);
     assert.equal(r.items.every((i) => i.reason === "GEMINI_QUOTA_EXCEEDED"), true);
+  });
+
+  it("N=3 substitui dois NOT_FOUND por três candidatos válidos", async () => {
+    const ids = ["11111111111", "22222222222", "33333333333", "44444444444", "55555555555"];
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+    }));
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
+    }));
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
+        ids.slice(0, 2).includes(itemId)
+          ? { status: "not_found" }
+          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
+    } as any);
+
+    const result = await runShopeeCommand("3 cozinha");
+    assert.equal(result.ok, 3);
+    assert.equal(result.candidatesExamined, 5);
+    assert.equal(result.rejectedCandidates, 2);
+    assert.equal(result.discoveryRounds, 1);
+  });
+
+  it("N=5 substitui seis rejeições por cinco candidatos válidos", async () => {
+    const ids = Array.from({ length: 11 }, (_, index) => String(11111111111 + index));
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+    }));
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
+    }));
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
+        ids.slice(0, 6).includes(itemId)
+          ? { status: "not_found" }
+          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
+    } as any);
+
+    const result = await runShopeeCommand("5 cozinha");
+    assert.equal(result.ok, 5);
+    assert.equal(result.candidatesExamined, 11);
+    assert.equal(result.rejectedCandidates, 6);
+  });
+
+  it("NOT_ELIGIBLE não consome slot e libera o próximo candidato", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+    }));
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: ["11111111111", "22222222222"].map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
+    }));
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
+        itemId === "11111111111"
+          ? { status: "not_eligible" }
+          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
+    } as any);
+
+    const result = await runShopeeCommand("1 cozinha");
+    assert.equal(result.ok, 1);
+    assert.equal(result.items[0]?.reason, "not_eligible");
+    assert.equal(result.candidatesExamined, 2);
+  });
+
+  it("quinze candidatos com cinco válidos entregam exatamente cinco cards", async () => {
+    const ids = Array.from({ length: 15 }, (_, index) => String(21111111111 + index));
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+    }));
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
+    }));
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
+        ids.slice(0, 10).includes(itemId)
+          ? { status: "not_found" }
+          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
+    } as any);
+
+    const result = await runShopeeCommand("5 cozinha");
+    assert.equal(result.ok, 5);
+    assert.equal(result.candidatesExamined, 15);
+    assert.equal(result.rejectedCandidates, 10);
+    assert.equal(result.poolCandidates, 15);
+  });
+
+  it("todos os candidatos rejeitados terminam sem card falso e com resumo explícito", async () => {
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: Array.from({ length: 5 }, (_, index) => {
+        const itemId = String(31111111111 + index);
+        return { url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" };
+      }),
+    }));
+    shopeeCmdTopo.setTestShopeeClient({ acquireAffiliateLink: async () => ({ status: "not_found" }) } as any);
+
+    const result = await runShopeeCommand("5 cozinha");
+    assert.equal(result.ok, 0);
+    assert.equal(result.rejectedCandidates, 5);
+    assert.equal(result.poolLocalExhausted, true);
+    assert.equal(result.budgetExhausted, true);
+    assert.equal(result.items.every((item) => item.status === "affiliate_not_eligible"), true);
+  });
+
+  it("executa nova rodada quando o pool inicial é insuficiente e elimina duplicatas entre rounds", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+    }));
+    let calls = 0;
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
+      calls += 1;
+      const ids = calls === 1 ? ["11111111111"] : ["11111111111", "22222222222", "33333333333"];
+      return { success: true, products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })) };
+    });
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) => ({ status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" }),
+    } as any);
+
+    const result = await runShopeeCommand("3 cozinha");
+    assert.equal(result.ok, 3);
+    assert.equal(result.discoveryRounds, 2);
+    assert.equal(result.poolCandidates, 3);
+    assert.equal(calls, 2);
+    assert.equal(result.items.some((item) => item.reason === "duplicate_candidate"), false);
+  });
+
+  it("termina incompleto somente após esgotar o orçamento de discovery", async () => {
+    let calls = 0;
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
+      calls += 1;
+      return { success: true, products: [] };
+    });
+
+    const result = await runShopeeCommand("3 cozinha");
+    assert.equal(result.ok, 0);
+    assert.equal(result.poolLocalExhausted, true);
+    assert.equal(result.sourceExhausted, false);
+    assert.equal(result.budgetExhausted, true);
+    assert.equal(result.discoveryRounds, 3);
+    assert.equal(calls, 3);
+  });
+
+  it("foto com ok:false usa fallback texto e só conta a confirmação lógica do texto", async () => {
+    let photoCalls = 0;
+    let messageCalls = 0;
+    telegramModule.setTestTelegramSenders(
+      async () => { messageCalls += 1; return { ok: true }; },
+      async () => { photoCalls += 1; return { ok: false, description: "PHOTO_INVALID" }; },
+    );
+
+    const result = await runShopeeCommand("1");
+    assert.equal(result.ok, 1);
+    assert.equal(photoCalls, 1);
+    assert.equal(messageCalls >= 3, true);
+  });
+
+  it("foto e texto com ok:false não contam card e permitem replacement", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+    }));
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: ["11111111111", "22222222222"].map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
+    }));
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) => ({ status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" }),
+    } as any);
+    telegramModule.setTestTelegramSenders(async () => ({ ok: false, description: "MESSAGE_REJECTED" }), async () => ({ ok: false, description: "PHOTO_REJECTED" }));
+
+    const result = await runShopeeCommand("1 cozinha");
+    assert.equal(result.ok, 0);
+    assert.equal(result.candidatesExamined, 2);
+    assert.equal(result.items.every((item) => item.status === "telegram_send_failed"), true);
+    assert.equal(result.budgetExhausted, true);
+  });
+
+  it("sendMessage com ok:false não conta card quando o candidato não tem imagem de entrega", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => ({
+      success: true,
+      data: { normalizedUrl: url, imagens: [], preco: 79.9, produto: "Produto Sem Foto" },
+    }));
+    telegramModule.setTestTelegramSenders(async () => ({ ok: false, description: "MESSAGE_REJECTED" }), async () => ({ ok: true }));
+
+    const result = await runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(result.ok, 0);
+    assert.equal(result.sourceExhausted, true);
+    assert.equal(result.items[0]?.status, "telegram_send_failed");
+  });
+
+  it("substitui rejeições mistas de identidade, Affiliate, scraper e Telegram até entregar N", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async (url) => {
+      if (url.endsWith("33333333333")) return { success: false, error: "scraper_blocked" };
+      return { success: true, data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" } };
+    });
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
+      success: true,
+      products: [
+        { url: "https://shopee.com.br/search?q=sem-identidade", shopId: null, itemId: null, title: "Inválido" },
+        { url: "https://shopee.com.br/product/1530442944/22222222222", shopId: "1530442944", itemId: "22222222222", title: "Affiliate" },
+        { url: "https://shopee.com.br/product/1530442944/33333333333", shopId: "1530442944", itemId: "33333333333", title: "Scraper" },
+        { url: "https://shopee.com.br/product/1530442944/44444444444", shopId: "1530442944", itemId: "44444444444", title: "Telegram" },
+        { url: "https://shopee.com.br/product/1530442944/55555555555", shopId: "1530442944", itemId: "55555555555", title: "Válido" },
+      ],
+    }));
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
+        itemId === "22222222222"
+          ? { status: "not_found" }
+          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
+    } as any);
+    let photoAttempts = 0;
+    telegramModule.setTestTelegramSenders(async (_chatId, text) => ({ ok: !String(text).includes("PREVIEW SHOPEE AFFILIATE") || photoAttempts > 1 }), async () => {
+      photoAttempts += 1;
+      return photoAttempts === 1 ? { ok: false, description: "PHOTO_REJECTED" } : { ok: true };
+    });
+
+    const result = await runShopeeCommand("1 cozinha");
+    assert.equal(result.ok, 1);
+    assert.equal(result.candidatesExamined, 5);
+    assert.equal(result.rejectedCandidates, 4);
+    assert.equal(result.items.map((item) => item.status).join(","), "discovery_failed,affiliate_not_eligible,scraper_enrichment_failed,telegram_send_failed,ok");
   });
 });

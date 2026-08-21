@@ -72,6 +72,45 @@ export function isUserAllowed(userId: string | number): boolean {
 
 let testOverrideSendTelegramMessage: ((...args: any[]) => Promise<any>) | null = null;
 let testOverrideSendTelegramPhoto: ((...args: any[]) => Promise<any>) | null = null;
+export interface TelegramDeliveryResult {
+  ok: boolean;
+  result?: Record<string, unknown>;
+  description?: string;
+  failureReason?: string;
+  httpStatus?: number;
+}
+
+async function parseTelegramDeliveryResponse(
+  method: "sendMessage" | "sendPhoto",
+  chatId: number | string,
+  response: Response,
+): Promise<TelegramDeliveryResult> {
+  let payload: any = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  const ok = response.ok && payload?.ok === true;
+  const description = sanitizeTelegramApiError(payload?.description);
+  const failureReason = ok
+    ? undefined
+    : description ?? (!response.ok ? `telegram_http_${response.status}` : "telegram_logical_failure");
+  logTelegramEvent("response", {
+    chat_id: chatId,
+    response_method: method,
+    response_success: ok,
+    error: failureReason,
+  });
+  return {
+    ok,
+    result: payload?.result && typeof payload.result === "object" ? payload.result : undefined,
+    description,
+    failureReason,
+    httpStatus: response.status,
+  };
+}
+
 /** Substitui sendTelegramMessage/sendTelegramPhoto em testes unitários; null restaura os reais. */
 export function setTestTelegramSenders(
   message: ((...args: any[]) => Promise<any>) | null,
@@ -81,9 +120,9 @@ export function setTestTelegramSenders(
   testOverrideSendTelegramPhoto = photo;
 }
 
-export async function sendTelegramMessage(chatId: number | string, text: string, replyMarkup?: any): Promise<any> {
+export async function sendTelegramMessage(chatId: number | string, text: string, replyMarkup?: any): Promise<TelegramDeliveryResult> {
   if (testOverrideSendTelegramMessage) return testOverrideSendTelegramMessage(chatId, text, replyMarkup);
-  if (!getTelegramBotToken()) return;
+  if (!getTelegramBotToken()) return { ok: false, failureReason: "telegram_token_missing" };
   try {
     const payload: any = {
       chat_id: chatId,
@@ -95,23 +134,18 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
       payload.reply_markup = replyMarkup;
     }
     const res = await telegramApiFetch("sendMessage", payload);
-    const result = await res.json();
-    logTelegramEvent("response", {
-      chat_id: chatId,
-      response_method: "sendMessage",
-      response_success: Boolean(result?.ok),
-      error: result?.ok ? undefined : sanitizeTelegramApiError(result?.description)
-    });
-    return result;
+    return parseTelegramDeliveryResponse("sendMessage", chatId, res);
   } catch (err) {
-    logTelegramEvent("response", { chat_id: chatId, response_method: "sendMessage", response_success: false, error: sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) });
+    const failureReason = sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) ?? "telegram_transport_error";
+    logTelegramEvent("response", { chat_id: chatId, response_method: "sendMessage", response_success: false, error: failureReason });
     console.error("Erro ao enviar mensagem Telegram:", err);
+    return { ok: false, failureReason };
   }
 }
 
-export async function sendTelegramPhoto(chatId: number | string, photoUrl: string, caption: string, replyMarkup?: any): Promise<any> {
+export async function sendTelegramPhoto(chatId: number | string, photoUrl: string, caption: string, replyMarkup?: any): Promise<TelegramDeliveryResult> {
   if (testOverrideSendTelegramPhoto) return testOverrideSendTelegramPhoto(chatId, photoUrl, caption, replyMarkup);
-  if (!getTelegramBotToken()) return;
+  if (!getTelegramBotToken()) return { ok: false, failureReason: "telegram_token_missing" };
   try {
     const payload: any = {
       chat_id: chatId,
@@ -124,9 +158,12 @@ export async function sendTelegramPhoto(chatId: number | string, photoUrl: strin
       payload.reply_markup = replyMarkup;
     }
     const res = await telegramApiFetch("sendPhoto", payload);
-    return await res.json();
+    return parseTelegramDeliveryResponse("sendPhoto", chatId, res);
   } catch (err) {
+    const failureReason = sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) ?? "telegram_transport_error";
+    logTelegramEvent("response", { chat_id: chatId, response_method: "sendPhoto", response_success: false, error: failureReason });
     console.error("Erro ao enviar foto Telegram:", err);
+    return { ok: false, failureReason };
   }
 }
 
