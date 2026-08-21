@@ -17,6 +17,8 @@ import { runDiscoverCommand } from "./discoveryCommands";
 import { runDiscoverBatchCommand } from "../commercial/facilitator/discoverBatchCommand";
 // FASE 25B (Commit 1) — painel de leitura Telegram (comandos read-only).
 import * as telegramPanel from "./telegramPanel";
+// FASE 25C (Commit 2) — orquestrador /shopee N (discovery → Affiliate → scraper → cards).
+import { runShopeeCommand } from "./shopeeCommand";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -67,7 +69,19 @@ export function isUserAllowed(userId: string | number): boolean {
   return allowedIds.includes(String(userId));
 }
 
+let testOverrideSendTelegramMessage: ((...args: any[]) => Promise<any>) | null = null;
+let testOverrideSendTelegramPhoto: ((...args: any[]) => Promise<any>) | null = null;
+/** Substitui sendTelegramMessage/sendTelegramPhoto em testes unitários; null restaura os reais. */
+export function setTestTelegramSenders(
+  message: ((...args: any[]) => Promise<any>) | null,
+  photo: ((...args: any[]) => Promise<any>) | null,
+): void {
+  testOverrideSendTelegramMessage = message;
+  testOverrideSendTelegramPhoto = photo;
+}
+
 export async function sendTelegramMessage(chatId: number | string, text: string, replyMarkup?: any): Promise<any> {
+  if (testOverrideSendTelegramMessage) return testOverrideSendTelegramMessage(chatId, text, replyMarkup);
   if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
@@ -94,6 +108,7 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
 }
 
 export async function sendTelegramPhoto(chatId: number | string, photoUrl: string, caption: string, replyMarkup?: any): Promise<any> {
+  if (testOverrideSendTelegramPhoto) return testOverrideSendTelegramPhoto(chatId, photoUrl, caption, replyMarkup);
   if (!getTelegramBotToken()) return;
   try {
     const payload: any = {
@@ -1271,10 +1286,30 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderApproved());
       return;
     }
-    // /shopee e /publicar são somente comandos futuros: nenhum comportamento
-    // parcial é criado nesta fase. Resposta informativa e fail-safe.
+    // /shopee N — orquestrador de lote (FASE 25C):
+    //   discovery Shopee → aquisição oficial → scraper → identidade →
+    //   PendingReview → cards. ZERO publicação automática.
     if (text.startsWith("/shopee")) {
-      if (chatId) await sendTelegramMessage(chatId, "🛒 <b>/shopee</b> ainda não disponível.\n\nEste comando será implementado em uma fase posterior e seguirá o fluxo: descoberta Shopee → aquisição oficial → validação → PendingReview → decisão humana. Nenhuma ação foi executada.");
+      const args = text.slice("/shopee".length).trim();
+      if (chatId) {
+        const result = await runShopeeCommand(args);
+        if (!result.chatTargetConfigured || !result.affiliateClientAvailable) {
+          await sendTelegramMessage(
+            chatId,
+            "⚠️ <b>/shopee indisponível</b> — ambiente incompleto: " +
+              `${result.chatTargetConfigured ? "" : "TELEGRAM_ALLOWED_USER_IDS ausente; "}` +
+              `${result.affiliateClientAvailable ? "" : "credenciais da Affiliate API ausentes."}` +
+              "\nNenhuma consulta foi executada.",
+          );
+        } else if (result.processed === 0) {
+          await sendTelegramMessage(
+            chatId,
+            "⚠️ <b>/shopee rejeitado</b>\n\nSintaxe: /shopee N [termo] — N inteiro entre 1 e 10.\nNenhuma ação foi executada.",
+          );
+        }
+        // Cards individuais e o card final do lote já foram enviados pelo
+        // orquestrador; nada adicional é enviado aqui (fail-safe).
+      }
       return;
     }
     if (text.startsWith("/publicar")) {

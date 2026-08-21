@@ -255,6 +255,16 @@ let testOverrideFindExistingProduct: ((
   cleanedTitle?: string | null,
 ) => Promise<Product | null>) | null = null;
 /** Substitui findExistingProduct em testes unitários; null restaura o real. */
+let testOverrideExtractProductForReview:
+  | ((rawUrl: string, rawTextOverride?: string) => Promise<any>)
+  | null = null;
+/** Substitui extractProductForReview em testes unitários; null restaura o real. */
+export function setTestExtractProductForReview(
+  override: ((rawUrl: string, rawTextOverride?: string) => Promise<any>) | null,
+): void {
+  testOverrideExtractProductForReview = override;
+}
+
 export function setTestFindExistingProduct(
   override: ((
     normalizedUrl: string,
@@ -335,6 +345,9 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
   data?: ExtractedReviewData;
   error?: string;
 }> {
+  if (testOverrideExtractProductForReview) {
+    return testOverrideExtractProductForReview(rawUrl, rawTextOverride);
+  }
   const normalizedUrl = normalizeProductUrl(rawUrl);
   if (!normalizedUrl && !rawTextOverride) {
     const err = "URL ou texto de produto inválido.";
