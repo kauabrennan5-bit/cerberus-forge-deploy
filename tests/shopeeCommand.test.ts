@@ -460,3 +460,178 @@ describe("runShopeeCommand — fail-closed por item", () => {
     automation.setTestExtractProductForReview(null);
   });
 });
+
+describe("runShopeeCommand — modo URL direta (shopee.com.br bloqueia /search com 403)", () => {
+  const savedReviews: any[] = [];
+  const telegramMessages: { chatId: number; text: string; photo?: boolean }[] = [];
+  let discoveryReset = false;
+  // setTestShopeeClient é resolvido por import dinâmico no beforeEach (não é
+  // possível await de módulo no topo de describe com esbuild/tsx).
+  let setTestShopeeClient: (c: any) => void = () => undefined;
+
+  beforeEach(async () => {
+    savedReviews.length = 0;
+    telegramMessages.length = 0;
+    const repo = await import("../server/repositories/telegramRepository");
+    repo.setTestSavePendingReview(async (review: any) => {
+      savedReviews.push(review);
+      return review;
+    });
+    const capture = (photo: boolean) =>
+      async (chatId: number | string, ...rest: any[]) => {
+        // sendPhoto(chatId, photoUrl, caption, markup) — a legenda é o 2º arg.
+        const text = typeof rest[1] === "string" ? rest[1] : typeof rest[0] === "string" ? rest[0] : "";
+        telegramMessages.push({ chatId: Number(chatId), text, photo });
+        return { ok: true } as any;
+      };
+    telegramBotModule.setTestTelegramSenders(capture(false), capture(true));
+    discoveryModule.discoveryRateLimiter.reset();
+    discoveryModule.discoveryCircuitBreaker.reset();
+    discoveryReset = true;
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "1976526372";
+    // Cliente Affiliate injetável via setTestShopeeClient (sem depender de
+    // process.env, que sofre corrida quando suítes rodam em paralelo).
+    const cmd = await import("../server/services/shopeeCommand");
+    setTestShopeeClient = cmd.setTestShopeeClient;
+    setTestShopeeClient({
+      lookupProduct: async () => ({ status: "link_acquired", affiliateUrl: "https://s.shopee.com.br/TESTE", productLink: "https://shopee.com.br/product/1530442944/23794344926", shopId: "1530442944", itemId: "23794344926", name: "Produto Teste", raw: null, error: null }) as any,
+      acquireAffiliateLink: async () => ({ status: "link_acquired", affiliateUrl: "https://s.shopee.com.br/TESTE", productLink: "https://shopee.com.br/product/1530442944/23794344926", shopId: "1530442944", itemId: "23794344926", name: "Produto Teste", raw: null, error: null }) as any,
+      generateShortLink: async () => ({ status: "link_acquired", shortLink: "https://s.shopee.com.br/TESTE", longLink: null, error: null }) as any,
+    });
+    const automation = await import("../server/services/productAutomation");
+    automation.setTestExtractProductForReview(async () => {
+      return {
+        success: true,
+        data: {
+          normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
+          imagens: ["https://img.test/1.webp"],
+          preco: 79.9,
+          produto: "Produto Teste",
+        },
+      };
+    });
+  });
+
+  afterEach(async () => {
+    process.env.SHOPEE_AFFILIATE_APP_ID = "";
+    process.env.SHOPEE_AFFILIATE_APP_SECRET = "";
+    process.env.SHOPEE_APP_ID = "";
+    process.env.SHOPEE_APP_SECRET = "";
+    setTestShopeeClient(null);
+    telegramBotModule.setTestTelegramSenders(null, null);
+    if (discoveryReset) {
+      discoveryModule.discoveryRateLimiter.reset();
+      discoveryModule.discoveryCircuitBreaker.reset();
+    }
+  });
+
+  it("parseShopeeCommand entra no modo urls quando os argumentos são URLs Shopee", () => {
+    const a = parseShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(a.error, null);
+    assert.equal(a.mode, "urls");
+    assert.deepEqual(a.urls, ["https://shopee.com.br/product/1530442944/23794344926"]);
+    // query registrada é a lista canônica (para o card do lote)
+    assert.match(a.query, /1530442944/);
+
+    const b = parseShopeeCommand("2 https://shopee.com.br/product/1/2 https://shopee.com.br/product/3/4");
+    assert.equal(b.mode, "urls");
+    assert.equal(b.count, 2);
+    assert.equal(b.urls.length, 2);
+
+    // URL não-Shopee mantém o modo termo (nada inventado — continua fail-closed via busca)
+    const c = parseShopeeCommand("1 https://www.google.com/search?q=x");
+    assert.equal(c.mode, "term");
+    assert.equal(c.urls?.length ?? 0, 0);
+    // URL sem identificadores também não entra no modo urls
+    const d = parseShopeeCommand("1 https://shopee.com.br/termo");
+    assert.equal(d.mode, "term");
+  });
+
+  it("URL com query string e trailing slash é normalizada para o padrão canônico", () => {
+    const a = parseShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926?abc=1#frag");
+    assert.equal(a.mode, "urls");
+    assert.deepEqual(a.urls, ["https://shopee.com.br/product/1530442944/23794344926"]);
+
+    const b = parseShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926/");
+    assert.equal(b.mode, "urls");
+    assert.deepEqual(b.urls, ["https://shopee.com.br/product/1530442944/23794344926"]);
+  });
+
+    it("lote por URL direta: discovery determinística, aquisição oficial, scraper e card como foto", async () => {
+    // O cliente mock registra as consultas oficiais (substitui o fetch de teste).
+    const queried: string[] = [];
+    const mockAcquisition = {
+      status: "link_acquired",
+      affiliateUrl: "https://s.shopee.com.br/TESTE",
+      productLink: "https://shopee.com.br/product/1530442944/23794344926",
+      shopId: "1530442944",
+      itemId: "23794344926",
+      name: "Produto Teste",
+      raw: null,
+      error: null,
+    } as any;
+    setTestShopeeClient({
+      lookupProduct: async () => mockAcquisition,
+      acquireAffiliateLink: async (params: any) => {
+        if (params?.shopId && params?.itemId) queried.push(`${params.shopId}/${params.itemId}`);
+        return mockAcquisition;
+      },
+      generateShortLink: async () => ({ status: "link_acquired", shortLink: "https://s.shopee.com.br/TESTE", longLink: null, error: null }) as any,
+    });
+    const r = await runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(r.ok, 1);
+    assert.equal(r.failed, 0);
+    assert.equal(r.items[0].status, "ok");
+    assert.equal(r.items[0].publicUrl, "https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(r.items[0].shopId, "1530442944");
+    assert.equal(r.items[0].itemId, "23794344926");
+    // NENHUMA busca pública: a única chamada foi a aquisição oficial do item.
+    assert.deepEqual(queried, ["1530442944/23794344926"]);
+    // Card enviado como foto (scraper retornou imagem) e offerLink preservado.
+    const photos = telegramMessages.filter((m) => m.photo);
+    assert.equal(photos.length, 1);
+    assert.match(photos[0].text, /40ftCq|s\.shopee\.com\.br\/TESTE/);
+    assert.equal(savedReviews.length, 1);
+    assert.equal(savedReviews[0].existingProduct.affiliateUrl, "https://s.shopee.com.br/TESTE");
+  });
+
+  it("mais itens solicitados do que URLs: lote fecha fail-closed com aviso e motivo", async () => {
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("open-api.affiliate.shopee")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ data: { productOfferV2: { nodes: [] } } }),
+        } as unknown as Response;
+      }
+      throw new Error(`fetch inesperado: ${url}`);
+    }) as typeof globalThis.fetch;
+    setTestShopeeClient({
+      lookupProduct: async () => ({ status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: null }) as any,
+      acquireAffiliateLink: async () => ({ status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: null }) as any,
+      generateShortLink: async () => ({ status: "link_acquired", shortLink: null, longLink: null, error: null }) as any,
+    });
+    const r = await runShopeeCommand("2 https://shopee.com.br/product/1530442944/23794344926");
+    // posição 1 foi registrada; posição 2 ficou sem URL → url_missing_for_position
+    assert.equal(r.items.length, 2);
+    assert.equal(r.items[1].status, "discovery_failed");
+    assert.equal(r.items[1].reason, "url_missing_for_position");
+    // Aviso do lote com o motivo exato enviado ao Telegram (nada inventado)
+    const avisos = telegramMessages.filter((m) => m.text.includes("url_missing_for_position"));
+    assert.equal(avisos.length, 1);
+    assert.equal(savedReviews.length, 0);
+  });
+
+  it("modo urls não consulta a busca pública mesmo quando /search está bloqueado", async () => {
+    let searchCalled = false;
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("shopee.com.br/search")) searchCalled = true;
+      if (url.includes("open-api.affiliate.shopee")) return AFFILIATE_RESPONSE as unknown as Response;
+      throw new Error(`fetch inesperado: ${url}`);
+    }) as typeof globalThis.fetch;
+    await runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(searchCalled, false);
+  });
+});

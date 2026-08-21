@@ -9,7 +9,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "node --import tsx/esm --test --test-concurrency=1 --test-reporter=spec tests/*.test.ts"
   },
   "dependencies": {
     "@google-analytics/data": "^7.0.0",

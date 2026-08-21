@@ -58,12 +58,19 @@ export interface ParsedShopeeCommand {
   count: number;
   query: string;
   error: string | null;
+  mode?: ShopeeDiscoveryMode;
+  urls?: string[];
+}
+
+export interface ParsedShopeeCommandWithDiscovery extends ParsedShopeeCommand {
+  mode: ShopeeDiscoveryMode;
+  urls: string[];
 }
 
 export function parseShopeeCommand(argsRaw: string): ParsedShopeeCommand {
   const trimmed = argsRaw.trim();
   if (!trimmed) {
-    return { count: 0, query: "", error: "sintaxe: /shopee N [termo] — N é obrigatório (1–10)" };
+    return { count: 0, query: "", error: "sintaxe: /shopee N [termo] ou /shopee N <URL> [<URL>...] — N é obrigatório (1–10)" };
   }
   const parts = trimmed.split(/\s+/);
   const rawCount = parts[0];
@@ -75,14 +82,20 @@ export function parseShopeeCommand(argsRaw: string): ParsedShopeeCommand {
       error: `sintaxe: N deve ser inteiro entre ${MIN_ITEMS} e ${MAX_ITEMS} (recebido: "${rawCount}")`,
     };
   }
-  const query = parts.slice(1).join(" ").trim() || "achados shopee";
-  return { count, query, error: null };
+  const discovery = parseShopeeDiscovery(parts);
+  // No modo URL, o "termo" registrado é a lista canônica (para o card do lote).
+  const query = discovery.mode === "urls" ? discovery.urls.join(" · ") : discovery.query;
+  return { count, query, error: null, mode: discovery.mode, urls: discovery.urls };
 }
 
 // ---------------------------------------------------------------
 // Cliente oficial da Affiliate API (mesma lógica do preview-telegram)
 // ---------------------------------------------------------------
+// Override de teste (injetável via setTestShopeeClient) — só para suítes de teste.
+let testClientOverride: ShopeeApiClient | null = null;
+
 function buildShopeeClient(): ShopeeApiClient | null {
+  if (testClientOverride) return testClientOverride;
   const appId = process.env.SHOPEE_APP_ID ?? process.env.SHOPEE_AFFILIATE_APP_ID;
   const appSecret =
     process.env.SHOPEE_APP_SECRET ?? process.env.SHOPEE_AFFILIATE_APP_SECRET;
@@ -92,6 +105,14 @@ function buildShopeeClient(): ShopeeApiClient | null {
     secret: appSecret,
     baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL,
   });
+}
+
+/**
+ * Hook de teste: substitui o cliente Affiliate usado pelo orquestrador.
+ * Passar null restaura a construção a partir do ambiente.
+ */
+export function setTestShopeeClient(client: ShopeeApiClient | null): void {
+  testClientOverride = client;
 }
 
 // ---------------------------------------------------------------
@@ -105,8 +126,20 @@ function extractCanonicalShopeeIds(url: string): { shopId: string | null; itemId
 }
 
 // ---------------------------------------------------------------
-// Id do lote (batch_id) para relacionar os cards no Telegram
+// Modo de descoberta do lote: por termo (busca pública) ou por URLs diretas.
 // ---------------------------------------------------------------
+export type ShopeeDiscoveryMode = "term" | "urls";
+
+function parseShopeeDiscovery(args: string[]): { mode: ShopeeDiscoveryMode; query: string; urls: string[] } {
+  // Se todos os argumentos (a partir do 2º) forem URLs Shopee válidas, entra no modo direto.
+  const rest = args.slice(1);
+  const urlPattern = /^https?:\/\/shopee\.com\.br\/[\w\-./]*\/\d+\/\d+$/;
+  const allUrls = rest.length > 0 && rest.every((a) => urlPattern.test(a.replace(/[#?].*$/, "").replace(/\/$/, "")));
+  if (allUrls) {
+    return { mode: "urls", query: "", urls: rest.map((a) => a.replace(/[#?].*$/, "").replace(/\/$/, "")) };
+  }
+  return { mode: "term", query: rest.join(" ").trim() || "achados shopee", urls: [] };
+}
 export function buildShopeeBatchId(): string {
   return `shopee-${Date.now().toString(36)}`;
 }
@@ -305,6 +338,8 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       affiliateClientAvailable: false,
     };
   }
+  const discoveryMode: ShopeeDiscoveryMode = parsed.mode ?? "term";
+  const directUrls: string[] = parsed.urls ?? [];
 
   const chatId = Number(
     (process.env.TELEGRAM_ALLOWED_USER_IDS?.split(",")[0] ?? "").trim() || "0",
@@ -370,25 +405,80 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
 
   // Card inicial do lote
   if (chatId) {
+    const sourceLine =
+      discoveryMode === "urls"
+        ? `📦 Solicitados: <b>${parsed.count}</b> · Modo: URL direta · <code>${directUrls.length}</code> URL(s)`
+        : `📦 Solicitados: <b>${parsed.count}</b> · Termo: "${parsed.query}"`;
     await sendTelegramMessage(
       chatId,
-      `🛒 <b>LOTE SHOPEE INICIADO</b>\n\n` +
-        `🆔 Lote: <code>${lotId}</code>\n` +
-        `📦 Solicitados: <b>${parsed.count}</b> · Termo: "${parsed.query}"\n\n` +
-        `<i>Cada item passa por: descoberta oficial → link de afiliado → scraper → auditoria de identidade → card. Falhas são reportadas por item, sem inventar dados.</i>`,
+      `🛒 <b>LOTE SHOPEE INICIADO</b>\n\n` + `🆔 Lote: <code>${lotId}</code>\n` + sourceLine + `\n\n` + `<i>Cada item passa por: descoberta oficial → link de afiliado → scraper → auditoria de identidade → card. Falhas são reportadas por item, sem inventar dados.</i>`,
     ).catch(() => undefined);
   }
 
   for (let position = 1; position <= parsed.count; position += 1) {
     if (position > 1) await new Promise((resolve) => setTimeout(resolve, LOT_PAUSE_MS));
 
-    // 1. Discovery — connector Shopee canônico (UMA busca por lote, reaproveitada)
-    let publicUrl: string | null = null;
-    let title: string | null = null;
+    // 1. Discovery
     let discoveryError: string | null = null;
-    if (position === 1) {
+    if (discoveryMode === "urls") {
+      // Modo URL direta: cada posição consome a URL correspondente (determinístico,
+      // sem busca pública — a Shopee bloqueia /search com 403 anti-bot).
+      const url = directUrls[position - 1] ?? null;
+      if (!url) {
+        items.push({
+          position,
+          status: "discovery_failed",
+          publicUrl: null,
+          shopId: null,
+          itemId: null,
+          reviewId: null,
+          imageCount: 0,
+          reason: "url_missing_for_position",
+        });
+        if (chatId) {
+          await sendTelegramMessage(
+            chatId,
+            `⚠️ <b>Descoberta indisponível</b> (motivo: <code>url_missing_for_position</code>) — lote fechado sem inventar dados. Envie uma URL por item: <code>/shopee N URL1 [URL2 ...]</code>.`,
+          ).catch(() => undefined);
+        }
+        break;
+      } else {
+        const identity = extractCanonicalShopeeIds(url);
+        if (!identity.shopId || !identity.itemId) {
+          items.push({
+            position,
+            status: "discovery_failed",
+            publicUrl: url,
+            shopId: null,
+            itemId: null,
+            reviewId: null,
+            imageCount: 0,
+            reason: "identifiers_not_extractable_from_url",
+          });
+          if (chatId) {
+            await sendTelegramMessage(
+              chatId,
+              `❌ <b>Item ${position}</b> falhou na descoberta: identificadores não extraíveis da URL — nenhum card enviado.`,
+            ).catch(() => undefined);
+          }
+        } else {
+          items.push({
+            position,
+            status: "ok",
+            publicUrl: url,
+            shopId: identity.shopId,
+            itemId: identity.itemId,
+            reviewId: null,
+            imageCount: 0,
+            reason: null,
+          });
+        }
+      }
+    } else if (position === 1) {
       // Busca única (respeito ao rate limit): os itens do lote vêm da mesma
-      // consulta, em ordem de leitura — sem buscas paralelas.
+      // consulta, em ordem de leitura — sem buscas paralelas. O /search público
+      // pode retornar 403 (anti-bot da Shopee); nesse caso o lote fecha fail-closed
+      // com relatório do motivo, sem inventar dados.
       const search = await shopeeConnector.search({ query: parsed.query, limit: parsed.count });
       if (!search.ok || search.listings.length === 0) {
         discoveryError = search.reason ?? "discovery_empty";
@@ -421,8 +511,16 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
         }
       }
     }
-    // Itens 2..N usam a mesma busca (descoberta única por lote).
-    while (items.length < parsed.count && discoveryError === null) {
+    // Preenche posições ainda não resolvidas pelo modo ativo.
+    // - modo urls: posições além de directUrls já foram tratadas com break;
+    //   se chegou aqui sem break, a URL foi registrada no items.
+    // - modo term: itens 2..N usam a mesma busca (descoberta única por lote).
+    // No modo urls, só preenche enquanto a posição atual ainda não foi registrada.
+    while (
+      items.length < parsed.count &&
+      discoveryError === null &&
+      (discoveryMode !== "urls" || items.length < position)
+    ) {
       items.push({
         position: items.length + 1,
         status: "discovery_failed",
@@ -447,9 +545,15 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
           reason: discoveryError,
         });
       }
+      // Card de falha do lote com o motivo exato (fail-closed, nada inventado).
+      if (chatId) {
+        await sendTelegramMessage(
+          chatId,
+          `⚠️ <b>Descoberta indisponível</b> (motivo: <code>${discoveryError}</code>) — lote fechado sem inventar dados.<br/>Dica: use <code>/shopee N https://shopee.com.br/product/…</code> para operar por URL direta.`,
+        ).catch(() => undefined);
+      }
       break;
     }
-    title = null;
 
     // 2. Aquisição oficial + 3. Scraper + 4. Identidade + 5. Review + 6. Card
     const item = items[position - 1];
