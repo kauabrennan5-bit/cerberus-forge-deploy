@@ -44,6 +44,8 @@ import { discoverShopeeProducts } from "./shopeeDiscovery";
 // ---------------------------------------------------------------
 const MIN_ITEMS = 1;
 const MAX_ITEMS = 10;
+const DISCOVERY_OVERFETCH_MULTIPLIER = 3;
+const MAX_DISCOVERY_CANDIDATES = 30;
 
 const LOT_PAUSE_MS = 3000; // pausa entre itens (respeito ao rate limit Shopee)
 const REVIEW_TTL_MS = 24 * 60 * 60 * 1000; // 24h
@@ -296,11 +298,24 @@ async function sendShopeeCard(params: {
   }
 }
 
+function logShopeeCandidateResult(params: {
+  lotId: string;
+  candidateIndex: number;
+  stage: "discovery" | "affiliate" | "scraper" | "review" | "telegram";
+  outcome: "accepted" | "rejected";
+  reason: string;
+}): void {
+  console.info(
+    `[SHOPEE LOT] lot=${params.lotId} candidate=${params.candidateIndex} stage=${params.stage} outcome=${params.outcome} reason=${params.reason}`,
+  );
+}
+
 // ---------------------------------------------------------------
 // Orquestrador
 // ---------------------------------------------------------------
 export interface ShopeeLotItemResult {
   position: number;
+  candidateIndex: number;
   status:
     | "ok"
     | "discovery_failed"
@@ -323,6 +338,10 @@ export interface ShopeeLotResult {
   processed: number;
   ok: number;
   failed: number;
+  rejectedCandidates?: number;
+  candidatesExamined: number;
+  searchExhausted: boolean;
+  discoveryError: string | null;
   items: ShopeeLotItemResult[];
   chatTargetConfigured: boolean;
   affiliateClientAvailable: boolean;
@@ -342,6 +361,9 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       processed: 0,
       ok: 0,
       failed: 0,
+      candidatesExamined: 0,
+      searchExhausted: false,
+      discoveryError: null,
       items: [],
       chatTargetConfigured: false,
       affiliateClientAvailable: false,
@@ -357,7 +379,11 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
   // FASE 26: Se o modo for 'term', usamos o Gemini Search Grounding para obter URLs
   let discoveryError: string | null = null;
   if (discoveryMode === "term") {
-    const discovery = await discoverShopeeProducts(parsed.query, parsed.count);
+    const candidateTarget = Math.min(
+      MAX_DISCOVERY_CANDIDATES,
+      Math.max(parsed.count, parsed.count * DISCOVERY_OVERFETCH_MULTIPLIER),
+    );
+    const discovery = await discoverShopeeProducts(parsed.query, candidateTarget);
     if (discovery.success && discovery.products.length > 0) {
       directUrls = discovery.products.map(p => p.url);
     } else {
@@ -379,8 +405,12 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       processed: 0,
       ok: 0,
       failed: parsed.count,
+      candidatesExamined: 0,
+      searchExhausted: false,
+      discoveryError,
       items: Array.from({ length: parsed.count }, (_, i) => ({
         position: i + 1,
+        candidateIndex: i + 1,
         status: "telegram_send_failed",
         publicUrl: null,
         shopId: null,
@@ -408,8 +438,12 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       processed: 0,
       ok: 0,
       failed: parsed.count,
+      candidatesExamined: 0,
+      searchExhausted: false,
+      discoveryError,
       items: Array.from({ length: parsed.count }, (_, i) => ({
         position: i + 1,
+        candidateIndex: i + 1,
         status: "discovery_failed",
         publicUrl: null,
         shopId: null,
@@ -435,100 +469,40 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     ).catch(() => undefined);
   }
 
-  for (let position = 1; position <= parsed.count; position += 1) {
-    if (position > 1) await new Promise((resolve) => setTimeout(resolve, LOT_PAUSE_MS));
+  const seenCandidates = new Set<string>();
+  let candidateCursor = 0;
+  let acceptedCount = 0;
 
-    // 1. Discovery (Fase 26: Gemini Search Grounding ou URL Direta)
-    if (discoveryMode === "urls" || discoveryMode === "term") {
-      const url = directUrls[position - 1] ?? null;
-      if (!url) {
-        if (discoveryMode === "urls") {
-          items.push({
-            position,
-            status: "discovery_failed",
-            publicUrl: null,
-            shopId: null,
-            itemId: null,
-            reviewId: null,
-            imageCount: 0,
-            reason: "url_missing_for_position",
-          });
-          if (chatId) {
-            await sendTelegramMessage(
-              chatId,
-              `⚠️ <b>Descoberta indisponível</b> (motivo: <code>url_missing_for_position</code>) — lote fechado sem inventar dados. Envie uma URL por item: <code>/shopee N URL1 [URL2 ...]</code>.`,
-            ).catch(() => undefined);
-          }
-          break;
-        } else {
-          // No modo termo, se não houver mais URLs retornadas pelo Gemini
-          if (discoveryError) {
-            while (items.length < parsed.count) {
-              items.push({
-                position: items.length + 1,
-                status: "discovery_failed",
-                publicUrl: null,
-                shopId: null,
-                itemId: null,
-                reviewId: null,
-                imageCount: 0,
-                reason: discoveryError,
-              });
-            }
-            if (chatId) {
-              await sendTelegramMessage(
-                chatId,
-                `⚠️ <b>Descoberta indisponível</b> (motivo: <code>${discoveryError}</code>) — lote fechado sem inventar dados.`,
-              ).catch(() => undefined);
-            }
-            break;
-          }
-          continue;
-        }
-      } else {
-        const identity = extractCanonicalShopeeIds(url);
-        if (!identity.shopId || !identity.itemId) {
-          items.push({
-            position,
-            status: "discovery_failed",
-            publicUrl: url,
-            shopId: null,
-            itemId: null,
-            reviewId: null,
-            imageCount: 0,
-            reason: "identifiers_not_extractable_from_url",
-          });
-          if (chatId) {
-            await sendTelegramMessage(
-              chatId,
-              `❌ <b>Item ${position}</b> falhou na descoberta: identificadores não extraíveis da URL — nenhum card enviado.`,
-            ).catch(() => undefined);
-          }
-        } else {
-          items.push({
-            position,
-            status: "ok",
-            publicUrl: url,
-            shopId: identity.shopId,
-            itemId: identity.itemId,
-            reviewId: null,
-            imageCount: 0,
-            reason: null,
-          });
-        }
-      }
-    }
-    // 2. Aquisição oficial + 3. Scraper + 4. Identidade + 5. Review + 6. Card
-    const item = items[position - 1];
-    if (!item) continue;
-    if (!item.publicUrl || !item.shopId || !item.itemId) {
+  while (acceptedCount < parsed.count && candidateCursor < directUrls.length) {
+    if (candidateCursor > 0) await new Promise((resolve) => setTimeout(resolve, LOT_PAUSE_MS));
+    const candidateIndex = candidateCursor + 1;
+    const url = directUrls[candidateCursor++] ?? null;
+    const identity = url ? extractCanonicalShopeeIds(url) : { shopId: null, itemId: null };
+    const candidateKey = identity.shopId && identity.itemId ? `${identity.shopId}:${identity.itemId}` : url ?? `missing:${candidateIndex}`;
+    const item: ShopeeLotItemResult = {
+      position: candidateIndex,
+      candidateIndex,
+      status: "ok",
+      publicUrl: url,
+      shopId: identity.shopId,
+      itemId: identity.itemId,
+      reviewId: null,
+      imageCount: 0,
+      reason: null,
+    };
+    items.push(item);
+
+    if (seenCandidates.has(candidateKey)) {
       item.status = "discovery_failed";
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `❌ <b>Item ${item.position}</b> falhou na descoberta: ${item.reason ?? "indisponível"} — nenhum card enviado.`,
-        ).catch(() => undefined);
-      }
+      item.reason = "duplicate_candidate";
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "discovery", outcome: "rejected", reason: item.reason });
+      continue;
+    }
+    seenCandidates.add(candidateKey);
+    if (!url || !item.shopId || !item.itemId) {
+      item.status = "discovery_failed";
+      item.reason = "identifiers_not_extractable_from_url";
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "discovery", outcome: "rejected", reason: item.reason });
       continue;
     }
 
@@ -537,25 +511,15 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       acquisition = await client.acquireAffiliateLink({ shopId: item.shopId, itemId: item.itemId });
     } catch (err) {
       acquisition = null;
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `❌ <b>Item ${item.position}</b> falhou na fonte oficial: ${err instanceof Error ? err.message : "unknown"} — nenhum card enviado.`,
-        ).catch(() => undefined);
-      }
       item.status = "affiliate_not_eligible";
-      item.reason = err instanceof Error ? err.message : "unknown";
+      item.reason = "affiliate_request_error";
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "affiliate", outcome: "rejected", reason: item.reason });
       continue;
     }
     if (!acquisition || acquisition.status !== "link_acquired") {
       item.status = "affiliate_not_eligible";
       item.reason = acquisition?.status ?? "not_eligible";
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `❌ <b>Item ${item.position}</b> não elegível na fonte oficial (status: <code>${item.reason}</code>) — nenhum card enviado.`,
-        ).catch(() => undefined);
-      }
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "affiliate", outcome: "rejected", reason: item.reason });
       continue;
     }
 
@@ -568,12 +532,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     if (!enriched.ok) {
       item.status = "scraper_enrichment_failed";
       item.reason = enriched.failureReason;
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `❌ <b>Item ${item.position}</b> falhou no enriquecimento (scraper: <code>${enriched.failureReason}</code>) — nenhum card enviado (fail-closed).`,
-        ).catch(() => undefined);
-      }
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "scraper", outcome: "rejected", reason: item.reason ?? "scraper_failed" });
       continue;
     }
 
@@ -602,7 +561,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       imagens: enriched.images,
       normalizedUrl: acquisition.productLink ?? item.publicUrl,
       descricao: [
-        `affiliate_preview · source=/shopee · batch=${lotId} · position=${position}`,
+        `affiliate_preview · source=/shopee · batch=${lotId} · candidate=${candidateIndex}`,
         `link oficial retornado pela Affiliate API: ${acquisition.affiliateUrl}`,
         `enriquecimento scraper: ${enriched.images.length} imagem(ns)${hasScrapedPrice ? ", preço observacional presente" : ""} · ${provenanceNote}`,
         `auditoria identidade: shop_id=${item.shopId} item_id=${item.itemId}`,
@@ -622,13 +581,8 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       await savePendingReview(review);
     } catch (err) {
       item.status = "review_persist_failed";
-      item.reason = err instanceof Error ? err.message : "persist_failed";
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          `❌ <b>Item ${item.position}</b> falhou ao registrar a decisão pendente — nenhuma publicação foi executada.`,
-        ).catch(() => undefined);
-      }
+      item.reason = "persist_failed";
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "review", outcome: "rejected", reason: item.reason });
       continue;
     }
 
@@ -655,10 +609,17 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     item.reviewId = reviewId;
     item.imageCount = enriched.images.length;
     item.status = sent.ok ? "ok" : "telegram_send_failed";
-    if (!sent.ok) item.reason = sent.reason ?? "send_failed";
+    if (!sent.ok) {
+      item.reason = "send_failed";
+      logShopeeCandidateResult({ lotId, candidateIndex, stage: "telegram", outcome: "rejected", reason: item.reason });
+      continue;
+    }
+    acceptedCount += 1;
+    logShopeeCandidateResult({ lotId, candidateIndex, stage: "telegram", outcome: "accepted", reason: "card_sent" });
   }
 
-  const okCount = items.filter((i) => i.status === "ok").length;
+  const okCount = acceptedCount;
+  const searchExhausted = okCount < parsed.count && candidateCursor >= directUrls.length;
 
   // Card final do lote
   if (chatId) {
@@ -666,8 +627,9 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       chatId,
       `🏁 <b>LOTE CONCLUÍDO</b>\n\n` +
         `🆔 Lote: <code>${lotId}</code>\n` +
-        `✅ Enviados como card: <b>${okCount}</b> de <b>${items.length}</b>\n` +
-        `❌ Falhas (fail-closed, nada inventado): <b>${items.length - okCount}</b>\n\n` +
+        `✅ Enviados como card: <b>${okCount}</b> de <b>${parsed.count}</b>\n` +
+        `❌ Candidatos rejeitados (fail-closed, nada inventado): <b>${items.length - okCount}</b>\n` +
+        `🔎 Candidatos avaliados: <b>${items.length}</b>${searchExhausted ? " · busca esgotada antes de completar o lote" : ""}\n\n` +
         `Cada card tem decisão independente: ✅ PUBLICAR registra a decisão · ❌ DESCARTAR cancela.\n` +
         `<i>Nenhuma publicação ou aquisição adicional foi executada.</i>`,
     ).catch(() => undefined);
@@ -679,7 +641,11 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     countRequested: parsed.count,
     processed: items.length,
     ok: okCount,
-    failed: items.length - okCount,
+    failed: parsed.count - okCount,
+    rejectedCandidates: items.length - okCount,
+    candidatesExamined: items.length,
+    searchExhausted,
+    discoveryError,
     items,
     chatTargetConfigured,
     affiliateClientAvailable,

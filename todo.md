@@ -124,3 +124,16 @@
 - [x] Executar lint, testes, build, revisão de segurança e validação de produção sem criar dados artificiais.
 - [x] Versionar e enviar o Bloco 7.5 para main, sem iniciar o Bloco 8.
 - [ ] Entregar relatório final com evidências, limitações e requisitos administrativos residuais.
+
+# Investigação Forense — Rejeição Shopee e Replacement de Candidatos
+
+- [x] Mapear o fluxo real de /shopee N <termo>, do Telegram ao card final, incluindo cada filtro e status de rejeição.
+- [x] Reconstruir em produção somente leitura a causa de not_found do lote shopee-mt3ca5la, sem criar produtos ou alterar catálogo.
+- [x] Auditar replacement, over-fetch, deduplicação, continue/break/return e a diferença entre falha de item e encerramento de lote.
+- [x] Documentar o diagnóstico de causa raiz comprovada: desafio DDG + descoberta insuficiente + slots fixos sem replacement; governança fora do caminho de rejeição.
+- [x] Implementar exclusivamente a correção comprovada, testes de regressão e observabilidade estruturada.
+- [x] Validar lint, testes e build sem enfraquecer filtros de governança; pendente somente teste de lote real após deploy.
+
+# Arquivo compactado de referência
+
+- [ ] Inspecionar cerberus-forge-deploy-main12(2).zip e comparar sua identidade com origin/main sem sobrescrever o workspace.

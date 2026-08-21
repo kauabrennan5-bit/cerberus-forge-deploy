@@ -188,7 +188,7 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(capturedPhoto.caption.includes("item_id=<code>23794344926</code>"), true);
   });
 
-  it("Gemini retorna produtos: pipeline canônico completo", async () => {
+  it("deduplica candidatos repetidos sem criar cards duplicados", async () => {
     const captured: string[] = [];
     telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { captured.push(String(text)); return { ok: true }; }, async (chatId: any, photoUrl: any, caption: any) => { captured.push(String(caption)); return { ok: true }; });
 
@@ -203,9 +203,46 @@ describe("runShopeeCommand — lote completo", () => {
     }));
 
     const r = await runShopeeCommand("3 cozinha");
-    assert.equal(r.processed, 3);
-    assert.equal(r.ok, 3);
-    assert.equal(savedReviews.length, 3);
+    assert.equal(r.ok, 1);
+    assert.equal(r.searchExhausted, true);
+    assert.equal(savedReviews.length, 1);
+    assert.equal(r.items.filter((item) => item.reason === "duplicate_candidate").length, 8);
+  });
+
+  it("faz over-fetch e substitui candidato não elegível pelo próximo candidato válido", async () => {
+    let requestedLimit = 0;
+    shopeeDiscoveryModule.setTestDiscoveryOverride(async (_query, limit) => {
+      requestedLimit = limit;
+      return {
+        success: true,
+        products: [
+          { url: "https://shopee.com.br/product/1530442944/11111111111", shopId: "1530442944", itemId: "11111111111", title: "Indisponível" },
+          { url: "https://shopee.com.br/product/1530442944/23794344926", shopId: "1530442944", itemId: "23794344926", title: "Produto Teste" },
+        ],
+      };
+    });
+    shopeeCmdTopo.setTestShopeeClient({
+      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
+        itemId === "11111111111"
+          ? { status: "not_found" }
+          : {
+              status: "link_acquired",
+              shopId: "1530442944",
+              itemId: "23794344926",
+              name: "Produto Teste",
+              productLink: "https://shopee.com.br/product/1530442944/23794344926",
+              affiliateUrl: "https://s.shopee.com.br/TESTE",
+            },
+    } as any);
+
+    const result = await runShopeeCommand("1 cozinha");
+
+    assert.equal(requestedLimit, 3);
+    assert.equal(result.ok, 1);
+    assert.equal(result.candidatesExamined, 2);
+    assert.equal(result.items[0]?.reason, "not_found");
+    assert.equal(result.items[1]?.status, "ok");
+    assert.equal(savedReviews.length, 1);
   });
 
   it("resposta vazia do Gemini → lote fail-closed", async () => {
