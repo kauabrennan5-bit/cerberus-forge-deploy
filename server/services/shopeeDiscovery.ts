@@ -1,104 +1,169 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
-import dotenv from "dotenv";
+import * as dotenv from "dotenv";
+import { searchShopeeProductsDDG, type ShopeeSearchCandidate } from "./shopeeSearchProvider";
 
 dotenv.config();
 
-// Inicializa o cliente Gemini (reutilizando a lógica do projeto)
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "",
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build"
-    }
+let aiInstance: any = null;
+function getAi() {
+  if (!aiInstance) {
+    aiInstance = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY || "",
+    });
   }
-});
+  return aiInstance;
+}
+
+export function setTestAi(override: any): void {
+  aiInstance = override;
+}
 
 export interface DiscoveredShopeeProduct {
   url: string;
-  title?: string;
+  shopId: string;
+  itemId: string;
+  title: string;
+}
+
+export interface DiscoveryResult {
+  success: boolean;
+  products: DiscoveredShopeeProduct[];
+  error?: string;
+}
+
+let discoveryOverride: ((query: string, limit: number) => Promise<DiscoveryResult>) | null = null;
+export function setTestDiscoveryOverride(override: any): void {
+  discoveryOverride = override;
+}
+
+let searchProviderOverride: ((query: string, limit: number) => Promise<ShopeeSearchCandidate[]>) | null = null;
+export function setTestSearchProvider(override: any): void {
+  searchProviderOverride = override;
 }
 
 /**
- * Serviço de descoberta via Gemini Search Grounding.
- * Objetivo: Encontrar URLs reais de produtos Shopee para um termo de busca.
- * 
- * REGRAS DE GOVERNANÇA:
- * - O Gemini é usado APENAS para descoberta (N2 candidates).
- * - Nenhuma informação do Gemini é tratada como verdade canônica.
- * - As URLs encontradas DEVEM ser validadas pelo pipeline oficial.
+ * Orquestra a descoberta Shopee:
+ * 1. Busca URLs reais via DuckDuckGo (Stage 1 & 2)
+ * 2. Normaliza e seleciona via Gemini 3.6 Flash (Stage 3)
  */
-let testDiscoveryOverride: typeof discoverShopeeProducts | null = null;
-
-export function setTestDiscoveryOverride(override: typeof discoverShopeeProducts | null): void {
-  testDiscoveryOverride = override;
-}
-
 export async function discoverShopeeProducts(
   query: string,
   limit: number = 10
-): Promise<{ success: boolean; products: DiscoveredShopeeProduct[]; error?: string }> {
-  if (testDiscoveryOverride) {
-    return testDiscoveryOverride(query, limit);
+): Promise<DiscoveryResult> {
+  if (discoveryOverride) {
+    return discoveryOverride(query, limit);
   }
-  if (!process.env.GEMINI_API_KEY) {
-    return { success: false, products: [], error: "GEMINI_API_KEY_MISSING" };
+  try {
+    // 1. Descoberta de candidatos reais (Stage 1 & 2)
+    const candidates = searchProviderOverride
+      ? await searchProviderOverride(query, limit)
+      : await searchShopeeProductsDDG(query, limit);
+
+    if (candidates.length === 0) {
+      return { success: true, products: [], error: "no_candidates_found_in_search" };
+    }
+
+    // 2. Normalização e Seleção via Gemini (Stage 3)
+    const normalized = await rankAndNormalizeCandidates(candidates, query, limit);
+
+    return {
+      success: true,
+      products: normalized
+    };
+  } catch (error: any) {
+    console.error("[Shopee Discovery Error]", error);
+    return {
+      success: false,
+      products: [],
+      error: error.message
+    };
   }
+}
+
+/**
+ * Usa Gemini 3.6 Flash para normalizar títulos e selecionar candidatos.
+ * GARANTIA ANTI-ALUCINAÇÃO: Valida que as URLs retornadas existem na entrada.
+ */
+async function rankAndNormalizeCandidates(
+  candidates: ShopeeSearchCandidate[],
+  query: string,
+  limit: number
+): Promise<DiscoveredShopeeProduct[]> {
+  const ai = getAi();
+
+  const prompt = `
+    Você é um curador de ofertas. Selecione os ${limit} melhores produtos para o termo "${query}".
+
+    REGRAS ESTRITAS:
+    1. Use APENAS as URLs fornecidas na lista de candidatos.
+    2. Retorne um JSON array de objetos: { "url": string, "normalizedTitle": string }.
+    3. O título deve ser curto, chamativo e em Português.
+    4. Não invente URLs.
+
+    CANDIDATOS:
+    ${JSON.stringify(candidates.map(c => ({ url: c.url, title: c.rawTitle })), null, 2)}
+  `;
 
   try {
-    const prompt = `Encontre ${limit} links reais de produtos da Shopee Brasil (shopee.com.br) relacionados ao termo: "${query}".
-Retorne apenas URLs válidas de produtos que sigam o padrão https://shopee.com.br/product/SHOP_ID/ITEM_ID ou https://shopee.com.br/NOME-DO-PRODUTO-i.SHOP_ID.ITEM_ID.
-Não invente URLs. Retorne apenas resultados que você encontrar via busca real.`;
-
+    // @ts-ignore - A tipagem do SDK v2.18.0 pode estar inconsistente no sandbox
     const result = await ai.models.generateContent({
-      model: "gemini-3.6-flash", // Atualizado para o modelo recomendado e testado com a nova chave
-      contents: prompt,
+      model: "gemini-3.6-flash",
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
       config: {
-        systemInstruction: "Você é um assistente de descoberta de produtos. Sua tarefa é encontrar URLs reais de produtos na Shopee Brasil. Retorne os resultados em formato JSON.",
-        // Habilitando Google Search Grounding
-        tools: [{ googleSearchRetrieval: {} } as any],
         responseMimeType: "application/json",
         responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            products: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  url: { type: Type.STRING },
-                  title: { type: Type.STRING }
-                },
-                required: ["url"]
-              }
-            }
-          },
-          required: ["products"]
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              url: { type: Type.STRING },
+              normalizedTitle: { type: Type.STRING }
+            },
+            required: ["url", "normalizedTitle"]
+          }
         }
       }
     });
 
-    const text = result.text || "{\"products\":[]}";
-    const data = JSON.parse(text);
-    
-    // Filtragem básica de segurança das URLs
-    const validProducts = (data.products || [])
-      .filter((p: any) => {
-        const url = p.url || "";
-        return url.includes("shopee.com.br") && (url.includes("/product/") || /i\.\d+\.\d+/.test(url));
-      })
-      .slice(0, limit);
+    const responseText = result.text || "[]";
+    const selected: any[] = JSON.parse(responseText);
 
-    return {
-      success: true,
-      products: validProducts
-    };
-  } catch (err: any) {
-    console.error("[Gemini Discovery Error]", err.message);
-    return {
-      success: false,
-      products: [],
-      error: err.message || "unknown_discovery_error"
-    };
+    const finalProducts: DiscoveredShopeeProduct[] = [];
+    const inputMap = new Map(candidates.map(c => [c.url, c]));
+
+    for (const item of selected) {
+      const original = inputMap.get(item.url);
+      if (original) {
+        finalProducts.push({
+          url: original.url,
+          shopId: original.shopId,
+          itemId: original.itemId,
+          title: item.normalizedTitle || original.rawTitle
+        });
+      } else {
+        console.warn(`[Anti-Alucinação] Gemini inventou URL: ${item.url}`);
+      }
+    }
+
+    // Fallback: se o Gemini não retornou nada válido, usa os brutos
+    if (finalProducts.length === 0) {
+      return candidates.slice(0, limit).map(c => ({
+        url: c.url,
+        shopId: c.shopId,
+        itemId: c.itemId,
+        title: c.rawTitle
+      }));
+    }
+
+    return finalProducts;
+  } catch (error) {
+    console.error("[Gemini Normalization Error]", error);
+    // Fallback para candidatos brutos em caso de erro no Gemini
+    return candidates.slice(0, limit).map(c => ({
+      url: c.url,
+      shopId: c.shopId,
+      itemId: c.itemId,
+      title: c.rawTitle
+    }));
   }
 }

@@ -5,7 +5,7 @@
  *
  * FLUXO POR ITEM (idêntico ao preview-telegram validado na Fase 24):
  *   discovery — modo URL: extração oficial do padrão canônico ·
- *   modo termo (Fase 26): busca oficial da Affiliate API (productOfferSearch)
+ *   modo termo (Fase 26): DuckDuckGo HTML + Gemini 3.6 Flash (normalização)
  *   → aquisição oficial (Affiliate API · acquireAffiliateLink · READ-ONLY)
  *   → enriquecimento pelo SCRAPER EXISTENTE (imagens + preço observacional)
  *   → verificação determinística de identidade (shopId + itemId)

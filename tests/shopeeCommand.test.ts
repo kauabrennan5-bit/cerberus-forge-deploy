@@ -154,7 +154,12 @@ describe("runShopeeCommand — lote completo", () => {
 
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
-      products: [{ url: "https://shopee.com.br/product/1530442944/23794344926" }]
+      products: [{
+        url: "https://shopee.com.br/product/1530442944/23794344926",
+        shopId: "1530442944",
+        itemId: "23794344926",
+        title: "Produto Teste"
+      }]
     }));
 
     globalThis.fetch = makeTermFetch() as unknown as typeof globalThis.fetch;
@@ -189,7 +194,12 @@ describe("runShopeeCommand — lote completo", () => {
 
     shopeeDiscoveryModule.setTestDiscoveryOverride(async (q, limit) => ({
       success: true,
-      products: Array(limit).fill({ url: "https://shopee.com.br/product/1530442944/23794344926" })
+      products: Array(limit).fill({
+        url: "https://shopee.com.br/product/1530442944/23794344926",
+        shopId: "1530442944",
+        itemId: "23794344926",
+        title: "Produto Teste"
+      })
     }));
 
     const r = await runShopeeCommand("3 cozinha");
