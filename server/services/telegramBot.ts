@@ -87,7 +87,8 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
     const payload: any = {
       chat_id: chatId,
       text: text,
-      parse_mode: "HTML"
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     };
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
@@ -115,7 +116,8 @@ export async function sendTelegramPhoto(chatId: number | string, photoUrl: strin
       chat_id: chatId,
       photo: photoUrl,
       caption: caption,
-      parse_mode: "HTML"
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     };
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
@@ -134,7 +136,8 @@ export async function editTelegramMessageText(chatId: number | string, messageId
       chat_id: chatId,
       message_id: messageId,
       text: text,
-      parse_mode: "HTML"
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     };
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
@@ -161,7 +164,8 @@ export async function editTelegramMessageCaption(chatId: number | string, messag
       chat_id: chatId,
       message_id: messageId,
       caption: caption,
-      parse_mode: "HTML"
+      parse_mode: "HTML",
+      disable_web_page_preview: true
     };
     if (replyMarkup) {
       payload.reply_markup = replyMarkup;
