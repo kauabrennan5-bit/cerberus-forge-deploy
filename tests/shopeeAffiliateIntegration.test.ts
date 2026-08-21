@@ -111,6 +111,10 @@ function officialError(code: number, message = "oficial"): unknown {
   return { errors: [{ code, message }] };
 }
 
+function officialErrorWithExtensions(code: number, message = "oficial"): unknown {
+  return { errors: [{ message, extensions: { code } }] };
+}
+
 // ---------------------------------------------------------------------------
 // SHOPEE-01 — Catálogo de erros fechado (todos os kinds declarados e únicos).
 // ---------------------------------------------------------------------------
@@ -374,6 +378,24 @@ describe("SHOPEE-05 consulta oficial por produto (match estrito)", () => {
     return client.lookupProduct({ shopId: "715084914", itemId: "23794344926" }).then((r) => {
       assert.equal(r.status, "error");
       assert.equal(r.error?.kind, "SHOPEE_GRAPHQL_ERROR");
+    });
+  });
+
+  it("extrai código de erro oficial de extensions.code (SHOPEE-17)", () => {
+    // 10010 em extensions.code deve ser mapeado para SHOPEE_FORBIDDEN
+    const handle = makeMockTransport(() => ({
+      status: 200,
+      body: officialErrorWithExtensions(10010, "Cannot query field productOfferSearch"),
+    }));
+    const client = createShopeeApiClient({
+      appId: APP_ID,
+      secret: APP_SECRET,
+      transport: handle.transport,
+    });
+    return client.lookupProduct({ shopId: "715084914", itemId: "23794344926" }).then((r) => {
+      assert.equal(r.status, "error");
+      assert.equal(r.error?.kind, "SHOPEE_FORBIDDEN");
+      assert.equal(r.error?.message, "shopee_client_error:SHOPEE_FORBIDDEN:code_10010");
     });
   });
 });

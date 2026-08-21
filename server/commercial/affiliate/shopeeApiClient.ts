@@ -161,9 +161,16 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
    */
   function shopeeGraphqlErrorsToError(errors: unknown[], httpStatus: number | null = null): ShopeeClientError {
     const first = errors[0] as Record<string, unknown> | undefined;
-    const code = typeof first?.code === "number" ? first.code
-      : typeof first?.code === "string" ? first.code
-        : "unknown";
+    const extensions = first?.extensions as Record<string, unknown> | undefined;
+
+    // A Shopee entrega o código oficial em extensions.code (ex: 10010, 10020).
+    // Algumas implementações podem colocar no nível raiz; tentamos ambos.
+    const code = typeof extensions?.code === "number" ? extensions.code
+      : typeof extensions?.code === "string" ? extensions.code
+        : typeof first?.code === "number" ? first.code
+          : typeof first?.code === "string" ? first.code
+            : "unknown";
+
     const kind: ReturnType<typeof kindFromCode> = kindFromCode(code);
     return new ShopeeClientError(kind, `code_${code}`, httpStatus);
   }
