@@ -194,7 +194,11 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
 
   // Garantia de propriedades obrigatórias
   if (!review.createdAt) review.createdAt = Date.now();
-  if (!review.expiresAt) review.expiresAt = review.createdAt + SESSION_EXPIRATION_MS;
+  // BUG F02: Se o registro já possui expiresAt (ex: 24h do /shopee), não devemos 
+  // sobrepor com a constante global de sessão de 1h.
+  if (!review.expiresAt) {
+    review.expiresAt = review.createdAt + SESSION_EXPIRATION_MS;
+  }
   if (!review.status) review.status = "pending";
 
   // 3. Validação de expiração: Apenas altera o status se 'pending' e tempo estourado
@@ -237,7 +241,8 @@ export async function getLatestPendingReviewForUser(
 
       if (!error && data && data.length > 0 && data[0].data) {
         const rev = data[0].data as PendingReview;
-        if (now - rev.createdAt <= SESSION_EXPIRATION_MS) {
+        const expiresAt = rev.expiresAt || (rev.createdAt + SESSION_EXPIRATION_MS);
+        if (now < expiresAt) {
           return rev;
         }
       }
@@ -250,7 +255,8 @@ export async function getLatestPendingReviewForUser(
   const reviews = readReviewsFromFile();
   const userReviews = Object.values(reviews).filter((r) => {
     const matchUser = String(r.senderId) === sId || (cId && String(r.chatId) === cId);
-    const valid = now - r.createdAt <= SESSION_EXPIRATION_MS;
+    const expiresAt = r.expiresAt || (r.createdAt + SESSION_EXPIRATION_MS);
+    const valid = now < expiresAt;
     return matchUser && valid;
   });
 

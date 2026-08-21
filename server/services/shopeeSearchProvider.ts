@@ -1,6 +1,7 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import { GoogleGenAI } from "@google/genai";
+import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
 
 export interface ShopeeSearchCandidate {
   url: string;
@@ -46,39 +47,22 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
         const title = $(element).text().trim();
 
         if (href) {
-          // O DDG pode retornar URLs de redirecionamento ou diretas
-          // Vamos tentar extrair a URL real da Shopee
-          // Padrão 1: URL direta
-          const shopeeMatch = href.match(/https:\/\/shopee\.com\.br\/product\/(\d+)\/(\d+)/);
-          if (shopeeMatch) {
+          const identity = extractShopeeIdentity(href);
+          if (identity.shopId && identity.itemId) {
             candidates.push({
-              url: `https://shopee.com.br/product/${shopeeMatch[1]}/${shopeeMatch[2]}`,
-              shopId: shopeeMatch[1],
-              itemId: shopeeMatch[2],
+              url: `https://shopee.com.br/product/${identity.shopId}/${identity.itemId}`,
+              shopId: identity.shopId,
+              itemId: identity.itemId,
               rawTitle: title
             });
-          } else if (href.includes("shopee.com.br/product")) {
-            // Padrão 2: URL com parâmetros ou formatada diferentemente
-            const parts = href.split("shopee.com.br/product/")[1]?.split("/");
-            if (parts && parts.length >= 2) {
-              const shopId = parts[0].split("?")[0];
-              const itemId = parts[1].split("?")[0];
-              if (/^\d+$/.test(shopId) && /^\d+$/.test(itemId)) {
-                candidates.push({
-                  url: `https://shopee.com.br/product/${shopId}/${itemId}`,
-                  shopId,
-                  itemId,
-                  rawTitle: title
-                });
-              }
-            }
           }
         }
       });
     });
 
     } else {
-      console.warn(`[DDG Search] Bloqueio ou desafio detectado (Status: ${response.status}). Acionando fallback Gemini Grounding.`);
+      const reason = isBotChallenge ? "ddg_bot_challenge" : `ddg_http_${response.status}`;
+      console.warn(`[DDG Search] Bloqueio ou desafio detectado: ${reason}. Acionando fallback Gemini Grounding.`);
     }
 
     // Fallback: Gemini 3.6 Flash com Grounding se o DDG falhar ou não encontrar nada
@@ -93,21 +77,25 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
         
         const links = result.text.match(/https:\/\/shopee\.com\.br\/product\/\d+\/\d+/g) || [];
         for (const link of links) {
-          const parts = link.split("/");
-          const shopId = parts[4];
-          const itemId = parts[5];
-          if (shopId && itemId) {
+          const identity = extractShopeeIdentity(link);
+          if (identity.shopId && identity.itemId) {
             candidates.push({
-              url: `https://shopee.com.br/product/${shopId}/${itemId}`,
-              shopId,
-              itemId,
+              url: `https://shopee.com.br/product/${identity.shopId}/${identity.itemId}`,
+              shopId: identity.shopId,
+              itemId: identity.itemId,
               rawTitle: keyword // Título temporário, será normalizado pelo orquestrador
             });
           }
         }
         console.log(`[Gemini Discovery] Encontrados ${links.length} candidatos via Grounding.`);
       } catch (geminiError: any) {
-        console.error("[Gemini Discovery Fallback Error]", geminiError.message);
+        const isQuota = geminiError.message?.includes("429") || geminiError.message?.includes("RESOURCE_EXHAUSTED");
+        const reason = isQuota ? "gemini_quota_exceeded" : "gemini_error";
+        console.error(`[Gemini Discovery Fallback Error] ${reason}:`, geminiError.message);
+        // Se ambos falharam, lançamos erro com o motivo para o orquestrador
+        if (candidates.length === 0) {
+          throw new Error(reason);
+        }
       }
     }
 
@@ -133,23 +121,24 @@ export async function searchShopeeProductsDDG(keyword: string, limit: number = 2
         const links = result.text.match(/https:\/\/shopee\.com\.br\/product\/\d+\/\d+/g) || [];
         const geminiCandidates: ShopeeSearchCandidate[] = [];
         for (const link of links) {
-          const parts = link.split("/");
-          const shopId = parts[4];
-          const itemId = parts[5];
-          if (shopId && itemId) {
+          const identity = extractShopeeIdentity(link);
+          if (identity.shopId && identity.itemId) {
             geminiCandidates.push({
-              url: `https://shopee.com.br/product/${shopId}/${itemId}`,
-              shopId,
-              itemId,
+              url: `https://shopee.com.br/product/${identity.shopId}/${identity.itemId}`,
+              shopId: identity.shopId,
+              itemId: identity.itemId,
               rawTitle: keyword
             });
           }
         }
         return geminiCandidates.slice(0, limit);
-      } catch (geminiError) {
-        console.error("[Gemini Discovery Fallback Critical Error]", geminiError);
+      } catch (geminiError: any) {
+        const isQuota = geminiError.message?.includes("429") || geminiError.message?.includes("RESOURCE_EXHAUSTED");
+        const reason = isQuota ? "gemini_quota_exceeded" : "gemini_error";
+        console.error(`[Gemini Discovery Fallback Critical Error] ${reason}:`, geminiError.message);
+        throw new Error(reason);
       }
     }
-    return [];
+    throw error;
   }
 }

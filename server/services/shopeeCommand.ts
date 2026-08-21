@@ -28,7 +28,7 @@ import {
   createShopeeApiClient,
   type ShopeeApiClient,
 } from "../commercial/affiliate/shopeeApiClient";
-import { extractProductForReview } from "./productAutomation";
+import { extractProductForReview, extractMarketplaceId } from "./productAutomation";
 import {
   sendTelegramMessage,
   sendTelegramPhoto,
@@ -117,11 +117,21 @@ export function setTestShopeeClient(client: ShopeeApiClient | null): void {
 // ---------------------------------------------------------------
 // Identificadores do item — extraídos da URL oficial (padrão /{loja}/{shop}/{item})
 // ---------------------------------------------------------------
+import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
+
 function extractCanonicalShopeeIds(url: string): { shopId: string | null; itemId: string | null } {
-  const pattern = /\/(\d+)\/(\d+)\/?$/;
-  const match = pattern.exec(url.replace(/[#?].*$/, "").replace(/\/$/, ""));
-  if (!match) return { shopId: null, itemId: null };
-  return { shopId: match[1], itemId: match[2] };
+  const identity = extractShopeeIdentity(url);
+  if (identity.shopId && identity.itemId) {
+    return identity;
+  }
+  
+  // Fallback para compatibilidade com extrator de marketplace genérico
+  const mktId = extractMarketplaceId(url);
+  if (mktId && mktId.startsWith("shopee-")) {
+    const parts = mktId.split("-");
+    return { shopId: parts[1], itemId: parts[2] };
+  }
+  return { shopId: null, itemId: null };
 }
 
 // ---------------------------------------------------------------

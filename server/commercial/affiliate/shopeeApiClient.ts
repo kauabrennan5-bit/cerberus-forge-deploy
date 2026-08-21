@@ -515,6 +515,9 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
    * transporte/auth → ok=false (jamais transformar em sucesso);
    * resposta sem nós → ok=true, items=[] (descoberta vazia, lote fecha
    * fail-closed no orquestrador sem inventar itens).
+   * 
+   * @deprecated Esta operação não retorna resultados consistentes no App atual.
+   * Usar shopeeSearchProvider (DDG/Gemini) para descoberta resiliente.
    */
   async function searchOffers(params: { query: string; limit?: number }): Promise<SearchOffersResult> {
     const keyword = sanitizeSearchKeyword(params.query);
