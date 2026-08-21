@@ -848,6 +848,10 @@ function buildProviderMock(responder: (req: RecordedRequest) => { status: number
         state.transportCalls += 1;
         return inner.generateShortLink(...args);
       },
+      searchOffers: async (...args: Parameters<typeof inner.searchOffers>) => {
+        state.transportCalls += 1;
+        return inner.searchOffers(...args);
+      },
     };
   };
   const provider = createShopeeAffiliateProvider({

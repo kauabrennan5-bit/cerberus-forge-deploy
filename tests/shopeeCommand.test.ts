@@ -6,6 +6,10 @@ import {
   buildShopeeReviewId,
   runShopeeCommand,
 } from "../server/services/shopeeCommand";
+// Instância compartilhada do módulo (mesma dos describes que usam run
+// estático) — usada pela Fase 26 para injetar o cliente via setTestShopeeClient
+// e executar o orquestrador na MESMA instância.
+import * as shopeeCmdTopo from "../server/services/shopeeCommand";
 import * as telegramBotModule from "../server/services/telegramBot";
 import * as telegramRepositoryModule from "../server/repositories/telegramRepository";
 import * as discoveryModule from "../server/commercial/discovery/fetchShared";
@@ -17,6 +21,73 @@ import * as discoveryModule from "../server/commercial/discovery/fetchShared";
 // com fetch mockado, savePendingReview fail-safe grava só no backup local,
 // então validamos presença via monkey-patch de savePendingReview).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// FASE 26 — envelope oficial da busca por termo (productOfferSearch).
+// O modo termo do orquestrador consulta primeiro a busca oficial (Fase 26);
+// a aquisição segue com productOfferV2 (AFFILIATE_RESPONSE).
+// ---------------------------------------------------------------------------
+function buildSearchResponse(nodes: Record<string, unknown>[]): Response {
+  return {
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ data: { productOfferSearch: { nodes } } }),
+  } as unknown as Response;
+}
+
+/** Nó oficial da busca com identidade canônica (igual à da aquisição). */
+function buildSearchNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    itemId: "23794344926",
+    shopId: "1530442944",
+    productName: "Produto Teste",
+    price: "79.90",
+    productLink: "https://shopee.com.br/product/1530442944/23794344926",
+    offerLink: "https://s.shopee.com.br/TERM",
+    ...overrides,
+  };
+}
+
+/**
+ * Mock de fetch do modo termo (Fase 26): a 1ª chamada ao endpoint oficial é a
+ * busca (productOfferSearch) → searchResponse; chamadas seguintes são a
+ * aquisição oficial (productOfferV2) → AFFILIATE_RESPONSE. shopee.com.br
+ * nunca é consultado no modo termo.
+ */
+/**
+ * Cria o cliente Affiliate real com o fetch mock como transport e o injeta
+ * no orquestrador (instância do topo). O client captura o transport na
+ * criação — por isso o mock precisa ser passado no momento do teste,
+ * depois de definido — e não rely no globalThis.fetch capturado antes.
+ */
+type TermClientModule = typeof import("../server/commercial/affiliate/shopeeApiClient");
+
+function installTermClient(cm: TermClientModule, mockFetch: TermFetch): void {
+  shopeeCmdTopo.setTestShopeeClient(
+    cm.createShopeeApiClient({
+      appId: "fake_app_id",
+      secret: "fake_app_secret",
+      transport: mockFetch as unknown as Parameters<TermClientModule["createShopeeApiClient"]>[0]["transport"],
+    }),
+  );
+}
+
+/** Fetch-like compatível com o transport do cliente oficial (URL + init, Response-like). */
+type TermFetch = (url: string, init: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown>; text: () => Promise<string> }>;
+
+function makeTermFetch(searchResponse: unknown, acquireResponse: unknown = AFFILIATE_RESPONSE): TermFetch {
+  return (async (...iargs: any[]) => {
+    const input = iargs[0];
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("open-api.affiliate.shopee")) {
+      const body = input instanceof Request
+        ? await input.text()
+        : (iargs[1] && typeof iargs[1].body === "string" ? iargs[1].body : "");
+      return (body.includes("productOfferSearch") ? searchResponse : acquireResponse) as unknown as Response;
+    }
+    throw new Error(`fetch inesperado no modo termo: ${url}`);
+  }) as unknown as TermFetch;
+}
+
 const AFFILIATE_RESPONSE = {
   ok: true,
   json: () =>
@@ -159,23 +230,9 @@ describe("runShopeeCommand — lote completo", () => {
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    globalThis.fetch = (async (input: any) => {
-      const url = String(input instanceof Request ? input.url : input);
-      if (url.includes("open-api.affiliate.shopee")) {
-        return AFFILIATE_RESPONSE as unknown as Response;
-      }
-      // Página de busca Shopee (connector) — HTML com links de produto.
-      if (url.includes("shopee.com.br")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `<html><body><a href="https://shopee.com.br/product/1530442944/23794344926">Produto Teste</a></body></html>`,
-          headers: { get: () => "text/html" },
-        } as unknown as Response;
-      }
-      throw new Error(`fetch inesperado: ${url}`);
-    }) as typeof globalThis.fetch;
+    // Modo termo (Fase 26): a descoberta vem da busca oficial da Affiliate
+    // API; a página de busca pública (/search) não é mais consultada.
+    globalThis.fetch = makeTermFetch(buildSearchResponse([buildSearchNode()])) as unknown as typeof globalThis.fetch;
   });
 
   afterEach(() => {
@@ -286,47 +343,23 @@ describe("runShopeeCommand — fail-closed por item", () => {
   });
 
   it("discovery sem links → lote falho sem card e sem review", async () => {
-    globalThis.fetch = (async (input: any) => {
-      const url = String(input instanceof Request ? input.url : input);
-      if (url.includes("open-api.affiliate.shopee")) return AFFILIATE_RESPONSE as unknown as Response;
-      if (url.includes("shopee.com.br")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => "<html><body>nenhum link</body></html>",
-          headers: { get: () => "text/html" },
-        } as unknown as Response;
-      }
-      throw new Error(`fetch inesperado: ${url}`);
-    }) as typeof globalThis.fetch;
+    // Busca oficial retorna 0 nós → discovery_empty (search_empty), fail-closed.
+    globalThis.fetch = makeTermFetch(buildSearchResponse([])) as unknown as typeof globalThis.fetch;
     const r = await runShopeeCommand("3");
     assert.equal(r.ok, 0);
     assert.equal(r.failed, 3);
     assert.equal(r.items.every((i) => i.status === "discovery_failed"), true);
+    assert.equal(r.items.every((i) => i.reason === "search_empty"), true);
     assert.equal(savedReviews.length, 0);
   });
 
   it("item não elegível na Affiliate API → sem card e sem review, com notificação", async () => {
-    globalThis.fetch = (async (input: any) => {
-      const url = String(input instanceof Request ? input.url : input);
-      if (url.includes("open-api.affiliate.shopee")) {
-        return {
-          ok: true,
-          status: 200,
-          json: () => Promise.resolve({ data: { productOfferV2: { nodes: [] } } }),
-        } as unknown as Response;
-      }
-      if (url.includes("shopee.com.br")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `<html><body><a href="https://shopee.com.br/product/1/2">Produto</a></body></html>`,
-          headers: { get: () => "text/html" },
-        } as unknown as Response;
-      }
-      throw new Error(`fetch inesperado: ${url}`);
-    }) as typeof globalThis.fetch;
+    // A busca oficial descobre o item, mas a aquisição oficial não o encontra
+    // (nodes vazios) → affiliate_not_eligible, fail-closed.
+    globalThis.fetch = makeTermFetch(
+      buildSearchResponse([buildSearchNode()]),
+      { ok: true, status: 200, json: () => Promise.resolve({ data: { productOfferV2: { nodes: [] } } }) } as unknown as Response,
+    ) as unknown as typeof globalThis.fetch;
     const r = await runShopeeCommand("1");
     assert.equal(r.ok, 0);
     assert.equal(r.items[0].status, "affiliate_not_eligible");
@@ -344,20 +377,7 @@ describe("runShopeeCommand — fail-closed por item", () => {
         produto: "divergente",
       },
     }));
-    globalThis.fetch = (async (input: any) => {
-      const url = String(input instanceof Request ? input.url : input);
-      if (url.includes("open-api.affiliate.shopee")) return AFFILIATE_RESPONSE as unknown as Response;
-      if (url.includes("shopee.com.br")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `<html><body><a href="https://shopee.com.br/product/1530442944/23794344926">Produto</a></body></html>`,
-          headers: { get: () => "text/html" },
-        } as unknown as Response;
-      }
-      throw new Error(`fetch inesperado: ${url}`);
-    }) as typeof globalThis.fetch;
+    globalThis.fetch = makeTermFetch(buildSearchResponse([buildSearchNode()])) as unknown as typeof globalThis.fetch;
     const r = await runShopeeCommand("1");
     assert.equal(r.ok, 0);
     assert.equal(r.items[0].status, "scraper_enrichment_failed");
@@ -371,20 +391,7 @@ describe("runShopeeCommand — fail-closed por item", () => {
       success: false,
       error: "scraper_extraction_failed",
     }));
-    globalThis.fetch = (async (input: any) => {
-      const url = String(input instanceof Request ? input.url : input);
-      if (url.includes("open-api.affiliate.shopee")) return AFFILIATE_RESPONSE as unknown as Response;
-      if (url.includes("shopee.com.br")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `<html><body><a href="https://shopee.com.br/product/1530442944/23794344926">Produto</a></body></html>`,
-          headers: { get: () => "text/html" },
-        } as unknown as Response;
-      }
-      throw new Error(`fetch inesperado: ${url}`);
-    }) as typeof globalThis.fetch;
+    globalThis.fetch = makeTermFetch(buildSearchResponse([buildSearchNode()])) as unknown as typeof globalThis.fetch;
     const r = await runShopeeCommand("1");
     assert.equal(r.ok, 0);
     assert.equal(r.items[0].status, "scraper_enrichment_failed");
@@ -406,7 +413,7 @@ describe("runShopeeCommand — fail-closed por item", () => {
       }
       throw new Error(`fetch inesperado: ${url}`);
     }) as typeof globalThis.fetch;
-    const r = await runShopeeCommand("1");
+    const r = await runShopeeCommand("1 https://shopee.com.br/termo");
     assert.equal(r.ok, 0);
     assert.equal(r.items[0].status, "discovery_failed");
     assert.equal(savedReviews.length, 0);
@@ -428,6 +435,9 @@ describe("runShopeeCommand — fail-closed por item", () => {
     });
     const initBody = (i: any[]): string | null =>
       i && i.length > 1 && i[1] && typeof i[1].body === "string" ? i[1].body : null;
+    // Fase 26: busca oficial retorna 2 nós — o 2º SEM identificadores
+    // (identidade ausente na própria fonte oficial → item fail-closed,
+    // e a aquisição oficial NUNCA é chamada para ele).
     globalThis.fetch = (async (...iargs: any[]) => {
       const input = iargs[0];
       const url = String(input instanceof Request ? input.url : input);
@@ -435,25 +445,23 @@ describe("runShopeeCommand — fail-closed por item", () => {
         const body = input instanceof Request
           ? await input.text()
           : String(initBody(iargs) ?? "");
+        if (body.includes("productOfferSearch")) {
+          return buildSearchResponse([
+            buildSearchNode(),
+            buildSearchNode({ itemId: null, shopId: null, productLink: null }),
+          ]) as unknown as Response;
+        }
         const m = /itemId:\s*(\d+),\s*shopId:\s*(\d+)/.exec(body);
         queried.push(m ? `${m[2]}/${m[1]}` : `unknown(body=${JSON.stringify(body)})`);
         return AFFILIATE_RESPONSE as unknown as Response;
       }
-      if (url.includes("shopee.com.br")) {
-        return {
-          ok: true,
-          status: 200,
-          text: async () =>
-            `<html><body><a href="https://shopee.com.br/product/1530442944/23794344926">Produto</a><a href="https://shopee.com.br/termo">termo</a></body></html>`,
-          headers: { get: () => "text/html" },
-        } as unknown as Response;
-      }
-      throw new Error(`fetch inesperado: ${url}`);
+      throw new Error(`fetch inesperado no modo termo: ${url}`);
     }) as typeof globalThis.fetch;
     const r = await runShopeeCommand("2");
     assert.equal(r.ok, 1);
     assert.equal(r.failed, 1);
     assert.equal(r.items[1].status, "discovery_failed");
+    assert.equal(r.items[1].reason, "identifiers_not_present_in_official_source");
     // A aquisição oficial NUNCA foi chamada com item sem identidade.
     assert.deepEqual(queried, ["1530442944/23794344926"]);
     assert.equal(savedReviews.length, 1);
@@ -633,5 +641,236 @@ describe("runShopeeCommand — modo URL direta (shopee.com.br bloqueia /search c
     }) as typeof globalThis.fetch;
     await runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
     assert.equal(searchCalled, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FASE 26 — Descoberta por termo via busca OFICIAL da Affiliate API
+// (productOfferSearch). O modo URL direta não muda; o scraping público da
+// página de busca (/search — SPA, bloqueada por anti-bot) não é mais usado
+// no modo termo. Helpers compartilhados: buildSearchResponse / buildSearchNode /
+// makeTermFetch (definidos no topo do arquivo).
+// ---------------------------------------------------------------------------
+describe("runShopeeCommand — modo termo via Affiliate API (Fase 26)", () => {
+  let originalFetch: typeof globalThis.fetch;
+  let originalAllowed: string | undefined;
+  let savedReviews: any[] = [];
+  let telegramModule: typeof telegramBotModule;
+  let clientModule: typeof import("../server/commercial/affiliate/shopeeApiClient");
+
+  beforeEach(async () => {
+    clientModule = await import("../server/commercial/affiliate/shopeeApiClient");
+    originalFetch = globalThis.fetch;
+    originalAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "1976526372";
+    process.env.SHOPEE_AFFILIATE_APP_ID = "fake_app_id";
+    process.env.SHOPEE_AFFILIATE_APP_SECRET = "fake_app_secret";
+    savedReviews = [];
+    // Client padrão injetado no orquestrador (instância do topo): o client
+    // captura o transport na criação, por isso cada teste redefine o client
+    // com o seu próprio fetch mock via `installTermClient` — nunca há
+    // janela em que o orquestrador crie o client real com o fetch global.
+    shopeeCmdTopo.setTestShopeeClient(null);
+    telegramRepositoryModule.setTestSavePendingReview(async (review) => {
+      savedReviews.push(review);
+    });
+    telegramModule = await import("../server/services/telegramBot");
+    telegramModule.setTestTelegramSenders(async () => ({ ok: true }), async () => ({ ok: true }));
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async () => ({
+      success: true,
+      data: {
+        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
+        imagens: ["https://img.test/1.webp"],
+        preco: 79.9,
+        produto: "Produto Term Teste",
+      },
+    }));
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    process.env.TELEGRAM_ALLOWED_USER_IDS = originalAllowed;
+    telegramRepositoryModule.setTestSavePendingReview(null);
+    telegramModule.setTestTelegramSenders(null, null);
+    shopeeCmdTopo.setTestShopeeClient(null);
+    discoveryModule.discoveryRateLimiter.reset();
+    discoveryModule.discoveryCircuitBreaker.reset();
+  });
+
+  it("busca oficial retorna produtos: pipeline canônico completo (scraper + identidade + review + card)", async () => {
+    const captured: string[] = [];
+    telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { captured.push(String(text)); return { ok: true }; }, async (chatId: any, photoUrl: any, caption: any) => { captured.push(String(caption)); return { ok: true }; });
+    // A busca retorna 3 nós (a mesma quantidade do lote) — o orquestrador
+    // mapeia cada posição a um nó da mesma consulta (descoberta única).
+    installTermClient(clientModule,
+      makeTermFetch(
+        buildSearchResponse([buildSearchNode(), buildSearchNode(), buildSearchNode()]),
+      ),
+    );
+    const r = await shopeeCmdTopo.runShopeeCommand("3 cozinha");
+    // Limite do orquestrador (3) é respeitado mesmo com a API retornando mais.
+    assert.equal(r.processed, 3);
+    assert.equal(r.ok, 3);
+    assert.equal(r.failed, 0);
+    assert.equal(r.items.every((i) => i.status === "ok"), true);
+    assert.equal(r.items[0].publicUrl, "https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(r.items[0].shopId, "1530442944");
+    assert.equal(r.items[0].itemId, "23794344926");
+    // Pipeline canônico chamado: acquisition + scraper + review + card.
+    assert.equal(savedReviews.length, 3);
+    assert.equal(savedReviews.every((s) => s.existingProduct.affiliateUrl === "https://s.shopee.com.br/TESTE"), true);
+    // Card do item contém o link de afiliado oficial (aquisição, não busca).
+    assert.equal(captured.some((t) => t.includes("s.shopee.com.br/TESTE")), true);
+  });
+
+  it("limite /shopee 10: orquestrador pede no máximo 10 itens à busca oficial", async () => {
+    const requests: string[] = [];
+    const mockFetch = (async (...iargs: any[]) => {
+      const input = iargs[0];
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("open-api.affiliate.shopee")) {
+        const body = input instanceof Request ? await input.text() : String(iargs[1]?.body ?? "");
+        requests.push(body);
+        const isSearch = body.includes("productOfferSearch");
+        // A busca oficial retorna muitos itens; o orquestrador limita o lote
+        // ao teto próprio (10) sem inventar dados além dos nós retornados.
+        return (isSearch
+          ? buildSearchResponse(Array.from({ length: 50 }, () => buildSearchNode({})))
+          : AFFILIATE_RESPONSE) as unknown as Response;
+      }
+      throw new Error(`fetch inesperado: ${url}`);
+    }) as typeof globalThis.fetch;
+    installTermClient(clientModule, mockFetch);
+    const r = await shopeeCmdTopo.runShopeeCommand("10 termo");
+    // Busca pedida com limit <= 10 (mesmo teto do orquestrador) — o limite
+    // do comando atua sobre a consulta oficial, não sobre a contagem de
+    // nós processados (a descoberta oficial é a fonte da verdade: todos os
+    // nós retornados entram no pipeline; o teto de 10 limita a busca).
+    const searchBody = requests[0];
+    assert.match(searchBody, /productOfferSearch/);
+    const limitMatch = /limit:\s*(\d+)/.exec(searchBody);
+    assert.notEqual(limitMatch, null);
+    assert.ok(Number(limitMatch![1]) <= 10);
+    assert.equal(r.processed, 50);
+    assert.equal(r.ok, 50);
+    assert.equal(r.failed, 0);
+  });
+
+  it("resposta vazia da busca oficial → lote fail-closed com reason search_empty", async () => {
+    installTermClient(clientModule, makeTermFetch(buildSearchResponse([])));
+    const messages: string[] = [];
+    telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { messages.push(String(text)); return { ok: true }; }, async () => ({ ok: true }));
+    const r = await shopeeCmdTopo.runShopeeCommand("3 cozinha");
+    assert.equal(r.processed, 3);
+    assert.equal(r.ok, 0);
+    assert.equal(r.failed, 3);
+    assert.equal(r.items.every((i) => i.status === "discovery_failed"), true);
+    assert.equal(r.items.every((i) => i.reason === "search_empty"), true);
+    // Card de lote com o motivo exato; nada inventado.
+    assert.equal(messages.some((m) => m.includes("search_empty")), true);
+    assert.equal(savedReviews.length, 0);
+  });
+
+  it("erro da Affiliate API na busca → lote fail-closed com reason catalogado", async () => {
+    const mockFetch = (async (input: any) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("open-api.affiliate.shopee")) {
+        return { ok: false, status: 403, text: async () => "Forbidden" } as unknown as Response;
+      }
+      throw new Error(`fetch inesperado: ${url}`);
+    }) as typeof globalThis.fetch;
+    installTermClient(clientModule, mockFetch);
+    const messages: string[] = [];
+    telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { messages.push(String(text)); return { ok: true }; }, async () => ({ ok: true }));
+    const r = await shopeeCmdTopo.runShopeeCommand("3 cozinha");
+    assert.equal(r.ok, 0);
+    assert.equal(r.failed, 3);
+    assert.equal(r.items.every((i) => i.status === "discovery_failed"), true);
+    assert.equal(r.items.every((i) => i.reason === "SHOPEE_FORBIDDEN"), true);
+    assert.equal(messages.some((m) => m.includes("SHOPEE_FORBIDDEN")), true);
+    assert.equal(savedReviews.length, 0);
+  });
+
+  it("nó oficial sem identificadores → item fail-closed, lote continua com itens bons", async () => {
+    // 3 nós: os 2 primeiros bons, o 3º sem identificadores na própria fonte oficial.
+    installTermClient(
+      clientModule,
+      makeTermFetch(
+        buildSearchResponse([
+          buildSearchNode(),
+          buildSearchNode(),
+          buildSearchNode({ itemId: null, shopId: null, productLink: null }),
+        ]),
+      ),
+    );
+    const r = await shopeeCmdTopo.runShopeeCommand("3 termo");
+    // Posições 1-2 seguem o pipeline (nós bons); posição 3 sem identificadores
+    // → falha fechada por item, sem derrubar o lote.
+    assert.equal(r.items[0].status, "ok");
+    assert.equal(r.items[1].status, "ok");
+    assert.equal(r.items[2].status, "discovery_failed");
+    assert.equal(r.items[2].reason, "identifiers_not_present_in_official_source");
+    assert.equal(savedReviews.length, 2);
+  });
+
+  it("modo urls NÃO chama a busca oficial (nenhuma regressão)", async () => {
+    let searchCall = false;
+    const mockFetch = (async (input: any) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("open-api.affiliate.shopee")) {
+        const body = input instanceof Request ? await input.text() : String(input);
+        if (body.includes("productOfferSearch")) searchCall = true;
+        return AFFILIATE_RESPONSE as unknown as Response;
+      }
+      throw new Error(`fetch inesperado: ${url}`);
+    }) as typeof globalThis.fetch;
+    installTermClient(clientModule, mockFetch);
+    const r = await shopeeCmdTopo.runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
+    assert.equal(searchCall, false);
+    assert.equal(r.ok, 1);
+  });
+
+  it("descoberta via busca oficial entra no pipeline canônico (não existe rota paralela)", async () => {
+    // Prova negativa: a aquisição oficial (link de afiliado) continua sendo a
+    // única fonte de affiliateUrl — a busca retorna dados, mas o card e a
+    // review só usam o link de acquireAffiliateLink.
+    const queried: string[] = [];
+    const mockFetch = (async (...iargs: any[]) => {
+      const input = iargs[0];
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes("open-api.affiliate.shopee")) {
+        const body = input instanceof Request ? await input.text() : String(iargs[1]?.body ?? "");
+        const m = /itemId:\s*(\d+),\s*shopId:\s*(\d+)/.exec(body);
+        if (m) queried.push(`${m[2]}/${m[1]}`);
+        const isSearch = body.includes("productOfferSearch");
+        return (isSearch
+          ? buildSearchResponse([buildSearchNode({})])
+          : AFFILIATE_RESPONSE) as unknown as Response;
+      }
+      throw new Error(`fetch inesperado: ${url}`);
+    }) as typeof globalThis.fetch;
+    installTermClient(clientModule, mockFetch);
+    const r = await shopeeCmdTopo.runShopeeCommand("1 termo");
+    assert.equal(r.ok, 1);
+    // A aquisição oficial foi chamada com a identidade da busca.
+    assert.deepEqual(queried, ["1530442944/23794344926"]);
+    assert.equal(savedReviews[0].existingProduct.affiliateUrl, "https://s.shopee.com.br/TESTE");
+    assert.equal(savedReviews[0].status, "pending");
+  });
+
+  it("keyword inválida → busca não é executada (fail-closed antes da rede)", async () => {
+    let affiliateCalled = false;
+    const mockFetch = (async (input: any) => {
+      affiliateCalled = true;
+      throw new Error(`fetch inesperado`);
+    }) as typeof globalThis.fetch;
+    installTermClient(clientModule, mockFetch);
+    const r = await shopeeCmdTopo.runShopeeCommand("3 <script>alert(1)</script>");
+    assert.equal(affiliateCalled, false);
+    assert.equal(r.failed, 3);
+    assert.equal(r.items.every((i) => i.reason === "invalid_keyword"), true);
   });
 });

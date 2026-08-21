@@ -4,8 +4,9 @@
  * Comando operacional manual com aprovação humana obrigatória.
  *
  * FLUXO POR ITEM (idêntico ao preview-telegram validado na Fase 24):
- *   discovery (connector Shopee canônico)
- *   → aquisição oficial (Affiliate API · acquireAffiliateLink · UMA chamada READ-ONLY)
+ *   discovery — modo URL: extração oficial do padrão canônico ·
+ *   modo termo (Fase 26): busca oficial da Affiliate API (productOfferSearch)
+ *   → aquisição oficial (Affiliate API · acquireAffiliateLink · READ-ONLY)
  *   → enriquecimento pelo SCRAPER EXISTENTE (imagens + preço observacional)
  *   → verificação determinística de identidade (shopId + itemId)
  *   → PendingReview (Supabase · status=pending · TTL 24h)
@@ -23,10 +24,6 @@
  * - Cap estrito: 1 ≤ N ≤ 10. Fora disso → rejeição com sintaxe, zero ação.
  * - Pausa de lote entre itens (respeito ao rate limit Shopee).
  */
-import { shopeeConnector } from "../commercial/discovery/connectors/shopee";
-import {
-  extractShopeeIdentifiers,
-} from "../commercial/affiliate/shopeeClientContracts";
 import {
   createShopeeApiClient,
   type ShopeeApiClient,
@@ -46,6 +43,7 @@ import type { PendingReview } from "./telegramBot";
 // ---------------------------------------------------------------
 const MIN_ITEMS = 1;
 const MAX_ITEMS = 10;
+
 const LOT_PAUSE_MS = 3000; // pausa entre itens (respeito ao rate limit Shopee)
 const REVIEW_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -475,39 +473,46 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
         }
       }
     } else if (position === 1) {
-      // Busca única (respeito ao rate limit): os itens do lote vêm da mesma
-      // consulta, em ordem de leitura — sem buscas paralelas. O /search público
-      // pode retornar 403 (anti-bot da Shopee); nesse caso o lote fecha fail-closed
-      // com relatório do motivo, sem inventar dados.
-      const search = await shopeeConnector.search({ query: parsed.query, limit: parsed.count });
-      if (!search.ok || search.listings.length === 0) {
-        discoveryError = search.reason ?? "discovery_empty";
+      // Busca única por termo via Affiliate API oficial (Fase 26):
+      // a fonte de descoberta é a própria plataforma autoritária — sem
+      // scraping da página pública de busca (que não entrega resultados
+      // no HTML estático — SPA — e é bloqueada por anti-bot). O rate
+      // limit é respeitado: os itens do lote vêm da mesma consulta.
+      const search = await client.searchOffers({ query: parsed.query, limit: parsed.count });
+      if (!search.ok) {
+        discoveryError = search.reason ?? "search_failed";
+      } else if (search.items.length === 0) {
+        discoveryError = "search_empty";
       } else {
-        for (const listing of search.listings) {
-          const identity = extractShopeeIdentifiers(listing.source_url);
-          if (identity.shopId && identity.itemId) {
-            items.push({
-              position: items.length + 1,
-              status: "ok",
-              publicUrl: listing.source_url,
-              shopId: identity.shopId,
-              itemId: identity.itemId,
-              reviewId: null,
-              imageCount: 0,
-              reason: null,
-            });
-          } else {
+        for (const item of search.items) {
+          // Identidade oficial retornada pela fonte autoritária (jamais
+          // derivada de URL pública). Item sem identificadores → fail-closed
+          // por item, sem derrubar o lote.
+          if (!item.shopId || !item.itemId) {
             items.push({
               position: items.length + 1,
               status: "discovery_failed",
-              publicUrl: listing.source_url,
+              publicUrl: null,
               shopId: null,
               itemId: null,
               reviewId: null,
               imageCount: 0,
-              reason: "identifiers_not_extractable_from_url",
+              reason: "identifiers_not_present_in_official_source",
             });
+            continue;
           }
+          items.push({
+            position: items.length + 1,
+            status: "ok",
+            // URL oficial do produto retornado pela fonte autoritária;
+            // se ausente, usa o padrão canônico oficial (shop_id/item_id).
+            publicUrl: item.productLink ?? `https://shopee.com.br/product/${item.shopId}/${item.itemId}`,
+            shopId: item.shopId,
+            itemId: item.itemId,
+            reviewId: null,
+            imageCount: 0,
+            reason: null,
+          });
         }
       }
     }

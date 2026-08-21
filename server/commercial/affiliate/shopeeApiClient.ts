@@ -449,10 +449,151 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     return { status: "permanent", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, raw: null, error: err };
   }
 
+  // -------------------------------------------------------------------------
+  // Busca oficial por palavra-chave (descoberta autorizada do modo /shopee
+  // por termo — Fase 26, 2026-08-21). `productOfferSearch` é operação oficial
+  // da plataforma de afiliados BR (listada no contrato interno
+  // SHOPEE_OPERATIONS e confirmada na documentação da plataforma):
+  //   productOfferSearch(keyword: String, limit: Int) → { nodes: [ShopeeOfferV2] }
+  // com os mesmos campos de produto da fonte oficial de oferta
+  // (itemId, shopId, productName, price, productLink, offerLink).
+  // GOVERNANÇA: descoberta != aquisição — a presença do item na busca NÃO
+  // significa link de afiliado adquirido; a aquisição continua via
+  // acquireAffiliateLink por item (fail-closed, nada derivado).
+  // -------------------------------------------------------------------------
+
+  /** Limite seguro da palavra-chave oficial (evita query inválida/10010). */
+  const SH_KEYWORD_MAX_LENGTH = 60;
+
+  /** Keywords oficiais: alfanumérico + espaço/hífen/acento; vazio → invalid. */
+  function sanitizeSearchKeyword(raw: string): string | null {
+    const trimmed = raw.trim().slice(0, SH_KEYWORD_MAX_LENGTH);
+    if (trimmed.length === 0) return null;
+    if (!/^[a-zA-Z0-9À-ÿ .\-]+$/.test(trimmed)) return null;
+    return trimmed.replace(/\s{2,}/g, " ");
+  }
+
+  /** Item estável da busca oficial (tipos internos — sem vazamento GraphQL). */
+  interface SearchItem {
+    readonly shopId: string | null;
+    readonly itemId: string | null;
+    readonly name: string | null;
+    readonly price: number | null;
+    readonly productLink: string | null;
+    readonly offerLink: string | null;
+  }
+
+  /** Resultado estável da busca por termo — DISCOVERY, nunca aquisição. */
+  interface SearchOffersResult {
+    /** true quando a fonte oficial respondeu com estrutura utilizável (pode
+     *  ter 0 itens — resposta vazia é uma descoberta legítima, não erro). */
+    readonly ok: boolean;
+    /** Motivo quando ok=false (catálogo fechado, fail-closed): erro de rede,
+     *  auth, rate limit, operação indisponível ou keyword inválida. */
+    readonly reason?: string;
+    readonly items: ReadonlyArray<SearchItem>;
+    /** Status HTTP observado; null quando não houve resposta utilizável. */
+    readonly httpStatus: number | null;
+    /** Erro catalogado somente quando ok=false (falha de cliente/transporte). */
+    readonly error: ShopeeClientError | null;
+  }
+
+  /** Limite mínimo da busca por termo (a página pública não é fonte). */
+  const SEARCH_MIN_LIMIT = 1;
+  /** Limite máximo da busca por termo — mesmo teto do orquestrador. */
+  const SEARCH_MAX_LIMIT = 10;
+
+  /**
+   * Consulta oficial de busca por palavra-chave. Fail-closed: erro de
+   * transporte/auth → ok=false (jamais transformar em sucesso);
+   * resposta sem nós → ok=true, items=[] (descoberta vazia, lote fecha
+   * fail-closed no orquestrador sem inventar itens).
+   */
+  async function searchOffers(params: { query: string; limit?: number }): Promise<SearchOffersResult> {
+    const keyword = sanitizeSearchKeyword(params.query);
+    if (!keyword) {
+      return {
+        ok: false,
+        reason: "invalid_keyword",
+        items: [],
+        httpStatus: null,
+        error: new ShopeeClientError("SHOPEE_GRAPHQL_ERROR", "invalid_search_keyword"),
+      };
+    }
+    const limit = Math.min(
+      SEARCH_MAX_LIMIT,
+      Math.max(SEARCH_MIN_LIMIT, Math.floor(params.limit ?? 5) || SEARCH_MIN_LIMIT),
+    );
+    try {
+      const response = await signedGraphqlPost({
+        query: `{ productOfferSearch(keyword: ${JSON.stringify(keyword)}, limit: ${limit}) { nodes { itemId shopId productName price productLink offerLink } } }`,
+        variables: {},
+      });
+      return parseSearchResponse(response.json, response.httpStatus);
+    } catch (err) {
+      if (err instanceof ShopeeClientError) {
+        return {
+          ok: false,
+          reason: err.kind,
+          items: [],
+          httpStatus: err.httpStatus,
+          error: err,
+        };
+      }
+      return {
+        ok: false,
+        reason: "SHOPEE_UNKNOWN_ERROR",
+        items: [],
+        httpStatus: null,
+        error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected"),
+      };
+    }
+  }
+
+  /**
+   * Parse da resposta de busca oficial — mesmo contrato de nós da oferta
+   * (extractOfferNodes lê productOfferV2; a busca usa envelope próprio
+   * productOfferSearch — extração local, determinística, sem presumir).
+   */
+  function parseSearchResponse(json: unknown, httpStatus: number | null): SearchOffersResult {
+    if (!json || typeof json !== "object") {
+      return { ok: false, reason: "SHOPEE_INVALID_RESPONSE", items: [], httpStatus, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_object") };
+    }
+    const data = (json as Record<string, unknown>)?.data;
+    if (!data || typeof data !== "object") {
+      return { ok: false, reason: "SHOPEE_INVALID_RESPONSE", items: [], httpStatus, error: new ShopeeClientError("SHOPEE_INVALID_RESPONSE", "no_data_envelope") };
+    }
+    const search = (data as Record<string, unknown>).productOfferSearch;
+    if (!search || typeof search !== "object" || !Array.isArray((search as Record<string, unknown>).nodes)) {
+      return { ok: false, reason: "search_operation_unavailable", items: [], httpStatus, error: new ShopeeClientError("SHOPEE_GRAPHQL_ERROR", "no_search_nodes") };
+    }
+    const nodes = (search as Record<string, unknown>).nodes as unknown[];
+    const items: SearchItem[] = [];
+    for (const raw of nodes) {
+      if (!raw || typeof raw !== "object") continue;
+      const obj = raw as Record<string, unknown>;
+      items.push({
+        shopId: typeof obj.shopId === "number" ? String(obj.shopId) : typeof obj.shopId === "string" ? obj.shopId : null,
+        itemId: typeof obj.itemId === "number" ? String(obj.itemId) : typeof obj.itemId === "string" ? obj.itemId : null,
+        name:
+          typeof obj.productName === "string" && obj.productName.length > 0
+            ? obj.productName
+            : typeof obj.name === "string" && obj.name.length > 0
+              ? obj.name
+              : null,
+        price: parseShopeePriceString(obj.price),
+        productLink: typeof obj.productLink === "string" ? obj.productLink : null,
+        offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
+      });
+    }
+    return { ok: true, items, httpStatus, error: null };
+  }
+
   return {
     lookupProduct,
     acquireAffiliateLink,
     generateShortLink,
+    searchOffers,
   };
 }
 
