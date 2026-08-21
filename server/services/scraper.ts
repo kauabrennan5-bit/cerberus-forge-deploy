@@ -12,13 +12,32 @@ export interface ExtractedProductData {
   checkoutPrice: number | null;
   /** Condição explícita que acompanha checkoutPrice; nunca inferida. */
   checkoutPriceCondition: "pix" | "pix_with_coupon" | null;
+  /** Evidência promocional observada no mesmo documento do anúncio. */
+  promotionEvidence: ShopeePromotionEvidence | null;
   images: string[];
   rawContent: string;
+}
+
+export interface ShopeeCouponEvidence {
+  label: string;
+  amount: number;
+  minimumSpend: number | null;
+  source: "structured_voucher";
+}
+
+export interface ShopeePromotionEvidence {
+  source: "document_text" | "structured_voucher" | "combined";
+  observedAt: number;
+  expiresAt: number;
+  checkoutPrice: number | null;
+  checkoutPriceCondition: "pix" | "pix_with_coupon" | null;
+  coupon: ShopeeCouponEvidence | null;
 }
 
 const SCRAPER_TIMEOUT_MS = 15_000;
 const SCRAPER_MAX_HTML_BYTES = 750_000;
 const SCRAPER_MAX_OVERRIDE_CHARS = 10_000;
+export const SHOPEE_PROMOTION_EVIDENCE_TTL_MS = 15 * 60 * 1000;
 
 function isSafeMarketplaceUrl(url: URL): boolean {
   const host = url.hostname.toLowerCase();
@@ -171,6 +190,7 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
   const price = extractCorrectPrice(combinedContent, jsonLdResult.price, ogResult.price);
   const priceMax = extractShopeeVariantPriceMax(combinedContent, price);
   const checkoutOffer = extractShopeeCheckoutPriceOffer(combinedContent);
+  const promotionEvidence = isShopee ? extractShopeePromotionEvidence(combinedContent, checkoutOffer) : null;
 
   // LOG DE DEBUG SOLICITADO
   printScraperDebugLog({
@@ -215,6 +235,7 @@ export async function fetchProductDataFromUrl(urlStr: string, rawTextOverride?: 
     priceMax,
     checkoutPrice: checkoutOffer.price,
     checkoutPriceCondition: checkoutOffer.condition,
+    promotionEvidence,
     images,
     rawContent: fullRawContent
   };
@@ -266,6 +287,59 @@ export function extractShopeeCheckoutPriceOffer(content: string): {
     if (price > 0 && price < 100000) return { price, condition: candidate.condition };
   }
   return { price: null, condition: null };
+}
+
+/**
+ * Extrai um cupom apenas de um objeto serializado de voucher. Banners, campanhas
+ * globais e texto livre não são suficientes: o card pode informar um benefício
+ * somente quando há valor e rótulo no mesmo objeto estruturado do documento.
+ */
+export function extractShopeeCouponEvidence(content: string): ShopeeCouponEvidence | null {
+  const normalized = content.replace(/\\"/g, '"').replace(/&quot;/gi, '"');
+  const objects = normalized.matchAll(/"(?:voucher|voucher_info|coupon)"\s*:\s*\{([\s\S]{0,900}?)\}/gi);
+  for (const objectMatch of objects) {
+    const segment = objectMatch[1] ?? "";
+    const labelMatch = segment.match(/"(?:voucher_name|display_name|label|title)"\s*:\s*"([^"\\]{3,180})"/i);
+    const amountMatch = segment.match(/"(?:discount_value|discount_amount|voucher_value)"\s*:\s*"?(\d+(?:\.\d+)?)"?/i);
+    if (!labelMatch?.[1] || !amountMatch?.[1]) continue;
+    const amount = normalizeShopeePriceScale(amountMatch[1]);
+    if (amount === null || amount <= 0 || amount >= 100000) continue;
+    const minimumMatch = segment.match(/"(?:min_spend|minimum_spend|min_purchase)"\s*:\s*"?(\d+(?:\.\d+)?)"?/i);
+    const minimumSpend = minimumMatch?.[1] ? normalizeShopeePriceScale(minimumMatch[1]) : null;
+    return {
+      label: labelMatch[1].replace(/\s+/g, " ").trim().slice(0, 180),
+      amount,
+      minimumSpend: minimumSpend !== null && minimumSpend > 0 && minimumSpend < 100000 ? minimumSpend : null,
+      source: "structured_voucher",
+    };
+  }
+  return null;
+}
+
+/**
+ * Cria um registro observacional de curta duração. Ele não altera preço base,
+ * não afirma que o cupom será aplicável à conta e é omitido quando o documento
+ * não contém uma evidência explícita.
+ */
+export function extractShopeePromotionEvidence(
+  content: string,
+  checkoutOffer: { price: number | null; condition: "pix" | "pix_with_coupon" | null },
+  observedAt: number = Date.now(),
+): ShopeePromotionEvidence | null {
+  const coupon = extractShopeeCouponEvidence(content);
+  if (checkoutOffer.price === null && checkoutOffer.condition === null && coupon === null) return null;
+  return {
+    source: checkoutOffer.condition && coupon ? "combined" : coupon ? "structured_voucher" : "document_text",
+    observedAt,
+    expiresAt: observedAt + SHOPEE_PROMOTION_EVIDENCE_TTL_MS,
+    checkoutPrice: checkoutOffer.price,
+    checkoutPriceCondition: checkoutOffer.condition,
+    coupon,
+  };
+}
+
+export function isShopeePromotionEvidenceFresh(evidence: ShopeePromotionEvidence | null | undefined, now: number = Date.now()): boolean {
+  return Boolean(evidence && Number.isFinite(evidence.expiresAt) && evidence.expiresAt > now);
 }
 
 /**

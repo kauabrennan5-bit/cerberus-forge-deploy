@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert";
-import { extractCorrectPrice, extractShopeeCheckoutPriceOffer, extractShopeeVariantPriceMax } from "../server/services/scraper";
+import {
+  extractCorrectPrice,
+  extractShopeeCheckoutPriceOffer,
+  extractShopeeCouponEvidence,
+  extractShopeePromotionEvidence,
+  extractShopeeVariantPriceMax,
+  isShopeePromotionEvidenceFresh,
+  SHOPEE_PROMOTION_EVIDENCE_TTL_MS,
+} from "../server/services/scraper";
 
 test("Mercado Livre prioriza o preço de venda e ignora preço original e parcela", () => {
   const html = `
@@ -75,4 +83,41 @@ test("Shopee não calcula cupom genérico ou desconto Pix sem preço explicitame
     extractShopeeCheckoutPriceOffer(`<div>Cupons disponíveis. Economize no Pix ao finalizar a compra.</div>`),
     { price: null, condition: null },
   );
+});
+
+test("Shopee preserva cupom apenas quando um voucher estruturado informa rótulo e valor", () => {
+  const coupon = extractShopeeCouponEvidence(
+    `<script>window.__STATE__={"voucher":{"voucher_name":"R$20 OFF acima de R$179","discount_value":"2000000000","min_spend":"17900000000"}}</script>`,
+  );
+
+  assert.deepEqual(coupon, {
+    label: "R$20 OFF acima de R$179",
+    amount: 20,
+    minimumSpend: 179,
+    source: "structured_voucher",
+  });
+});
+
+test("Shopee rejeita cupom em banner solto, sem objeto estruturado do anúncio", () => {
+  assert.equal(extractShopeeCouponEvidence(`<aside>R$20 OFF acima de R$179 · CUPOM DO DIA</aside>`), null);
+});
+
+test("Shopee cria evidência de preço Pix e cupom com expiração curta", () => {
+  const observedAt = 1_700_000_000_000;
+  const content = `<script>{"voucher":{"label":"Cupom R$20 OFF","discount_amount":"2000000000","minimum_spend":"17900000000"}}</script><div>R$ 460,00 no Pix com cupom</div>`;
+  const offer = extractShopeeCheckoutPriceOffer(content);
+  const evidence = extractShopeePromotionEvidence(content, offer, observedAt);
+
+  assert.equal(evidence?.checkoutPrice, 460);
+  assert.equal(evidence?.checkoutPriceCondition, "pix_with_coupon");
+  assert.equal(evidence?.coupon?.amount, 20);
+  assert.equal(evidence?.coupon?.minimumSpend, 179);
+  assert.equal(evidence?.expiresAt, observedAt + SHOPEE_PROMOTION_EVIDENCE_TTL_MS);
+  assert.equal(isShopeePromotionEvidenceFresh(evidence, observedAt + SHOPEE_PROMOTION_EVIDENCE_TTL_MS - 1), true);
+  assert.equal(isShopeePromotionEvidenceFresh(evidence, observedAt + SHOPEE_PROMOTION_EVIDENCE_TTL_MS), false);
+});
+
+test("Shopee não cria evidência sem valor Pix vinculado ou voucher estruturado", () => {
+  const content = `<div>Use cupom e pague no Pix para economizar</div>`;
+  assert.equal(extractShopeePromotionEvidence(content, extractShopeeCheckoutPriceOffer(content), 1_700_000_000_000), null);
 });

@@ -29,6 +29,7 @@ import {
   type ShopeeApiClient,
 } from "../commercial/affiliate/shopeeApiClient";
 import { extractProductForReview, extractMarketplaceId } from "./productAutomation";
+import { isShopeePromotionEvidenceFresh, type ShopeePromotionEvidence } from "./scraper";
 import {
   sendTelegramMessage,
   sendTelegramPhoto,
@@ -123,6 +124,27 @@ export function setTestShopeeClient(client: ShopeeApiClient | null): void {
   testClientOverride = client;
 }
 
+/**
+ * Inspeção administrativa somente-leitura do schema oficial. O retorno contém
+ * somente nomes de campos; jamais loga credenciais, URLs de oferta ou payloads.
+ */
+export async function inspectShopeePromotionFields(): Promise<{
+  available: boolean;
+  nodeType: string | null;
+  fields: string[];
+  reason: string | null;
+}> {
+  const client = buildShopeeClient();
+  if (!client) return { available: false, nodeType: null, fields: [], reason: "credentials_not_configured" };
+  const result = await client.inspectPromotionFields();
+  return {
+    available: result.ok,
+    nodeType: result.nodeType,
+    fields: result.fields,
+    reason: result.reason,
+  };
+}
+
 // ---------------------------------------------------------------
 // Identificadores do item — extraídos da URL oficial (padrão /{loja}/{shop}/{item})
 // ---------------------------------------------------------------
@@ -214,6 +236,7 @@ async function enrichWithExistingScraper(params: {
   scraperPriceMax: number | null;
   scraperCheckoutPrice: number | null;
   scraperCheckoutPriceCondition: "pix" | "pix_with_coupon" | null;
+  promotionEvidence: ShopeePromotionEvidence | null;
   curatedTitle: string | null;
 }> {
   try {
@@ -227,6 +250,7 @@ async function enrichWithExistingScraper(params: {
         scraperPriceMax: null,
         scraperCheckoutPrice: null,
         scraperCheckoutPriceCondition: null,
+        promotionEvidence: null,
         curatedTitle: null,
       };
     }
@@ -238,7 +262,7 @@ async function enrichWithExistingScraper(params: {
       extracted.shopId === params.officialShopId &&
       extracted.itemId === params.officialItemId;
     if (!identityMatches) {
-      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, curatedTitle: null };
+      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, curatedTitle: null };
     }
     return {
       ok: true,
@@ -248,10 +272,11 @@ async function enrichWithExistingScraper(params: {
       scraperPriceMax: data.precoMaximo ?? null,
       scraperCheckoutPrice: data.precoCheckout ?? null,
       scraperCheckoutPriceCondition: data.condicaoPrecoCheckout ?? null,
+      promotionEvidence: data.evidenciaPromocional ?? null,
       curatedTitle: data.produto ?? null,
     };
   } catch {
-    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, curatedTitle: null };
+    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, curatedTitle: null };
   }
 }
 
@@ -279,6 +304,7 @@ function buildShopeeCardText(params: {
   priceSource: "affiliate_api" | "scraper_observacional";
   checkoutPrice: number | null;
   checkoutPriceCondition: "pix" | "pix_with_coupon" | null;
+  promotionEvidence: ShopeePromotionEvidence | null;
   productLink: string | null;
   affiliateUrl: string | null;
   shopId: string | null;
@@ -299,16 +325,25 @@ function buildShopeeCardText(params: {
   const priceLine = priceInfo
     ? `💰 <b>Preço do anúncio:</b> ${priceInfo}${priceSourceNote}${priceRange}`
     : `⚠️ <b>Preço:</b> não retornado por nenhuma das fontes`;
-  const checkoutPriceInfo = formatPreviewPrice(params.checkoutPrice);
-  const checkoutLine = params.checkoutPriceCondition === "pix_with_coupon"
+  const promotionFresh = isShopeePromotionEvidenceFresh(params.promotionEvidence);
+  const checkoutPriceInfo = formatPreviewPrice(promotionFresh ? params.promotionEvidence?.checkoutPrice ?? null : params.checkoutPrice);
+  const checkoutCondition = promotionFresh ? params.promotionEvidence?.checkoutPriceCondition ?? null : params.checkoutPriceCondition;
+  const checkoutLine = checkoutCondition === "pix_with_coupon"
     ? checkoutPriceInfo
       ? `🏷️ <b>Preço no Pix com cupom:</b> ${checkoutPriceInfo}\n<i>Condição exibida no anúncio; cupom e elegibilidade devem ser confirmados no checkout.</i>`
       : `🏷️ <b>Condição observada:</b> desconto no Pix com cupom pode estar disponível no checkout.\n<i>Não foi calculado nem prometido nenhum valor.</i>`
-    : params.checkoutPriceCondition === "pix"
+    : checkoutCondition === "pix"
       ? checkoutPriceInfo
         ? `🏷️ <b>Preço no Pix:</b> ${checkoutPriceInfo}\n<i>Condição exibida no anúncio; confirme a elegibilidade no checkout.</i>`
         : `🏷️ <b>Condição observada:</b> desconto no Pix pode estar disponível no checkout.\n<i>Não foi calculado nem prometido nenhum valor.</i>`
       : `ℹ️ <i>Pix, cupons, frete e elegibilidade podem alterar o total no checkout; este card não estima descontos.</i>`;
+  const coupon = promotionFresh ? params.promotionEvidence?.coupon ?? null : null;
+  const couponLine = coupon
+    ? `🎟️ <b>Cupom observado:</b> ${formatPreviewPrice(coupon.amount)} OFF${coupon.minimumSpend ? ` acima de ${formatPreviewPrice(coupon.minimumSpend)}` : ""}\n<i>Regra exibida no anúncio; disponibilidade, conta e validade devem ser confirmadas no checkout.</i>`
+    : "";
+  const evidenceLine = promotionFresh
+    ? `⏱️ <i>Condições promocionais observadas neste preview; podem mudar após ${new Date(params.promotionEvidence!.expiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" })}.</i>`
+    : "";
   const affiliateLine = params.affiliateUrl
     ? `<b>Link de afiliado:</b> <code>${params.affiliateUrl}</code>`
     : `<b>Link de afiliado:</b> <i>não elegível (fonte oficial não retornou offerLink)</i>`;
@@ -322,6 +357,8 @@ function buildShopeeCardText(params: {
     `🏷️ <b>Produto:</b> ${params.name ?? "<i>sem nome retornado</i>"}\n` +
     priceLine + `\n` +
     checkoutLine + `\n` +
+    (couponLine ? couponLine + `\n` : "") +
+    (evidenceLine ? evidenceLine + `\n` : "") +
     `🔗 <b>URL original:</b> <code>${params.productLink ?? "?"}</code>\n` +
     `${affiliateLine}\n` +
     `${imageLine}\n` +
@@ -338,6 +375,7 @@ function buildPreviewKeyboard(reviewId: string) {
       // o lifecycle de publicação e só confirma sucesso após Supabase, sync e
       // validação da vitrine pública.
       [{ text: "✅ PUBLICAR", callback_data: `confirm_pub:${reviewId}` }],
+      [{ text: "🏷️ AJUSTAR PROMOÇÃO", callback_data: `promo_edit:${reviewId}` }],
       [{ text: "❌ DESCARTAR", callback_data: `cancel_rev:${reviewId}` }],
     ],
   };
@@ -774,6 +812,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
         shopId: item.shopId,
         itemId: item.itemId,
       },
+      promotionEvidence: enriched.promotionEvidence,
     };
     try {
       await savePendingReview(review);
@@ -792,6 +831,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       priceSource: hasScrapedPrice ? "scraper_observacional" : "affiliate_api",
       checkoutPrice: enriched.scraperCheckoutPrice,
       checkoutPriceCondition: enriched.scraperCheckoutPriceCondition,
+      promotionEvidence: enriched.promotionEvidence,
       productLink: acquisition.productLink,
       affiliateUrl: acquisition.affiliateUrl,
       shopId: acquisition.shopId,

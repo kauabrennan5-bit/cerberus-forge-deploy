@@ -443,6 +443,45 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     }
   }
 
+  /**
+   * Descobre, por introspecção autenticada e somente-leitura, quais campos o
+   * tipo real de productOfferV2 permite retornar. Não altera a consulta de
+   * descoberta/aquisição e não registra payloads, credenciais ou valores.
+   */
+  async function inspectPromotionFields(): Promise<{
+    ok: boolean;
+    nodeType: string | null;
+    fields: string[];
+    reason: string | null;
+  }> {
+    try {
+      const typeResponse = await signedGraphqlPost({
+        query: "{ productOfferV2(itemId: 46816332146, shopId: 852965232, limit: 1) { nodes { __typename } } }",
+        variables: {},
+      });
+      const root = typeResponse.json as { data?: { productOfferV2?: { nodes?: Array<{ __typename?: unknown }> } } };
+      const nodeType = root.data?.productOfferV2?.nodes?.[0]?.__typename;
+      if (typeof nodeType !== "string" || nodeType.length === 0) {
+        return { ok: false, nodeType: null, fields: [], reason: "node_type_unavailable" };
+      }
+      const schemaResponse = await signedGraphqlPost({
+        query: `query { __type(name: ${JSON.stringify(nodeType)}) { fields { name } } }`,
+        variables: {},
+      });
+      const schema = schemaResponse.json as { data?: { __type?: { fields?: Array<{ name?: unknown }> } } };
+      const fields = (schema.data?.__type?.fields ?? [])
+        .map((field) => field.name)
+        .filter((name): name is string => typeof name === "string")
+        .sort();
+      return fields.length > 0
+        ? { ok: true, nodeType, fields, reason: null }
+        : { ok: false, nodeType, fields: [], reason: "fields_unavailable" };
+    } catch (err) {
+      const reason = err instanceof ShopeeClientError ? err.kind : "unexpected";
+      return { ok: false, nodeType: null, fields: [], reason };
+    }
+  }
+
   function mapKindToStatus(err: ShopeeClientError): ShopeeAffiliateAcquisitionResult {
     if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") {
       return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
@@ -601,6 +640,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     acquireAffiliateLink,
     generateShortLink,
     searchOffers,
+    inspectPromotionFields,
   };
 }
 

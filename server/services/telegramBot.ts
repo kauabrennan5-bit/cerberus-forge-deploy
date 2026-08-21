@@ -19,7 +19,8 @@ import { runDiscoverBatchCommand } from "../commercial/facilitator/discoverBatch
 // FASE 25B (Commit 1) — painel de leitura Telegram (comandos read-only).
 import * as telegramPanel from "./telegramPanel";
 // FASE 25C (Commit 2) — orquestrador /shopee N (discovery → Affiliate → scraper → cards).
-import { runShopeeCommand } from "./shopeeCommand";
+import { inspectShopeePromotionFields, runShopeeCommand } from "./shopeeCommand";
+import type { ShopeePromotionEvidence } from "./scraper";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -264,6 +265,39 @@ export interface PendingReview {
   cardMessageId?: number;
   existingProduct?: any;
   lifecycle?: LifecycleRecord;
+  /** Metadado observacional do preview; nunca substitui preco no produto canônico. */
+  promotionEvidence?: ShopeePromotionEvidence | null;
+  /** Ajuste humano de oferta, auditável e separado do preço-base canônico. */
+  promotionReview?: {
+    price: number;
+    condition: "pix" | "pix_with_coupon" | "coupon" | "other";
+    benefits: string[];
+    source: "admin_confirmed";
+    confirmedAt: number;
+  } | null;
+  /** Rascunho temporário da oferta humana, removido ao confirmar ou cancelar. */
+  promotionDraft?: {
+    price: number;
+    condition: "pix" | "pix_with_coupon" | "coupon" | "other" | null;
+    benefits: string[];
+  } | null;
+}
+
+function formatPromotionCondition(condition: NonNullable<PendingReview["promotionReview"]>["condition"]): string {
+  if (condition === "pix") return "no Pix";
+  if (condition === "pix_with_coupon") return "no Pix com cupom";
+  if (condition === "coupon") return "com cupom";
+  return "sob condição observada";
+}
+
+function renderPromotionReview(review: PendingReview): string {
+  const promotion = review.promotionReview;
+  if (!promotion) return "";
+  const price = `R$ ${promotion.price.toFixed(2).replace(".", ",")}`;
+  const benefits = promotion.benefits.length > 0
+    ? `\nBenefícios observados:\n${promotion.benefits.map((benefit) => `• ${benefit}`).join("\n")}`
+    : "";
+  return `\n🏷️ <b>Oferta promocional confirmada manualmente:</b> ${price} ${formatPromotionCondition(promotion.condition)}${benefits}\n<i>Não substitui o preço-base canônico; condições devem ser confirmadas no checkout.</i>`;
 }
 
 function buildReviewCardText(review: PendingReview): string {
@@ -275,6 +309,7 @@ function buildReviewCardText(review: PendingReview): string {
          `🏷️ <b>Produto:</b> ${review.produto}\n` +
          `📁 <b>Categoria:</b> ${review.categoria}\n` +
          `💰 <b>Preço:</b> ${precoStr}\n` +
+         renderPromotionReview(review) + `\n` +
          `🛒 <b>Marketplace:</b> ${lifecycle?.candidate.marketplace || detectMarketplace(review.normalizedUrl)}\n` +
          `🔗 <b>Link:</b> <code>${review.normalizedUrl}</code>\n\n` +
          `Estado: <b>${lifecycle?.state || "PENDING_APPROVAL"}</b>\n` +
@@ -289,6 +324,7 @@ function buildMainReviewKeyboard(reviewId: string) {
       [{ text: "✅ Confirmar & Publicar", callback_data: `confirm_pub:${reviewId}` }],
       [
         { text: "💰 Alterar Preço", callback_data: `edit_price:${reviewId}` },
+        { text: "🏷️ Ajustar Promoção", callback_data: `promo_edit:${reviewId}` },
         { text: "📁 Alterar Categoria", callback_data: `edit_cat:${reviewId}` }
       ],
       [{ text: "🔎 Ver detalhes", callback_data: `review_details:${reviewId}` }, { text: "❌ Rejeitar", callback_data: `cancel_rev:${reviewId}` }]
@@ -1228,7 +1264,10 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         await telegramRepo.savePendingReview(review);
         await telegramRepo.deleteUserState(senderId);
 
-        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço: R$ ${publishedProduct.preco.toFixed(2).replace(".", ",")}\n🆔 Operação: <code>${lifecycle.operationId || "confirmada"}</code>\n\nSupabase gravado, catálogo sincronizado e vitrine pública validada.`;
+        const promotionNote = review.promotionReview
+          ? `\n\n🏷️ Oferta promocional registrada na revisão: <b>R$ ${review.promotionReview.price.toFixed(2).replace(".", ",")}</b> ${formatPromotionCondition(review.promotionReview.condition)}.\n<i>O catálogo preserva o preço-base canônico; confirmação no checkout continua necessária.</i>`
+          : "";
+        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço-base: R$ ${publishedProduct.preco.toFixed(2).replace(".", ",")}\n🆔 Operação: <code>${lifecycle.operationId || "confirmada"}</code>${promotionNote}\n\nSupabase gravado, catálogo sincronizado e vitrine pública validada.`;
         // O card Shopee pode ser foto ou texto. Uma nova mensagem funciona em
         // ambos os casos; editMessageCaption falha para cards enviados como
         // texto e não pode ser a única confirmação de publicação.
@@ -1272,6 +1311,73 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       await telegramRepo.setUserState(senderId, { action: "awaiting_price", reviewId });
       await answerCallbackQuery(callbackId, "Digite o novo preço:");
       if (chatId) await sendTelegramMessage(chatId, "💰 <b>DIGITE O NOVO PREÇO EM REAIS:</b>\nExemplo: <code>189,90</code>");
+      return;
+    }
+
+    if (data.startsWith("promo_edit:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("promo_edit", reviewId, chatId, review);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, validation.reason, true);
+        return;
+      }
+      await telegramRepo.setUserState(senderId, { action: "awaiting_promotion_price", reviewId });
+      await answerCallbackQuery(callbackId, "Digite o preço promocional observado.");
+      if (chatId) await sendTelegramMessage(chatId, "🏷️ <b>AJUSTAR PREÇO PROMOCIONAL</b>\n\nDigite o valor exibido no anúncio. Exemplo: <code>264,44</code>\n\n<i>Esse valor será registrado separadamente do preço-base e exigirá confirmação.</i>");
+      return;
+    }
+
+    if (data.startsWith("promo_condition:")) {
+      const condition = data.split(":")[1] as "pix" | "pix_with_coupon" | "coupon" | "other";
+      const userState = await telegramRepo.getUserState(senderId);
+      const review = userState?.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (!userState || userState.action !== "awaiting_promotion_condition" || !review?.promotionDraft) {
+        await answerCallbackQuery(callbackId, "Ajuste promocional não encontrado ou expirado.", true);
+        return;
+      }
+      review.promotionDraft.condition = condition;
+      await telegramRepo.savePendingReview(review);
+      await telegramRepo.setUserState(senderId, { action: "awaiting_promotion_benefits", reviewId: userState.reviewId });
+      await answerCallbackQuery(callbackId, "Condição registrada.");
+      if (chatId) await sendTelegramMessage(chatId, "🧾 Informe benefícios observados, um por linha (ex.: <code>Compre R$200 e ganhe R$6 off</code>).\n\nEnvie <code>-</code> se não houver benefício adicional.");
+      return;
+    }
+
+    if (data.startsWith("promo_confirm:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const userState = await telegramRepo.getUserState(senderId);
+      const validation = logAndValidateReviewCallback("promo_confirm", reviewId, chatId, review);
+      if (!validation.valid || !review || !userState || userState.action !== "confirm_promotion" || userState.reviewId !== reviewId || !review.promotionDraft?.price || !review.promotionDraft.condition) {
+        await answerCallbackQuery(callbackId, "Ajuste promocional inválido ou expirado.", true);
+        return;
+      }
+      review.promotionReview = {
+        price: review.promotionDraft.price,
+        condition: review.promotionDraft.condition,
+        benefits: review.promotionDraft.benefits,
+        source: "admin_confirmed",
+        confirmedAt: Date.now(),
+      };
+      review.promotionDraft = null;
+      await telegramRepo.savePendingReview(review);
+      await telegramRepo.deleteUserState(senderId);
+      await answerCallbackQuery(callbackId, "Oferta promocional registrada.");
+      if (chatId) await sendTelegramMessage(chatId, `✅ <b>OFERTA PROMOCIONAL REGISTRADA</b>\n\nPreço-base: <b>R$ ${review.preco.toFixed(2).replace(".", ",")}</b>${renderPromotionReview(review)}\n\n<i>O produto não foi publicado nem teve o preço-base alterado.</i>`);
+      return;
+    }
+
+    if (data.startsWith("promo_cancel:")) {
+      const userState = await telegramRepo.getUserState(senderId);
+      const review = userState?.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (review?.promotionDraft) {
+        review.promotionDraft = null;
+        await telegramRepo.savePendingReview(review);
+      }
+      await telegramRepo.deleteUserState(senderId);
+      await answerCallbackQuery(callbackId, "Ajuste promocional cancelado.");
+      if (chatId) await sendTelegramMessage(chatId, "❌ Ajuste promocional cancelado. Nenhum dado foi alterado.");
       return;
     }
 
@@ -1344,6 +1450,20 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderApproved());
       return;
     }
+    // /shopee-schema — inspeção autenticada e somente-leitura do schema oficial.
+    // O comando é alcançável somente depois da whitelist administradora acima.
+    if (text === "/shopee-schema") {
+      const inspection = await inspectShopeePromotionFields();
+      if (!chatId) return;
+      if (!inspection.available) {
+        await sendTelegramMessage(chatId, `⚠️ <b>SCHEMA SHOPEE INDISPONÍVEL</b>\n\nMotivo: <code>${inspection.reason ?? "não informado"}</code>\nNenhuma query de produto foi alterada.`);
+        return;
+      }
+      const promotionFields = inspection.fields.filter((field) => /price|discount|coupon|voucher|promo|campaign|shipping|freight/i.test(field));
+      await sendTelegramMessage(chatId, `🔎 <b>SCHEMA OFICIAL SHOPEE — SOMENTE LEITURA</b>\n\nTipo: <code>${inspection.nodeType}</code>\nCampos promocionais/localizados: <code>${promotionFields.join(", ") || "nenhum"}</code>\n\n<i>Nenhuma query de descoberta, link de afiliado, review ou produto foi alterada.</i>`);
+      return;
+    }
+
     // /shopee N — orquestrador de lote (FASE 25C):
     //   discovery Shopee → aquisição oficial → scraper → identidade →
     //   PendingReview → cards. ZERO publicação automática.
@@ -1813,6 +1933,57 @@ async function renderCycleState(input: string): Promise<string> {
         else if (targetReview.imagens[0]) await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
         else await sendTelegramMessage(chatId, updatedCardText, keyboard);
       }
+      return;
+    }
+
+    if (userState && userState.action === "awaiting_promotion_price") {
+      const price = parseAndNormalizePrice(text);
+      if (price === null || price <= 0) {
+        if (chatId) await sendTelegramMessage(chatId, "❌ Valor promocional inválido. Envie um valor como <code>264,44</code>.");
+        return;
+      }
+      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (!targetReview) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ A revisão não está mais disponível para receber a promoção.");
+        return;
+      }
+      targetReview.promotionDraft = { price, condition: null, benefits: [] };
+      await telegramRepo.savePendingReview(targetReview);
+      await telegramRepo.setUserState(senderId, { action: "awaiting_promotion_condition", reviewId: userState.reviewId });
+      if (chatId) await sendTelegramMessage(chatId, "🏷️ <b>QUAL CONDIÇÃO ACOMPANHA ESSE VALOR?</b>", {
+        inline_keyboard: [
+          [{ text: "Pix", callback_data: "promo_condition:pix" }, { text: "Pix com cupom", callback_data: "promo_condition:pix_with_coupon" }],
+          [{ text: "Cupom", callback_data: "promo_condition:coupon" }, { text: "Outra condição", callback_data: "promo_condition:other" }],
+          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],
+        ],
+      });
+      return;
+    }
+
+    if (userState && userState.action === "awaiting_promotion_benefits") {
+      const benefits = text.trim() === "-"
+        ? []
+        : text.split(/\n|;/)
+          .map((value) => value.replace(/\s+/g, " ").trim())
+          .filter((value) => value.length >= 3 && value.length <= 180)
+          .slice(0, 5);
+      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (!targetReview?.promotionDraft?.condition) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ O rascunho promocional não está mais disponível. Inicie o ajuste novamente.");
+        return;
+      }
+      targetReview.promotionDraft.benefits = benefits;
+      await telegramRepo.savePendingReview(targetReview);
+      await telegramRepo.setUserState(senderId, { action: "confirm_promotion", reviewId: userState.reviewId });
+      const price = `R$ ${targetReview.promotionDraft.price.toFixed(2).replace(".", ",")}`;
+      if (chatId) await sendTelegramMessage(chatId, `🔎 <b>CONFIRMAR OFERTA PROMOCIONAL</b>\n\nPreço promocional: <b>${price}</b> ${formatPromotionCondition(targetReview.promotionDraft.condition)}\nBenefícios: ${benefits.length > 0 ? benefits.map((benefit) => `\n• ${benefit}`).join("") : "não informado"}\n\n<i>O preço-base canônico não será alterado.</i>`, {
+        inline_keyboard: [
+          [{ text: "✅ Confirmar oferta", callback_data: `promo_confirm:${userState.reviewId}` }],
+          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],
+        ],
+      });
       return;
     }
 

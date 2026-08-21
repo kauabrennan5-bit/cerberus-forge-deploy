@@ -3,7 +3,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { Product } from "../../src/types";
 import { generateSlug } from "../../src/data/initialProducts";
 import * as productsRepository from "../repositories/productsRepository";
-import { fetchProductDataFromUrl, extractTitleFromUrl } from "./scraper";
+import { fetchProductDataFromUrl, extractTitleFromUrl, type ShopeePromotionEvidence } from "./scraper";
 import { detectMarketplace } from "./marketplace";
 import { ExternalCallBudget } from "./operationalGuards";
 import { containsRawPayloadMarkers } from "./productLifecycle";
@@ -334,6 +334,7 @@ export interface ExtractedReviewData {
   precoMaximo?: number | null;
   precoCheckout?: number | null;
   condicaoPrecoCheckout?: "pix" | "pix_with_coupon" | null;
+  evidenciaPromocional?: ShopeePromotionEvidence | null;
   imagens: string[];
   descricao: string;
   existingProduct: Product | null;
@@ -383,6 +384,7 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     const scrapedPriceMax = scraped.priceMax;
     const scrapedCheckoutPrice = scraped.checkoutPrice;
     const scrapedCheckoutPriceCondition = scraped.checkoutPriceCondition;
+    const scrapedPromotionEvidence = scraped.promotionEvidence;
     const scrapedImages = scraped.images || [];
     const rawContent = scraped.rawContent;
 
@@ -522,6 +524,7 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
         precoMaximo: scrapedPriceMax,
         precoCheckout: scrapedCheckoutPrice,
         condicaoPrecoCheckout: scrapedCheckoutPriceCondition,
+        evidenciaPromocional: scrapedPromotionEvidence,
         imagens: scrapedImages,
         descricao: curatedDescription,
         existingProduct

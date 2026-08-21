@@ -64,3 +64,29 @@ test("acquireAffiliateLink preserva o preço atual retornado para o item oficial
   assert.equal(result.status, "link_acquired");
   assert.equal(result.price, 79.9);
 });
+
+test("inspectPromotionFields usa apenas introspecção e retorna nomes de campos promocionais disponíveis", async () => {
+  const payloads: string[] = [];
+  let call = 0;
+  const client = createShopeeApiClient({
+    appId: "test-app",
+    secret: "test-secret",
+    transport: async (_url, init) => {
+      payloads.push(init.body);
+      call += 1;
+      const body = call === 1
+        ? { data: { productOfferV2: { nodes: [{ __typename: "ProductOfferNode" }] } } }
+        : { data: { __type: { fields: [{ name: "price" }, { name: "promotionPrice" }, { name: "couponLabel" }] } } };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const result = await client.inspectPromotionFields();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.nodeType, "ProductOfferNode");
+  assert.deepEqual(result.fields, ["couponLabel", "price", "promotionPrice"]);
+  assert.match(payloads[0] ?? "", /__typename/);
+  assert.match(payloads[1] ?? "", /__type/);
+  assert.doesNotMatch(payloads.join("\n"), /offerLink/);
+});
