@@ -50,6 +50,7 @@ import {
 } from "./server/commercial/affiliate/acquisitionService";
 import { createShopeeAffiliateProvider } from "./server/commercial/affiliate/shopeeAffiliateProvider";
 import { registerCycleRoutes } from "./server/routes/cycleRoutes";
+import diagRoutes from "./server/routes/diagRoutes";
 // Fase 23 — PREVIEW != PUBLICATION: rota de preview manual Shopee Affiliate →
 // Telegram com decisão humana registrada (approve_only), sem automação de publicação.
 import { setupPreviewTelegramRoutes } from "./server/routes/previewTelegramRoutes";
@@ -1194,6 +1195,10 @@ NUNCA modifique ou invente preços ou imagens.`,
     setCycleClient(productsRepository.supabase as any);
   }
   registerCycleRoutes(app, requireAdminAuth, productsRepository.supabase);
+
+  // Rotas de Diagnóstico da Fase 26
+  app.use("/api", diagRoutes);
+
   // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
     // In dev, serve public first
