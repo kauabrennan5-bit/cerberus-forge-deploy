@@ -1,1 +1,29 @@
-[]
+[
+  {
+    "id": "prod-1787351832260",
+    "ref": "REF-016",
+    "slug": "luminaria-pendente-de-vidro-estilo-bauhaus-luminaria-para-sala-de-jantar-decoracao-vintage-casa-lampu-gantung",
+    "produto": "Luminaria Pendente De Vidro Estilo Bauhaus Luminaria Para Sala De Jantar Decoracao Vintage Casa Lampu Gantung",
+    "preco": 519,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-8258u-mqvn863wq3gn92",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8257y-mqvn86ihg26i2b"
+    ],
+    "link": "https://s.shopee.com.br/2gAX6IixPg",
+    "categoria": "Afiliado",
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-21T22:37:12.436297+00:00",
+    "ofertaPromocional": {
+      "price": 464,
+      "condition": "pix",
+      "benefits": [
+        "Envie"
+      ],
+      "source": "admin_confirmed",
+      "confirmedAt": 1787372973799
+    },
+    "ativo": true,
+    "status": "published"
+  }
+]
