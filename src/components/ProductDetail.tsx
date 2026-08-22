@@ -40,6 +40,14 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   // Touch Swipe tracking
   const touchStartX = useRef<number | null>(null);
   const touchEndX = useRef<number | null>(null);
+  const relatedRailRef = useRef<HTMLDivElement>(null);
+
+  const scrollRelatedProducts = (direction: number) => {
+    relatedRailRef.current?.scrollBy({
+      left: direction * Math.max(240, relatedRailRef.current.clientWidth * 0.82),
+      behavior: 'smooth',
+    });
+  };
 
   const images = product.imagens && product.imagens.length > 0
     ? product.imagens.filter((_, idx) => !imageError[idx])
@@ -376,28 +384,58 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
 
       {relatedProducts.length > 0 && (
         <section aria-labelledby="related-products-title" className="border-t border-[#3A342E] pt-5 sm:pt-7 animate-fade-in">
-          <div className="mb-3 flex min-w-0 items-end justify-between gap-3 sm:mb-4">
+          <div className="mb-3 flex min-w-0 flex-col gap-2 sm:mb-4 sm:flex-row sm:items-end sm:justify-between">
             <div className="min-w-0">
               <p className="text-[9px] font-display uppercase tracking-[0.22em] text-[#8A1F1F]">Da mesma curadoria</p>
-              <h2 id="related-products-title" className="mt-1 font-gothic text-2xl text-[#E8E1D3] sm:text-3xl">Você também pode gostar</h2>
+              <h2 id="related-products-title" className="mt-1 font-gothic text-2xl leading-tight text-[#E8E1D3] sm:text-3xl">Você também pode gostar</h2>
             </div>
-            <span className="shrink-0 text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Continue explorando</span>
+            <div className="flex min-w-0 items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
+              <span className="text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Deslize para explorar</span>
+              <div className="flex shrink-0 gap-1 md:hidden" aria-label="Navegação das recomendações">
+                <button
+                  type="button"
+                  onClick={() => scrollRelatedProducts(-1)}
+                  className="flex h-9 w-9 items-center justify-center border border-[#3A342E] bg-[#0B0908] text-[#E8E1D3] transition-colors hover:border-[#8A1F1F] hover:bg-[#8A1F1F] focus:outline-none focus:ring-1 focus:ring-[#D7A64B]"
+                  aria-label="Ver recomendação anterior"
+                  title="Recomendação anterior"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollRelatedProducts(1)}
+                  className="flex h-9 w-9 items-center justify-center border border-[#3A342E] bg-[#0B0908] text-[#E8E1D3] transition-colors hover:border-[#8A1F1F] hover:bg-[#8A1F1F] focus:outline-none focus:ring-1 focus:ring-[#D7A64B]"
+                  aria-label="Ver próxima recomendação"
+                  title="Próxima recomendação"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
           </div>
 
-          <div className="flex snap-x snap-mandatory gap-2 sm:gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 lg:grid-cols-4 md:overflow-visible">
-            {relatedProducts.map((related, relatedIndex) => (
-              <div key={related.id} className="w-[70vw] max-w-[15rem] sm:w-[76vw] sm:max-w-[17rem] shrink-0 snap-start md:w-auto md:max-w-none md:min-w-0">
-                <ProductCard
-                  product={related}
-                  index={related.rawRowIndex ?? relatedIndex}
-                  isFavorite={favoriteIds.includes(related.id)}
-                  onToggleFavorite={onToggleFavorite}
-                  onSelectProduct={onSelectProduct}
-                  metaPixelId={metaPixelId}
-                  metaAccessToken={metaAccessToken}
-                />
-              </div>
-            ))}
+          <div className="relative min-w-0">
+            <div
+              ref={relatedRailRef}
+              role="region"
+              aria-labelledby="related-products-title"
+              tabIndex={0}
+              className="flex min-w-0 touch-pan-x snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain scroll-smooth pb-2 pr-1 outline-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 md:gap-3 md:overflow-visible md:pr-0 lg:grid-cols-4"
+            >
+              {relatedProducts.map((related, relatedIndex) => (
+                <div key={related.id} className="w-[calc(100vw-2.75rem)] max-w-[18rem] shrink-0 snap-start sm:w-[76vw] sm:max-w-[17rem] md:w-auto md:max-w-none md:min-w-0">
+                  <ProductCard
+                    product={related}
+                    index={related.rawRowIndex ?? relatedIndex}
+                    isFavorite={favoriteIds.includes(related.id)}
+                    onToggleFavorite={onToggleFavorite}
+                    onSelectProduct={onSelectProduct}
+                    metaPixelId={metaPixelId}
+                    metaAccessToken={metaAccessToken}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </section>
       )}

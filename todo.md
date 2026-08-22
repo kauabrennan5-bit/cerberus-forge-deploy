@@ -137,3 +137,6 @@
 # Arquivo compactado de referência
 
 - [ ] Inspecionar cerberus-forge-deploy-main12(2).zip e comparar sua identidade com origin/main sem sobrescrever o workspace.
+
+- [x] Corrigir o trilho horizontal de recomendações no mobile para permitir revelar e navegar pelos cards parcialmente cortados por toque, arraste, teclado e controles acessíveis, sem overflow da página.
+- [x] Validar a correção do trilho em viewports móveis e desktop com testes, build e verificação visual.
