@@ -173,9 +173,22 @@ export async function subscribeNewsletter(email: string): Promise<{ success: boo
       body: JSON.stringify({ email })
     });
     const payload = await res.json().catch(() => ({}));
-    return res.ok ? { success: true } : { success: false, error: payload.error || 'Cadastro indisponível.' };
+
+    if (res.status === 201) {
+      return { success: true };
+    }
+
+    if (res.status === 400 && payload.code === 'INVALID_EMAIL') {
+      return { success: false, error: 'E-mail inválido. Verifique e tente novamente.' };
+    }
+
+    if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') {
+      return { success: false, error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' };
+    }
+
+    return { success: false, error: payload.error || 'Cadastro indisponível.' };
   } catch {
-    return { success: false, error: 'Não foi possível conectar ao cadastro.' };
+    return { success: false, error: 'Não foi possível conectar. Se o site acabou de carregar, aguarde alguns segundos e tente novamente.' };
   }
 }
 
