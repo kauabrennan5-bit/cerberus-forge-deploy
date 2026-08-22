@@ -1,7 +1,11 @@
 import React, { useState, useRef } from 'react';
 // Mobile refinement: keep the approved product-card hierarchy while preventing long content and controls from expanding the card beyond its grid column.
 import { Product } from '../types';
-import { getProductDisplayTitle } from '../lib/productPresentation';
+import {
+  getProductCardDescription,
+  getProductCardPricePresentation,
+  getProductDisplayTitle,
+} from '../lib/productPresentation';
 import { trackClickAndGetUrl, trackSelectItem } from '../lib/analytics';
 import { ExternalLink, ImageOff, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 
@@ -108,17 +112,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     style: 'currency',
     currency: 'BRL'
   }).format(product.preco);
-  const formattedPromotionPrice = product.ofertaPromocional
-    ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.ofertaPromocional.price)
-    : null;
-  const promotionCondition = product.ofertaPromocional?.condition === 'pix'
-    ? 'no Pix'
-    : product.ofertaPromocional?.condition === 'pix_with_coupon'
-      ? 'no Pix com cupom'
-      : product.ofertaPromocional?.condition === 'coupon'
-        ? 'com cupom'
-        : 'sob condição observada';
+  const pricePresentation = getProductCardPricePresentation(product);
+  const formattedCardPrice = new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(pricePresentation.mainPrice);
   const displayTitle = getProductDisplayTitle(product);
+  const cardDescription = getProductCardDescription(product);
+  // Mantido localmente para que o contrato visual da oferta confirmada permaneça explícito no card.
+  const priceLabel = pricePresentation.announcementPrice ? 'PREÇO VERIFICADO' : 'PREÇO DO ANÚNCIO';
 
   return (
     <div
@@ -238,21 +240,34 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <h3 title={displayTitle} className="h-[2.4rem] sm:h-[2.7rem] font-display text-[11px] sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-[1.3] sm:leading-[1.35] tracking-wide break-words overflow-hidden">
             {displayTitle}
           </h3>
+          {cardDescription && (
+            <p className="mt-1 text-[9px] sm:text-[10px] leading-snug text-[#E8E1D3]/55 line-clamp-2 break-words">
+              {cardDescription}
+            </p>
+          )}
         </div>
 
         {/* Footer: Price & Direct Acquire Button */}
         <div className="pt-1.5 sm:pt-2 border-t border-[#3A342E] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-2 min-w-0">
           <div className="flex-1 min-w-0">
-            {formattedPromotionPrice && (
-              <div className="space-y-0.5">
-                <span className="text-[8px] uppercase font-display tracking-widest text-[#D7A64B] block">PREÇO VERIFICADO</span>
-                <span className="font-mono font-bold text-[13px] sm:text-base text-[#D7A64B] leading-tight break-words">
-                  {formattedPromotionPrice} {promotionCondition}
-                </span>
-                <span className="text-[9px] font-mono text-[#E8E1D3]/60 block">Preço do anúncio: {formattedPrice}</span>
-                <p className="text-[8px] leading-snug text-[#E8E1D3]/50">Preço verificado pela nossa curadoria. Condições finais de pagamento e frete são confirmadas na loja oficial.</p>
-              </div>
-            )}
+            <div className="space-y-0.5">
+              <span className={`text-[8px] uppercase font-display tracking-widest block ${
+                pricePresentation.announcementPrice ? 'text-[#D7A64B]' : 'text-[#E8E1D3]/60'
+              }`}>
+                {priceLabel}
+              </span>
+              <span className={`font-mono font-bold text-[13px] sm:text-base leading-tight break-words ${
+                pricePresentation.announcementPrice ? 'text-[#D7A64B]' : 'text-[#E8E1D3]'
+              }`}>
+                {formattedCardPrice} {pricePresentation.condition}
+              </span>
+              {pricePresentation.announcementPrice && (
+                <>
+                  <span className="text-[9px] font-mono text-[#E8E1D3]/60 block">Preço do anúncio: {formattedPrice}</span>
+                  <p className="text-[8px] leading-snug text-[#E8E1D3]/50">Preço verificado pela nossa curadoria. Condições finais de pagamento e frete são confirmadas na loja oficial.</p>
+                </>
+              )}
+            </div>
           </div>
 
           <button
