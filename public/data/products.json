@@ -1,9 +1,29 @@
 [
   {
+    "id": "prod-1787414659793",
+    "ref": "REF-019",
+    "slug": "nordic-bauhaus-vidro-luminaria-de-mesa-moderno-quarto-luminaria-de-leitura-estudo-abajur-de-cabeceira",
+    "produto": "Nordic Bauhaus Vidro Luminária De Mesa Moderno Quarto Luminária De Leitura Estudo Abajur De Cabeceira",
+    "displayTitle": "Luminária de Mesa em Vidro Estilo Bauhaus",
+    "preco": 269,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mrjxtm6ly611fc",
+      "https://down-br.img.susercontent.com/file/cn-11134207-7r98o-lzbqae16seqqde"
+    ],
+    "link": "https://s.shopee.com.br/6L3pTCIR05",
+    "categoria": "Acessórios",
+    "descricao": "Luminária de mesa em vidro com design inspirado na estética Bauhaus, proporcionando iluminação funcional e sofisticada. Peça versátil que combina estrutura minimalista e presença decorativa para ambientes de leitura ou estudo.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-22T16:04:19.95871+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1787387829291",
     "ref": "REF-018",
     "slug": "luminaria-de-teto-de-vidro-estilo-mid-century-bauhaus-led-tricolor-ajustavel-20cm-vidro-para-corredor-entrada-closet",
     "produto": "Luminária De Teto De Vidro Estilo Mid-Century & Bauhaus, LED Tricolor Ajustável, 20cm Vidro Para Corredor Entrada Closet",
+    "displayTitle": "Luminária de Teto Vidro 20cm Estilo Mid-Century Bauhaus",
     "preco": 286,
     "imagens": [
       "https://down-br.img.susercontent.com/file/sg-11134201-825ap-mqblldzied5b4a",
@@ -11,7 +31,7 @@
     ],
     "link": "https://s.shopee.com.br/19meOwp4C",
     "categoria": "Afiliado",
-    "descricao": "",
+    "descricao": "Luminária de teto em vidro com LED tricolor ajustável e diâmetro de 20 cm, indicada para corredor, entrada ou closet.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-22T08:37:09.404317+00:00",
     "ativo": true,
