@@ -141,5 +141,9 @@
 - [x] Corrigir o trilho horizontal de recomendações no mobile para permitir revelar e navegar pelos cards parcialmente cortados por toque, arraste, teclado e controles acessíveis, sem overflow da página.
 - [x] Validar a correção do trilho em viewports móveis e desktop com testes, build e verificação visual.
 
-- [ ] Priorizar o deslize horizontal por toque no carrossel de recomendações, evitando que o gesto seja capturado pela página, mantendo os botões como alternativa.
-- [ ] Validar gesto de toque, navegação por teclado, build e publicação do ajuste.
+- [x] Priorizar o deslize horizontal por toque no carrossel de recomendações, evitando que o gesto seja capturado pela página, mantendo os botões como alternativa.
+- [x] Validar gesto de toque, navegação por teclado, build e publicação do ajuste.
+
+- [x] Substituir a etiqueta genérica “AFILIADO” pela etiqueta canônica do marketplace hospedado em cada produto, incluindo Shopee e Mercado Livre.
+- [x] Restaurar setas sempre visíveis e utilizáveis no carrossel de recomendações, mantendo o deslize por toque.
+- [x] Validar etiquetas, setas, toque, build e publicação sem alterar dados ou tracking.

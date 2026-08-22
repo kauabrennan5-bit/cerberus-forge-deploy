@@ -418,32 +418,28 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               <p className="text-[9px] font-display uppercase tracking-[0.22em] text-[#8A1F1F]">Da mesma curadoria</p>
               <h2 id="related-products-title" className="mt-1 font-gothic text-2xl leading-tight text-[#E8E1D3] sm:text-3xl">Você também pode gostar</h2>
             </div>
-            <div className="flex min-w-0 items-center justify-between gap-3 sm:shrink-0 sm:justify-end">
-              <span className="text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Deslize para explorar</span>
-              <div className="flex shrink-0 gap-1 md:hidden" aria-label="Navegação das recomendações">
-                <button
-                  type="button"
-                  onClick={() => scrollRelatedProducts(-1)}
-                  className="flex h-9 w-9 items-center justify-center border border-[#3A342E] bg-[#0B0908] text-[#E8E1D3] transition-colors hover:border-[#8A1F1F] hover:bg-[#8A1F1F] focus:outline-none focus:ring-1 focus:ring-[#D7A64B]"
-                  aria-label="Ver recomendação anterior"
-                  title="Recomendação anterior"
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => scrollRelatedProducts(1)}
-                  className="flex h-9 w-9 items-center justify-center border border-[#3A342E] bg-[#0B0908] text-[#E8E1D3] transition-colors hover:border-[#8A1F1F] hover:bg-[#8A1F1F] focus:outline-none focus:ring-1 focus:ring-[#D7A64B]"
-                  aria-label="Ver próxima recomendação"
-                  title="Próxima recomendação"
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
+            <span className="shrink-0 text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Deslize para explorar</span>
           </div>
 
           <div className="relative min-w-0">
+            <button
+              type="button"
+              onClick={() => scrollRelatedProducts(-1)}
+              className="absolute left-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-[#3A342E] bg-[#0B0908]/95 text-[#E8E1D3] shadow-lg transition-colors hover:border-[#8A1F1F] hover:bg-[#8A1F1F] focus:outline-none focus:ring-1 focus:ring-[#D7A64B] md:hidden"
+              aria-label="Ver recomendação anterior"
+              title="Recomendação anterior"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => scrollRelatedProducts(1)}
+              className="absolute right-1 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center border border-[#3A342E] bg-[#0B0908]/95 text-[#E8E1D3] shadow-lg transition-colors hover:border-[#8A1F1F] hover:bg-[#8A1F1F] focus:outline-none focus:ring-1 focus:ring-[#D7A64B] md:hidden"
+              aria-label="Ver próxima recomendação"
+              title="Próxima recomendação"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
             <div
               ref={relatedRailRef}
               role="region"

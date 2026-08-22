@@ -49,3 +49,32 @@ export function getProductCardDescription(product: Pick<Product, 'descricao'>): 
   const description = product.descricao?.replace(/\s+/g, ' ').trim();
   return description || null;
 }
+
+/**
+ * Identifica a loja a partir do domínio do link canônico persistido.
+ * Não inventa marketplace: URLs desconhecidas recebem "Loja parceira".
+ */
+export function getProductMarketplaceLabel(product: Pick<Product, 'link'>): string {
+  const rawLink = product.link?.trim();
+  if (!rawLink) return 'Loja parceira';
+
+  try {
+    const host = new URL(rawLink).hostname.toLowerCase().replace(/^www\./, '');
+    if (host === 'shopee.com.br' || host.endsWith('.shopee.com.br') || host === 'shopee.com' || host.endsWith('.shopee.com')) {
+      return 'Shopee';
+    }
+    if (host === 'mercadolivre.com.br' || host.endsWith('.mercadolivre.com.br') || host === 'mercadolibre.com' || host.endsWith('.mercadolibre.com') || host === 'meli.la') {
+      return 'Mercado Livre';
+    }
+    if (host === 'amazon.com.br' || host.endsWith('.amazon.com.br')) {
+      return 'Amazon';
+    }
+    if (host === 'magazineluiza.com.br' || host.endsWith('.magazineluiza.com.br')) {
+      return 'Magalu';
+    }
+  } catch {
+    return 'Loja parceira';
+  }
+
+  return 'Loja parceira';
+}

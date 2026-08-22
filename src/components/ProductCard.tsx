@@ -5,6 +5,7 @@ import {
   getProductCardDescription,
   getProductCardPricePresentation,
   getProductDisplayTitle,
+  getProductMarketplaceLabel,
 } from '../lib/productPresentation';
 import { trackClickAndGetUrl, trackSelectItem } from '../lib/analytics';
 import { ExternalLink, ImageOff, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
@@ -119,6 +120,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   }).format(pricePresentation.mainPrice);
   const displayTitle = getProductDisplayTitle(product);
   const cardDescription = getProductCardDescription(product);
+  const marketplaceLabel = getProductMarketplaceLabel(product);
   // Mantido localmente para que o contrato visual da oferta confirmada permaneça explícito no card.
   const priceLabel = pricePresentation.announcementPrice ? 'PREÇO VERIFICADO' : 'PREÇO DO ANÚNCIO';
 
@@ -235,7 +237,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       <div className="min-w-0 p-2 sm:p-3 flex-1 flex flex-col justify-between space-y-2 sm:space-y-2.5 bg-[#141210]">
         <div>
           <p className="text-[8px] sm:text-[9px] uppercase font-display tracking-widest text-[#8A1F1F] mb-0.5 font-bold">
-            {product.categoria}
+            {marketplaceLabel}
           </p>
           <h3 title={displayTitle} className="h-[2.4rem] sm:h-[2.7rem] font-display text-[11px] sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-[1.3] sm:leading-[1.35] tracking-wide break-words overflow-hidden">
             {displayTitle}
