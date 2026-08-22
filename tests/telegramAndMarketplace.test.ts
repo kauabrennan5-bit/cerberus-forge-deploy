@@ -215,6 +215,16 @@ test("gerador de build sanitiza descricao contaminada antes de escrever o catál
   assert.match(source, /\[conteudo da pagina\]/);
 });
 
+test("gerador estático projeta apenas oferta promocional confirmada e preserva ausência segura", () => {
+  const source = readFileSync(new URL("../scripts/generate-static-catalog.js", import.meta.url), "utf8");
+
+  assert.match(source, /function sanitizePromotionOffer\(value\)/);
+  assert.match(source, /candidate\.source !== 'admin_confirmed'/);
+  assert.match(source, /PROMOTION_CONDITIONS\.has\(candidate\.condition\)/);
+  assert.match(source, /ofertaPromocional: sanitizePromotionOffer\(p\.ofertaPromocional \|\| p\.oferta_promocional\)/);
+  assert.doesNotMatch(source, /couponCode|checkoutPrice|pixDiscount/);
+});
+
 test("API pública sanitiza descricao contaminada sem alterar o registro canônico", () => {
   const source = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
 
@@ -355,6 +365,8 @@ test("projeções runtime e build preservam ref existente e não expõem marketp
 
   assert.match(runtimeSource, /ref: p\.ref/);
   assert.match(buildSource, /ref: p\.ref/);
+  assert.match(runtimeSource, /ofertaPromocional: p\.ofertaPromocional/);
+  assert.match(buildSource, /ofertaPromocional: sanitizePromotionOffer/);
   assert.doesNotMatch(runtimeSource, /marketplace\s*:/);
   assert.doesNotMatch(buildSource, /marketplace\s*:/);
   assert.doesNotMatch(frontendSource, /marketplace\s*:/);

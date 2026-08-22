@@ -19,10 +19,40 @@ const RAW_PAYLOAD_MARKERS = [
   '[conteudo da pagina]'
 ];
 
+const PROMOTION_CONDITIONS = new Set([
+  'pix',
+  'pix_with_coupon',
+  'coupon',
+  'other'
+]);
+
 function containsRawPayloadMarkers(value) {
   if (typeof value !== 'string') return false;
   const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   return RAW_PAYLOAD_MARKERS.some(marker => normalized.includes(marker));
+}
+
+// O build é executado diretamente pelo Node e não pode importar o módulo
+// TypeScript do runtime. Esta projeção reproduz somente o contrato público
+// validado: não calcula descontos, não aceita fonte não confirmada e não
+// transporta campos internos de review para o catálogo estático.
+function sanitizePromotionOffer(value) {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value;
+  if (typeof candidate.price !== 'number' || !Number.isFinite(candidate.price) || candidate.price <= 0) return undefined;
+  if (typeof candidate.condition !== 'string' || !PROMOTION_CONDITIONS.has(candidate.condition)) return undefined;
+  if (candidate.source !== 'admin_confirmed') return undefined;
+  if (typeof candidate.confirmedAt !== 'number' || !Number.isFinite(candidate.confirmedAt) || candidate.confirmedAt <= 0) return undefined;
+  const benefits = Array.isArray(candidate.benefits)
+    ? candidate.benefits.filter(benefit => typeof benefit === 'string' && benefit.trim().length > 0).map(benefit => benefit.trim()).slice(0, 8)
+    : [];
+  return {
+    price: candidate.price,
+    condition: candidate.condition,
+    benefits,
+    source: 'admin_confirmed',
+    confirmedAt: candidate.confirmedAt
+  };
 }
 
 function requestCanonicalJson(url, attempts = 3) {
@@ -141,6 +171,7 @@ async function generateStaticCatalog() {
     categoria: p.categoria || 'Geral',
     descricao: containsRawPayloadMarkers(p.descricao || p.description || '') ? '' : (p.descricao || p.description || ''),
     paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',
+    ofertaPromocional: sanitizePromotionOffer(p.ofertaPromocional || p.oferta_promocional),
     ativo: true,
     status: 'published'
   }));
