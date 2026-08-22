@@ -165,12 +165,12 @@ export async function trackProductClickApi(data: any): Promise<boolean> {
   }
 }
 
-export async function subscribeNewsletter(email: string): Promise<{ success: boolean; error?: string }> {
+export async function subscribeNewsletter(email: string, marketingConsent: boolean): Promise<{ success: boolean; error?: string }> {
   try {
     const res = await fetch(getApiUrl('/api/newsletter'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email })
+      body: JSON.stringify({ email, marketingConsent })
     });
     const payload = await res.json().catch(() => ({}));
 
@@ -180,6 +180,14 @@ export async function subscribeNewsletter(email: string): Promise<{ success: boo
 
     if (res.status === 400 && payload.code === 'INVALID_EMAIL') {
       return { success: false, error: 'E-mail inválido. Verifique e tente novamente.' };
+    }
+
+    if (res.status === 400 && payload.code === 'CONSENT_REQUIRED') {
+      return { success: false, error: 'Confirme que deseja receber novas seleções, recomendações e ofertas.' };
+    }
+
+    if (res.status === 409 && payload.code === 'RECONSENT_REQUIRED') {
+      return { success: false, error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.' };
     }
 
     if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') {

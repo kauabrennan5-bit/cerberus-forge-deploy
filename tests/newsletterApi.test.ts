@@ -20,13 +20,18 @@ describe('subscribeNewsletter', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('returns success for HTTP 201', async () => {
-    globalThis.fetch = async () => jsonResponse(201, {
-      success: true,
-      message: 'Inscrição registrada.',
-    });
+  it('sends explicit consent and returns success for HTTP 201', async () => {
+    let requestBody: unknown;
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse(201, {
+        success: true,
+        message: 'Inscrição registrada.',
+      });
+    };
 
-    assert.deepEqual(await subscribeNewsletter('valid@example.com'), { success: true });
+    assert.deepEqual(await subscribeNewsletter('valid@example.com', true), { success: true });
+    assert.deepEqual(requestBody, { email: 'valid@example.com', marketingConsent: true });
   });
 
   it('returns the specific validation message for HTTP 400 INVALID_EMAIL', async () => {
@@ -36,7 +41,7 @@ describe('subscribeNewsletter', () => {
       error: 'Informe um e-mail válido.',
     });
 
-    assert.deepEqual(await subscribeNewsletter('invalid'), {
+    assert.deepEqual(await subscribeNewsletter('invalid', true), {
       success: false,
       error: 'E-mail inválido. Verifique e tente novamente.',
     });
@@ -49,9 +54,35 @@ describe('subscribeNewsletter', () => {
       error: 'Cadastro temporariamente indisponível.',
     });
 
-    assert.deepEqual(await subscribeNewsletter('valid@example.com'), {
+    assert.deepEqual(await subscribeNewsletter('valid@example.com', true), {
       success: false,
       error: 'Serviço temporariamente indisponível. Tente novamente em instantes.',
+    });
+  });
+
+  it('maps missing consent to an explicit user-facing error', async () => {
+    globalThis.fetch = async () => jsonResponse(400, {
+      success: false,
+      code: 'CONSENT_REQUIRED',
+      error: 'É necessário confirmar o consentimento.',
+    });
+
+    assert.deepEqual(await subscribeNewsletter('valid@example.com', false), {
+      success: false,
+      error: 'Confirme que deseja receber novas seleções, recomendações e ofertas.',
+    });
+  });
+
+  it('does not mask reconsent-required contacts as a successful subscription', async () => {
+    globalThis.fetch = async () => jsonResponse(409, {
+      success: false,
+      code: 'RECONSENT_REQUIRED',
+      error: 'Este contato exige um fluxo explícito de reativação.',
+    });
+
+    assert.deepEqual(await subscribeNewsletter('valid@example.com', true), {
+      success: false,
+      error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.',
     });
   });
 
@@ -60,7 +91,7 @@ describe('subscribeNewsletter', () => {
       throw new Error('network unavailable');
     };
 
-    assert.deepEqual(await subscribeNewsletter('valid@example.com'), {
+    assert.deepEqual(await subscribeNewsletter('valid@example.com', true), {
       success: false,
       error: 'Não foi possível conectar. Se o site acabou de carregar, aguarde alguns segundos e tente novamente.',
     });

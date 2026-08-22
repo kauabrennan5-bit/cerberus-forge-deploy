@@ -68,6 +68,7 @@ export default function App() {
   const [isLoadingProducts, setIsLoadingProducts] = useState<boolean>(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [newsletterEmail, setNewsletterEmail] = useState('');
+  const [newsletterConsent, setNewsletterConsent] = useState(false);
   const [newsletterStatus, setNewsletterStatus] = useState<string | null>(null);
   const [isSubscribing, setIsSubscribing] = useState(false);
 
@@ -199,11 +200,16 @@ export default function App() {
   const handleNewsletterSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setNewsletterStatus(null);
+    if (!newsletterConsent) {
+      setNewsletterStatus('Confirme que deseja receber novas seleções, recomendações e ofertas.');
+      return;
+    }
     setIsSubscribing(true);
-    const result = await subscribeNewsletter(newsletterEmail);
+    const result = await subscribeNewsletter(newsletterEmail, newsletterConsent);
     setIsSubscribing(false);
     if (result.success) {
       setNewsletterEmail('');
+      setNewsletterConsent(false);
       setNewsletterStatus('Inscrição registrada.');
       return;
     }
@@ -362,6 +368,17 @@ export default function App() {
                 {isSubscribing ? 'Enviando' : 'Receber'}
               </button>
             </div>
+            <label htmlFor="newsletter-consent" className="flex items-start gap-2 text-[10px] leading-4 text-[#E8E1D3]/65">
+              <input
+                id="newsletter-consent"
+                type="checkbox"
+                required
+                checked={newsletterConsent}
+                onChange={(event) => setNewsletterConsent(event.target.checked)}
+                className="mt-0.5 accent-[#8A1F1F]"
+              />
+              <span>Quero receber por e-mail novas seleções, recomendações e ofertas.</span>
+            </label>
             {newsletterStatus && <p role="status" className="text-[10px] text-[#E8E1D3]/70">{newsletterStatus}</p>}
           </form>
         </div>
