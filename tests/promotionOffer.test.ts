@@ -91,4 +91,8 @@ test("acervo usa criação canônica crescente e mantém o número arquival fora
   assert.match(gridSource, /'Iluminação'/);
   assert.match(gridSource, /'Infantil'/);
   assert.match(gridSource, /index=\{product\.rawRowIndex \?\? idx\}/);
+  assert.match(gridSource, /aria-expanded=\{isCategoryPanelOpen\}/);
+  assert.match(gridSource, /data-testid="category-panel"/);
+  assert.match(gridSource, /setSelectedCategory\(category\.name\)/);
+  assert.match(gridSource, /category\.count\.toString\(\)\.padStart\(2, '0'\)/);
 });
