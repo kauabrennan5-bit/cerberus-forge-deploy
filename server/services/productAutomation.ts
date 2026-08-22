@@ -460,7 +460,10 @@ TAREFAS DO CURADOR:
 3. "categoria": Escolha EXATAMENTE uma das seguintes categorias: "Camisetas", "Calças", "Acessórios", "Calçados", "Jaquetas", "Moletons".`;
 
         const geminiRes = await ai.models.generateContent({
-          model: process.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-2.5-flash",
+          // `gemini-2.5-flash` foi descontinuado pelo provedor. O fallback deve
+          // apontar para um modelo disponível para que a curadoria não silencie
+          // título e descrição e deixe uma review incompleta chegar ao Telegram.
+          model: process.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
           contents: prompt,
           config: {
             systemInstruction: `Você é o assistente curador do Cerberus Finds Archive.

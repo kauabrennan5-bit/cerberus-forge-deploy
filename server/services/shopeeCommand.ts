@@ -315,6 +315,32 @@ function formatPreviewPrice(value: number | null): string | null {
   }).format(value);
 }
 
+/**
+ * Impede que uma review de Shopee seja persistida ou enviada ao Telegram se a
+ * curadoria não tiver produzido campos que a publicação canônica exige. A
+ * origem continua sendo o anúncio já observado; não há geração de preço, link
+ * ou descrição de preenchimento.
+ */
+function getShopeeReviewReadinessErrors(enriched: {
+  rawTitle: string | null;
+  curatedTitle: string | null;
+  description: string;
+  images: string[];
+}): string[] {
+  const errors: string[] = [];
+  const rawTitle = enriched.rawTitle?.trim() ?? "";
+  const displayTitle = enriched.curatedTitle?.trim() ?? "";
+  const description = enriched.description.trim();
+
+  if (!rawTitle) errors.push("título de origem ausente");
+  if (!displayTitle || displayTitle === rawTitle) errors.push("título editorial ausente");
+  if (description.length < 24) errors.push("descrição editorial ausente");
+  if (enriched.images.filter((image) => typeof image === "string" && image.trim()).length === 0) {
+    errors.push("imagem válida ausente");
+  }
+  return errors;
+}
+
 // ---------------------------------------------------------------
 // Texto do card (contrato de proveniência da Fase 24)
 // ---------------------------------------------------------------
@@ -456,6 +482,7 @@ export interface ShopeeLotItemResult {
     | "discovery_failed"
     | "affiliate_not_eligible"
     | "scraper_enrichment_failed"
+    | "editorial_curation_failed"
     | "telegram_send_failed"
     | "review_persist_failed";
   publicUrl: string | null;
@@ -778,6 +805,18 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       item.status = "scraper_enrichment_failed";
       item.reason = enriched.failureReason;
       logShopeeCandidateResult({ lotId, candidateIndex, discoveryRound, stage: "scraper", outcome: "rejected", reason: item.reason ?? "scraper_failed" });
+      continue;
+    }
+
+    // A review é o único payload usado por `confirm_pub`. Não é aceitável
+    // exibir um card para um item que inevitavelmente falhará na publicação:
+    // se a IA não devolveu curadoria válida, o candidato é rejeitado e o lote
+    // segue para o próximo sem inventar campos comerciais ou editoriais.
+    const readinessErrors = getShopeeReviewReadinessErrors(enriched);
+    if (readinessErrors.length > 0) {
+      item.status = "editorial_curation_failed";
+      item.reason = `editorial_curation_incomplete:${readinessErrors.join(",")}`;
+      logShopeeCandidateResult({ lotId, candidateIndex, discoveryRound, stage: "review", outcome: "rejected", reason: item.reason });
       continue;
     }
 

@@ -82,6 +82,20 @@ const AFFILIATE_RESPONSE = {
     }),
 };
 
+function buildCompleteReviewData(normalizedUrl: string, overrides: Record<string, unknown> = {}) {
+  return {
+    normalizedUrl,
+    imagens: ["https://img.test/1.webp"],
+    preco: 79.9,
+    rawTitle: "Produto teste observado no anúncio",
+    displayTitle: "Luminária de Mesa Bauhaus",
+    produto: "Produto teste observado no anúncio",
+    descricao: "Peça compacta de vidro com presença gráfica para compor iluminação de apoio.",
+    categoria: "Acessórios",
+    ...overrides,
+  };
+}
+
 describe("parseShopeeCommand", () => {
   it("rejeita argumento vazio", () => {
     const p = parseShopeeCommand("");
@@ -214,6 +228,43 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(savedReviews[0]?.existingProduct?.affiliateUrl, "https://s.shopee.com.br/TESTE");
   });
 
+  it("rejeita antes do card a curadoria indisponível e não persiste review que falharia em confirm_pub", async () => {
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(async () => ({
+      success: true,
+      data: {
+        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
+        imagens: ["https://img.test/1.webp"],
+        preco: 79.9,
+        rawTitle: "Luminária Bauhaus do anúncio",
+        displayTitle: "Luminária Bauhaus do anúncio",
+        produto: "Luminária Bauhaus do anúncio",
+        descricao: "",
+        categoria: "Acessórios",
+      },
+    }));
+    const sentPreviews: string[] = [];
+    telegramModule.setTestTelegramSenders(
+      async (_chatId, text) => {
+        sentPreviews.push(String(text));
+        return { ok: true };
+      },
+      async (_chatId, _photoUrl, caption) => {
+        sentPreviews.push(String(caption));
+        return { ok: true };
+      },
+    );
+
+    const result = await runShopeeCommand("1 luminária bauhaus");
+
+    assert.equal(result.ok, 0);
+    assert.equal(savedReviews.length, 0);
+    assert.equal(result.items[0]?.status, "editorial_curation_failed");
+    assert.match(result.items[0]?.reason ?? "", /título editorial ausente/);
+    assert.match(result.items[0]?.reason ?? "", /descrição editorial ausente/);
+    assert.equal(sentPreviews.some((text) => text.includes("PREVIEW SHOPEE AFFILIATE")), false);
+  });
+
   it("usa busca oficial por termo antes do fallback externo e entrega card sem URL do administrador", async () => {
     let officialSearchCalls = 0;
     shopeeCmdTopo.setTestShopeeClient({
@@ -258,12 +309,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async () => ({
       success: true,
-      data: {
-        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
-        imagens: ["https://img.test/1.webp"],
-        preco: null,
-        produto: "Luminária Bauhaus",
-      },
+      data: buildCompleteReviewData("https://shopee.com.br/product/1530442944/23794344926", { preco: null }),
     }));
     let capturedCaption = "";
     let capturedKeyboard: any = null;
@@ -311,15 +357,12 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async () => ({
       success: true,
-      data: {
-        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
-        imagens: ["https://img.test/1.webp"],
+      data: buildCompleteReviewData("https://shopee.com.br/product/1530442944/23794344926", {
         preco: 519,
         precoMaximo: 599,
         precoCheckout: 460,
         condicaoPrecoCheckout: "pix_with_coupon",
-        produto: "Luminária Bauhaus",
-      },
+      }),
     }));
     let capturedCaption = "";
     telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption) => {
@@ -422,7 +465,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+      data: buildCompleteReviewData(url),
     }));
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
@@ -447,7 +490,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+      data: buildCompleteReviewData(url),
     }));
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
@@ -470,7 +513,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+      data: buildCompleteReviewData(url),
     }));
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
@@ -494,7 +537,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+      data: buildCompleteReviewData(url),
     }));
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
@@ -536,7 +579,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+      data: buildCompleteReviewData(url),
     }));
     let calls = 0;
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
@@ -590,7 +633,7 @@ describe("runShopeeCommand — lote completo", () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" },
+      data: buildCompleteReviewData(url),
     }));
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
@@ -608,25 +651,25 @@ describe("runShopeeCommand — lote completo", () => {
     assert.equal(result.budgetExhausted, true);
   });
 
-  it("sendMessage com ok:false não conta card quando o candidato não tem imagem de entrega", async () => {
+  it("candidato sem imagem não é entregue nem persistido como review publicável", async () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => ({
       success: true,
-      data: { normalizedUrl: url, imagens: [], preco: 79.9, produto: "Produto Sem Foto" },
+      data: buildCompleteReviewData(url, { imagens: [], produto: "Produto Sem Foto" }),
     }));
     telegramModule.setTestTelegramSenders(async () => ({ ok: false, description: "MESSAGE_REJECTED" }), async () => ({ ok: true }));
 
     const result = await runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
     assert.equal(result.ok, 0);
     assert.equal(result.sourceExhausted, true);
-    assert.equal(result.items[0]?.status, "telegram_send_failed");
+    assert.equal(result.items[0]?.status, "editorial_curation_failed");
   });
 
   it("substitui rejeições mistas de identidade, Affiliate, scraper e Telegram até entregar N", async () => {
     const paModule = await import("../server/services/productAutomation");
     paModule.setTestExtractProductForReview(async (url) => {
       if (url.endsWith("33333333333")) return { success: false, error: "scraper_blocked" };
-      return { success: true, data: { normalizedUrl: url, imagens: ["https://img.test/1.webp"], preco: 79.9, produto: "Produto Teste" } };
+      return { success: true, data: buildCompleteReviewData(url) };
     });
     shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
       success: true,
