@@ -567,10 +567,16 @@ test("T — contexto de autorização derivado cobre a ação solicitada", () =>
 
 test("U — replay idempotente: segunda chamada retorna identical_duplicate", async () => {
   const { handle } = happySetup();
-  const first = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+  const first = await evaluateGovernanceDecision(
+    { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+    { nowIso: FIXED_NOW },
+  );
   assert.equal(first.ok, true);
   assert.equal(first.outcome, "evaluated");
-  const second = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+  const second = await evaluateGovernanceDecision(
+    { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+    { nowIso: FIXED_NOW },
+  );
   assert.equal(second.ok, true);
   assert.equal(second.outcome, "identical_duplicate");
   assert.equal(second.assessment_id, first.assessment_id);
@@ -587,14 +593,20 @@ test("U — replay idempotente: segunda chamada retorna identical_duplicate", as
 test("V — alteração real no snapshot (score N14 novo) → nova decisão, digest novo", async () => {
   const first = await (async () => {
     const { handle } = happySetup({ score: 0.8 });
-    const r = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+    const r = await evaluateGovernanceDecision(
+      { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+      { nowIso: FIXED_NOW },
+    );
     return { r, handle };
   })();
   assert.equal(first.r.ok, true);
   resetClients();
   const second = await (async () => {
     const { handle } = happySetup({ score: 0.9 });
-    const r = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+    const r = await evaluateGovernanceDecision(
+      { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+      { nowIso: FIXED_NOW },
+    );
     return { r, handle };
   })();
   assert.equal(second.r.ok, true);
@@ -731,7 +743,10 @@ test("AF — source assessment digests na decisão", () => {
 
 test("AG — persistência grava rationale/requisitos/evidence_refs completos", async () => {
   const { handle } = happySetup();
-  const result = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+  const result = await evaluateGovernanceDecision(
+    { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+    { nowIso: FIXED_NOW },
+  );
   assert.equal(result.ok, true);
   // A decisão persistida carrega reasons/requirements via input_snapshot;
   // a rota GET filtra por filter_version n15:governance_v1.
@@ -770,11 +785,17 @@ test("AI — erro de infra na leitura do catálogo → internal_error, sem APPRO
 // ---------------------------------------------------------------------------
 test("AJ — GET read-only via service: decisão retorna com source assessments (parse do row)", async () => {
   const { handle } = happySetup();
-  const result = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+  const result = await evaluateGovernanceDecision(
+    { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+    { nowIso: FIXED_NOW },
+  );
   assert.equal(result.ok, true);
   assert.equal(handle.insertCalls(), 1);
   // Replay lê o row persistido e reconstrói a decisão (parseDecisionFromRow):
-  const replay = await evaluateGovernanceDecision({ candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" });
+  const replay = await evaluateGovernanceDecision(
+    { candidateId: VALID_CANDIDATE_ID, action: "PUBLISH" },
+    { nowIso: FIXED_NOW },
+  );
   assert.equal(replay.outcome, "identical_duplicate");
   assert.equal(replay.decision?.status, "APPROVED");
   assert.equal(replay.decision?.action, "PUBLISH");
