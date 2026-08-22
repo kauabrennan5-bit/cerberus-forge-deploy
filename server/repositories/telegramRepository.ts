@@ -19,10 +19,10 @@ const SESSION_EXPIRATION_MS = 60 * 60 * 1000;
 
 // Supabase Client Initialization
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
-  ? createClient(supabaseUrl, supabaseKey)
+export const supabase: SupabaseClient | null = (supabaseUrl && supabaseServiceRoleKey)
+  ? createClient(supabaseUrl, supabaseServiceRoleKey)
   : null;
 
 export interface UserState {
