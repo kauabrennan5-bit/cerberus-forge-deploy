@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ProductPipeline } from "../server/services/productPipeline";
 import { normalizePromotionOffer, promotionConditionLabel } from "../server/services/promotionOffer";
+import { orderCatalogProducts } from "../src/lib/catalogOrder";
 
 const confirmedOffer = {
   price: 264,
@@ -70,9 +71,24 @@ test("projeção pública e renderização tratam a oferta como campo separado e
   const detailSource = readFileSync(new URL("../src/components/ProductDetail.tsx", import.meta.url), "utf8");
 
   assert.match(exportSource, /ofertaPromocional: p\.ofertaPromocional/);
-  assert.match(cardSource, /Preço do anúncio/i);
-  assert.match(cardSource, /Oferta observada/i);
-  assert.match(cardSource, /Confirme no checkout/i);
+  assert.ok(cardSource.indexOf('OFERTA CONFIRMADA') < cardSource.indexOf('Preço do anúncio:'), 'card prioriza a oferta acima da referência');
+  assert.match(cardSource, /Condições devem ser confirmadas no checkout/i);
+  assert.ok(detailSource.indexOf('Oferta confirmada') < detailSource.indexOf('Preço do anúncio:'), 'detalhe prioriza a oferta acima da referência');
   assert.match(detailSource, /Condição confirmada manualmente/i);
-  assert.match(detailSource, /preço do anúncio/i);
+});
+
+test("acervo usa criação canônica crescente e mantém o número arquival fora da posição filtrada", () => {
+  const ordered = orderCatalogProducts([
+    { id: "prod-1787369003000", produto: "Novo", categoria: "Iluminação", preco: 10, imagens: [], link: "https://example.test/novo", ativo: true, destaque: false },
+    { id: "prod-1787369001000", produto: "Antigo", categoria: "Decoração", preco: 10, imagens: [], link: "https://example.test/antigo", ativo: true, destaque: false },
+    { id: "legacy", produto: "Legado", categoria: "Móveis", preco: 10, imagens: [], link: "https://example.test/legado", ativo: true, destaque: false },
+  ]);
+  const gridSource = readFileSync(new URL("../src/components/ProductGrid.tsx", import.meta.url), "utf8");
+
+  assert.deepEqual(ordered.map(product => product.id), ["prod-1787369001000", "prod-1787369003000", "legacy"]);
+  assert.deepEqual(ordered.map(product => product.rawRowIndex), [0, 1, 2]);
+  assert.match(gridSource, /const BASE_CATEGORIES = \[/);
+  assert.match(gridSource, /'Iluminação'/);
+  assert.match(gridSource, /'Infantil'/);
+  assert.match(gridSource, /index=\{product\.rawRowIndex \?\? idx\}/);
 });

@@ -285,19 +285,11 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               {product.produto}
             </h1>
 
-            <div className="flex items-baseline space-x-2 pt-0.5">
-              <span className="text-[9px] uppercase font-display tracking-widest text-[#E8E1D3]/50">
-                PREÇO DO ANÚNCIO:
-              </span>
-              <span className="font-mono font-bold text-xl sm:text-3xl text-[#E8E1D3]">
-                {formattedPrice}
-              </span>
-            </div>
-
             {formattedPromotionPrice && (
               <div className="border-l-2 border-[#D7A64B] bg-[#D7A64B]/10 px-3 py-2 text-xs text-[#E8E1D3]">
-                <p className="font-display text-[10px] uppercase tracking-widest text-[#D7A64B]">Oferta observada</p>
-                <p className="mt-0.5 font-mono font-bold text-base">{formattedPromotionPrice} {promotionCondition}</p>
+                <p className="font-display text-[10px] uppercase tracking-widest text-[#D7A64B]">Oferta confirmada</p>
+                <p className="mt-0.5 font-mono font-bold text-2xl sm:text-3xl text-[#D7A64B]">{formattedPromotionPrice} {promotionCondition}</p>
+                <p className="mt-1 text-[10px] font-mono text-[#E8E1D3]/65">Preço do anúncio: {formattedPrice}</p>
                 <p className="mt-1 text-[10px] leading-snug text-[#E8E1D3]/70">Condição confirmada manualmente. Cupons, Pix, frete e elegibilidade devem ser confirmados no checkout.</p>
                 {product.ofertaPromocional?.benefits.length ? (
                   <ul className="mt-1 list-disc pl-4 text-[10px] text-[#E8E1D3]/80">

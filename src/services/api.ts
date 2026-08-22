@@ -70,6 +70,7 @@ export async function getProducts(): Promise<any[]> {
       : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
     link: p.link || p.url || '',
     categoria: p.categoria || 'Geral',
+    createdAt: typeof (p.createdAt || p.created_at) === 'string' ? (p.createdAt || p.created_at) : undefined,
     ativo: p.ativo !== false,
     status: p.status || 'published'
   }));

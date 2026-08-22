@@ -241,15 +241,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         {/* Footer: Price & Direct Acquire Button */}
         <div className="pt-2 border-t border-[#3A342E] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 min-w-0">
           <div className="flex-1 min-w-0">
-            <span className="text-[8px] uppercase font-display tracking-widest text-[#E8E1D3]/50 block">PREÇO DO ANÚNCIO</span>
-            <span className="font-mono font-bold text-xs sm:text-sm text-[#E8E1D3] whitespace-nowrap">
-              {formattedPrice}
-            </span>
             {formattedPromotionPrice && (
-              <p className="mt-1 text-[9px] leading-snug text-[#D7A64B]">
-                <span className="font-display uppercase tracking-wider">Oferta observada:</span>{' '}
-                <span className="font-mono font-bold">{formattedPromotionPrice}</span> {promotionCondition}. Confirme no checkout.
-              </p>
+              <div className="space-y-0.5">
+                <span className="text-[8px] uppercase font-display tracking-widest text-[#D7A64B] block">OFERTA CONFIRMADA</span>
+                <span className="font-mono font-bold text-sm sm:text-base text-[#D7A64B] whitespace-nowrap">
+                  {formattedPromotionPrice} {promotionCondition}
+                </span>
+                <span className="text-[9px] font-mono text-[#E8E1D3]/60 block">Preço do anúncio: {formattedPrice}</span>
+                <p className="text-[8px] leading-snug text-[#E8E1D3]/50">Condições devem ser confirmadas no checkout.</p>
+              </div>
             )}
           </div>
 

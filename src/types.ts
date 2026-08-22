@@ -30,6 +30,7 @@ export interface Product {
   rawRowIndex?: number;
   lifecycleState?: string;
   lifecycleUpdatedAt?: string;
+  createdAt?: string;
 }
 
 export interface AppConfig {

@@ -171,6 +171,7 @@ async function generateStaticCatalog() {
     categoria: p.categoria || 'Geral',
     descricao: containsRawPayloadMarkers(p.descricao || p.description || '') ? '' : (p.descricao || p.description || ''),
     paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',
+    createdAt: p.createdAt || p.created_at || undefined,
     ofertaPromocional: sanitizePromotionOffer(p.ofertaPromocional || p.oferta_promocional),
     ativo: true,
     status: 'published'

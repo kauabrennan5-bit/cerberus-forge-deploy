@@ -5,6 +5,7 @@ import { initMetaPixel, initTikTokPixel } from './lib/pixels';
 import { captureUTMs } from './lib/utm';
 import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
 import { getProducts } from './services/api';
+import { orderCatalogProducts } from './lib/catalogOrder';
 
 import { Header } from './components/Header';
 import { ProductGrid } from './components/ProductGrid';
@@ -100,7 +101,8 @@ export default function App() {
 
     try {
       const productList = await getProducts();
-      setProducts(productList);
+      const orderedProducts = orderCatalogProducts(productList);
+      setProducts(orderedProducts);
 
       // Check if current URL requests a specific product slug/id
       if (typeof window !== 'undefined') {
@@ -114,7 +116,7 @@ export default function App() {
         }
 
         if (requestedSlugOrId) {
-          const found = productList.find((p: Product) => p.slug === requestedSlugOrId || p.id === requestedSlugOrId);
+          const found = orderedProducts.find((p: Product) => p.slug === requestedSlugOrId || p.id === requestedSlugOrId);
           if (found) {
             setSelectedProduct(found);
             setCurrentView('product-detail');

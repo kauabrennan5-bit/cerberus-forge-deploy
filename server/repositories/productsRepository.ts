@@ -135,6 +135,7 @@ export async function getProducts(): Promise<Product[]> {
       descricao: item.descricao || item.description || "",
       paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || "",
       ofertaPromocional: normalizePromotionOffer(item.oferta_promocional ?? item.ofertaPromocional),
+      createdAt: item.created_at || item.createdAt,
     }));
 
     return mapped.filter((p: Product) => isValidProductLink(p.link));

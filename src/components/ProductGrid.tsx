@@ -5,6 +5,19 @@ import { ProductCard } from './ProductCard';
 import { Search, RefreshCw, AlertCircle, Sparkles, Filter, X, Heart } from 'lucide-react';
 import { CerberusLogo } from './CerberusLogo';
 
+const BASE_CATEGORIES = [
+  'Iluminação',
+  'Decoração',
+  'Móveis',
+  'Cozinha & Mesa',
+  'Organização',
+  'Vestuário',
+  'Calçados & Acessórios',
+  'Tecnologia',
+  'Beleza & Bem-estar',
+  'Infantil',
+] as const;
+
 interface ProductGridProps {
   products: Product[];
   favorites: string[];
@@ -37,16 +50,11 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Extract unique categories from actual products
+  // A navegação apresenta a taxonomia editorial que será aplicada às próximas
+  // publicações. Não reclassifica produtos históricos automaticamente.
   const categories = useMemo(() => {
-    const set = new Set<string>();
-    products.forEach((p) => {
-      if (p.categoria && p.categoria.trim()) {
-        set.add(p.categoria.trim());
-      }
-    });
-    return ['Todos', ...Array.from(set).sort()];
-  }, [products]);
+    return ['Todos', ...BASE_CATEGORIES];
+  }, []);
 
   // Filter products by selected category, search string, and favorites
   const filteredProducts = useMemo(() => {
@@ -241,7 +249,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
             <ProductCard
               key={product.id}
               product={product}
-              index={idx}
+              index={product.rawRowIndex ?? idx}
               isFavorite={favorites.includes(product.id)}
               onToggleFavorite={onToggleFavorite}
               onSelectProduct={onSelectProduct}
