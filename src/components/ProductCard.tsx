@@ -127,7 +127,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         onSelectProduct(product);
       }}
       id={`product-card-${product.id}`}
-      className="group relative bg-[#141210] hover:bg-[#1C1815] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none overflow-hidden flex flex-col transition-all duration-300 cursor-pointer select-none touch-pan-y shadow-md hover:shadow-xl hover:-translate-y-0.5 w-full min-w-0"
+      className="group relative bg-[#141210] hover:bg-[#1C1815] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none overflow-hidden flex flex-col transition-all duration-200 cursor-pointer select-none touch-pan-y shadow-md hover:shadow-xl hover:-translate-y-0.5 active:scale-[0.99] motion-reduce:transform-none w-full min-w-0"
     >
       {/* Top Tag Header - Curatorial Archival Registration Badge */}
       <div className="min-w-0 p-2 sm:p-2.5 bg-[#0B0908] border-b border-[#3A342E] flex items-center justify-between gap-1 text-[10px] uppercase font-display tracking-widest text-[#E8E1D3]/80">
@@ -146,7 +146,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           {/* Heart Favorite Button */}
           <button
             onClick={handleFavoriteClick}
-            className={`min-h-10 min-w-10 p-1.5 rounded-none border transition-colors ${
+            className={`min-h-10 min-w-10 p-1.5 rounded-none border transition-all duration-150 active:scale-95 motion-reduce:transform-none ${
               isFavorite
                 ? 'bg-[#8A1F1F] text-[#E8E1D3] border-[#8A1F1F]'
                 : 'bg-[#0B0908] text-[#E8E1D3]/60 border-[#3A342E] hover:text-[#E8E1D3] hover:border-[#8A1F1F]'
@@ -235,7 +235,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <p className="text-[9px] uppercase font-display tracking-widest text-[#8A1F1F] mb-0.5 font-bold">
             {product.categoria}
           </p>
-          <h3 className="font-display text-xs sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-snug tracking-wide break-words min-h-[2.5rem] overflow-hidden">
+          <h3 title={displayTitle} className="h-[2.7rem] font-display text-xs sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-[1.35] tracking-wide break-words overflow-hidden">
             {displayTitle}
           </h3>
         </div>
@@ -257,7 +257,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
           <button
             onClick={handleBuyClick}
-            className="min-h-10 w-full sm:w-auto shrink-0 px-2.5 py-1 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] hover:bg-[#8A1F1F] text-[#E8E1D3] text-[10px] font-display uppercase tracking-wider flex items-center justify-center space-x-1 transition-colors rounded-none"
+            className="min-h-10 w-full sm:w-auto shrink-0 px-2.5 py-1 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] hover:bg-[#8A1F1F] active:scale-[0.98] motion-reduce:transform-none text-[#E8E1D3] text-[10px] font-display uppercase tracking-wider flex items-center justify-center space-x-1 transition-all duration-150 rounded-none"
           >
             <span>ADQUIRIR</span>
             <ExternalLink className="w-3 h-3 text-[#8A1F1F] group-hover:text-[#E8E1D3]" />

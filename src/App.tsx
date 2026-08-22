@@ -6,6 +6,7 @@ import { captureUTMs } from './lib/utm';
 import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
 import { getProducts, subscribeNewsletter } from './services/api';
 import { orderCatalogProducts } from './lib/catalogOrder';
+import { getRelatedProducts } from './lib/relatedProducts';
 
 import { Header } from './components/Header';
 import { ProductGrid } from './components/ProductGrid';
@@ -168,6 +169,7 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const slug = product.slug || product.id;
       window.history.pushState({}, '', `/produto/${slug}`);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -242,6 +244,7 @@ export default function App() {
   const existingCategories = Array.from(
     new Set(products.map((p) => p.categoria).filter(Boolean))
   );
+  const relatedProducts = selectedProduct ? getRelatedProducts(selectedProduct, products) : [];
 
   return (
     <div className="min-h-screen min-w-0 bg-noise bg-[#0B0908] text-[#E8E1D3] flex flex-col font-sans selection:bg-[#8A1F1F] selection:text-[#E8E1D3] w-full max-w-full">
@@ -281,8 +284,11 @@ export default function App() {
             product={selectedProduct}
             index={products.findIndex((p) => p.id === selectedProduct.id)}
             isFavorite={favorites.includes(selectedProduct.id)}
+            favoriteIds={favorites}
             onToggleFavorite={handleToggleFavorite}
             onBack={handleBackToCatalog}
+            relatedProducts={relatedProducts}
+            onSelectProduct={handleSelectProduct}
             metaPixelId={config.metaPixelId}
             metaAccessToken={config.metaAccessToken}
           />

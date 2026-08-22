@@ -1,16 +1,20 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 // Mobile refinement: keep the approved product-detail composition while constraining gallery, metadata, actions, and lightbox content to the viewport.
 import { Product } from '../types';
 import { getProductDisplayTitle } from '../lib/productPresentation';
 import { trackClickAndGetUrl } from '../lib/analytics';
 import { ArrowLeft, ExternalLink, Heart, Share2, Check, ChevronLeft, ChevronRight, ImageOff, ShieldCheck, Maximize2, X } from 'lucide-react';
+import { ProductCard } from './ProductCard';
 
 interface ProductDetailProps {
   product: Product;
   index?: number;
   isFavorite: boolean;
+  favoriteIds: string[];
   onToggleFavorite: (id: string) => void;
   onBack: () => void;
+  relatedProducts: Product[];
+  onSelectProduct: (product: Product) => void;
   metaPixelId?: string;
   metaAccessToken?: string;
 }
@@ -19,8 +23,11 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   product,
   index = 0,
   isFavorite,
+  favoriteIds,
   onToggleFavorite,
   onBack,
+  relatedProducts,
+  onSelectProduct,
   metaPixelId,
   metaAccessToken
 }) => {
@@ -61,6 +68,12 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     return normalized.length >= 8 && /\s/.test(normalized);
   });
   const displayTitle = getProductDisplayTitle(product);
+
+  useEffect(() => {
+    setSelectedImageIndex(0);
+    setImageError({});
+    setIsZoomOpen(false);
+  }, [product.id]);
 
   const handleNextImage = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -307,7 +320,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               <button
                 onClick={handleBuy}
                 disabled={isRedirecting}
-                className="min-h-12 w-full py-3 sm:py-4 bg-[#8A1F1F] hover:bg-[#8A1F1F]/80 text-[#E8E1D3] font-display text-xs sm:text-base uppercase tracking-widest flex items-center justify-center space-x-2 rounded-none transition-colors border border-[#8A1F1F] shadow-lg"
+                className="min-h-12 w-full py-3 sm:py-4 bg-[#8A1F1F] hover:bg-[#8A1F1F]/80 active:scale-[0.99] motion-reduce:transform-none text-[#E8E1D3] font-display text-xs sm:text-base uppercase tracking-widest flex items-center justify-center space-x-2 rounded-none transition-all duration-150 border border-[#8A1F1F] shadow-lg"
               >
                 {isRedirecting ? (
                   <span>REDIRECIONANDO...</span>
@@ -360,6 +373,34 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
         </div>
 
       </div>
+
+      {relatedProducts.length > 0 && (
+        <section aria-labelledby="related-products-title" className="border-t border-[#3A342E] pt-5 sm:pt-7 animate-fade-in">
+          <div className="mb-3 flex min-w-0 items-end justify-between gap-3 sm:mb-4">
+            <div className="min-w-0">
+              <p className="text-[9px] font-display uppercase tracking-[0.22em] text-[#8A1F1F]">Da mesma curadoria</p>
+              <h2 id="related-products-title" className="mt-1 font-gothic text-2xl text-[#E8E1D3] sm:text-3xl">Você também pode gostar</h2>
+            </div>
+            <span className="shrink-0 text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Continue explorando</span>
+          </div>
+
+          <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 lg:grid-cols-4 md:overflow-visible">
+            {relatedProducts.map((related, relatedIndex) => (
+              <div key={related.id} className="w-[76vw] max-w-[17rem] shrink-0 snap-start md:w-auto md:max-w-none md:min-w-0">
+                <ProductCard
+                  product={related}
+                  index={related.rawRowIndex ?? relatedIndex}
+                  isFavorite={favoriteIds.includes(related.id)}
+                  onToggleFavorite={onToggleFavorite}
+                  onSelectProduct={onSelectProduct}
+                  metaPixelId={metaPixelId}
+                  metaAccessToken={metaAccessToken}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Lightbox / Fullscreen Zoom Modal */}
       {isZoomOpen && images[selectedImageIndex] && (
