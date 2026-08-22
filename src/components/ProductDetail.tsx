@@ -384,9 +384,9 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
             <span className="shrink-0 text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Continue explorando</span>
           </div>
 
-          <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 lg:grid-cols-4 md:overflow-visible">
+          <div className="flex snap-x snap-mandatory gap-2 sm:gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 lg:grid-cols-4 md:overflow-visible">
             {relatedProducts.map((related, relatedIndex) => (
-              <div key={related.id} className="w-[76vw] max-w-[17rem] shrink-0 snap-start md:w-auto md:max-w-none md:min-w-0">
+              <div key={related.id} className="w-[70vw] max-w-[15rem] sm:w-[76vw] sm:max-w-[17rem] shrink-0 snap-start md:w-auto md:max-w-none md:min-w-0">
                 <ProductCard
                   product={related}
                   index={related.rawRowIndex ?? relatedIndex}

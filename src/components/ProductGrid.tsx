@@ -195,7 +195,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
                     setSelectedCategory(category.name);
                     setIsCategoryPanelOpen(false);
                   }}
-                  className={`group flex min-h-24 min-w-0 flex-col justify-between border-b border-r border-[#3A342E] p-3 text-left transition-colors ${
+                  className={`group flex min-h-20 sm:min-h-24 min-w-0 flex-col justify-between border-b border-r border-[#3A342E] p-2.5 sm:p-3 text-left transition-colors ${
                     selectedCategory === category.name
                       ? 'bg-[#8A1F1F] text-[#E8E1D3]'
                       : 'bg-[#141210] text-[#E8E1D3] hover:bg-[#211C18]'
@@ -295,7 +295,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
 
       {/* Main Responsive Grid (Mobile: 2 cols | Tablet: 3 cols | Desktop: 4-5 cols) */}
       {!isLoading && !error && filteredProducts.length > 0 && (
-        <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
+        <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 sm:gap-4 lg:gap-5">
           {filteredProducts.map((product, idx) => (
             <ProductCard
               key={product.id}

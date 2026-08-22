@@ -130,7 +130,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       className="group relative bg-[#141210] hover:bg-[#1C1815] border border-[#3A342E] hover:border-[#8A1F1F] rounded-none overflow-hidden flex flex-col transition-all duration-200 cursor-pointer select-none touch-pan-y shadow-md hover:shadow-xl hover:-translate-y-0.5 active:scale-[0.99] motion-reduce:transform-none w-full min-w-0"
     >
       {/* Top Tag Header - Curatorial Archival Registration Badge */}
-      <div className="min-w-0 p-2 sm:p-2.5 bg-[#0B0908] border-b border-[#3A342E] flex items-center justify-between gap-1 text-[10px] uppercase font-display tracking-widest text-[#E8E1D3]/80">
+      <div className="min-w-0 p-1.5 sm:p-2.5 bg-[#0B0908] border-b border-[#3A342E] flex items-center justify-between gap-1 text-[9px] sm:text-[10px] uppercase font-display tracking-widest text-[#E8E1D3]/80">
         <span className="min-w-0 font-mono text-[#8A1F1F] font-bold text-[10px] flex items-center space-x-1 truncate">
           <span className="w-1.5 h-1.5 bg-[#8A1F1F] inline-block mr-1"></span>
           <span>{refNumber}</span>
@@ -160,7 +160,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
       {/* Image Stage */}
       <div
-        className="relative w-full aspect-square min-w-0 bg-[#090807] p-2 flex items-center justify-center overflow-hidden border-b border-[#3A342E]"
+        className="relative w-full aspect-[5/4] sm:aspect-square min-w-0 bg-[#090807] p-1.5 sm:p-2 flex items-center justify-center overflow-hidden border-b border-[#3A342E]"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -185,14 +185,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <>
             <button
               onClick={handlePrevImage}
-              className="absolute left-1 top-1/2 -translate-y-1/2 min-h-10 min-w-10 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-[#8A1F1F] hover:border-[#8A1F1F]"
+              className="absolute left-1 top-1/2 -translate-y-1/2 min-h-10 min-w-10 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] hidden sm:flex items-center justify-center sm:opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-[#8A1F1F] hover:border-[#8A1F1F]"
               title="Foto anterior"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleNextImage}
-              className="absolute right-1 top-1/2 -translate-y-1/2 min-h-10 min-w-10 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-[#8A1F1F] hover:border-[#8A1F1F]"
+              className="absolute right-1 top-1/2 -translate-y-1/2 min-h-10 min-w-10 bg-[#0B0908]/90 border border-[#3A342E] text-[#E8E1D3] hidden sm:flex items-center justify-center sm:opacity-0 group-hover:opacity-100 transition-opacity z-10 hover:bg-[#8A1F1F] hover:border-[#8A1F1F]"
               title="Próxima foto"
             >
               <ChevronRight className="w-3.5 h-3.5" />
@@ -202,7 +202,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
         {/* Interactive Clickable Navigation Dots */}
         {hasMultipleImages && (
-          <div className="absolute bottom-1.5 left-0 right-0 flex justify-center items-center space-x-1.5 z-10">
+          <div className="absolute bottom-1 left-0 right-0 flex justify-center items-center space-x-1 z-10">
             {images.map((_, idx) => (
               <button
                 key={idx}
@@ -230,23 +230,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       </div>
 
       {/* Card Details Body */}
-      <div className="min-w-0 p-2.5 sm:p-3 flex-1 flex flex-col justify-between space-y-2.5 bg-[#141210]">
+      <div className="min-w-0 p-2 sm:p-3 flex-1 flex flex-col justify-between space-y-2 sm:space-y-2.5 bg-[#141210]">
         <div>
-          <p className="text-[9px] uppercase font-display tracking-widest text-[#8A1F1F] mb-0.5 font-bold">
+          <p className="text-[8px] sm:text-[9px] uppercase font-display tracking-widest text-[#8A1F1F] mb-0.5 font-bold">
             {product.categoria}
           </p>
-          <h3 title={displayTitle} className="h-[2.7rem] font-display text-xs sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-[1.35] tracking-wide break-words overflow-hidden">
+          <h3 title={displayTitle} className="h-[2.4rem] sm:h-[2.7rem] font-display text-[11px] sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-[1.3] sm:leading-[1.35] tracking-wide break-words overflow-hidden">
             {displayTitle}
           </h3>
         </div>
 
         {/* Footer: Price & Direct Acquire Button */}
-        <div className="pt-2 border-t border-[#3A342E] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 min-w-0">
+        <div className="pt-1.5 sm:pt-2 border-t border-[#3A342E] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1.5 sm:gap-2 min-w-0">
           <div className="flex-1 min-w-0">
             {formattedPromotionPrice && (
               <div className="space-y-0.5">
                 <span className="text-[8px] uppercase font-display tracking-widest text-[#D7A64B] block">PREÇO VERIFICADO</span>
-                <span className="font-mono font-bold text-sm sm:text-base text-[#D7A64B] leading-tight break-words">
+                <span className="font-mono font-bold text-[13px] sm:text-base text-[#D7A64B] leading-tight break-words">
                   {formattedPromotionPrice} {promotionCondition}
                 </span>
                 <span className="text-[9px] font-mono text-[#E8E1D3]/60 block">Preço do anúncio: {formattedPrice}</span>
@@ -257,7 +257,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
           <button
             onClick={handleBuyClick}
-            className="min-h-10 w-full sm:w-auto shrink-0 px-2.5 py-1 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] hover:bg-[#8A1F1F] active:scale-[0.98] motion-reduce:transform-none text-[#E8E1D3] text-[10px] font-display uppercase tracking-wider flex items-center justify-center space-x-1 transition-all duration-150 rounded-none"
+            className="min-h-9 sm:min-h-10 w-full sm:w-auto shrink-0 px-2 sm:px-2.5 py-1 bg-[#0B0908] border border-[#3A342E] hover:border-[#8A1F1F] hover:bg-[#8A1F1F] active:scale-[0.98] motion-reduce:transform-none text-[9px] sm:text-[10px] font-display uppercase tracking-wider flex items-center justify-center space-x-1 transition-all duration-150 rounded-none"
           >
             <span>ADQUIRIR</span>
             <ExternalLink className="w-3 h-3 text-[#8A1F1F] group-hover:text-[#E8E1D3]" />

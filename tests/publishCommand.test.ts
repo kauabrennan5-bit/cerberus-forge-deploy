@@ -141,7 +141,7 @@ function buildPendingReview(partial: Partial<FakeReview>): FakeReview {
     normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
     descricao: "affiliate_preview · source=affiliate_preview",
     status: "pending",
-    existingProduct: { source: "affiliate_preview", priceScaleVerified: false },
+    existingProduct: { source: "affiliate_preview", affiliateUrl: "https://s.shopee.com.br/default-affiliate", priceScaleVerified: false },
     ...partial,
   } as FakeReview;
 }
@@ -436,12 +436,16 @@ test("confirm_pub publica com o affiliate link oficial como link do produto e de
   }
 });
 
-test("descricao legítima (não-proveniência) é preservada intacta na publicação", async () => {
+test("confirm_pub preserva descrição, preço, título editorial e link oficial na publicação", async () => {
   const cleanup = installFakeTelegramTransport();
   const reviewId = "affprev-legit";
   reviewsById.set(reviewId, buildPendingReview({
     id: reviewId,
     status: "pending",
+    produto: "Luminária de mesa observada no anúncio",
+    rawTitle: "Luminária de mesa observada no anúncio",
+    displayTitle: "Luminária de Mesa Bauhaus",
+    preco: 264,
     descricao: "Organizador de talheres em madeira nobre com suporte de vidro. Peça elegante para mesas postas.",
     existingProduct: { source: "affiliate_preview", affiliateUrl: "https://s.shopee.com.br/legit", priceScaleVerified: false },
   }));
@@ -468,6 +472,44 @@ test("descricao legítima (não-proveniência) é preservada intacta na publica�
       "Organizador de talheres em madeira nobre com suporte de vidro. Peça elegante para mesas postas.",
       "descrição legítima preservada — fail-closed nunca inventa nem apaga conteúdo real",
     );
+    assert.equal(capturedCandidate.rawTitle, "Luminária de mesa observada no anúncio");
+    assert.equal(capturedCandidate.displayTitle, "Luminária de Mesa Bauhaus");
+    assert.equal(capturedCandidate.preco, 264);
+    assert.equal(capturedCandidate.link, "https://s.shopee.com.br/legit");
+  } finally {
+    setTestProductPipeline(null);
+    cleanup();
+  }
+});
+
+test("confirm_pub bloqueia a review Shopee sem link de afiliado antes da persistência canônica", async () => {
+  const cleanup = installFakeTelegramTransport();
+  const reviewId = "affprev-without-affiliate";
+  reviewsById.set(reviewId, buildPendingReview({
+    id: reviewId,
+    existingProduct: { source: "affiliate_preview", priceScaleVerified: false },
+  }));
+  let createCanonicalProductCalls = 0;
+  setTestProductPipeline(() => new ProductPipeline({
+    getProducts: async () => [],
+    createCanonicalProduct: async () => {
+      createCanonicalProductCalls += 1;
+      throw new Error("não deveria persistir produto");
+    },
+    syncAndValidatePublication: async () => ({ success: true }),
+    pauseCanonicalProduct: async () => {},
+  }));
+  try {
+    await handleTelegramWebhookUpdate({
+      callback_query: {
+        from: { id: adminUserId },
+        message: { chat: { id: adminUserId }, message_id: 54, text: "placeholder" },
+        data: `confirm_pub:${reviewId}`,
+      } as any,
+    });
+    assert.equal(createCanonicalProductCalls, 0, "nenhum produto parcial é criado");
+    assert.equal(reviewsById.get(reviewId)?.status, "error");
+    assert.ok(sentMessages.some((message) => /AFFILIATE_LINK_REQUIRED/.test(message.text)));
   } finally {
     setTestProductPipeline(null);
     cleanup();

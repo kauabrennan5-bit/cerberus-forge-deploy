@@ -153,7 +153,11 @@ describe("runShopeeCommand — lote completo", () => {
         normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
         imagens: ["https://img.test/1.webp"],
         preco: 79.9,
+        rawTitle: "Produto Teste Shopee — título observado",
+        displayTitle: "Luminária de Mesa Bauhaus",
         produto: "Produto Teste",
+        descricao: "Luminária compacta com leitura contemporânea e acabamento em vidro.",
+        categoria: "Acessórios",
       },
     }));
 
@@ -171,13 +175,15 @@ describe("runShopeeCommand — lote completo", () => {
     setTestShopeeLotPauseMs(0);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
     process.env.TELEGRAM_ALLOWED_USER_IDS = originalAllowed;
     telegramRepositoryModule.setTestSavePendingReview(null);
     telegramModule.setTestTelegramSenders(null, null);
     shopeeDiscoveryModule.setTestDiscoveryOverride(null);
     shopeeCmdTopo.setTestShopeeClient(null);
+    const paModule = await import("../server/services/productAutomation");
+    paModule.setTestExtractProductForReview(null);
     setTestShopeeLotPauseMs(null);
   });
 
@@ -193,6 +199,19 @@ describe("runShopeeCommand — lote completo", () => {
     assert.match(capturedPhoto.caption, /PREVIEW SHOPEE AFFILIATE/);
     assert.equal(capturedPhoto.caption.includes("shop_id=<code>1530442944</code>"), true);
     assert.equal(capturedPhoto.caption.includes("item_id=<code>23794344926</code>"), true);
+  });
+
+  it("persiste na review os campos editoriais e comerciais que a publicação canônica precisa", async () => {
+    const result = await runShopeeCommand("1 luminária bauhaus");
+
+    assert.equal(result.ok, 1);
+    assert.equal(savedReviews.length, 1);
+    assert.equal(savedReviews[0]?.produto, "Produto Teste Shopee — título observado");
+    assert.equal(savedReviews[0]?.rawTitle, "Produto Teste Shopee — título observado");
+    assert.equal(savedReviews[0]?.displayTitle, "Luminária de Mesa Bauhaus");
+    assert.equal(savedReviews[0]?.descricao, "Luminária compacta com leitura contemporânea e acabamento em vidro.");
+    assert.equal(savedReviews[0]?.categoria, "Acessórios");
+    assert.equal(savedReviews[0]?.existingProduct?.affiliateUrl, "https://s.shopee.com.br/TESTE");
   });
 
   it("usa busca oficial por termo antes do fallback externo e entrega card sem URL do administrador", async () => {

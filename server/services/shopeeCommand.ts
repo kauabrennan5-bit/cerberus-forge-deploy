@@ -249,7 +249,10 @@ async function enrichWithExistingScraper(params: {
   scraperCheckoutPrice: number | null;
   scraperCheckoutPriceCondition: "pix" | "pix_with_coupon" | null;
   promotionEvidence: ShopeePromotionEvidence | null;
+  rawTitle: string | null;
   curatedTitle: string | null;
+  description: string;
+  category: string | null;
 }> {
   try {
     const result = await extractProductForReview(params.productLink);
@@ -263,7 +266,10 @@ async function enrichWithExistingScraper(params: {
         scraperCheckoutPrice: null,
         scraperCheckoutPriceCondition: null,
         promotionEvidence: null,
+        rawTitle: null,
         curatedTitle: null,
+        description: "",
+        category: null,
       };
     }
     const data = result.data;
@@ -274,7 +280,7 @@ async function enrichWithExistingScraper(params: {
       extracted.shopId === params.officialShopId &&
       extracted.itemId === params.officialItemId;
     if (!identityMatches) {
-      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, curatedTitle: null };
+      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, rawTitle: null, curatedTitle: null, description: "", category: null };
     }
     return {
       ok: true,
@@ -285,10 +291,13 @@ async function enrichWithExistingScraper(params: {
       scraperCheckoutPrice: data.precoCheckout ?? null,
       scraperCheckoutPriceCondition: data.condicaoPrecoCheckout ?? null,
       promotionEvidence: data.evidenciaPromocional ?? null,
-      curatedTitle: data.produto ?? null,
+      rawTitle: data.rawTitle ?? data.produto ?? null,
+      curatedTitle: data.displayTitle ?? data.produto ?? null,
+      description: data.descricao?.trim() ?? "",
+      category: data.categoria?.trim() || null,
     };
   } catch {
-    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, curatedTitle: null };
+    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, rawTitle: null, curatedTitle: null, description: "", category: null };
   }
 }
 
@@ -772,10 +781,9 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       continue;
     }
 
-    // 5. PendingReview — contrato REAL de PendingReview (telegramBot.ts):
-    // id/chatId/senderId/firstName/username/produto/categoria/preco/imagens/
-    // normalizedUrl/descricao/status/expiresAt/existingProduct. Espelha
-    // persistPreviewReview do preview-telegram validado na Fase 24.
+    // 5. PendingReview — é a fonte completa para o clique posterior em
+    // [PUBLICAR]. A proveniência permanece separada em existingProduct; nunca
+    // ocupa descricao, que será projetada publicamente se estiver disponível.
     const reviewId = buildShopeeReviewId(item.publicUrl, chatId);
     const hasScrapedPrice =
       enriched.scraperPrice !== null &&
@@ -803,17 +811,14 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       senderId: chatId,
       firstName: process.env.USER ?? "admin",
       username: process.env.USER ?? "admin",
-      produto: enriched.curatedTitle ?? acquisition.name ?? `item ${item.itemId}`,
-      categoria: "affiliate_preview",
+      produto: enriched.rawTitle ?? acquisition.name ?? `item ${item.itemId}`,
+      rawTitle: enriched.rawTitle ?? acquisition.name ?? undefined,
+      displayTitle: enriched.curatedTitle ?? enriched.rawTitle ?? acquisition.name ?? undefined,
+      categoria: enriched.category ?? "affiliate_preview",
       preco: displayPrice,
       imagens: enriched.images,
       normalizedUrl: acquisition.productLink ?? item.publicUrl,
-      descricao: [
-        `affiliate_preview · source=/shopee · batch=${lotId} · candidate=${candidateIndex}`,
-        `link oficial retornado pela Affiliate API: ${acquisition.affiliateUrl}`,
-        `enriquecimento scraper: ${enriched.images.length} imagem(ns)${hasScrapedPrice ? ", preço observacional presente" : ""} · ${provenanceNote}`,
-        `auditoria identidade: shop_id=${item.shopId} item_id=${item.itemId}`,
-      ].join(" · "),
+      descricao: enriched.description,
       status: "pending",
       createdAt: Date.now(),
       expiresAt: Date.now() + REVIEW_TTL_MS,

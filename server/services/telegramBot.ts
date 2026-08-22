@@ -364,6 +364,24 @@ async function refreshReviewLifecycle(review: PendingReview): Promise<LifecycleR
   return lifecycle;
 }
 
+function getPublicationLink(review: PendingReview): { link?: string; error?: string } {
+  const affiliateLink = typeof review.existingProduct?.affiliateUrl === "string"
+    ? review.existingProduct.affiliateUrl.trim()
+    : "";
+  const marketplace = detectMarketplace(review.normalizedUrl);
+  if (marketplace === "Shopee" && !affiliateLink) {
+    return { error: "AFFILIATE_LINK_REQUIRED" };
+  }
+  const link = affiliateLink || review.normalizedUrl.trim();
+  try {
+    const parsed = new URL(link);
+    if (!/^https?:$/i.test(parsed.protocol)) return { error: "PRODUCT_LINK_INVALID" };
+    return { link };
+  } catch {
+    return { error: "PRODUCT_LINK_INVALID" };
+  }
+}
+
 function logAndValidateReviewCallback(
   actionName: string,
   reviewId: string,
@@ -1239,19 +1257,26 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         review.status = "publishing";
         await telegramRepo.savePendingReview(review);
         const pipeline = createProductionProductPipeline();
-        // FASE 25C (Commit 3) — link do produto: autoridade é o affiliate link oficial da
-        // review (Affiliate API); sem ele, a URL pública normalizada oficial é o fallback.
-        const affiliateLink = (review.existingProduct?.affiliateUrl || "").trim();
-        let lifecycle = review.lifecycle ? restoreLifecycleRecord(review.lifecycle) : await pipeline.evaluate({
+        const publicationLink = getPublicationLink(review);
+        if (!publicationLink.link) {
+          review.status = "error";
+          await telegramRepo.savePendingReview(review);
+          if (chatId) await sendTelegramMessage(chatId, `❌ <b>${publicationLink.error}</b>\n\nA publicação foi bloqueada antes de criar um produto canônico. A review Shopee precisa manter um link de afiliado oficial válido.`);
+          return;
+        }
+        // O lifecycle é reavaliado com a review integral no instante de
+        // publicação. Assim, um preview salvo antes de edições de preço ou da
+        // curadoria não descarta displayTitle, descrição, oferta ou link.
+        let lifecycle = await pipeline.evaluate({
           produto: review.produto,
           rawTitle: review.rawTitle,
-          displayTitle: review.displayTitle,
+          displayTitle: review.displayTitle || review.rawTitle || review.produto,
           curatorNote: review.curatorNote,
           categoria: review.categoria,
           preco: review.preco,
           imagens: review.imagens,
           normalizedUrl: review.normalizedUrl,
-          link: affiliateLink || review.normalizedUrl,
+          link: publicationLink.link,
           descricao: stripRawAffiliateProvenance(review.descricao),
           marketplace: detectMarketplace(review.normalizedUrl),
         });
@@ -1695,12 +1720,17 @@ async function renderCycleState(input: string): Promise<string> {
         if (restored && (restored.state === "PENDING_APPROVAL" || restored.state === "APPROVED")) {
           preview = restored;
         } else {
+          const publicationLink = getPublicationLink(review);
           preview = await createProductionProductPipeline().evaluate({
             produto: review.produto,
+            rawTitle: review.rawTitle,
+            displayTitle: review.displayTitle || review.rawTitle || review.produto,
+            curatorNote: review.curatorNote,
             categoria: review.categoria,
             preco: review.preco,
             imagens: review.imagens,
             normalizedUrl: review.normalizedUrl,
+            link: publicationLink.link || review.normalizedUrl,
             descricao: review.descricao,
             marketplace: detectMarketplace(review.normalizedUrl),
           });
