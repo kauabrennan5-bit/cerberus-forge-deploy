@@ -135,11 +135,13 @@ function buildPendingReview(partial: Partial<FakeReview>): FakeReview {
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
     produto: "Porta Talher Madeira Nobre Teste",
+    rawTitle: "Porta Talher Madeira Nobre Teste",
+    displayTitle: "Porta-Talheres de Madeira Nobre",
     categoria: "affiliate_preview",
     preco: 79.9,
     imagens: ["https://down-br.img.susercontent.com/file/sg-test"],
     normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
-    descricao: "affiliate_preview · source=affiliate_preview",
+    descricao: "Porta-talheres em madeira nobre para organizar a mesa com acabamento acolhedor.",
     status: "pending",
     existingProduct: { source: "affiliate_preview", affiliateUrl: "https://s.shopee.com.br/default-affiliate", priceScaleVerified: false },
     ...partial,
@@ -378,7 +380,7 @@ test("/publicar é rejeitado para usuário não autorizado", async () => {
   }
 });
 
-test("confirm_pub publica com o affiliate link oficial como link do produto e descrição pública limpa", async () => {
+test("confirm_pub bloqueia review cuja descrição só contém proveniência técnica", async () => {
   const cleanup = installFakeTelegramTransport();
   const reviewId = "affprev-affiliate";
   const affiliateUrl = "https://s.shopee.com.br/40ftCq9rTu";
@@ -413,22 +415,11 @@ test("confirm_pub publica com o affiliate link oficial como link do produto e de
         data: `confirm_pub:${reviewId}`,
       } as any,
     });
-    assert.ok(capturedCandidate, "candidate foi persistido pelo publish canônico");
-    assert.equal(
-      capturedCandidate.link,
-      affiliateUrl,
-      "link do produto = affiliate link oficial da review (autoridade)",
-    );
-    assert.equal(
-      capturedCandidate.normalizedUrl,
-      "https://shopee.com.br/product/1530442944/23794344926",
-      "URL pública canônica preservada em normalizedUrl para auditoria/deduplicação",
-    );
-    assert.equal(capturedCandidate.descricao, "", "descrição pública vazia quando o conteúdo é proveniência raw");
-    assert.equal(capturedCandidate.categoria, "Afiliado", "categoria interna 'affiliate_preview' mapeada para a apresentação pública");
+    assert.equal(capturedCandidate, null, "review parcial não alcança a persistência canônica");
+    assert.equal(reviewsById.get(reviewId)?.status, "error");
     assert.ok(
-      sentMessages.some((message) => /PEÇA PUBLICADA COM SUCESSO/i.test(message.text)),
-      "confirmação de sucesso é enviada como nova mensagem tanto para card de foto quanto de texto",
+      sentMessages.some((message) => /descrição editorial ausente/i.test(message.text)),
+      "o bloqueio explica que a proveniência técnica não é uma descrição pública",
     );
   } finally {
     setTestProductPipeline(null);

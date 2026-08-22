@@ -382,6 +382,25 @@ function getPublicationLink(review: PendingReview): { link?: string; error?: str
   }
 }
 
+function getPublicationCompletenessErrors(review: PendingReview): string[] {
+  const errors: string[] = [];
+  const rawTitle = review.rawTitle?.trim() || review.produto?.trim() || "";
+  const displayTitle = review.displayTitle?.trim() || "";
+  const description = stripRawAffiliateProvenance(review.descricao || "").trim();
+
+  if (!rawTitle) errors.push("título de origem ausente");
+  // O título público deve resultar da curadoria, não de um fallback silencioso
+  // para o título longo recebido do marketplace.
+  if (!displayTitle || displayTitle === rawTitle) errors.push("título editorial ausente");
+  if (!Number.isFinite(review.preco) || review.preco <= 0) errors.push("preço válido ausente");
+  if (!Array.isArray(review.imagens) || review.imagens.filter((image) => typeof image === "string" && image.trim()).length === 0) {
+    errors.push("imagem válida ausente");
+  }
+  if (description.length < 24) errors.push("descrição editorial ausente");
+
+  return errors;
+}
+
 function logAndValidateReviewCallback(
   actionName: string,
   reviewId: string,
@@ -1251,6 +1270,18 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         return;
       }
       try {
+        const completenessErrors = getPublicationCompletenessErrors(review);
+        if (completenessErrors.length > 0) {
+          review.status = "error";
+          await telegramRepo.savePendingReview(review);
+          if (chatId) {
+            await sendTelegramMessage(
+              chatId,
+              `❌ <b>PUBLICAÇÃO BLOQUEADA</b>\n\nA review não tem dados suficientes para criar um produto canônico: ${completenessErrors.join(", ")}. Nenhum produto foi criado. Reprocesse ou ajuste a review sem inventar informações.`
+            );
+          }
+          return;
+        }
         // Trava a mesma review antes de qualquer persistência canônica: um
         // segundo toque no botão não pode criar um produto duplicado enquanto
         // Supabase → GitHub → catálogo público está em andamento.
