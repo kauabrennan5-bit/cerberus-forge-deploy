@@ -1,6 +1,7 @@
 import { generateSlug } from "../../src/data/initialProducts";
 
 import { detectMarketplace } from "./marketplace";
+import type { PromotionOffer } from "../../src/types";
 
 export type ProductLifecycleState =
   | "DISCOVERED" | "COLLECTING" | "COLLECTED" | "VALIDATING" | "ANALYZING" | "CURATING"
@@ -27,6 +28,8 @@ export interface ProductCandidate {
   categoria: string;
   preco: number | null;
   precoAntigo?: number | null;
+  /** Oferta confirmada manualmente; não altera o preço-base `preco`. */
+  ofertaPromocional?: PromotionOffer;
   imagens: string[];
   slug: string;
   ref?: string;
@@ -157,6 +160,7 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
     categoria: publicCategoryMapping((input.categoria || "").trim()),
     preco: typeof input.preco === "number" && Number.isFinite(input.preco) ? input.preco : null,
     precoAntigo: typeof input.precoAntigo === "number" ? input.precoAntigo : null,
+    ofertaPromocional: input.ofertaPromocional,
     imagens: Array.isArray(input.imagens) ? input.imagens.filter(image => typeof image === "string" && /^https?:\/\//i.test(image)) : [],
     slug: input.slug || generateSlug(produto),
     ref: input.ref,

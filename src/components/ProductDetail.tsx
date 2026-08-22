@@ -45,6 +45,16 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     style: 'currency',
     currency: 'BRL'
   }).format(product.preco);
+  const formattedPromotionPrice = product.ofertaPromocional
+    ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.ofertaPromocional.price)
+    : null;
+  const promotionCondition = product.ofertaPromocional?.condition === 'pix'
+    ? 'no Pix'
+    : product.ofertaPromocional?.condition === 'pix_with_coupon'
+      ? 'no Pix com cupom'
+      : product.ofertaPromocional?.condition === 'coupon'
+        ? 'com cupom'
+        : 'sob condição observada';
 
   const handleNextImage = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -277,12 +287,25 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
 
             <div className="flex items-baseline space-x-2 pt-0.5">
               <span className="text-[9px] uppercase font-display tracking-widest text-[#E8E1D3]/50">
-                VALOR:
+                PREÇO DO ANÚNCIO:
               </span>
               <span className="font-mono font-bold text-xl sm:text-3xl text-[#E8E1D3]">
                 {formattedPrice}
               </span>
             </div>
+
+            {formattedPromotionPrice && (
+              <div className="border-l-2 border-[#D7A64B] bg-[#D7A64B]/10 px-3 py-2 text-xs text-[#E8E1D3]">
+                <p className="font-display text-[10px] uppercase tracking-widest text-[#D7A64B]">Oferta observada</p>
+                <p className="mt-0.5 font-mono font-bold text-base">{formattedPromotionPrice} {promotionCondition}</p>
+                <p className="mt-1 text-[10px] leading-snug text-[#E8E1D3]/70">Condição confirmada manualmente. Cupons, Pix, frete e elegibilidade devem ser confirmados no checkout.</p>
+                {product.ofertaPromocional?.benefits.length ? (
+                  <ul className="mt-1 list-disc pl-4 text-[10px] text-[#E8E1D3]/80">
+                    {product.ofertaPromocional.benefits.map((benefit) => <li key={benefit}>{benefit}</li>)}
+                  </ul>
+                ) : null}
+              </div>
+            )}
 
             {/* Primary Action Button - Prominent & Above the Fold on Mobile */}
             <div className="pt-1 pb-1">

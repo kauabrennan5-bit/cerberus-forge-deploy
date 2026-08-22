@@ -11,6 +11,7 @@ import { syncCatalogAndDeploy } from "./catalogSync";
 import { detectMarketplace } from "./marketplace";
 import { stripRawAffiliateProvenance } from "./productLifecycle";
 import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
+import { normalizePromotionOffer } from "./promotionOffer";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
 import * as commercialCockpit from "./commercialCockpit";
 import { runDiscoverCommand } from "./discoveryCommands";
@@ -364,7 +365,7 @@ function logAndValidateReviewCallback(
   if (!review) {
     valid = false;
     reason = "Revisão não localizada no sistema.";
-  } else if (statusStr === "published") {
+  } else if (statusStr === "published" && !actionName.startsWith("promo_")) {
     valid = false;
     reason = "Esta revisão já foi publicada.";
   } else if (statusStr === "publishing") {
@@ -1240,6 +1241,10 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           descricao: stripRawAffiliateProvenance(review.descricao),
           marketplace: detectMarketplace(review.normalizedUrl),
         });
+        // A oferta humana confirmada acompanha o candidato exclusivamente como
+        // metadado separado. O pipeline preserva review.preco como preço-base.
+        const promotionOffer = normalizePromotionOffer(review.promotionReview);
+        if (promotionOffer) lifecycle.candidate.ofertaPromocional = promotionOffer;
         if (lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
           review.lifecycle = lifecycle;
           review.status = "error";
@@ -1353,18 +1358,42 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         await answerCallbackQuery(callbackId, "Ajuste promocional inválido ou expirado.", true);
         return;
       }
-      review.promotionReview = {
+      const wasPublished = review.status === "published";
+      const confirmedPromotion = {
         price: review.promotionDraft.price,
         condition: review.promotionDraft.condition,
         benefits: review.promotionDraft.benefits,
         source: "admin_confirmed",
         confirmedAt: Date.now(),
-      };
+      } as const;
+      const promotionOffer = normalizePromotionOffer(confirmedPromotion);
+      if (!promotionOffer) {
+        await answerCallbackQuery(callbackId, "Oferta promocional inválida.", true);
+        return;
+      }
+      let syncedProduct = null;
+      if (wasPublished) {
+        const affiliateLink = (review.existingProduct?.affiliateUrl || review.normalizedUrl || "").trim();
+        try {
+          syncedProduct = await productsRepository.updatePublishedPromotionByLink(affiliateLink, promotionOffer);
+        } catch {
+          if (chatId) await sendTelegramMessage(chatId, "❌ <b>PROMOTION_SYNC_ERROR</b>\n\nA oferta não foi confirmada na vitrine pública. O preço-base não foi alterado e a promoção anterior foi preservada.");
+          return;
+        }
+        if (!syncedProduct) {
+          if (chatId) await sendTelegramMessage(chatId, "❌ <b>PROMOTION_PERSISTENCE_ERROR</b>\n\nNão foi localizado um produto publicado correspondente para atualizar a oferta. Nenhuma promoção foi declarada pública.");
+          return;
+        }
+      }
+      review.promotionReview = confirmedPromotion;
       review.promotionDraft = null;
       await telegramRepo.savePendingReview(review);
       await telegramRepo.deleteUserState(senderId);
       await answerCallbackQuery(callbackId, "Oferta promocional registrada.");
-      if (chatId) await sendTelegramMessage(chatId, `✅ <b>OFERTA PROMOCIONAL REGISTRADA</b>\n\nPreço-base: <b>R$ ${review.preco.toFixed(2).replace(".", ",")}</b>${renderPromotionReview(review)}\n\n<i>O produto não foi publicado nem teve o preço-base alterado.</i>`);
+      const publicConfirmation = syncedProduct
+        ? "\n\n✅ A oferta foi sincronizada e validada na vitrine pública."
+        : "\n\n<i>O produto não foi publicado nem teve o preço-base alterado.</i>";
+      if (chatId) await sendTelegramMessage(chatId, `✅ <b>OFERTA PROMOCIONAL REGISTRADA</b>\n\nPreço-base: <b>R$ ${review.preco.toFixed(2).replace(".", ",")}</b>${renderPromotionReview(review)}${publicConfirmation}`);
       return;
     }
 

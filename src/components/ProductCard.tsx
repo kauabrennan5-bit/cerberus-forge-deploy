@@ -107,6 +107,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     style: 'currency',
     currency: 'BRL'
   }).format(product.preco);
+  const formattedPromotionPrice = product.ofertaPromocional
+    ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(product.ofertaPromocional.price)
+    : null;
+  const promotionCondition = product.ofertaPromocional?.condition === 'pix'
+    ? 'no Pix'
+    : product.ofertaPromocional?.condition === 'pix_with_coupon'
+      ? 'no Pix com cupom'
+      : product.ofertaPromocional?.condition === 'coupon'
+        ? 'com cupom'
+        : 'sob condição observada';
 
   return (
     <div
@@ -230,11 +240,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
         {/* Footer: Price & Direct Acquire Button */}
         <div className="pt-2 border-t border-[#3A342E] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 min-w-0">
-          <div className="flex items-baseline justify-between gap-2 sm:block">
-            <span className="text-[8px] uppercase font-display tracking-widest text-[#E8E1D3]/50 block">VALOR</span>
+          <div className="flex-1 min-w-0">
+            <span className="text-[8px] uppercase font-display tracking-widest text-[#E8E1D3]/50 block">PREÇO DO ANÚNCIO</span>
             <span className="font-mono font-bold text-xs sm:text-sm text-[#E8E1D3] whitespace-nowrap">
               {formattedPrice}
             </span>
+            {formattedPromotionPrice && (
+              <p className="mt-1 text-[9px] leading-snug text-[#D7A64B]">
+                <span className="font-display uppercase tracking-wider">Oferta observada:</span>{' '}
+                <span className="font-mono font-bold">{formattedPromotionPrice}</span> {promotionCondition}. Confirme no checkout.
+              </p>
+            )}
           </div>
 
           <button

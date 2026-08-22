@@ -226,6 +226,7 @@ export function createProductionProductPipeline(): ProductPipeline {
       descricao: candidate.descricao,
       status: "approved",
       ref: candidate.ref,
+      ofertaPromocional: candidate.ofertaPromocional,
     }, { syncCatalog: false }),
     syncAndValidatePublication: async (product, operationId) => {
       const promoted = await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });

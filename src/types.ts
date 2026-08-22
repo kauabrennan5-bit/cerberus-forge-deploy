@@ -1,5 +1,16 @@
 export type ProductStatus = "pending" | "approved" | "published" | "paused" | "archived" | "error";
 
+export type PromotionOfferCondition = "pix" | "pix_with_coupon" | "coupon" | "other";
+
+/** Oferta observada e confirmada pelo administrador; nunca substitui `preco`. */
+export interface PromotionOffer {
+  price: number;
+  condition: PromotionOfferCondition;
+  benefits: string[];
+  source: "admin_confirmed";
+  confirmedAt: number;
+}
+
 export interface Product {
   id: string;
   ref?: string;
@@ -15,6 +26,7 @@ export interface Product {
   slug?: string;
   descricao?: string;
   paginaPonteUrl?: string;
+  ofertaPromocional?: PromotionOffer;
   rawRowIndex?: number;
   lifecycleState?: string;
   lifecycleUpdatedAt?: string;

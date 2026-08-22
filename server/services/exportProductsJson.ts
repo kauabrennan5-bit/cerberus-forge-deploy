@@ -61,6 +61,9 @@ export async function exportStaticProductsJson(): Promise<number> {
       categoria: p.categoria || 'Geral',
       descricao: containsRawPayloadMarkers(p.descricao) ? '' : p.descricao || '',
       paginaPonteUrl: p.paginaPonteUrl || '',
+      // A oferta observada é separada de `preco`; o frontend a rotula com
+      // condição e ressalva, sem prometer total final de checkout.
+      ofertaPromocional: p.ofertaPromocional,
       ativo: true,
       status: 'published'
     }));

@@ -1,7 +1,8 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
-import { Product, ProductStatus } from "../../src/types";
+import { Product, ProductStatus, PromotionOffer } from "../../src/types";
+import { normalizePromotionOffer } from "../services/promotionOffer";
 
 dotenv.config();
 
@@ -74,7 +75,8 @@ async function saveProducts(products: Product[], syncCatalog = true): Promise<vo
     created_by: p.createdBy || "system",
     slug: p.slug || generateSlug(p.produto),
     descricao: p.descricao || "",
-    pagina_ponte_url: p.paginaPonteUrl || ""
+    pagina_ponte_url: p.paginaPonteUrl || "",
+    oferta_promocional: normalizePromotionOffer(p.ofertaPromocional) || null,
   }));
 
   console.log(`[Supabase] Gravando ${formatted.length} produtos em public.products...`);
@@ -131,7 +133,8 @@ export async function getProducts(): Promise<Product[]> {
       createdBy: item.created_by || item.createdBy,
       slug: item.slug || generateSlug(item.produto || ""),
       descricao: item.descricao || item.description || "",
-      paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || ""
+      paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || "",
+      ofertaPromocional: normalizePromotionOffer(item.oferta_promocional ?? item.ofertaPromocional),
     }));
 
     return mapped.filter((p: Product) => isValidProductLink(p.link));
@@ -165,6 +168,7 @@ export async function createProduct(input: {
   paginaPonteUrl?: string;
   status?: ProductStatus;
   ref?: string;
+  ofertaPromocional?: PromotionOffer;
 }, options: { syncCatalog?: boolean } = {}): Promise<Product> {
   const products = await getProducts();
   const inputLink = input.link.trim();
@@ -198,7 +202,8 @@ export async function createProduct(input: {
       imagens: imagesArray.length > 0 ? imagesArray : existingProduct.imagens,
       link: inputLink,
       descricao: (input.descricao || "").trim() || existingProduct.descricao,
-      status: input.status || "published"
+      status: input.status || "published",
+      ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional) || existingProduct.ofertaPromocional,
     }, options);
 
     if (updated) return updated;
@@ -230,7 +235,8 @@ export async function createProduct(input: {
     status: input.status || "published",
     slug,
     descricao: (input.descricao || "").trim(),
-    paginaPonteUrl: (input.paginaPonteUrl || "").trim()
+    paginaPonteUrl: (input.paginaPonteUrl || "").trim(),
+    ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional)
   };
 
   products.unshift(newProduct);
@@ -288,6 +294,47 @@ export async function pauseProduct(id: string): Promise<Product | null> {
 
 export async function reactivateProduct(id: string): Promise<Product | null> {
   return updateProduct(id, { ativo: true, status: "published" });
+}
+
+/**
+ * Atualiza a oferta observada de uma peça já publicada sem tocar em `preco`.
+ * A identidade é o link oficial da review; a projeção pública só é considerada
+ * concluída após o mesmo sync+validação canônicos da publicação original.
+ */
+export async function updatePublishedPromotionByLink(
+  reviewLink: string,
+  ofertaPromocional: PromotionOffer,
+): Promise<Product | null> {
+  const normalizedOffer = normalizePromotionOffer(ofertaPromocional);
+  if (!normalizedOffer) throw new Error("PROMOTION_VALIDATION_ERROR");
+  const products = await getProducts();
+  const target = products.find((product) => {
+    if (!product.link) return false;
+    if (product.link.trim() === reviewLink.trim()) return true;
+    try {
+      const existing = new URL(product.link);
+      const incoming = new URL(reviewLink);
+      return existing.hostname.toLowerCase() === incoming.hostname.toLowerCase()
+        && existing.pathname === incoming.pathname;
+    } catch {
+      return false;
+    }
+  });
+  if (!target || target.ativo === false || target.status !== "published") return null;
+
+  const previousOffer = target.ofertaPromocional;
+  const updated = await updateProduct(target.id, { ofertaPromocional: normalizedOffer }, { syncCatalog: false });
+  if (!updated) throw new Error("PROMOTION_PERSISTENCE_ERROR");
+
+  const { syncCatalogAndDeploy } = await import("../services/catalogSync");
+  const sync = await syncCatalogAndDeploy(`oferta promocional atualizada: ${updated.produto}`, updated.id);
+  if (sync.success) return updated;
+
+  // Compensação não destrutiva: a review não deve afirmar uma oferta pública
+  // se a projeção não foi validada. Mantém o preço-base e restaura a oferta anterior.
+  await updateProduct(updated.id, { ofertaPromocional: previousOffer }, { syncCatalog: false });
+  await syncCatalogAndDeploy(`rollback de oferta promocional: ${updated.produto}`, updated.id);
+  throw new Error(`PROMOTION_SYNC_ERROR:${sync.diagnostic?.code || sync.error || "PUBLICATION_ERROR"}`);
 }
 
 export interface ProductClickData {
