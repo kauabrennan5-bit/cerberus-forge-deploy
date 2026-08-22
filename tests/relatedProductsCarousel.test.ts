@@ -11,6 +11,9 @@ describe('related products carousel navigation', () => {
     assert.match(productDetailSource, /overflow-x-auto/);
     assert.match(productDetailSource, /role="region"/);
     assert.match(productDetailSource, /tabIndex=\{0\}/);
+    assert.match(productDetailSource, /onTouchStart=\{handleRelatedTouchStart\}/);
+    assert.match(productDetailSource, /onTouchMove=\{handleRelatedTouchMove\}/);
+    assert.match(productDetailSource, /rail\.scrollLeft = start\.scrollLeft - deltaX/);
   });
 
   it('keeps explicit previous and next controls for narrow viewports', () => {

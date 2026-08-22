@@ -41,6 +41,35 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   const touchStartX = useRef<number | null>(null);
   const touchEndX = useRef<number | null>(null);
   const relatedRailRef = useRef<HTMLDivElement>(null);
+  const relatedTouchStart = useRef<{ x: number; y: number; scrollLeft: number } | null>(null);
+
+  const handleRelatedTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch || !relatedRailRef.current) return;
+    relatedTouchStart.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      scrollLeft: relatedRailRef.current.scrollLeft,
+    };
+  };
+
+  const handleRelatedTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = relatedTouchStart.current;
+    const touch = event.touches[0];
+    const rail = relatedRailRef.current;
+    if (!start || !touch || !rail) return;
+
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < 4) return;
+
+    if (event.cancelable) event.preventDefault();
+    rail.scrollLeft = start.scrollLeft - deltaX;
+  };
+
+  const clearRelatedTouch = () => {
+    relatedTouchStart.current = null;
+  };
 
   const scrollRelatedProducts = (direction: number) => {
     relatedRailRef.current?.scrollBy({
@@ -419,7 +448,12 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               ref={relatedRailRef}
               role="region"
               aria-labelledby="related-products-title"
+              aria-label="Produtos recomendados; deslize horizontalmente para navegar"
               tabIndex={0}
+              onTouchStart={handleRelatedTouchStart}
+              onTouchMove={handleRelatedTouchMove}
+              onTouchEnd={clearRelatedTouch}
+              onTouchCancel={clearRelatedTouch}
               className="flex min-w-0 touch-pan-x snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain scroll-smooth pb-2 pr-1 outline-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 md:gap-3 md:overflow-visible md:pr-0 lg:grid-cols-4"
             >
               {relatedProducts.map((related, relatedIndex) => (
