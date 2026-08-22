@@ -90,3 +90,40 @@ test("inspectPromotionFields usa apenas introspecção e retorna nomes de campos
   assert.match(payloads[1] ?? "", /__type/);
   assert.doesNotMatch(payloads.join("\n"), /offerLink/);
 });
+
+test("inspectPromotionOffer consulta valores oficiais do item exato sem criar link", async () => {
+  let payload = "";
+  const client = createShopeeApiClient({
+    appId: "test-app",
+    secret: "test-secret",
+    transport: async (_url, init) => {
+      payload = init.body;
+      return new Response(JSON.stringify({
+        data: {
+          productOfferV2: {
+            nodes: [{
+              shopId: 852965232,
+              itemId: 46816332146,
+              price: "299.00",
+              priceMin: "264.44",
+              priceMax: "299.00",
+              priceDiscountRate: 12,
+            }],
+          },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const result = await client.inspectPromotionOffer({ shopId: "852965232", itemId: "46816332146" });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.values, {
+    price: "299.00",
+    priceMin: "264.44",
+    priceMax: "299.00",
+    priceDiscountRate: 12,
+  });
+  assert.match(payload, /priceMin priceMax priceDiscountRate/);
+  assert.doesNotMatch(payload, /offerLink/);
+});

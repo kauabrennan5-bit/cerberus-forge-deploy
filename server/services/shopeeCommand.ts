@@ -145,6 +145,18 @@ export async function inspectShopeePromotionFields(): Promise<{
   };
 }
 
+/** Consulta administrativa de valores oficiais para um item exato, sem mutation. */
+export async function inspectShopeePromotionOffer(shopId: string, itemId: string): Promise<{
+  available: boolean;
+  values: { price: string | number | null; priceMin: string | number | null; priceMax: string | number | null; priceDiscountRate: string | number | null } | null;
+  reason: string | null;
+}> {
+  const client = buildShopeeClient();
+  if (!client) return { available: false, values: null, reason: "credentials_not_configured" };
+  const result = await client.inspectPromotionOffer({ shopId, itemId });
+  return { available: result.ok, values: result.values, reason: result.reason };
+}
+
 // ---------------------------------------------------------------
 // Identificadores do item — extraídos da URL oficial (padrão /{loja}/{shop}/{item})
 // ---------------------------------------------------------------

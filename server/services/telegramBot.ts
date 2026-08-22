@@ -19,7 +19,7 @@ import { runDiscoverBatchCommand } from "../commercial/facilitator/discoverBatch
 // FASE 25B (Commit 1) — painel de leitura Telegram (comandos read-only).
 import * as telegramPanel from "./telegramPanel";
 // FASE 25C (Commit 2) — orquestrador /shopee N (discovery → Affiliate → scraper → cards).
-import { inspectShopeePromotionFields, runShopeeCommand } from "./shopeeCommand";
+import { inspectShopeePromotionFields, inspectShopeePromotionOffer, runShopeeCommand } from "./shopeeCommand";
 import type { ShopeePromotionEvidence } from "./scraper";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
@@ -1461,6 +1461,24 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       const promotionFields = inspection.fields.filter((field) => /price|discount|coupon|voucher|promo|campaign|shipping|freight/i.test(field));
       await sendTelegramMessage(chatId, `🔎 <b>SCHEMA OFICIAL SHOPEE — SOMENTE LEITURA</b>\n\nTipo: <code>${inspection.nodeType}</code>\nCampos promocionais/localizados: <code>${promotionFields.join(", ") || "nenhum"}</code>\n\n<i>Nenhuma query de descoberta, link de afiliado, review ou produto foi alterada.</i>`);
+      return;
+    }
+
+    // /shopee-offer SHOP_ID ITEM_ID — leitura oficial de valores para uma oferta exata.
+    if (text.startsWith("/shopee-offer")) {
+      const parts = text.split(/\s+/).slice(1);
+      if (!chatId) return;
+      if (parts.length !== 2 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) {
+        await sendTelegramMessage(chatId, "⚠️ <b>SINTAXE</b>\n\nUse <code>/shopee-offer SHOP_ID ITEM_ID</code>. Nenhuma consulta foi executada.");
+        return;
+      }
+      const offer = await inspectShopeePromotionOffer(parts[0], parts[1]);
+      if (!offer.available || !offer.values) {
+        await sendTelegramMessage(chatId, `⚠️ <b>OFERTA OFICIAL INDISPONÍVEL</b>\n\nMotivo: <code>${offer.reason ?? "não informado"}</code>\nNenhuma query de descoberta, review ou produto foi alterada.`);
+        return;
+      }
+      const value = (raw: string | number | null) => raw === null ? "não retornado" : String(raw);
+      await sendTelegramMessage(chatId, `🔎 <b>OFERTA OFICIAL SHOPEE — SOMENTE LEITURA</b>\n\n<code>price:</code> ${value(offer.values.price)}\n<code>priceMin:</code> ${value(offer.values.priceMin)}\n<code>priceMax:</code> ${value(offer.values.priceMax)}\n<code>priceDiscountRate:</code> ${value(offer.values.priceDiscountRate)}\n\n<i>Os valores são retornados pela Affiliate API e ainda não alteram cards, reviews ou preço-base.</i>`);
       return;
     }
 

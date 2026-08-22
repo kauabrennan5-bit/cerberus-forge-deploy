@@ -482,6 +482,42 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     }
   }
 
+  /** Consulta exata e somente-leitura dos campos promocionais confirmados no schema. */
+  async function inspectPromotionOffer(params: {
+    shopId: string;
+    itemId: string;
+  }): Promise<{
+    ok: boolean;
+    values: { price: string | number | null; priceMin: string | number | null; priceMax: string | number | null; priceDiscountRate: string | number | null } | null;
+    reason: string | null;
+  }> {
+    if (!/^\d+$/.test(params.shopId) || !/^\d+$/.test(params.itemId)) {
+      return { ok: false, values: null, reason: "invalid_identity" };
+    }
+    try {
+      const response = await signedGraphqlPost({
+        query: `{ productOfferV2(itemId: ${params.itemId}, shopId: ${params.shopId}, limit: 1) { nodes { itemId shopId price priceMin priceMax priceDiscountRate } } }`,
+        variables: {},
+      });
+      const root = response.json as { data?: { productOfferV2?: { nodes?: Array<Record<string, unknown>> } } };
+      const node = root.data?.productOfferV2?.nodes?.find((candidate) => String(candidate.itemId) === params.itemId && String(candidate.shopId) === params.shopId);
+      if (!node) return { ok: false, values: null, reason: "exact_offer_not_found" };
+      const scalar = (value: unknown): string | number | null => typeof value === "string" || typeof value === "number" ? value : null;
+      return {
+        ok: true,
+        values: {
+          price: scalar(node.price),
+          priceMin: scalar(node.priceMin),
+          priceMax: scalar(node.priceMax),
+          priceDiscountRate: scalar(node.priceDiscountRate),
+        },
+        reason: null,
+      };
+    } catch (err) {
+      return { ok: false, values: null, reason: err instanceof ShopeeClientError ? err.kind : "unexpected" };
+    }
+  }
+
   function mapKindToStatus(err: ShopeeClientError): ShopeeAffiliateAcquisitionResult {
     if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") {
       return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
@@ -641,6 +677,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
     generateShortLink,
     searchOffers,
     inspectPromotionFields,
+    inspectPromotionOffer,
   };
 }
 
