@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 // Mobile refinement: preserve the existing archival grid while making filters, headings, and controls wrap within the viewport.
 import { Product } from '../types';
+import { getProductDisplayTitle } from '../lib/productPresentation';
 import { ProductCard } from './ProductCard';
 import { Search, RefreshCw, AlertCircle, Sparkles, ChevronDown, ChevronUp, ArrowUpRight, X, Heart } from 'lucide-react';
 import { CerberusLogo } from './CerberusLogo';
@@ -58,7 +59,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
       name,
       count: products.filter((product) => product.categoria.toLowerCase() === name.toLowerCase()).length,
     }));
-  }, []);
+  }, [products]);
 
   // Filter products by selected category, search string, and favorites
   const filteredProducts = useMemo(() => {
@@ -77,7 +78,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
       const query = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !query ||
-        product.produto.toLowerCase().includes(query) ||
+        getProductDisplayTitle(product).toLowerCase().includes(query) ||
         product.categoria.toLowerCase().includes(query);
 
       return matchesCategory && matchesSearch;

@@ -336,7 +336,8 @@ test("fluxo controlado percorre lifecycle e persiste somente descrição editori
 
 test("ProductDetail usa apenas campos editoriais e não contém bypass de rawContent", () => {
   const source = readFileSync(new URL("../src/components/ProductDetail.tsx", import.meta.url), "utf8");
-  assert.match(source, /product\.produto/);
+  assert.match(source, /getProductDisplayTitle\(product\)/);
+  assert.match(source, /displayTitle/);
   assert.match(source, /product\.preco/);
   assert.match(source, /product\.categoria/);
   assert.match(source, /product\.descricao/);

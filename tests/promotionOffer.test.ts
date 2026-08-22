@@ -71,10 +71,10 @@ test("projeção pública e renderização tratam a oferta como campo separado e
   const detailSource = readFileSync(new URL("../src/components/ProductDetail.tsx", import.meta.url), "utf8");
 
   assert.match(exportSource, /ofertaPromocional: p\.ofertaPromocional/);
-  assert.ok(cardSource.indexOf('OFERTA CONFIRMADA') < cardSource.indexOf('Preço do anúncio:'), 'card prioriza a oferta acima da referência');
-  assert.match(cardSource, /Condições devem ser confirmadas no checkout/i);
-  assert.ok(detailSource.indexOf('Oferta confirmada') < detailSource.indexOf('Preço do anúncio:'), 'detalhe prioriza a oferta acima da referência');
-  assert.match(detailSource, /Condição confirmada manualmente/i);
+  assert.ok(cardSource.indexOf('PREÇO VERIFICADO') < cardSource.indexOf('Preço do anúncio:'), 'card prioriza a oferta acima da referência');
+  assert.match(cardSource, /Condições finais de pagamento e frete são confirmadas na loja oficial/i);
+  assert.ok(detailSource.indexOf('PREÇO VERIFICADO') < detailSource.indexOf('Preço do anúncio:'), 'detalhe prioriza a oferta acima da referência');
+  assert.match(detailSource, /Condições finais de pagamento e frete são confirmadas na loja oficial/i);
 });
 
 test("acervo usa criação canônica crescente e mantém o número arquival fora da posição filtrada", () => {

@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 // Mobile refinement: keep the approved product-detail composition while constraining gallery, metadata, actions, and lightbox content to the viewport.
 import { Product } from '../types';
+import { getProductDisplayTitle } from '../lib/productPresentation';
 import { trackClickAndGetUrl } from '../lib/analytics';
 import { ArrowLeft, ExternalLink, Heart, Share2, Check, ChevronLeft, ChevronRight, ImageOff, ShieldCheck, Maximize2, X } from 'lucide-react';
 
@@ -55,6 +56,11 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
       : product.ofertaPromocional?.condition === 'coupon'
         ? 'com cupom'
         : 'sob condição observada';
+  const visiblePromotionBenefits = (product.ofertaPromocional?.benefits ?? []).filter((benefit) => {
+    const normalized = benefit.replace(/\s+/g, ' ').trim();
+    return normalized.length >= 8 && /\s/.test(normalized);
+  });
+  const displayTitle = getProductDisplayTitle(product);
 
   const handleNextImage = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -178,7 +184,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
             {images.length > 0 ? (
               <img
                 src={images[selectedImageIndex]}
-                alt={product.produto}
+                alt={displayTitle}
                 onError={() => setImageError((prev) => ({ ...prev, [selectedImageIndex]: true }))}
                 className="w-full h-full object-contain transition-transform duration-300 ease-out group-hover:scale-105"
               />
@@ -276,24 +282,21 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               <span className="text-[10px] sm:text-xs uppercase font-display tracking-widest text-[#8A1F1F] font-bold">
                 {product.categoria}
               </span>
-              <span className="min-w-0 max-w-[48%] text-right break-all text-[9px] font-mono text-[#E8E1D3]/50">
-                REG. {product.id}
-              </span>
             </div>
 
             <h1 className="font-gothic text-2xl sm:text-4xl font-normal text-[#E8E1D3] leading-tight break-words">
-              {product.produto}
+              {displayTitle}
             </h1>
 
             {formattedPromotionPrice && (
               <div className="border-l-2 border-[#D7A64B] bg-[#D7A64B]/10 px-3 py-2 text-xs text-[#E8E1D3]">
-                <p className="font-display text-[10px] uppercase tracking-widest text-[#D7A64B]">Oferta confirmada</p>
+                <p className="font-display text-[10px] uppercase tracking-widest text-[#D7A64B]">PREÇO VERIFICADO</p>
                 <p className="mt-0.5 font-mono font-bold text-2xl sm:text-3xl text-[#D7A64B]">{formattedPromotionPrice} {promotionCondition}</p>
                 <p className="mt-1 text-[10px] font-mono text-[#E8E1D3]/65">Preço do anúncio: {formattedPrice}</p>
-                <p className="mt-1 text-[10px] leading-snug text-[#E8E1D3]/70">Condição confirmada manualmente. Cupons, Pix, frete e elegibilidade devem ser confirmados no checkout.</p>
-                {product.ofertaPromocional?.benefits.length ? (
+                <p className="mt-1 text-[10px] leading-snug text-[#E8E1D3]/70">Preço verificado pela nossa curadoria. Condições finais de pagamento e frete são confirmadas na loja oficial.</p>
+                {visiblePromotionBenefits.length ? (
                   <ul className="mt-1 list-disc pl-4 text-[10px] text-[#E8E1D3]/80">
-                    {product.ofertaPromocional.benefits.map((benefit) => <li key={benefit}>{benefit}</li>)}
+                    {visiblePromotionBenefits.map((benefit) => <li key={benefit}>{benefit.replace(/\s+/g, ' ').trim()}</li>)}
                   </ul>
                 ) : null}
               </div>
@@ -328,6 +331,17 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
                 </span>
                 <p className="font-condensed text-xs sm:text-sm text-[#E8E1D3]">
                   {product.descricao}
+                </p>
+              </div>
+            )}
+
+            {product.curatorNote?.trim() && (
+              <div className="border-l border-[#8A1F1F] pl-3 text-xs text-[#E8E1D3]/80 leading-relaxed space-y-1.5">
+                <span className="text-[9px] sm:text-[10px] uppercase font-display tracking-widest text-[#8A1F1F] block font-bold">
+                  NOTA DO CURADOR
+                </span>
+                <p className="font-condensed text-xs sm:text-sm text-[#E8E1D3]">
+                  {product.curatorNote.trim()}
                 </p>
               </div>
             )}
@@ -367,7 +381,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
           <div className="relative max-w-4xl max-h-[75vh] w-full min-h-0 flex items-center justify-center my-auto p-2">
             <img
               src={images[selectedImageIndex]}
-              alt={product.produto}
+                alt={displayTitle}
               className="max-w-full max-h-full object-contain"
             />
 

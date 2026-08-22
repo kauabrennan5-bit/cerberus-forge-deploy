@@ -257,6 +257,9 @@ export interface PendingReview {
   createdAt: number;
   expiresAt?: number;
   produto: string;
+  rawTitle?: string;
+  displayTitle?: string;
+  curatorNote?: string;
   categoria: string;
   preco: number;
   imagens: string[];
@@ -306,10 +309,14 @@ function buildReviewCardText(review: PendingReview): string {
   const lifecycle = review.lifecycle;
   const validation = lifecycle?.validation;
   const curation = lifecycle?.curation;
+  const curatorNote = review.curatorNote?.trim()
+    ? `📝 <b>Nota do curador:</b> ${review.curatorNote.trim()}\n`
+    : "";
   return `🛡️ <b>CERBERUS FINDS — PAINEL DE REVISÃO</b>\n\n` +
-         `🏷️ <b>Produto:</b> ${review.produto}\n` +
+         `🏷️ <b>Produto:</b> ${review.displayTitle || review.produto}\n` +
          `📁 <b>Categoria:</b> ${review.categoria}\n` +
          `💰 <b>Preço:</b> ${precoStr}\n` +
+         curatorNote +
          renderPromotionReview(review) + `\n` +
          `🛒 <b>Marketplace:</b> ${lifecycle?.candidate.marketplace || detectMarketplace(review.normalizedUrl)}\n` +
          `🔗 <b>Link:</b> <code>${review.normalizedUrl}</code>\n\n` +
@@ -328,6 +335,7 @@ function buildMainReviewKeyboard(reviewId: string) {
         { text: "🏷️ Ajustar Promoção", callback_data: `promo_edit:${reviewId}` },
         { text: "📁 Alterar Categoria", callback_data: `edit_cat:${reviewId}` }
       ],
+      [{ text: "📝 Nota do curador (opcional)", callback_data: `curator_note_init:${reviewId}` }],
       [{ text: "🔎 Ver detalhes", callback_data: `review_details:${reviewId}` }, { text: "❌ Rejeitar", callback_data: `cancel_rev:${reviewId}` }]
     ]
   };
@@ -342,6 +350,9 @@ async function extractProductForReview(url: string): Promise<{ success: boolean;
 async function refreshReviewLifecycle(review: PendingReview): Promise<LifecycleRecord> {
   const lifecycle = await createProductionProductPipeline().evaluate({
     produto: review.produto,
+    rawTitle: review.rawTitle,
+    displayTitle: review.displayTitle,
+    curatorNote: review.curatorNote,
     categoria: review.categoria,
     preco: review.preco > 0 ? review.preco : null,
     imagens: review.imagens,
@@ -1233,6 +1244,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         const affiliateLink = (review.existingProduct?.affiliateUrl || "").trim();
         let lifecycle = review.lifecycle ? restoreLifecycleRecord(review.lifecycle) : await pipeline.evaluate({
           produto: review.produto,
+          rawTitle: review.rawTitle,
+          displayTitle: review.displayTitle,
+          curatorNote: review.curatorNote,
           categoria: review.categoria,
           preco: review.preco,
           imagens: review.imagens,
@@ -1272,7 +1286,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         const promotionNote = review.promotionReview
           ? `\n\n🏷️ Oferta promocional registrada na revisão: <b>R$ ${review.promotionReview.price.toFixed(2).replace(".", ",")}</b> ${formatPromotionCondition(review.promotionReview.condition)}.\n<i>O catálogo preserva o preço-base canônico; confirmação no checkout continua necessária.</i>`
           : "";
-        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço-base: R$ ${publishedProduct.preco.toFixed(2).replace(".", ",")}\n🆔 Operação: <code>${lifecycle.operationId || "confirmada"}</code>${promotionNote}\n\nSupabase gravado, catálogo sincronizado e vitrine pública validada.`;
+        const successText = `✅ <b>PEÇA PUBLICADA COM SUCESSO!</b>\n\n<b>${publishedProduct.displayTitle || publishedProduct.produto}</b>\nREF: <code>${publishedProduct.ref}</code>\nPreço-base: R$ ${publishedProduct.preco.toFixed(2).replace(".", ",")}\n🆔 Operação: <code>${lifecycle.operationId || "confirmada"}</code>${promotionNote}\n\nSupabase gravado, catálogo sincronizado e vitrine pública validada.`;
         // O card Shopee pode ser foto ou texto. Uma nova mensagem funciona em
         // ambos os casos; editMessageCaption falha para cards enviados como
         // texto e não pode ser a única confirmação de publicação.
@@ -1302,6 +1316,20 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         `Recomendação: <b>${lifecycle?.curation.recommendation || "REVIEW"}</b>\n` +
         `Score: ${lifecycle?.curation.score ?? 0} · Confiança: ${lifecycle?.curation.confidence || "LOW"}`;
       if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, buildMainReviewKeyboard(reviewId));
+      return;
+    }
+
+    if (data.startsWith("curator_note_init:")) {
+      const reviewId = data.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      const validation = logAndValidateReviewCallback("curator_note", reviewId, chatId, review);
+      if (!validation.valid || !review) {
+        await answerCallbackQuery(callbackId, validation.reason, true);
+        return;
+      }
+      await telegramRepo.setUserState(senderId, { action: `curator_note:${reviewId}` });
+      await answerCallbackQuery(callbackId);
+      if (chatId) await sendTelegramMessage(chatId, "📝 <b>NOTA DO CURADOR (OPCIONAL)</b>\n\nEnvie uma nota breve para a página da peça. Envie <code>-</code> para remover ou deixar sem nota. A confirmação e publicação continuam disponíveis mesmo sem texto.");
       return;
     }
 
@@ -1912,6 +1940,23 @@ async function renderCycleState(input: string): Promise<string> {
       } catch (err: any) {
         if (chatId) await sendTelegramMessage(chatId, `❌ Erro ao atualizar: ${err.message}`);
       }
+      return;
+    }
+
+    if (userState && userState.action.startsWith("curator_note:")) {
+      const reviewId = userState.action.split(":")[1];
+      const review = await telegramRepo.getPendingReview(reviewId);
+      if (!review) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ Revisão não localizada.");
+        return;
+      }
+      const note = text.trim() === "-" ? "" : text.replace(/\s+/g, " ").trim().slice(0, 500);
+      review.curatorNote = note || undefined;
+      await refreshReviewLifecycle(review);
+      await telegramRepo.savePendingReview(review);
+      await telegramRepo.deleteUserState(senderId);
+      if (chatId) await sendTelegramMessage(chatId, note ? "✅ Nota do curador registrada na revisão." : "✅ Nota do curador removida da revisão.");
       return;
     }
 

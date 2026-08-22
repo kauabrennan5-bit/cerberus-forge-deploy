@@ -9,6 +9,9 @@ dotenv.config();
 // Initialize Supabase Client prioritizing Service Role Key for server-side administrative access (bypassing RLS)
 const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_SECRET_KEY || "";
+// A migration editorial é um gate explícito. Antes de ela ser aplicada, o
+// repositório continua escrevendo somente colunas existentes em produção.
+const editorialFieldsEnabled = process.env.PRODUCT_EDITORIAL_FIELDS_ENABLED === "true";
 
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
   ? createClient(supabaseUrl, supabaseKey)
@@ -61,23 +64,31 @@ export function isValidProductLink(link?: string): boolean {
 async function saveProducts(products: Product[], syncCatalog = true): Promise<void> {
   const client = requireSupabase();
 
-  const formatted = products.map((p) => ({
-    id: p.id,
-    ref: p.ref,
-    produto: p.produto,
-    categoria: p.categoria,
-    preco: Number(p.preco) || 0,
-    imagens: p.imagens,
-    link: p.link,
-    ativo: p.ativo !== undefined ? p.ativo : true,
-    destaque: Boolean(p.destaque),
-    status: p.status || "published",
-    created_by: p.createdBy || "system",
-    slug: p.slug || generateSlug(p.produto),
-    descricao: p.descricao || "",
-    pagina_ponte_url: p.paginaPonteUrl || "",
-    oferta_promocional: normalizePromotionOffer(p.ofertaPromocional) || null,
-  }));
+  const formatted = products.map((p) => {
+    const productRow: Record<string, unknown> = {
+      id: p.id,
+      ref: p.ref,
+      produto: p.produto,
+      categoria: p.categoria,
+      preco: Number(p.preco) || 0,
+      imagens: p.imagens,
+      link: p.link,
+      ativo: p.ativo !== undefined ? p.ativo : true,
+      destaque: Boolean(p.destaque),
+      status: p.status || "published",
+      created_by: p.createdBy || "system",
+      slug: p.slug || generateSlug(p.produto),
+      descricao: p.descricao || "",
+      pagina_ponte_url: p.paginaPonteUrl || "",
+      oferta_promocional: normalizePromotionOffer(p.ofertaPromocional) || null,
+    };
+    if (editorialFieldsEnabled) {
+      productRow.raw_title = p.rawTitle || p.produto;
+      productRow.display_title = p.displayTitle || null;
+      productRow.curator_note = p.curatorNote || null;
+    }
+    return productRow;
+  });
 
   console.log(`[Supabase] Gravando ${formatted.length} produtos em public.products...`);
   const { error } = await client.from("products").upsert(formatted, { onConflict: "id" });
@@ -119,6 +130,8 @@ export async function getProducts(): Promise<Product[]> {
       id: item.id,
       ref: item.ref || item.ref_code,
       produto: item.produto || item.title || item.name,
+      rawTitle: item.raw_title || item.rawTitle || undefined,
+      displayTitle: item.display_title || item.displayTitle || undefined,
       categoria: item.categoria || item.category,
       preco: Number(item.preco || item.price || 0),
       imagens: Array.isArray(item.imagens)
@@ -135,6 +148,7 @@ export async function getProducts(): Promise<Product[]> {
       descricao: item.descricao || item.description || "",
       paginaPonteUrl: item.pagina_ponte_url || item.paginaPonteUrl || "",
       ofertaPromocional: normalizePromotionOffer(item.oferta_promocional ?? item.ofertaPromocional),
+      curatorNote: item.curator_note || item.curatorNote || undefined,
       createdAt: item.created_at || item.createdAt,
     }));
 
@@ -170,6 +184,9 @@ export async function createProduct(input: {
   status?: ProductStatus;
   ref?: string;
   ofertaPromocional?: PromotionOffer;
+  rawTitle?: string;
+  displayTitle?: string;
+  curatorNote?: string;
 }, options: { syncCatalog?: boolean } = {}): Promise<Product> {
   const products = await getProducts();
   const inputLink = input.link.trim();
@@ -203,6 +220,9 @@ export async function createProduct(input: {
       imagens: imagesArray.length > 0 ? imagesArray : existingProduct.imagens,
       link: inputLink,
       descricao: (input.descricao || "").trim() || existingProduct.descricao,
+      rawTitle: input.rawTitle?.trim() || existingProduct.rawTitle,
+      displayTitle: input.displayTitle?.trim() || existingProduct.displayTitle,
+      curatorNote: input.curatorNote?.trim() || existingProduct.curatorNote,
       status: input.status || "published",
       ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional) || existingProduct.ofertaPromocional,
     }, options);
@@ -236,6 +256,9 @@ export async function createProduct(input: {
     status: input.status || "published",
     slug,
     descricao: (input.descricao || "").trim(),
+    rawTitle: input.rawTitle?.trim() || input.produto.trim(),
+    displayTitle: input.displayTitle?.trim(),
+    curatorNote: input.curatorNote?.trim(),
     paginaPonteUrl: (input.paginaPonteUrl || "").trim(),
     ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional)
   };

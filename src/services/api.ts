@@ -64,6 +64,8 @@ export async function getProducts(): Promise<any[]> {
     ...p,
     id: String(p.id || ''),
     produto: p.produto || '',
+    displayTitle: typeof (p.displayTitle || p.display_title) === 'string' ? (p.displayTitle || p.display_title).trim() : undefined,
+    curatorNote: typeof (p.curatorNote || p.curator_note) === 'string' ? (p.curatorNote || p.curator_note).trim() : undefined,
     preco: Number(p.preco) || 0,
     imagens: Array.isArray(p.imagens)
       ? p.imagens
@@ -160,6 +162,20 @@ export async function trackProductClickApi(data: any): Promise<boolean> {
   } catch (err) {
     console.warn('[Analytics] Falha ao enviar clique para o backend:', err);
     return false;
+  }
+}
+
+export async function subscribeNewsletter(email: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(getApiUrl('/api/newsletter'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const payload = await res.json().catch(() => ({}));
+    return res.ok ? { success: true } : { success: false, error: payload.error || 'Cadastro indisponível.' };
+  } catch {
+    return { success: false, error: 'Não foi possível conectar ao cadastro.' };
   }
 }
 

@@ -14,7 +14,12 @@ export interface PromotionOffer {
 export interface Product {
   id: string;
   ref?: string;
+  /** Título canônico atual; preservado para compatibilidade e auditoria. */
   produto: string;
+  /** Título bruto observado na fonte, nunca prioritário na vitrine. */
+  rawTitle?: string;
+  /** Título editorial em português, aprovado pela curadoria. */
+  displayTitle?: string;
   categoria: string;
   preco: number;
   imagens: string[];
@@ -27,6 +32,8 @@ export interface Product {
   descricao?: string;
   paginaPonteUrl?: string;
   ofertaPromocional?: PromotionOffer;
+  /** Nota editorial opcional escrita pelo curador; não renderiza se ausente. */
+  curatorNote?: string;
   rawRowIndex?: number;
   lifecycleState?: string;
   lifecycleUpdatedAt?: string;

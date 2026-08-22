@@ -217,6 +217,9 @@ export function createProductionProductPipeline(): ProductPipeline {
     getProducts: () => productsRepository.getProducts(),
     createCanonicalProduct: candidate => productsRepository.createProduct({
       produto: candidate.produto,
+      rawTitle: candidate.rawTitle,
+      displayTitle: candidate.displayTitle,
+      curatorNote: candidate.curatorNote,
       categoria: candidate.categoria,
       preco: candidate.preco || 0,
       imagens: candidate.imagens,

@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 // Mobile refinement: keep the approved product-card hierarchy while preventing long content and controls from expanding the card beyond its grid column.
 import { Product } from '../types';
+import { getProductDisplayTitle } from '../lib/productPresentation';
 import { trackClickAndGetUrl, trackSelectItem } from '../lib/analytics';
 import { ExternalLink, ImageOff, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 
@@ -117,6 +118,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       : product.ofertaPromocional?.condition === 'coupon'
         ? 'com cupom'
         : 'sob condição observada';
+  const displayTitle = getProductDisplayTitle(product);
 
   return (
     <div
@@ -166,7 +168,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         {!imageError[currentImageIndex] ? (
           <img
             src={images[currentImageIndex]}
-            alt={product.produto}
+            alt={displayTitle}
             onError={() => setImageError(prev => ({ ...prev, [currentImageIndex]: true }))}
             className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500 ease-out"
             loading="lazy"
@@ -233,8 +235,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <p className="text-[9px] uppercase font-display tracking-widest text-[#8A1F1F] mb-0.5 font-bold">
             {product.categoria}
           </p>
-          <h3 className="font-display text-xs sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-snug tracking-wide break-words min-h-[2.5rem]">
-            {product.produto}
+          <h3 className="font-display text-xs sm:text-sm uppercase font-bold text-[#E8E1D3] group-hover:text-[#8A1F1F] line-clamp-2 leading-snug tracking-wide break-words min-h-[2.5rem] overflow-hidden">
+            {displayTitle}
           </h3>
         </div>
 
@@ -243,12 +245,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <div className="flex-1 min-w-0">
             {formattedPromotionPrice && (
               <div className="space-y-0.5">
-                <span className="text-[8px] uppercase font-display tracking-widest text-[#D7A64B] block">OFERTA CONFIRMADA</span>
-                <span className="font-mono font-bold text-sm sm:text-base text-[#D7A64B] whitespace-nowrap">
+                <span className="text-[8px] uppercase font-display tracking-widest text-[#D7A64B] block">PREÇO VERIFICADO</span>
+                <span className="font-mono font-bold text-sm sm:text-base text-[#D7A64B] leading-tight break-words">
                   {formattedPromotionPrice} {promotionCondition}
                 </span>
                 <span className="text-[9px] font-mono text-[#E8E1D3]/60 block">Preço do anúncio: {formattedPrice}</span>
-                <p className="text-[8px] leading-snug text-[#E8E1D3]/50">Condições devem ser confirmadas no checkout.</p>
+                <p className="text-[8px] leading-snug text-[#E8E1D3]/50">Preço verificado pela nossa curadoria. Condições finais de pagamento e frete são confirmadas na loja oficial.</p>
               </div>
             )}
           </div>

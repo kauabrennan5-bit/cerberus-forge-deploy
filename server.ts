@@ -84,7 +84,16 @@ async function startServer() {
   const adminRateLimiter = new InMemoryRateLimiter(rateLimit("ADMIN_RATE_LIMIT_PER_MINUTE", 30), 60_000);
   const catalogRateLimiter = new InMemoryRateLimiter(rateLimit("CATALOG_RATE_LIMIT_PER_MINUTE", 120), 60_000);
   const analyticsRateLimiter = new InMemoryRateLimiter(rateLimit("ANALYTICS_RATE_LIMIT_PER_MINUTE", 30), 60_000);
+  const newsletterRateLimiter = new InMemoryRateLimiter(rateLimit("NEWSLETTER_RATE_LIMIT_PER_MINUTE", 10), 60_000);
   const expensiveOperationRateLimiter = new InMemoryRateLimiter(rateLimit("EXPENSIVE_RATE_LIMIT_PER_MINUTE", 10), 60_000);
+
+  const escapeHtml = (value: unknown): string => String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+  const isSocialCrawler = (userAgent: unknown): boolean => /facebookexternalhit|facebot|twitterbot|slackbot|discordbot|linkedinbot|whatsapp|telegrambot|pinterestbot|embedly/i.test(String(userAgent || ""));
 
   const enforceRateLimit = (limiter: InMemoryRateLimiter, req: express.Request, res: express.Response): boolean => {
     const decision = limiter.check(requestKey(req));
@@ -240,6 +249,28 @@ async function startServer() {
   // POST /api/admin/verify - Endpoint para verificar senha de administrador
   app.post("/api/admin/verify", requireAdminAuth, (req, res) => {
     return res.json({ success: true, message: "Senha de administrador verificada com sucesso!" });
+  });
+
+  // Não existe rota pública de leitura: visitantes só podem registrar uma
+  // inscrição mínima e normalizada, sujeita a limitação de taxa.
+  app.post("/api/newsletter", async (req, res) => {
+    if (!enforceRateLimit(newsletterRateLimiter, req, res)) return;
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email) || email.length > 254) {
+      return res.status(400).json({ success: false, code: "INVALID_EMAIL", error: "Informe um e-mail válido." });
+    }
+    try {
+      const client = productsRepository.requireSupabase();
+      const { error } = await client.from("newsletter_subscribers").upsert(
+        { email },
+        { onConflict: "email", ignoreDuplicates: true },
+      );
+      if (error) throw error;
+      return res.status(201).json({ success: true, message: "Inscrição registrada." });
+    } catch (error: any) {
+      console.error("[Newsletter] Falha ao registrar inscrição:", error?.message || error);
+      return res.status(503).json({ success: false, code: "NEWSLETTER_UNAVAILABLE", error: "Cadastro temporariamente indisponível." });
+    }
   });
 
   // POST /api/admin/rebuild-static-catalog - Endpoint para reconstrução manual do catálogo estático
@@ -1210,6 +1241,26 @@ NUNCA modifique ou invente preços ou imagens.`,
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
+
+    // A SPA permanece a resposta para visitantes. Apenas robôs sociais recebem
+    // HTML mínimo, suficiente para a prévia do link sem introduzir SSR completo.
+    app.get("/produto/:slug", async (req, res, next) => {
+      if (!isSocialCrawler(req.headers["user-agent"])) return next();
+      try {
+        const product = await productsRepository.getProductByIdOrSlug(req.params.slug);
+        if (!product || product.ativo === false || product.status !== "published") return next();
+        const publicOrigin = (process.env.PUBLIC_SITE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+        const title = product.displayTitle || product.produto;
+        const description = (product.curatorNote || product.descricao || "Peça selecionada pela curadoria Cerberus Finds.").replace(/\s+/g, " ").trim().slice(0, 180);
+        const image = Array.isArray(product.imagens) ? product.imagens[0] : "";
+        const canonicalUrl = `${publicOrigin}/produto/${encodeURIComponent(product.slug || product.id)}`;
+        const imageTag = image ? `<meta property="og:image" content="${escapeHtml(image)}"><meta name="twitter:image" content="${escapeHtml(image)}">` : "";
+        res.type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(canonicalUrl)}"><meta property="og:type" content="product"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonicalUrl)}">${imageTag}<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"></head><body><p>${escapeHtml(title)}</p></body></html>`);
+      } catch (error: any) {
+        console.error("[OpenGraph] Falha ao montar prévia social:", error?.message || error);
+        next();
+      }
+    });
     
     // 1. Explicit route for static data (Highest Priority)
     app.get("/data/*", (req, res) => {

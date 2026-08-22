@@ -1,10 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useEffect, useState, useCallback, type FormEvent } from 'react';
 // Mobile refinement: preserve the Cerberus archival dark/red identity while keeping every public layout region intrinsically contained across narrow viewports.
 import { AppConfig, Product, ViewMode } from './types';
 import { initMetaPixel, initTikTokPixel } from './lib/pixels';
 import { captureUTMs } from './lib/utm';
 import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
-import { getProducts } from './services/api';
+import { getProducts, subscribeNewsletter } from './services/api';
 import { orderCatalogProducts } from './lib/catalogOrder';
 
 import { Header } from './components/Header';
@@ -66,6 +66,9 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoadingProducts, setIsLoadingProducts] = useState<boolean>(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [newsletterEmail, setNewsletterEmail] = useState('');
+  const [newsletterStatus, setNewsletterStatus] = useState<string | null>(null);
+  const [isSubscribing, setIsSubscribing] = useState(false);
 
   // Initialize Tracking (UTMs, Pixels, GA4) on mount and when config changes
   useEffect(() => {
@@ -191,6 +194,20 @@ export default function App() {
     setCurrentView(view);
   };
 
+  const handleNewsletterSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setNewsletterStatus(null);
+    setIsSubscribing(true);
+    const result = await subscribeNewsletter(newsletterEmail);
+    setIsSubscribing(false);
+    if (result.success) {
+      setNewsletterEmail('');
+      setNewsletterStatus('Inscrição registrada.');
+      return;
+    }
+    setNewsletterStatus(result.error || 'Cadastro indisponível.');
+  };
+
   // Listen to popstate browser navigation (Back/Forward)
   useEffect(() => {
     const handlePopState = () => {
@@ -302,7 +319,7 @@ export default function App() {
 
       {/* Gothic / Archival Footer */}
       <footer className="border-t border-[#3A342E] bg-[#141210] py-8 px-4 text-center text-xs text-[#E8E1D3]/60 w-full max-w-full min-w-0">
-        <div className="max-w-7xl mx-auto min-w-0 flex flex-col sm:flex-row items-center justify-between gap-4 font-sans">
+        <div className="max-w-7xl mx-auto min-w-0 flex flex-col lg:flex-row items-center justify-between gap-5 font-sans">
           <div className="flex items-center space-x-3">
             <span className="font-gothic text-xl text-[#E8E1D3] tracking-wide uppercase">
               CERBERUS FINDS
@@ -321,6 +338,26 @@ export default function App() {
               Acervo
             </button>
           </div>
+
+          <form onSubmit={handleNewsletterSubmit} className="w-full max-w-md flex flex-col items-stretch gap-1.5 text-left" noValidate>
+            <label htmlFor="newsletter-email" className="text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/70">Receba novas seleções</label>
+            <div className="flex min-w-0">
+              <input
+                id="newsletter-email"
+                type="email"
+                required
+                autoComplete="email"
+                value={newsletterEmail}
+                onChange={(event) => setNewsletterEmail(event.target.value)}
+                placeholder="seu@email.com"
+                className="min-w-0 flex-1 border border-[#3A342E] bg-[#0B0908] px-3 py-2 text-xs text-[#E8E1D3] outline-none placeholder:text-[#E8E1D3]/35 focus:border-[#8A1F1F]"
+              />
+              <button type="submit" disabled={isSubscribing} className="border border-l-0 border-[#8A1F1F] bg-[#8A1F1F] px-3 py-2 text-[9px] font-display uppercase tracking-wider text-[#E8E1D3] transition-colors hover:bg-[#8A1F1F]/80 disabled:opacity-60">
+                {isSubscribing ? 'Enviando' : 'Receber'}
+              </button>
+            </div>
+            {newsletterStatus && <p role="status" className="text-[10px] text-[#E8E1D3]/70">{newsletterStatus}</p>}
+          </form>
         </div>
       </footer>
 

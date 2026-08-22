@@ -24,6 +24,9 @@ export interface ProductCandidate {
   externalId?: string;
   marketplace: string;
   produto: string;
+  rawTitle?: string;
+  displayTitle?: string;
+  curatorNote?: string;
   descricao: string;
   categoria: string;
   preco: number | null;
@@ -143,6 +146,9 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
   }
 
   const produto = (input.produto || "").replace(/\s+/g, " ").trim();
+  const rawTitle = typeof input.rawTitle === "string" ? input.rawTitle.replace(/\s+/g, " ").trim().slice(0, 500) : undefined;
+  const displayTitle = typeof input.displayTitle === "string" ? input.displayTitle.replace(/\s+/g, " ").trim().slice(0, 90) : undefined;
+  const curatorNote = typeof input.curatorNote === "string" ? input.curatorNote.replace(/\s+/g, " ").trim().slice(0, 500) : undefined;
   const rawDescription = (input.descricao || "").trim();
   const marketplace = (input.marketplace || detectMarketplace(normalizedUrl)).trim();
   // FASE 25C (Commit 3): quando o fluxo de afiliado passa o link oficial
@@ -156,6 +162,9 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
     externalId: input.externalId || extractExternalId(normalizedUrl),
     marketplace,
     produto,
+    rawTitle,
+    displayTitle,
+    curatorNote,
     descricao: containsRawPayloadMarkers(rawDescription) ? "" : stripRawAffiliateProvenance(rawDescription),
     categoria: publicCategoryMapping((input.categoria || "").trim()),
     preco: typeof input.preco === "number" && Number.isFinite(input.preco) ? input.preco : null,
