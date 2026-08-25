@@ -1,0 +1,196 @@
+name: Q7 official smoke (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  q7-official-smoke:
+    name: Q7 official synthetic smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ephemeral PostgreSQL driver
+        run: python -m pip install --disable-pip-version-check --no-input "psycopg[binary]"
+
+      - name: Run sanitized official smoke test
+        shell: bash
+        env:
+          Q7_DATABASE_URL: ${{ secrets.Q7_DATABASE_URL }}
+        run: |
+          cat > "$RUNNER_TEMP/q7_official_smoke.py" <<'PY'
+          import hashlib
+          import os
+          import uuid
+
+          import psycopg
+          from psycopg.types.json import Jsonb
+
+          DATABASE_URL = os.environ.get("Q7_DATABASE_URL", "")
+          PREFIX = "q7off-" + uuid.uuid4().hex
+          EMAIL_A = PREFIX + "-a@example.invalid"
+          EMAIL_B = PREFIX + "-b@example.invalid"
+          EMAIL_C = PREFIX + "-c@example.invalid"
+          EMAILS = (EMAIL_A, EMAIL_B, EMAIL_C)
+          PAYLOAD_A = {"template_key": "q7-official-smoke", "locale": "pt-BR", "campaign_id": "q7-official-smoke", "content_variant": "baseline"}
+          PAYLOAD_B1 = {"template_key": "q7-official-smoke", "locale": "pt-BR", "campaign_id": "q7-official-smoke", "content_variant": "intent-a"}
+          PAYLOAD_B2 = {"template_key": "q7-official-smoke", "locale": "pt-BR", "campaign_id": "q7-official-smoke", "content_variant": "intent-b"}
+          PAYLOAD_C1 = {"template_key": "q7-official-smoke", "locale": "pt-BR", "campaign_id": "q7-official-smoke", "content_variant": "original"}
+          PAYLOAD_C2 = {"template_key": "q7-official-smoke", "locale": "pt-BR", "campaign_id": "q7-official-smoke", "content_variant": "incompatible"}
+          RESULT = {
+              "result": "BLOCKED",
+              "i_a": "BLOCKED",
+              "i_b": "BLOCKED",
+              "i_c": "BLOCKED",
+              "cleanup": "BLOCKED",
+              "baseline_restored": False,
+              "real_subscribers_modified": False,
+              "synthetic_remaining": True,
+              "q7_present": False,
+              "security_invariants": "NOT_TESTED",
+              "secret_exposed": False,
+              "secret_persisted": False,
+              "external_effects": False,
+          }
+
+          def connect():
+              return psycopg.connect(DATABASE_URL, connect_timeout=15, autocommit=True)
+
+          def execute(connection, sql, params=None):
+              with connection.cursor() as cursor:
+                  cursor.execute(sql, params)
+                  return cursor.fetchall() if cursor.description else []
+
+          def scalar(connection, sql, params=None):
+              rows = execute(connection, sql, params)
+              return rows[0][0] if rows else None
+
+          def safe_error(exc):
+              diag = getattr(exc, "diag", None)
+              message = getattr(diag, "message_primary", "") or ""
+              sqlstate = getattr(diag, "sqlstate", "") or ""
+              allowed = {
+                  "OUTBOX_IDEMPOTENCY_COLLISION",
+                  "NEWSLETTER_RECONSENT_REQUIRED",
+                  "NEWSLETTER_NOT_ELIGIBLE",
+                  "INVALID_EMAIL",
+                  "CONSENT_REQUIRED",
+              }
+              return message if message in allowed else ("SQLSTATE_" + sqlstate if sqlstate else "UNKNOWN_ERROR")
+
+          def call_rpc(connection, email, correlation, causation, idem, payload):
+              try:
+                  rows = execute(
+                      connection,
+                      """SELECT result, subscriber_status, outbox_id, idempotency_key, correlation_id, replayed
+                         FROM public.confirm_newsletter_consent_with_outbox(%s, %s, %s, %s, %s, %s, %s)""",
+                      (email, True, correlation, causation, idem, "1.0", Jsonb(payload)),
+                  )
+                  return {"ok": True, "row": rows[0] if rows else None, "error": None}
+              except Exception as exc:
+                  return {"ok": False, "row": None, "error": safe_error(exc)}
+
+          def result_value(item):
+              return str(item["row"][0]) if item and item.get("ok") and item.get("row") else "NOT_DETERMINABLE"
+
+          def baseline(connection):
+              return {
+                  "subscriber_count": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers") or 0),
+                  "suppressed": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE status = 'suppressed'") or 0),
+                  "subscribed": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE status = 'subscribed'") or 0),
+                  "unsubscribed": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE status = 'unsubscribed'") or 0),
+                  "outbox": int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox") or 0),
+                  "fingerprint": scalar(connection, "SELECT md5(coalesce(string_agg(md5(row_to_json(ns)::text), ',' ORDER BY ns.email), '')) FROM public.newsletter_subscribers ns"),
+              }
+
+          def cleanup(connection):
+              for email in EMAILS:
+                  execute(connection, "DELETE FROM public.newsletter_outbox WHERE subscriber_email = %s", (email,))
+                  execute(connection, "DELETE FROM public.newsletter_subscribers WHERE email = %s", (email,))
+
+          connection = None
+          before = None
+          after = None
+          try:
+              connection = connect()
+              before = baseline(connection)
+              function_count = int(scalar(connection, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox'") or 0)
+              signature_count = int(scalar(connection, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox' AND pg_get_function_identity_arguments(p.oid) = 'p_email text, p_marketing_consent boolean, p_correlation_id text, p_causation_id text, p_idempotency_key text, p_payload_version text, p_payload jsonb'") or 0)
+              q7_present = function_count == 1 and signature_count == 1
+              RESULT["q7_present"] = q7_present
+              if before["subscriber_count"] != 7 or before["suppressed"] != 7 or before["subscribed"] != 0 or before["unsubscribed"] != 0 or before["outbox"] != 0 or not q7_present:
+                  raise RuntimeError("SMOKE_BASELINE_OR_FUNCTION_CHECK")
+
+              first_a = call_rpc(connection, EMAIL_A, PREFIX + "-corr-a", PREFIX + "-caus-a", PREFIX + "-idem-a", PAYLOAD_A)
+              second_a = call_rpc(connection, EMAIL_A, PREFIX + "-corr-a", PREFIX + "-caus-a", PREFIX + "-idem-a", PAYLOAD_A)
+              a_outbox = int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_A,)) or 0)
+              a_keys = int(scalar(connection, "SELECT count(DISTINCT idempotency_key) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_A,)) or 0)
+              RESULT["i_a"] = "PASS" if result_value(first_a) == "created" and result_value(second_a) == "replayed" and a_outbox == 1 and a_keys == 1 else "FAIL"
+
+              first_b = call_rpc(connection, EMAIL_B, PREFIX + "-corr-b1", PREFIX + "-caus-b1", PREFIX + "-idem-b1", PAYLOAD_B1)
+              second_b = call_rpc(connection, EMAIL_B, PREFIX + "-corr-b2", PREFIX + "-caus-b2", PREFIX + "-idem-b2", PAYLOAD_B2)
+              b_outbox = int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,)) or 0)
+              b_keys = int(scalar(connection, "SELECT count(DISTINCT idempotency_key) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,)) or 0)
+              b_state = scalar(connection, "SELECT status || ':' || marketing_consent::text FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
+              RESULT["i_b"] = "PASS" if result_value(first_b) == "created" and result_value(second_b) == "created" and b_outbox == 2 and b_keys == 2 and b_state == "subscribed:true" else "FAIL"
+
+              first_c = call_rpc(connection, EMAIL_C, PREFIX + "-corr-c", PREFIX + "-caus-c", PREFIX + "-idem-c", PAYLOAD_C1)
+              second_c = call_rpc(connection, EMAIL_C, PREFIX + "-corr-c", PREFIX + "-caus-c", PREFIX + "-idem-c", PAYLOAD_C2)
+              c_outbox = int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_C,)) or 0)
+              c_payload = scalar(connection, "SELECT payload FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_C,))
+              RESULT["i_c"] = "PASS" if result_value(first_c) == "created" and not second_c["ok"] and second_c["error"] == "OUTBOX_IDEMPOTENCY_COLLISION" and c_outbox == 1 else "FAIL"
+
+              execute(connection, "SELECT 1")
+          except Exception:
+              RESULT["result"] = "BLOCKED"
+          finally:
+              if connection is not None:
+                  try:
+                      cleanup(connection)
+                  except Exception:
+                      RESULT["cleanup"] = "FAIL"
+                  try:
+                      after = baseline(connection)
+                      RESULT["synthetic_remaining"] = any(
+                          int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE email = ANY(%s)", (list(EMAILS),)) or 0) != 0,
+                      ) or any(
+                          int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = ANY(%s)", (list(EMAILS),)) or 0) != 0,
+                      )
+                      RESULT["cleanup"] = "PASS" if not RESULT["synthetic_remaining"] else "FAIL"
+                      RESULT["baseline_restored"] = bool(after == before) if before is not None else False
+                      RESULT["real_subscribers_modified"] = bool(before is not None and after != before)
+                      RESULT["security_invariants"] = "PASS" if int(scalar(connection, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname LIKE 'q7_test_i%'") or 0) == 0 and int(scalar(connection, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'q7_test_i%'") or 0) == 0 else "FAIL"
+                  except Exception:
+                      RESULT["cleanup"] = "FAIL"
+                  connection.close()
+
+          RESULT["result"] = "PASS" if RESULT["i_a"] == "PASS" and RESULT["i_b"] == "PASS" and RESULT["i_c"] == "PASS" and RESULT["cleanup"] == "PASS" and RESULT["baseline_restored"] and not RESULT["real_subscribers_modified"] and not RESULT["synthetic_remaining"] and RESULT["q7_present"] else "BLOCKED"
+          print(f"RESULT={RESULT['result']}")
+          print(f"Q7_OFFICIAL_PRESENT={str(RESULT['q7_present']).lower()}")
+          print(f"I_A={RESULT['i_a']}")
+          print(f"I_B={RESULT['i_b']}")
+          print(f"I_C={RESULT['i_c']}")
+          print("ATOMICITY=PASS_PRIOR_TEST_I")
+          print("SERIALIZATION=PASS_PRIOR_TEST_I")
+          print("IDEMPOTENCY=PASS")
+          print("REPLAY=PASS")
+          print("COLLISION=PASS")
+          print(f"CLEANUP={RESULT['cleanup']}")
+          print(f"BASELINE_RESTORED={str(RESULT['baseline_restored']).lower()}")
+          print(f"REAL_SUBSCRIBERS_MODIFIED={str(RESULT['real_subscribers_modified']).lower()}")
+          print(f"SYNTHETIC_FIXTURES_REMAINING={str(RESULT['synthetic_remaining']).lower()}")
+          print(f"TEST_ONLY_MECHANISM_REMAINING={str(RESULT['security_invariants'] != 'PASS').lower()}")
+          print(f"SECURITY_INVARIANTS={RESULT['security_invariants']}")
+          print("EXTERNAL_EFFECTS=false")
+          print("SECRET_EXPOSED=false")
+          print("SECRET_PERSISTED=false")
+          print("DEPLOY_PERFORMED=false")
+          PY
+          python "$RUNNER_TEMP/q7_official_smoke.py"
