@@ -80,26 +80,29 @@ jobs:
               )
               variant = variant.replace(
                   "  v_outbox_id text;\nBEGIN",
-                  "  v_outbox_id text;\n  v_test_i_classid integer;\n  v_test_i_objid integer;\n  v_test_i_deadline timestamptz;\n  v_test_i_label text;\nBEGIN",
+                  "  v_outbox_id text;\n  v_test_i_own_classid integer;\n  v_test_i_own_objid integer;\n  v_test_i_other_classid integer;\n  v_test_i_other_objid integer;\n  v_test_i_deadline timestamptz;\n  v_test_i_label text;\nBEGIN",
                   1,
               )
               marker = "  -- O lock de linha serializa requests para o mesmo assinante após o INSERT.\n"
               barrier = (
-                  "  -- TEST-ONLY barrier: both sessions must hold the same shared transaction advisory lock before the real row lock.\n"
+                  "  -- TEST-ONLY barrier: each session holds a distinct exclusive transaction advisory lock before the real row lock.\n"
                   "  IF current_setting('q7.test_i_barrier_key', true) IS NOT NULL THEN\n"
-                  "    v_test_i_classid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':class');\n    v_test_i_objid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':obj');\n"
-                  "    v_test_i_deadline := clock_timestamp() + interval '20 seconds';\n"
                   "    v_test_i_label := current_setting('q7.test_i_label', true);\n"
-                  "    PERFORM pg_catalog.pg_advisory_xact_lock_shared(v_test_i_classid::integer, v_test_i_objid::integer);\n"
+                  "    v_test_i_own_classid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || v_test_i_label || ':class')::bigint), 2147483000) + 1)::integer;\n"
+                  "    v_test_i_own_objid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || v_test_i_label || ':obj')::bigint), 2147483000) + 1)::integer;\n"
+                  "    v_test_i_other_classid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || CASE WHEN v_test_i_label = 'A' THEN 'B' ELSE 'A' END || ':class')::bigint), 2147483000) + 1)::integer;\n"
+                  "    v_test_i_other_objid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || CASE WHEN v_test_i_label = 'A' THEN 'B' ELSE 'A' END || ':obj')::bigint), 2147483000) + 1)::integer;\n"
+                  "    v_test_i_deadline := clock_timestamp() + interval '20 seconds';\n"
+                  "    PERFORM pg_catalog.pg_advisory_xact_lock(v_test_i_own_classid, v_test_i_own_objid);\n"
                   "    RAISE NOTICE 'TEST_ONLY_READY_%', v_test_i_label;\n"
                   "    WHILE (\n"
                   "      SELECT count(*)\n"
                   "      FROM pg_catalog.pg_locks\n"
                   "      WHERE locktype = 'advisory'\n"
                   "        AND granted\n"
-                  "        AND mode = 'ShareLock'\n"
-                  "        AND classid = ((v_test_i_classid::bigint + 4294967296) % 4294967296)::oid\n"
-                  "        AND objid = ((v_test_i_objid::bigint + 4294967296) % 4294967296)::oid\n"
+                  "        AND mode = 'ExclusiveLock'\n"
+                  "        AND ((classid = v_test_i_own_classid::oid AND objid = v_test_i_own_objid::oid)\n"
+                  "          OR (classid = v_test_i_other_classid::oid AND objid = v_test_i_other_objid::oid))\n"
                   "    ) < 2 LOOP\n"
                   "      IF clock_timestamp() >= v_test_i_deadline THEN\n"
                   "        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'TEST_ONLY_BARRIER_TIMEOUT';\n"
