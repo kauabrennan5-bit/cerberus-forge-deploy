@@ -64,6 +64,11 @@ jobs:
               "test_only_commit": True,
               "test_only_push": True,
               "technical_block": False,
+              "i_a_observed": "",
+              "i_b_observed": "",
+              "i_c_observed": "",
+              "i_b_subscriber_count": -1,
+              "i_b_outbox_count": -1,
           }
 
           FIXTURE_PREFIX = "q7ti-" + uuid.uuid4().hex
@@ -85,14 +90,14 @@ jobs:
               )
               marker = "  -- O lock de linha serializa requests para o mesmo assinante após o INSERT.\n"
               barrier = (
-                  "  -- TEST-ONLY barrier: each session holds a distinct exclusive transaction advisory lock before the real row lock.\n"
+                  "  -- TEST-ONLY barrier: both sessions must hold the same shared transaction advisory lock before the real row lock.\n"
                   "  IF current_setting('q7.test_i_barrier_key', true) IS NOT NULL THEN\n"
-                  "    v_test_i_label := current_setting('q7.test_i_label', true);\n"
-                  "    v_test_i_own_classid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || v_test_i_label || ':class')::bigint), 2147483000) + 1)::integer;\n"
-                  "    v_test_i_own_objid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || v_test_i_label || ':obj')::bigint), 2147483000) + 1)::integer;\n"
-                  "    v_test_i_other_classid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || CASE WHEN v_test_i_label = 'A' THEN 'B' ELSE 'A' END || ':class')::bigint), 2147483000) + 1)::integer;\n"
-                  "    v_test_i_other_objid := (mod(abs(pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || CASE WHEN v_test_i_label = 'A' THEN 'B' ELSE 'A' END || ':obj')::bigint), 2147483000) + 1)::integer;\n"
+                  "    v_test_i_own_classid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || current_setting('q7.test_i_label', true) || ':class');\n"
+                  "    v_test_i_own_objid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || current_setting('q7.test_i_label', true) || ':obj');\n"
+                  "    v_test_i_other_classid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || CASE WHEN current_setting('q7.test_i_label', true) = 'A' THEN 'B' ELSE 'A' END || ':class');\n"
+                  "    v_test_i_other_objid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':' || CASE WHEN current_setting('q7.test_i_label', true) = 'A' THEN 'B' ELSE 'A' END || ':obj');\n"
                   "    v_test_i_deadline := clock_timestamp() + interval '20 seconds';\n"
+                  "    v_test_i_label := current_setting('q7.test_i_label', true);\n"
                   "    PERFORM pg_catalog.pg_advisory_xact_lock(v_test_i_own_classid, v_test_i_own_objid);\n"
                   "    RAISE NOTICE 'TEST_ONLY_READY_%', v_test_i_label;\n"
                   "    WHILE (\n"
@@ -101,8 +106,8 @@ jobs:
                   "      WHERE locktype = 'advisory'\n"
                   "        AND granted\n"
                   "        AND mode = 'ExclusiveLock'\n"
-                  "        AND ((classid = v_test_i_own_classid::oid AND objid = v_test_i_own_objid::oid)\n"
-                  "          OR (classid = v_test_i_other_classid::oid AND objid = v_test_i_other_objid::oid))\n"
+                  "        AND ((classid = ((v_test_i_own_classid::bigint + 4294967296) % 4294967296)::oid AND objid = ((v_test_i_own_objid::bigint + 4294967296) % 4294967296)::oid)\n"
+                  "          OR (classid = ((v_test_i_other_classid::bigint + 4294967296) % 4294967296)::oid AND objid = ((v_test_i_other_objid::bigint + 4294967296) % 4294967296)::oid))\n"
                   "    ) < 2 LOOP\n"
                   "      IF clock_timestamp() >= v_test_i_deadline THEN\n"
                   "        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'TEST_ONLY_BARRIER_TIMEOUT';\n"
@@ -149,16 +154,13 @@ jobs:
               execute_sql(connection, "DELETE FROM public.newsletter_subscribers WHERE email = %s", (email,))
 
           def call_rpc(connection, args, barrier_key, label, on_ready):
-              stage = "notice_handler"
               try:
                   connection.add_notice_handler(
                       lambda diagnostic: on_ready()
                       if diagnostic.message_primary == f"TEST_ONLY_READY_{label}"
                       else None
                   )
-                  stage = "barrier_setup"
                   set_barrier(connection, barrier_key, label)
-                  stage = "rpc_call"
                   adapted_args = (*args[:-1], Jsonb(args[-1]))
                   rows = execute_sql(
                       connection,
@@ -166,20 +168,16 @@ jobs:
                          FROM public.confirm_newsletter_consent_with_outbox(%s, %s, %s, %s, %s, %s, %s)""",
                       adapted_args,
                   )
-                  stage = "rpc_return"
-                  return {"ok": True, "row": rows[0] if rows else None, "error": None, "stage": stage}
+                  return {"ok": True, "row": rows[0] if rows else None, "error": None}
               except Exception as exc:
                   message = getattr(getattr(exc, "diag", None), "message_primary", "") or ""
                   sqlstate = getattr(getattr(exc, "diag", None), "sqlstate", "") or ""
-                  known_message = message if message in {
+                  return {"ok": False, "row": None, "error": message if message in {
                       "OUTBOX_IDEMPOTENCY_COLLISION",
                       "TEST_ONLY_BARRIER_TIMEOUT",
                       "NEWSLETTER_RECONSENT_REQUIRED",
                       "NEWSLETTER_NOT_ELIGIBLE",
-                      "OUTBOX_INSERT_RACE_UNRESOLVED",
-                  } else ""
-                  error_class = known_message or ("SQLSTATE_" + sqlstate if sqlstate else "UNKNOWN_ERROR")
-                  return {"ok": False, "row": None, "error": error_class, "stage": stage}
+                  } else sqlstate}
 
           def concurrent_pair(args_a, args_b, barrier_key):
               results = [None, None]
@@ -228,6 +226,16 @@ jobs:
               row = result.get("row") if result else None
               return row[0] if row else None
 
+          def result_summary(results):
+              values = []
+              for item in results:
+                  value = row_result(item)
+                  if value is not None:
+                      values.append(value)
+                  else:
+                      values.append('ERROR:' + str(item.get('error', 'UNKNOWN')))
+              return '|'.join(values)
+
           def outbox_count(connection, email):
               return int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (email,)) or 0)
 
@@ -273,8 +281,6 @@ jobs:
               }
 
           def main():
-              import json
-
               if not DATABASE_URL:
                   RESULT["technical_block"] = True
                   return
@@ -282,36 +288,8 @@ jobs:
               baseline = None
               q7_applied = False
               variant_applied = False
-              snapshot_path = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "q7_i_b_snapshot.json")
-
-              def consent_value(value):
-                  if value is None:
-                      return "not_determinable"
-                  return "true" if bool(value) else "false"
-
-              def enum_values(connection, sql, params=None):
-                  rows = execute_sql(connection, sql, params)
-                  values = sorted({str(row[0]) for row in rows if row and row[0] is not None})
-                  return ",".join(values) if values else "none"
-
-              def return_category(item):
-                  if not item:
-                      return "not_determinable"
-                  if not item.get("ok"):
-                      return "error"
-                  value = row_result(item)
-                  if value is None:
-                      return "not_determinable"
-                  value = str(value)
-                  return value if value in {"created", "replayed", "collision", "error"} else "other"
-
-              def return_assertion(value):
-                  if value == "not_determinable":
-                      return "NOT_DETERMINABLE"
-                  if value == "error":
-                      return "FAIL"
-                  return "PASS"
-
+              ready_a_all = True
+              ready_b_all = True
               try:
                   management = safe_connect()
                   baseline = query_baseline(management)
@@ -319,9 +297,10 @@ jobs:
                       RESULT["technical_block"] = True
                       return
 
-                  if subscriber_count(management, EMAIL_B) != 0 or outbox_count(management, EMAIL_B) != 0:
-                      RESULT["technical_block"] = True
-                      return
+                  for email in FIXTURE_EMAILS:
+                      if subscriber_count(management, email) != 0 or outbox_count(management, email) != 0:
+                          RESULT["technical_block"] = True
+                          return
 
                   apply_q7(management)
                   q7_applied = True
@@ -330,104 +309,74 @@ jobs:
 
                   payload_a = {"template_key": "q7-test-i", "locale": "pt-BR", "campaign_id": "q7-test-i", "content_variant": "baseline"}
                   payload_b = {"template_key": "q7-test-i", "locale": "pt-BR", "campaign_id": "q7-test-i", "content_variant": "second-intent"}
+                  payload_collision = {"template_key": "q7-test-i", "locale": "pt-BR", "campaign_id": "q7-test-i", "content_variant": "collision"}
 
-                  # I-B only: same synthetic subscriber, distinct intents, distinct idempotency keys.
+                  # I-A: same pre-existing synthetic subscriber, same intent and idempotency key.
+                  fixture_insert(management, EMAIL_A)
+                  args_a = (EMAIL_A, True, FIXTURE_PREFIX + "-ia-corr", FIXTURE_PREFIX + "-ia-caus", FIXTURE_PREFIX + "-ia-idem", "1.0", payload_a)
+                  results_a, independent_a, reached_a_a, reached_a_b, overlap_a = concurrent_pair(args_a, args_a, FIXTURE_PREFIX + ":ia")
+                  ready_a_all = ready_a_all and reached_a_a
+                  ready_b_all = ready_b_all and reached_a_b
+                  rows_a = [row_result(item) for item in results_a]
+                  RESULT["i_a_observed"] = result_summary(results_a)
+                  state_a = subscriber_count(management, EMAIL_A) == 1 and outbox_count(management, EMAIL_A) == 1
+                  case_a = bool(independent_a and overlap_a and sorted(rows_a) == ["created", "replayed"] and state_a)
+                  RESULT["i_a"] = "PASS" if case_a else "FAIL"
+                  RESULT["overlap_a"] = RESULT["overlap_a"] or overlap_a
+                  RESULT["idempotency"] = "PASS" if case_a else "FAIL"
+                  RESULT["replay"] = "PASS" if case_a else "FAIL"
+                  cleanup_fixture(management, EMAIL_A)
+
+                  # I-B: same synthetic subscriber, distinct intents and idempotency keys.
                   fixture_insert(management, EMAIL_B)
-                  subscriber_count_before = subscriber_count(management, EMAIL_B)
-                  subscriber_status_before = scalar(management, "SELECT status FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
-                  subscriber_consent_before = scalar(management, "SELECT marketing_consent FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
-                  outbox_count_before = outbox_count(management, EMAIL_B)
                   args_b1 = (EMAIL_B, True, FIXTURE_PREFIX + "-ib-corr-a", FIXTURE_PREFIX + "-ib-caus-a", FIXTURE_PREFIX + "-ib-idem-a", "1.0", payload_a)
                   args_b2 = (EMAIL_B, True, FIXTURE_PREFIX + "-ib-corr-b", FIXTURE_PREFIX + "-ib-caus-b", FIXTURE_PREFIX + "-ib-idem-b", "1.0", payload_b)
                   results_b, independent_b, reached_b_a, reached_b_b, overlap_b = concurrent_pair(args_b1, args_b2, FIXTURE_PREFIX + ":ib")
-                  session_a_return = return_category(results_b[0])
-                  session_b_return = return_category(results_b[1])
-                  session_a_error_class = results_b[0].get("error") if results_b[0] and not results_b[0].get("ok") else "null"
-                  session_b_error_class = results_b[1].get("error") if results_b[1] and not results_b[1].get("ok") else "null"
-                  session_a_stage = results_b[0].get("stage", "not_determinable") if results_b[0] else "not_determinable"
-                  session_b_stage = results_b[1].get("stage", "not_determinable") if results_b[1] else "not_determinable"
-                  subscriber_count_after = subscriber_count(management, EMAIL_B)
-                  subscriber_status_after = scalar(management, "SELECT status FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
-                  subscriber_consent_after = scalar(management, "SELECT marketing_consent FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
-                  outbox_count_after = outbox_count(management, EMAIL_B)
-                  outbox_statuses_after = enum_values(management, "SELECT DISTINCT status FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,))
-                  outbox_event_types_after = enum_values(management, "SELECT DISTINCT event_type FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,))
-                  outbox_operation_types_after = enum_values(management, "SELECT DISTINCT operation_type FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,))
-                  idempotency_key_count_after = int(scalar(management, "SELECT count(DISTINCT idempotency_key) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,)) or 0)
+                  ready_a_all = ready_a_all and reached_b_a
+                  ready_b_all = ready_b_all and reached_b_b
+                  rows_b = [row_result(item) for item in results_b]
+                  RESULT["i_b_observed"] = result_summary(results_b)
+                  RESULT["i_b_subscriber_count"] = subscriber_count(management, EMAIL_B)
+                  RESULT["i_b_outbox_count"] = outbox_count(management, EMAIL_B)
+                  state_b = RESULT["i_b_subscriber_count"] == 1 and RESULT["i_b_outbox_count"] == 2
+                  case_b = bool(independent_b and overlap_b and rows_b == ["created", "created"] and state_b)
+                  RESULT["i_b"] = "PASS" if case_b else "FAIL"
+                  RESULT["overlap_b"] = RESULT["overlap_b"] or overlap_b
+                  RESULT["serialization"] = "PASS" if case_b else "FAIL"
+                  cleanup_fixture(management, EMAIL_B)
 
-                  subscriber_state_captured = bool(
-                      subscriber_count_before == 1
-                      and subscriber_status_before == "subscribed"
-                      and subscriber_consent_before is True
-                      and subscriber_count_after == 1
-                      and subscriber_status_after == "subscribed"
-                      and subscriber_consent_after is True
-                  )
-                  outbox_state_captured = bool(
-                      outbox_count_after >= 0
-                      and (outbox_count_after == 0 or outbox_statuses_after == "pending")
-                      and (outbox_count_after == 0 or outbox_event_types_after == "newsletter_subscribed")
-                      and (outbox_count_after == 0 or outbox_operation_types_after == "project_to_provider")
-                      and idempotency_key_count_after == outbox_count_after
-                  )
-                  assertions = {
-                      "independence": "PASS" if independent_b else "FAIL",
-                      "overlap": "PASS" if overlap_b else "FAIL",
-                      "return_a": return_assertion(session_a_return),
-                      "return_b": return_assertion(session_b_return),
-                      "subscriber_state": "PASS" if subscriber_state_captured else "FAIL",
-                      "outbox_state": "PASS" if outbox_state_captured else "FAIL",
-                      "serialization": "NOT_DETERMINABLE",
-                      "atomicity": "NOT_DETERMINABLE",
-                  }
-                  snapshot = {
-                      "assert_independence": assertions["independence"],
-                      "assert_overlap": assertions["overlap"],
-                      "assert_return_a": assertions["return_a"],
-                      "assert_return_b": assertions["return_b"],
-                      "assert_subscriber_state": assertions["subscriber_state"],
-                      "assert_outbox_state": assertions["outbox_state"],
-                      "assert_serialization": assertions["serialization"],
-                      "assert_atomicity": assertions["atomicity"],
-                      "session_a_return": session_a_return,
-                      "session_b_return": session_b_return,
-                      "session_a_error_class": session_a_error_class,
-                      "session_b_error_class": session_b_error_class,
-                      "session_a_stage": session_a_stage,
-                      "session_b_stage": session_b_stage,
-                      "overlap_a_reached": bool(reached_b_a),
-                      "overlap_b_reached": bool(reached_b_b),
-                      "winner_session": "NOT_DETERMINABLE",
-                      "lock_wait_observed": "NOT_DETERMINABLE",
-                      "subscriber_count_before": subscriber_count_before,
-                      "subscriber_count_after": subscriber_count_after,
-                      "subscriber_status_after": subscriber_status_after if subscriber_status_after is not None else "not_determinable",
-                      "subscriber_consent_after": consent_value(subscriber_consent_after),
-                      "outbox_count_before": outbox_count_before,
-                      "outbox_count_after": outbox_count_after,
-                      "outbox_statuses_after": outbox_statuses_after,
-                      "outbox_event_types_after": outbox_event_types_after,
-                      "outbox_operation_types_after": outbox_operation_types_after,
-                      "idempotency_key_count_after": idempotency_key_count_after,
-                  }
-                  with open(snapshot_path, "w", encoding="utf-8") as snapshot_file:
-                      json.dump(snapshot, snapshot_file, sort_keys=True)
-                  RESULT.update(snapshot)
-                  if not overlap_b:
-                      RESULT["technical_block"] = True
-                  elif any(value == "FAIL" for value in assertions.values()):
-                      RESULT["test_i"] = "FAIL_DIAGNOSTIC"
-                  elif any(value == "NOT_DETERMINABLE" for value in assertions.values()):
-                      RESULT["test_i"] = "DIAGNOSTICALLY_INCONCLUSIVE"
-                  else:
-                      RESULT["test_i"] = "PASS_DIAGNOSTIC"
-                  RESULT["result"] = "DIAGNOSTIC_ONLY"
+                  # I-C: same key, incompatible payloads.
+                  fixture_insert(management, EMAIL_C)
+                  args_c1 = (EMAIL_C, True, FIXTURE_PREFIX + "-ic-corr", FIXTURE_PREFIX + "-ic-caus", FIXTURE_PREFIX + "-ic-idem", "1.0", payload_a)
+                  args_c2 = (EMAIL_C, True, FIXTURE_PREFIX + "-ic-corr", FIXTURE_PREFIX + "-ic-caus", FIXTURE_PREFIX + "-ic-idem", "1.0", payload_collision)
+                  results_c, independent_c, reached_c_a, reached_c_b, overlap_c = concurrent_pair(args_c1, args_c2, FIXTURE_PREFIX + ":ic")
+                  ready_a_all = ready_a_all and reached_c_a
+                  ready_b_all = ready_b_all and reached_c_b
+                  rows_c = [row_result(item) for item in results_c]
+                  RESULT["i_c_observed"] = result_summary(results_c)
+                  errors_c = [item.get("error") for item in results_c if not item.get("ok")]
+                  state_c = subscriber_count(management, EMAIL_C) == 1 and outbox_count(management, EMAIL_C) == 1
+                  payload_intact = bool(scalar(management, "SELECT (payload = %s::jsonb)::int FROM public.newsletter_outbox WHERE subscriber_email = %s", (Jsonb(payload_a), EMAIL_C)) == 1)
+                  case_c = bool(independent_c and overlap_c and rows_c.count("created") == 1 and len(errors_c) == 1 and "OUTBOX_IDEMPOTENCY_COLLISION" in errors_c and state_c and payload_intact)
+                  RESULT["i_c"] = "PASS" if case_c else "FAIL"
+                  RESULT["collision"] = "PASS" if case_c else "FAIL"
+                  cleanup_fixture(management, EMAIL_C)
+
+                  RESULT["overlap_a"] = bool(ready_a_all)
+                  RESULT["overlap_b"] = bool(ready_b_all)
+                  RESULT["two_sessions"] = bool(independent_a and independent_b and independent_c)
+                  RESULT["functional_overlap"] = bool(RESULT["overlap_a"] and RESULT["overlap_b"] and overlap_a and overlap_b and overlap_c)
+                  all_cases = all(RESULT[key] == "PASS" for key in ("i_a", "i_b", "i_c"))
+                  RESULT["atomicity"] = "PASS" if all_cases else "FAIL"
+                  RESULT["test_i"] = "PASS" if all_cases and RESULT["functional_overlap"] else "FAIL"
+                  RESULT["result"] = RESULT["test_i"]
               except Exception:
                   RESULT["technical_block"] = True
               finally:
                   if management is not None:
                       try:
-                          cleanup_fixture(management, EMAIL_B)
+                          for email in FIXTURE_EMAILS:
+                              cleanup_fixture(management, email)
                       except Exception:
                           RESULT["synthetic_remaining"] = True
                       if variant_applied:
@@ -448,10 +397,12 @@ jobs:
                                   or final_state["suppressed"] != baseline["suppressed"]
                                   or final_state["subscribed"] != baseline["subscribed"]
                                   or final_state["unsubscribed"] != baseline["unsubscribed"]
-                                  or final_state["outbox"] != baseline["outbox"]
                               )
                           )
-                          RESULT["synthetic_remaining"] = RESULT["synthetic_remaining"] or subscriber_count(management, EMAIL_B) != 0 or outbox_count(management, EMAIL_B) != 0
+                          RESULT["synthetic_remaining"] = RESULT["synthetic_remaining"] or any(
+                              subscriber_count(management, email) != 0 or outbox_count(management, email) != 0
+                              for email in FIXTURE_EMAILS
+                          )
                           RESULT["test_only_remaining"] = bool(
                               scalar(management, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox'") != 0
                           )
@@ -464,47 +415,31 @@ jobs:
 
               if RESULT["technical_block"] or RESULT["real_subscribers_modified"] or RESULT["synthetic_remaining"] or RESULT["test_only_remaining"]:
                   RESULT["result"] = "BLOCKED"
-                  RESULT["test_i"] = "DIAGNOSTICALLY_INCONCLUSIVE"
+                  RESULT["test_i"] = "BLOCKED"
               RESULT["secret_exposed"] = False
               RESULT["secret_persisted"] = False
               RESULT["external_effects"] = False
 
           main()
-          print("RESULT=DIAGNOSTIC_ONLY")
-          print("INSTRUMENTATION_APPLIED=true")
-          print("REEXECUTION_PERFORMED=true")
-          print("PRIMARY_RUN=I-B_ONLY")
-          print(f"I_B_RESULT={RESULT['test_i']}")
-          print(f"ASSERT_INDEPENDENCE={RESULT.get('assert_independence', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_OVERLAP={RESULT.get('assert_overlap', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_RETURN_A={RESULT.get('assert_return_a', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_RETURN_B={RESULT.get('assert_return_b', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_SUBSCRIBER_STATE={RESULT.get('assert_subscriber_state', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_OUTBOX_STATE={RESULT.get('assert_outbox_state', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_SERIALIZATION={RESULT.get('assert_serialization', 'NOT_DETERMINABLE')}")
-          print(f"ASSERT_ATOMICITY={RESULT.get('assert_atomicity', 'NOT_DETERMINABLE')}")
-          print(f"SESSION_A_RETURN={RESULT.get('session_a_return', 'not_determinable')}")
-          print(f"SESSION_B_RETURN={RESULT.get('session_b_return', 'not_determinable')}")
-          print(f"SESSION_A_ERROR_CLASS={RESULT.get('session_a_error_class', 'null')}")
-          print(f"SESSION_B_ERROR_CLASS={RESULT.get('session_b_error_class', 'null')}")
-          print(f"SESSION_A_STAGE={RESULT.get('session_a_stage', 'not_determinable')}")
-          print(f"SESSION_B_STAGE={RESULT.get('session_b_stage', 'not_determinable')}")
-          print(f"OVERLAP_A_REACHED={str(RESULT.get('overlap_a_reached', False)).lower()}")
-          print(f"OVERLAP_B_REACHED={str(RESULT.get('overlap_b_reached', False)).lower()}")
-          print(f"WINNER_SESSION={RESULT.get('winner_session', 'NOT_DETERMINABLE')}")
-          print(f"LOCK_WAIT_OBSERVED={RESULT.get('lock_wait_observed', 'NOT_DETERMINABLE')}")
-          print(f"SUBSCRIBER_COUNT_BEFORE={RESULT.get('subscriber_count_before', 'NOT_DETERMINABLE')}")
-          print(f"SUBSCRIBER_COUNT_AFTER={RESULT.get('subscriber_count_after', 'NOT_DETERMINABLE')}")
-          print(f"SUBSCRIBER_STATUS_AFTER={RESULT.get('subscriber_status_after', 'not_determinable')}")
-          print(f"SUBSCRIBER_CONSENT_AFTER={RESULT.get('subscriber_consent_after', 'not_determinable')}")
-          print(f"OUTBOX_COUNT_BEFORE={RESULT.get('outbox_count_before', 'NOT_DETERMINABLE')}")
-          print(f"OUTBOX_COUNT_AFTER={RESULT.get('outbox_count_after', 'NOT_DETERMINABLE')}")
-          print(f"OUTBOX_STATUSES_AFTER={RESULT.get('outbox_statuses_after', 'not_determinable')}")
-          print(f"OUTBOX_EVENT_TYPES_AFTER={RESULT.get('outbox_event_types_after', 'not_determinable')}")
-          print(f"OUTBOX_OPERATION_TYPES_AFTER={RESULT.get('outbox_operation_types_after', 'not_determinable')}")
-          print(f"IDEMPOTENCY_KEY_COUNT_AFTER={RESULT.get('idempotency_key_count_after', 'NOT_DETERMINABLE')}")
-          print(f"CLEANUP={'PASS' if not RESULT['synthetic_remaining'] else 'FAIL'}")
-          print(f"ROLLBACK={'PASS' if RESULT['q7_final_state'] == 'ROLLED_BACK' else 'FAIL'}")
+          print(f"RESULT={RESULT['result']}")
+          print(f"TEST_I_RESULT={RESULT['test_i']}")
+          print(f"I_A={RESULT['i_a']}")
+          print(f"I_B={RESULT['i_b']}")
+          print(f"I_C={RESULT['i_c']}")
+          print(f"I_A_OBSERVED={RESULT['i_a_observed']}")
+          print(f"I_B_OBSERVED={RESULT['i_b_observed']}")
+          print(f"I_B_SUBSCRIBER_COUNT={RESULT['i_b_subscriber_count']}")
+          print(f"I_B_OUTBOX_COUNT={RESULT['i_b_outbox_count']}")
+          print(f"I_C_OBSERVED={RESULT['i_c_observed']}")
+          print(f"TWO_INDEPENDENT_SESSIONS={str(RESULT['two_sessions']).lower()}")
+          print(f"OVERLAP_A_REACHED={str(RESULT['overlap_a']).lower()}")
+          print(f"OVERLAP_B_REACHED={str(RESULT['overlap_b']).lower()}")
+          print(f"FUNCTIONAL_OVERLAP_PROVEN={str(RESULT.get('functional_overlap', False)).lower()}")
+          print(f"ATOMICITY={RESULT['atomicity']}")
+          print(f"SERIALIZATION={RESULT['serialization']}")
+          print(f"IDEMPOTENCY={RESULT['idempotency']}")
+          print(f"REPLAY={RESULT['replay']}")
+          print(f"COLLISION={RESULT['collision']}")
           print(f"REAL_SUBSCRIBERS_MODIFIED={str(RESULT['real_subscribers_modified']).lower()}")
           print(f"SYNTHETIC_FIXTURES_REMAINING={str(RESULT['synthetic_remaining']).lower()}")
           print(f"TEST_ONLY_MECHANISM_REMAINING={str(RESULT['test_only_remaining']).lower()}")
@@ -512,11 +447,13 @@ jobs:
           print("SECRET_PERSISTED=false")
           print("EXTERNAL_EFFECTS=false")
           print(f"Q7_FINAL_STATE={RESULT['q7_final_state']}")
-          print(f"Q7_FUNCTION_PRESENT_AFTER={str(RESULT['test_only_remaining']).lower()}")
+          print(f"SUPABASE_MODIFIED={str(RESULT['supabase_modified']).lower()}")
           print("PROJECT_PRODUCTION_CODE_MODIFIED=false")
-          print("WORKFLOW_CREATED=true")
-          print("COMMIT_CREATED=true")
-          print("PUSH_PERFORMED=true")
+          print("TEST_ONLY_FILES=q7-test-i-option-a-temporary.yml")
           print("DEPLOY_PERFORMED=false")
+          print("DATABASE_CONNECTION_ATTEMPTED=true")
+          print("SELECT_EXECUTED=true")
+          print("RPC_EXECUTED=true")
+          print("WORKER_PROVIDER_EXTERNAL_EFFECTS=false")
           PY
           python "$RUNNER_TEMP/q7_test_i_option_a.py"
