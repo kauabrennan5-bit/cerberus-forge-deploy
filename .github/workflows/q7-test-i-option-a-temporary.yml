@@ -84,32 +84,32 @@ jobs:
                   1,
               )
               marker = "  -- O lock de linha serializa requests para o mesmo assinante após o INSERT.\n"
-              barrier = """  -- TEST-ONLY barrier: both sessions must hold the same shared transaction advisory lock before the real row lock.
-  IF current_setting('q7.test_i_barrier_key', true) IS NOT NULL THEN
-    v_test_i_barrier_key := pg_catalog.hashtextextended(current_setting('q7.test_i_barrier_key'), 0);
-    v_test_i_deadline := clock_timestamp() + interval '20 seconds';
-    v_test_i_label := current_setting('q7.test_i_label', true);
-    PERFORM pg_catalog.pg_advisory_xact_lock_shared(v_test_i_barrier_key);
-    RAISE NOTICE 'TEST_ONLY_READY_%', v_test_i_label;
-    WHILE (
-      SELECT count(*)
-      FROM pg_catalog.pg_locks
-      WHERE locktype = 'advisory'
-        AND granted
-        AND mode = 'ShareLock'
-        AND objsubid = 1
-        AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())
-        AND classid = ((v_test_i_barrier_key >> 32) & 4294967295)::oid
-        AND objid = (v_test_i_barrier_key & 4294967295)::oid
-    ) < 2 LOOP
-      IF clock_timestamp() >= v_test_i_deadline THEN
-        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'TEST_ONLY_BARRIER_TIMEOUT';
-      END IF;
-      PERFORM pg_catalog.pg_sleep(0.01);
-    END LOOP;
-  END IF;
-
-"""
+              barrier = (
+                  "  -- TEST-ONLY barrier: both sessions must hold the same shared transaction advisory lock before the real row lock.\n"
+                  "  IF current_setting('q7.test_i_barrier_key', true) IS NOT NULL THEN\n"
+                  "    v_test_i_barrier_key := pg_catalog.hashtextextended(current_setting('q7.test_i_barrier_key'), 0);\n"
+                  "    v_test_i_deadline := clock_timestamp() + interval '20 seconds';\n"
+                  "    v_test_i_label := current_setting('q7.test_i_label', true);\n"
+                  "    PERFORM pg_catalog.pg_advisory_xact_lock_shared(v_test_i_barrier_key);\n"
+                  "    RAISE NOTICE 'TEST_ONLY_READY_%', v_test_i_label;\n"
+                  "    WHILE (\n"
+                  "      SELECT count(*)\n"
+                  "      FROM pg_catalog.pg_locks\n"
+                  "      WHERE locktype = 'advisory'\n"
+                  "        AND granted\n"
+                  "        AND mode = 'ShareLock'\n"
+                  "        AND objsubid = 1\n"
+                  "        AND database = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())\n"
+                  "        AND classid = ((v_test_i_barrier_key >> 32) & 4294967295)::oid\n"
+                  "        AND objid = (v_test_i_barrier_key & 4294967295)::oid\n"
+                  "    ) < 2 LOOP\n"
+                  "      IF clock_timestamp() >= v_test_i_deadline THEN\n"
+                  "        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'TEST_ONLY_BARRIER_TIMEOUT';\n"
+                  "      END IF;\n"
+                  "      PERFORM pg_catalog.pg_sleep(0.01);\n"
+                  "    END LOOP;\n"
+                  "  END IF;\n"
+              )
               if marker not in variant:
                   raise RuntimeError("variant marker not found")
               return variant.replace(marker, barrier + marker, 1)
