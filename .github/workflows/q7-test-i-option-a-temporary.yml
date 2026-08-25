@@ -1,0 +1,500 @@
+name: Q7 Test I Option A (temporary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  q7-test-i:
+    name: Temporary Q7 functional concurrency validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ephemeral PostgreSQL driver
+        run: python -m pip install --disable-pip-version-check --no-input "psycopg[binary]"
+
+      - name: Run sanitized TEST-ONLY harness
+        shell: bash
+        env:
+          Q7_DATABASE_URL: ${{ secrets.Q7_DATABASE_URL }}
+        run: |
+          cat > "$RUNNER_TEMP/q7_test_i_option_a.py" <<'PY'
+          import os
+          import sys
+          import threading
+          import uuid
+          from contextlib import closing
+
+          import psycopg
+          from psycopg.types.json import Jsonb
+
+          Q7_SQL = "-- TASK Q7 — RPC transacional newsletter + outbox\n-- PROPOSTA/APLICAÇÃO CONTROLADA: cria somente a function e sua segurança.\n-- Não altera RLS, policies, grants ou schema das tabelas existentes.\nBEGIN;\n\nCREATE FUNCTION public.confirm_newsletter_consent_with_outbox(\n  p_email text,\n  p_marketing_consent boolean,\n  p_correlation_id text,\n  p_causation_id text,\n  p_idempotency_key text,\n  p_payload_version text,\n  p_payload jsonb\n)\nRETURNS TABLE (\n  result text,\n  subscriber_status text,\n  outbox_id text,\n  idempotency_key text,\n  correlation_id text,\n  replayed boolean\n)\nLANGUAGE plpgsql\nSECURITY INVOKER\nSET search_path = pg_catalog, public\nAS $function$\nDECLARE\n  v_email text;\n  v_correlation_id text;\n  v_causation_id text;\n  v_idempotency_key text;\n  v_payload_version text;\n  v_payload jsonb;\n  v_status text;\n  v_marketing_consent boolean;\n  v_existing_outbox_id text;\n  v_existing_subscriber_email text;\n  v_existing_event_type text;\n  v_existing_operation_type text;\n  v_existing_correlation_id text;\n  v_existing_payload_version text;\n  v_existing_payload jsonb;\n  v_outbox_id text;\nBEGIN\n  v_email := lower(btrim(coalesce(p_email, '')));\n  IF v_email = '' OR v_email !~* '^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]{2,}$' THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'INVALID_EMAIL';\n  END IF;\n\n  IF p_marketing_consent IS DISTINCT FROM TRUE THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'CONSENT_REQUIRED';\n  END IF;\n\n  v_correlation_id := btrim(coalesce(p_correlation_id, ''));\n  IF v_correlation_id = '' THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'CORRELATION_ID_REQUIRED';\n  END IF;\n\n  v_causation_id := NULLIF(btrim(coalesce(p_causation_id, '')), '');\n  v_idempotency_key := btrim(coalesce(p_idempotency_key, ''));\n  IF v_idempotency_key = '' THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'IDEMPOTENCY_KEY_REQUIRED';\n  END IF;\n\n  v_payload_version := btrim(coalesce(p_payload_version, ''));\n  IF v_payload_version <> '1.0' THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'UNSUPPORTED_PAYLOAD_VERSION';\n  END IF;\n\n  v_payload := coalesce(p_payload, '{}'::jsonb);\n  IF jsonb_typeof(v_payload) <> 'object' THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PAYLOAD_OBJECT_REQUIRED';\n  END IF;\n  IF length(v_payload::text) > 4096 THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PAYLOAD_TOO_LARGE';\n  END IF;\n  IF EXISTS (\n    SELECT 1\n    FROM jsonb_object_keys(v_payload) AS allowed_key(key)\n    WHERE key NOT IN ('template_key', 'locale', 'campaign_id', 'content_variant')\n  ) THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PAYLOAD_KEY_NOT_ALLOWED';\n  END IF;\n  IF EXISTS (\n    SELECT 1\n    FROM jsonb_each(v_payload) AS field(key, value)\n    WHERE key NOT IN ('template_key', 'locale', 'campaign_id', 'content_variant')\n       OR jsonb_typeof(value) IN ('object', 'array')\n       OR lower(key) IN (\n         'secret', 'api_key', 'apikey', 'service_role_key', 'password',\n         'authorization', 'credential', 'unsubscribe_token', 'unsubscribe_token_hash'\n       )\n  ) THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PAYLOAD_KEY_OR_VALUE_FORBIDDEN';\n  END IF;\n\n  -- INSERT ... ON CONFLICT serializa novos e-mails concorrentes pela PK email.\n  INSERT INTO public.newsletter_subscribers (\n    email,\n    status,\n    marketing_consent,\n    consent_at,\n    consent_source,\n    consent_purpose,\n    consent_policy_version,\n    unsubscribe_at,\n    unsubscribe_source,\n    suppression_reason,\n    unsubscribe_token_hash,\n    unsubscribe_token_expires_at,\n    updated_at\n  ) VALUES (\n    v_email,\n    'subscribed',\n    TRUE,\n    clock_timestamp(),\n    'site_newsletter_form',\n    'new_selections_recommendations_promotional_offers',\n    'newsletter-consent-v1',\n    NULL,\n    NULL,\n    NULL,\n    NULL,\n    NULL,\n    clock_timestamp()\n  )\n  ON CONFLICT (email) DO NOTHING;\n\n  -- O lock de linha serializa requests para o mesmo assinante após o INSERT.\n  SELECT ns.status, ns.marketing_consent\n    INTO v_status, v_marketing_consent\n  FROM public.newsletter_subscribers AS ns\n  WHERE ns.email = v_email\n  FOR UPDATE;\n\n  IF NOT FOUND THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'SUBSCRIBER_LOCK_FAILED';\n  END IF;\n\n  IF v_status IN ('suppressed', 'unsubscribed') THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'NEWSLETTER_RECONSENT_REQUIRED';\n  END IF;\n  IF v_status <> 'subscribed' OR v_marketing_consent IS DISTINCT FROM TRUE THEN\n    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'NEWSLETTER_NOT_ELIGIBLE';\n  END IF;\n\n  -- Replays são resolvidos sob o lock do assinante e sem sobrescrever evidência histórica.\n  SELECT\n    o.id,\n    o.subscriber_email,\n    o.event_type,\n    o.operation_type,\n    o.correlation_id,\n    o.payload_version,\n    o.payload\n    INTO\n      v_existing_outbox_id,\n      v_existing_subscriber_email,\n      v_existing_event_type,\n      v_existing_operation_type,\n      v_existing_correlation_id,\n      v_existing_payload_version,\n      v_existing_payload\n  FROM public.newsletter_outbox AS o\n  WHERE o.idempotency_key = v_idempotency_key\n  FOR UPDATE;\n\n  IF FOUND THEN\n    IF v_existing_subscriber_email <> v_email\n       OR v_existing_event_type <> 'newsletter_subscribed'\n       OR v_existing_operation_type <> 'project_to_provider'\n       OR v_existing_correlation_id <> v_correlation_id\n       OR v_existing_payload_version <> v_payload_version\n       OR v_existing_payload IS DISTINCT FROM v_payload THEN\n      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'OUTBOX_IDEMPOTENCY_COLLISION';\n    END IF;\n\n    RETURN QUERY SELECT\n      'replayed'::text,\n      'subscribed'::text,\n      v_existing_outbox_id,\n      v_idempotency_key,\n      v_correlation_id,\n      TRUE;\n    RETURN;\n  END IF;\n\n  v_outbox_id := 'nout-' || md5(v_idempotency_key || '|newsletter_subscribed|project_to_provider');\n\n  INSERT INTO public.newsletter_outbox (\n    id,\n    subscriber_email,\n    event_type,\n    operation_type,\n    status,\n    correlation_id,\n    causation_id,\n    idempotency_key,\n    payload_version,\n    payload,\n    attempt_count,\n    max_attempts,\n    next_attempt_at,\n    lease_until,\n    lease_token,\n    last_error_code,\n    last_error_message,\n    provider_reference,\n    created_at,\n    updated_at,\n    processing_started_at,\n    succeeded_at,\n    failed_at\n  ) VALUES (\n    v_outbox_id,\n    v_email,\n    'newsletter_subscribed',\n    'project_to_provider',\n    'pending',\n    v_correlation_id,\n    v_causation_id,\n    v_idempotency_key,\n    v_payload_version,\n    v_payload,\n    0,\n    3,\n    clock_timestamp(),\n    NULL,\n    NULL,\n    NULL,\n    NULL,\n    NULL,\n    clock_timestamp(),\n    clock_timestamp(),\n    NULL,\n    NULL,\n    NULL\n  )\n  ON CONFLICT ON CONSTRAINT newsletter_outbox_idempotency_key_key DO NOTHING\n  RETURNING id INTO v_outbox_id;\n\n  IF v_outbox_id IS NULL THEN\n    SELECT\n      o.id,\n      o.subscriber_email,\n      o.event_type,\n      o.operation_type,\n      o.correlation_id,\n      o.payload_version,\n      o.payload\n      INTO\n        v_existing_outbox_id,\n        v_existing_subscriber_email,\n        v_existing_event_type,\n        v_existing_operation_type,\n        v_existing_correlation_id,\n        v_existing_payload_version,\n        v_existing_payload\n    FROM public.newsletter_outbox AS o\n    WHERE o.idempotency_key = v_idempotency_key\n    FOR UPDATE;\n\n    IF NOT FOUND THEN\n      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'OUTBOX_INSERT_RACE_UNRESOLVED';\n    END IF;\n    IF v_existing_subscriber_email <> v_email\n       OR v_existing_event_type <> 'newsletter_subscribed'\n       OR v_existing_operation_type <> 'project_to_provider'\n       OR v_existing_correlation_id <> v_correlation_id\n       OR v_existing_payload_version <> v_payload_version\n       OR v_existing_payload IS DISTINCT FROM v_payload THEN\n      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'OUTBOX_IDEMPOTENCY_COLLISION';\n    END IF;\n\n    RETURN QUERY SELECT\n      'replayed'::text,\n      'subscribed'::text,\n      v_existing_outbox_id,\n      v_idempotency_key,\n      v_correlation_id,\n      TRUE;\n    RETURN;\n  END IF;\n\n  RETURN QUERY SELECT\n    'created'::text,\n    'subscribed'::text,\n    v_outbox_id,\n    v_idempotency_key,\n    v_correlation_id,\n    FALSE;\nEND;\n$function$;\n\nREVOKE EXECUTE ON FUNCTION public.confirm_newsletter_consent_with_outbox(text, boolean, text, text, text, text, jsonb)\n  FROM PUBLIC, anon, authenticated;\n\nGRANT EXECUTE ON FUNCTION public.confirm_newsletter_consent_with_outbox(text, boolean, text, text, text, text, jsonb)\n  TO service_role;\n\nCOMMIT;\n"
+          DATABASE_URL = os.environ.get("Q7_DATABASE_URL", "")
+          RESULT = {
+              "result": "BLOCKED",
+              "test_i": "BLOCKED",
+              "i_a": "BLOCKED",
+              "i_b": "BLOCKED",
+              "i_c": "BLOCKED",
+              "two_sessions": False,
+              "overlap_a": False,
+              "overlap_b": False,
+              "atomicity": "NOT_TESTED",
+              "serialization": "NOT_TESTED",
+              "idempotency": "NOT_TESTED",
+              "replay": "NOT_TESTED",
+              "collision": "NOT_TESTED",
+              "real_subscribers_modified": False,
+              "synthetic_remaining": False,
+              "test_only_remaining": False,
+              "secret_exposed": False,
+              "secret_persisted": False,
+              "external_effects": False,
+              "q7_final_state": "ROLLED_BACK",
+              "supabase_modified": False,
+              "production_code_modified": False,
+              "test_only_files": True,
+              "test_only_commit": True,
+              "test_only_push": True,
+              "technical_block": False,
+          }
+
+          FIXTURE_PREFIX = "q7ti-" + uuid.uuid4().hex
+          EMAIL_A = FIXTURE_PREFIX + "-a@example.invalid"
+          EMAIL_B = FIXTURE_PREFIX + "-b@example.invalid"
+          EMAIL_C = FIXTURE_PREFIX + "-c@example.invalid"
+          FIXTURE_EMAILS = (EMAIL_A, EMAIL_B, EMAIL_C)
+
+          def make_variant_sql():
+              variant = Q7_SQL.replace(
+                  "CREATE FUNCTION public.confirm_newsletter_consent_with_outbox(",
+                  "CREATE OR REPLACE FUNCTION public.confirm_newsletter_consent_with_outbox(",
+                  1,
+              )
+              variant = variant.replace(
+                  "  v_outbox_id text;\nBEGIN",
+                  "  v_outbox_id text;\n  v_test_i_classid integer;\n  v_test_i_objid integer;\n  v_test_i_deadline timestamptz;\n  v_test_i_label text;\nBEGIN",
+                  1,
+              )
+              marker = "  -- O lock de linha serializa requests para o mesmo assinante após o INSERT.\n"
+              barrier = (
+                  "  -- TEST-ONLY barrier: both sessions must hold the same shared transaction advisory lock before the real row lock.\n"
+                  "  IF current_setting('q7.test_i_barrier_key', true) IS NOT NULL THEN\n"
+                  "    v_test_i_classid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':class');\n    v_test_i_objid := pg_catalog.hashtext(current_setting('q7.test_i_barrier_key') || ':obj');\n"
+                  "    v_test_i_deadline := clock_timestamp() + interval '20 seconds';\n"
+                  "    v_test_i_label := current_setting('q7.test_i_label', true);\n"
+                  "    PERFORM pg_catalog.pg_advisory_xact_lock_shared(v_test_i_classid::integer, v_test_i_objid::integer);\n"
+                  "    RAISE NOTICE 'TEST_ONLY_READY_%', v_test_i_label;\n"
+                  "    WHILE (\n"
+                  "      SELECT count(*)\n"
+                  "      FROM pg_catalog.pg_locks\n"
+                  "      WHERE locktype = 'advisory'\n"
+                  "        AND granted\n"
+                  "        AND mode = 'ShareLock'\n"
+                  "        AND classid = ((v_test_i_classid::bigint + 4294967296) % 4294967296)::oid\n"
+                  "        AND objid = ((v_test_i_objid::bigint + 4294967296) % 4294967296)::oid\n"
+                  "    ) < 2 LOOP\n"
+                  "      IF clock_timestamp() >= v_test_i_deadline THEN\n"
+                  "        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'TEST_ONLY_BARRIER_TIMEOUT';\n"
+                  "      END IF;\n"
+                  "      PERFORM pg_catalog.pg_sleep(0.01);\n"
+                  "    END LOOP;\n"
+                  "  END IF;\n"
+              )
+              if marker not in variant:
+                  raise RuntimeError("variant marker not found")
+              return variant.replace(marker, barrier + marker, 1)
+
+          VARIANT_SQL = make_variant_sql()
+
+          def safe_connect():
+              return psycopg.connect(DATABASE_URL, connect_timeout=15, autocommit=True)
+
+          def execute_sql(connection, sql, params=None):
+              with connection.cursor() as cursor:
+                  cursor.execute(sql, params)
+                  return cursor.fetchall() if cursor.description else []
+
+          def scalar(connection, sql, params=None):
+              rows = execute_sql(connection, sql, params)
+              return rows[0][0] if rows else None
+
+          def set_barrier(connection, key, label):
+              execute_sql(connection, "SELECT set_config('q7.test_i_barrier_key', %s, false)", (key,))
+              execute_sql(connection, "SELECT set_config('q7.test_i_label', %s, false)", (label,))
+
+          def fixture_insert(connection, email):
+              execute_sql(
+                  connection,
+                  """INSERT INTO public.newsletter_subscribers
+                     (email, status, marketing_consent, consent_at, consent_source,
+                      consent_purpose, consent_policy_version, updated_at)
+                     VALUES (%s, 'subscribed', TRUE, clock_timestamp(),
+                             'q7_test_i', 'q7_test_i', 'q7-test-i', clock_timestamp())""",
+                  (email,),
+              )
+
+          def cleanup_fixture(connection, email):
+              execute_sql(connection, "DELETE FROM public.newsletter_outbox WHERE subscriber_email = %s", (email,))
+              execute_sql(connection, "DELETE FROM public.newsletter_subscribers WHERE email = %s", (email,))
+
+          def call_rpc(connection, args, barrier_key, label, on_ready):
+              try:
+                  connection.add_notice_handler(
+                      lambda diagnostic: on_ready()
+                      if diagnostic.message_primary == f"TEST_ONLY_READY_{label}"
+                      else None
+                  )
+                  set_barrier(connection, barrier_key, label)
+                  adapted_args = (*args[:-1], Jsonb(args[-1]))
+                  rows = execute_sql(
+                      connection,
+                      """SELECT result, subscriber_status, outbox_id, idempotency_key, correlation_id, replayed
+                         FROM public.confirm_newsletter_consent_with_outbox(%s, %s, %s, %s, %s, %s, %s)""",
+                      adapted_args,
+                  )
+                  return {"ok": True, "row": rows[0] if rows else None, "error": None}
+              except Exception as exc:
+                  message = getattr(getattr(exc, "diag", None), "message_primary", "") or ""
+                  sqlstate = getattr(getattr(exc, "diag", None), "sqlstate", "") or ""
+                  return {"ok": False, "row": None, "error": message if message in {
+                      "OUTBOX_IDEMPOTENCY_COLLISION",
+                      "TEST_ONLY_BARRIER_TIMEOUT",
+                      "NEWSLETTER_RECONSENT_REQUIRED",
+                      "NEWSLETTER_NOT_ELIGIBLE",
+                  } else sqlstate}
+
+          def concurrent_pair(args_a, args_b, barrier_key):
+              results = [None, None]
+              opened = [False, False]
+              pids = [None, None]
+              reached = [False, False]
+              start_gate = threading.Barrier(2, timeout=20)
+
+              def worker(index, args):
+                  connection = None
+                  try:
+                      connection = safe_connect()
+                      opened[index] = True
+                      pids[index] = scalar(connection, "SELECT pg_backend_pid()")
+                      start_gate.wait()
+                      results[index] = call_rpc(
+                          connection,
+                          args,
+                          barrier_key,
+                          'A' if index == 0 else 'B',
+                          lambda: reached.__setitem__(index, True),
+                      )
+                  except Exception:
+                      results[index] = {"ok": False, "row": None, "error": "WORKER_FAILURE"}
+                  finally:
+                      if connection is not None:
+                          try:
+                              connection.close()
+                          except Exception:
+                              pass
+
+              threads = [
+                  threading.Thread(target=worker, args=(0, args_a), daemon=True),
+                  threading.Thread(target=worker, args=(1, args_b), daemon=True),
+              ]
+              threads[0].start()
+              threads[1].start()
+              threads[0].join(timeout=35)
+              threads[1].join(timeout=35)
+              completed = all(result is not None for result in results)
+              independent = bool(opened[0] and opened[1] and pids[0] is not None and pids[1] is not None and pids[0] != pids[1])
+              overlap = bool(completed and independent and reached[0] and reached[1])
+              return results, independent, reached[0], reached[1], overlap
+
+          def row_result(result):
+              row = result.get("row") if result else None
+              return row[0] if row else None
+
+          def outbox_count(connection, email):
+              return int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (email,)) or 0)
+
+          def subscriber_count(connection, email):
+              return int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE email = %s", (email,)) or 0)
+
+          def apply_q7(connection):
+              execute_sql(connection, Q7_SQL)
+              RESULT["supabase_modified"] = True
+
+          def apply_variant(connection):
+              execute_sql(connection, VARIANT_SQL)
+              RESULT["supabase_modified"] = True
+
+          def restore_original(connection):
+              original_replace = Q7_SQL.replace(
+                  "CREATE FUNCTION public.confirm_newsletter_consent_with_outbox(",
+                  "CREATE OR REPLACE FUNCTION public.confirm_newsletter_consent_with_outbox(",
+                  1,
+              )
+              execute_sql(connection, original_replace)
+              RESULT["supabase_modified"] = True
+
+          def rollback_q7(connection):
+              execute_sql(
+                  connection,
+                  """BEGIN;
+                     REVOKE EXECUTE ON FUNCTION public.confirm_newsletter_consent_with_outbox(text, boolean, text, text, text, text, jsonb)
+                       FROM PUBLIC, anon, authenticated, service_role;
+                     DROP FUNCTION IF EXISTS public.confirm_newsletter_consent_with_outbox(text, boolean, text, text, text, text, jsonb);
+                     COMMIT;""",
+              )
+              RESULT["q7_final_state"] = "ROLLED_BACK"
+              RESULT["supabase_modified"] = True
+
+          def query_baseline(connection):
+              return {
+                  "subscriber_count": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers") or 0),
+                  "suppressed": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE status = 'suppressed'") or 0),
+                  "subscribed": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE status = 'subscribed'") or 0),
+                  "unsubscribed": int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE status = 'unsubscribed'") or 0),
+                  "outbox": int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox") or 0),
+              }
+
+          def main():
+              import json
+
+              if not DATABASE_URL:
+                  RESULT["technical_block"] = True
+                  return
+              management = None
+              baseline = None
+              q7_applied = False
+              variant_applied = False
+              snapshot_path = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "q7_i_b_snapshot.json")
+
+              def consent_value(value):
+                  if value is None:
+                      return "not_determinable"
+                  return "true" if bool(value) else "false"
+
+              def enum_values(connection, sql, params=None):
+                  rows = execute_sql(connection, sql, params)
+                  values = sorted({str(row[0]) for row in rows if row and row[0] is not None})
+                  return ",".join(values) if values else "none"
+
+              def return_category(item):
+                  if not item:
+                      return "not_determinable"
+                  if not item.get("ok"):
+                      return "error"
+                  value = row_result(item)
+                  if value is None:
+                      return "not_determinable"
+                  value = str(value)
+                  return value if value in {"created", "replayed", "collision", "error"} else "other"
+
+              def return_assertion(value):
+                  if value == "not_determinable":
+                      return "NOT_DETERMINABLE"
+                  if value == "error":
+                      return "FAIL"
+                  return "PASS"
+
+              try:
+                  management = safe_connect()
+                  baseline = query_baseline(management)
+                  if baseline["subscriber_count"] != 7 or baseline["suppressed"] != 7 or baseline["subscribed"] != 0 or baseline["unsubscribed"] != 0 or baseline["outbox"] != 0:
+                      RESULT["technical_block"] = True
+                      return
+
+                  if subscriber_count(management, EMAIL_B) != 0 or outbox_count(management, EMAIL_B) != 0:
+                      RESULT["technical_block"] = True
+                      return
+
+                  apply_q7(management)
+                  q7_applied = True
+                  apply_variant(management)
+                  variant_applied = True
+
+                  payload_a = {"template_key": "q7-test-i", "locale": "pt-BR", "campaign_id": "q7-test-i", "content_variant": "baseline"}
+                  payload_b = {"template_key": "q7-test-i", "locale": "pt-BR", "campaign_id": "q7-test-i", "content_variant": "second-intent"}
+
+                  # I-B only: same synthetic subscriber, distinct intents, distinct idempotency keys.
+                  fixture_insert(management, EMAIL_B)
+                  subscriber_count_before = subscriber_count(management, EMAIL_B)
+                  subscriber_status_before = scalar(management, "SELECT status FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
+                  subscriber_consent_before = scalar(management, "SELECT marketing_consent FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
+                  outbox_count_before = outbox_count(management, EMAIL_B)
+                  args_b1 = (EMAIL_B, True, FIXTURE_PREFIX + "-ib-corr-a", FIXTURE_PREFIX + "-ib-caus-a", FIXTURE_PREFIX + "-ib-idem-a", "1.0", payload_a)
+                  args_b2 = (EMAIL_B, True, FIXTURE_PREFIX + "-ib-corr-b", FIXTURE_PREFIX + "-ib-caus-b", FIXTURE_PREFIX + "-ib-idem-b", "1.0", payload_b)
+                  results_b, independent_b, reached_b_a, reached_b_b, overlap_b = concurrent_pair(args_b1, args_b2, FIXTURE_PREFIX + ":ib")
+                  session_a_return = return_category(results_b[0])
+                  session_b_return = return_category(results_b[1])
+                  subscriber_count_after = subscriber_count(management, EMAIL_B)
+                  subscriber_status_after = scalar(management, "SELECT status FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
+                  subscriber_consent_after = scalar(management, "SELECT marketing_consent FROM public.newsletter_subscribers WHERE email = %s", (EMAIL_B,))
+                  outbox_count_after = outbox_count(management, EMAIL_B)
+                  outbox_statuses_after = enum_values(management, "SELECT DISTINCT status FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,))
+                  outbox_event_types_after = enum_values(management, "SELECT DISTINCT event_type FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,))
+                  outbox_operation_types_after = enum_values(management, "SELECT DISTINCT operation_type FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,))
+                  idempotency_key_count_after = int(scalar(management, "SELECT count(DISTINCT idempotency_key) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_B,)) or 0)
+
+                  subscriber_state_captured = bool(
+                      subscriber_count_before == 1
+                      and subscriber_status_before == "subscribed"
+                      and subscriber_consent_before is True
+                      and subscriber_count_after == 1
+                      and subscriber_status_after == "subscribed"
+                      and subscriber_consent_after is True
+                  )
+                  outbox_state_captured = bool(
+                      outbox_count_after >= 0
+                      and (outbox_count_after == 0 or outbox_statuses_after == "pending")
+                      and (outbox_count_after == 0 or outbox_event_types_after == "newsletter_subscribed")
+                      and (outbox_count_after == 0 or outbox_operation_types_after == "project_to_provider")
+                      and idempotency_key_count_after == outbox_count_after
+                  )
+                  assertions = {
+                      "independence": "PASS" if independent_b else "FAIL",
+                      "overlap": "PASS" if overlap_b else "FAIL",
+                      "return_a": return_assertion(session_a_return),
+                      "return_b": return_assertion(session_b_return),
+                      "subscriber_state": "PASS" if subscriber_state_captured else "FAIL",
+                      "outbox_state": "PASS" if outbox_state_captured else "FAIL",
+                      "serialization": "NOT_DETERMINABLE",
+                      "atomicity": "NOT_DETERMINABLE",
+                  }
+                  snapshot = {
+                      "assert_independence": assertions["independence"],
+                      "assert_overlap": assertions["overlap"],
+                      "assert_return_a": assertions["return_a"],
+                      "assert_return_b": assertions["return_b"],
+                      "assert_subscriber_state": assertions["subscriber_state"],
+                      "assert_outbox_state": assertions["outbox_state"],
+                      "assert_serialization": assertions["serialization"],
+                      "assert_atomicity": assertions["atomicity"],
+                      "session_a_return": session_a_return,
+                      "session_b_return": session_b_return,
+                      "overlap_a_reached": bool(reached_b_a),
+                      "overlap_b_reached": bool(reached_b_b),
+                      "winner_session": "NOT_DETERMINABLE",
+                      "lock_wait_observed": "NOT_DETERMINABLE",
+                      "subscriber_count_before": subscriber_count_before,
+                      "subscriber_count_after": subscriber_count_after,
+                      "subscriber_status_after": subscriber_status_after if subscriber_status_after is not None else "not_determinable",
+                      "subscriber_consent_after": consent_value(subscriber_consent_after),
+                      "outbox_count_before": outbox_count_before,
+                      "outbox_count_after": outbox_count_after,
+                      "outbox_statuses_after": outbox_statuses_after,
+                      "outbox_event_types_after": outbox_event_types_after,
+                      "outbox_operation_types_after": outbox_operation_types_after,
+                      "idempotency_key_count_after": idempotency_key_count_after,
+                  }
+                  with open(snapshot_path, "w", encoding="utf-8") as snapshot_file:
+                      json.dump(snapshot, snapshot_file, sort_keys=True)
+                  RESULT.update(snapshot)
+                  if not overlap_b:
+                      RESULT["technical_block"] = True
+                  elif any(value == "FAIL" for value in assertions.values()):
+                      RESULT["test_i"] = "FAIL_DIAGNOSTIC"
+                  elif any(value == "NOT_DETERMINABLE" for value in assertions.values()):
+                      RESULT["test_i"] = "DIAGNOSTICALLY_INCONCLUSIVE"
+                  else:
+                      RESULT["test_i"] = "PASS_DIAGNOSTIC"
+                  RESULT["result"] = "DIAGNOSTIC_ONLY"
+              except Exception:
+                  RESULT["technical_block"] = True
+              finally:
+                  if management is not None:
+                      try:
+                          cleanup_fixture(management, EMAIL_B)
+                      except Exception:
+                          RESULT["synthetic_remaining"] = True
+                      if variant_applied:
+                          try:
+                              restore_original(management)
+                          except Exception:
+                              RESULT["technical_block"] = True
+                      if q7_applied:
+                          try:
+                              rollback_q7(management)
+                          except Exception:
+                              RESULT["technical_block"] = True
+                      try:
+                          final_state = query_baseline(management)
+                          RESULT["real_subscribers_modified"] = bool(
+                              baseline is not None and (
+                                  final_state["subscriber_count"] != baseline["subscriber_count"]
+                                  or final_state["suppressed"] != baseline["suppressed"]
+                                  or final_state["subscribed"] != baseline["subscribed"]
+                                  or final_state["unsubscribed"] != baseline["unsubscribed"]
+                                  or final_state["outbox"] != baseline["outbox"]
+                              )
+                          )
+                          RESULT["synthetic_remaining"] = RESULT["synthetic_remaining"] or subscriber_count(management, EMAIL_B) != 0 or outbox_count(management, EMAIL_B) != 0
+                          RESULT["test_only_remaining"] = bool(
+                              scalar(management, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox'") != 0
+                          )
+                      except Exception:
+                          RESULT["technical_block"] = True
+                      try:
+                          management.close()
+                      except Exception:
+                          pass
+
+              if RESULT["technical_block"] or RESULT["real_subscribers_modified"] or RESULT["synthetic_remaining"] or RESULT["test_only_remaining"]:
+                  RESULT["result"] = "BLOCKED"
+                  RESULT["test_i"] = "DIAGNOSTICALLY_INCONCLUSIVE"
+              RESULT["secret_exposed"] = False
+              RESULT["secret_persisted"] = False
+              RESULT["external_effects"] = False
+
+          main()
+          print("RESULT=DIAGNOSTIC_ONLY")
+          print("INSTRUMENTATION_APPLIED=true")
+          print("REEXECUTION_PERFORMED=true")
+          print("PRIMARY_RUN=I-B_ONLY")
+          print(f"I_B_RESULT={RESULT['test_i']}")
+          print(f"ASSERT_INDEPENDENCE={RESULT.get('assert_independence', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_OVERLAP={RESULT.get('assert_overlap', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_RETURN_A={RESULT.get('assert_return_a', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_RETURN_B={RESULT.get('assert_return_b', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_SUBSCRIBER_STATE={RESULT.get('assert_subscriber_state', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_OUTBOX_STATE={RESULT.get('assert_outbox_state', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_SERIALIZATION={RESULT.get('assert_serialization', 'NOT_DETERMINABLE')}")
+          print(f"ASSERT_ATOMICITY={RESULT.get('assert_atomicity', 'NOT_DETERMINABLE')}")
+          print(f"SESSION_A_RETURN={RESULT.get('session_a_return', 'not_determinable')}")
+          print(f"SESSION_B_RETURN={RESULT.get('session_b_return', 'not_determinable')}")
+          print(f"OVERLAP_A_REACHED={str(RESULT.get('overlap_a_reached', False)).lower()}")
+          print(f"OVERLAP_B_REACHED={str(RESULT.get('overlap_b_reached', False)).lower()}")
+          print(f"WINNER_SESSION={RESULT.get('winner_session', 'NOT_DETERMINABLE')}")
+          print(f"LOCK_WAIT_OBSERVED={RESULT.get('lock_wait_observed', 'NOT_DETERMINABLE')}")
+          print(f"SUBSCRIBER_COUNT_BEFORE={RESULT.get('subscriber_count_before', 'NOT_DETERMINABLE')}")
+          print(f"SUBSCRIBER_COUNT_AFTER={RESULT.get('subscriber_count_after', 'NOT_DETERMINABLE')}")
+          print(f"SUBSCRIBER_STATUS_AFTER={RESULT.get('subscriber_status_after', 'not_determinable')}")
+          print(f"SUBSCRIBER_CONSENT_AFTER={RESULT.get('subscriber_consent_after', 'not_determinable')}")
+          print(f"OUTBOX_COUNT_BEFORE={RESULT.get('outbox_count_before', 'NOT_DETERMINABLE')}")
+          print(f"OUTBOX_COUNT_AFTER={RESULT.get('outbox_count_after', 'NOT_DETERMINABLE')}")
+          print(f"OUTBOX_STATUSES_AFTER={RESULT.get('outbox_statuses_after', 'not_determinable')}")
+          print(f"OUTBOX_EVENT_TYPES_AFTER={RESULT.get('outbox_event_types_after', 'not_determinable')}")
+          print(f"OUTBOX_OPERATION_TYPES_AFTER={RESULT.get('outbox_operation_types_after', 'not_determinable')}")
+          print(f"IDEMPOTENCY_KEY_COUNT_AFTER={RESULT.get('idempotency_key_count_after', 'NOT_DETERMINABLE')}")
+          print(f"CLEANUP={'PASS' if not RESULT['synthetic_remaining'] else 'FAIL'}")
+          print(f"ROLLBACK={'PASS' if RESULT['q7_final_state'] == 'ROLLED_BACK' else 'FAIL'}")
+          print(f"REAL_SUBSCRIBERS_MODIFIED={str(RESULT['real_subscribers_modified']).lower()}")
+          print(f"SYNTHETIC_FIXTURES_REMAINING={str(RESULT['synthetic_remaining']).lower()}")
+          print(f"TEST_ONLY_MECHANISM_REMAINING={str(RESULT['test_only_remaining']).lower()}")
+          print("SECRET_EXPOSED=false")
+          print("SECRET_PERSISTED=false")
+          print("EXTERNAL_EFFECTS=false")
+          print(f"Q7_FINAL_STATE={RESULT['q7_final_state']}")
+          print(f"Q7_FUNCTION_PRESENT_AFTER={str(RESULT['test_only_remaining']).lower()}")
+          print("PROJECT_PRODUCTION_CODE_MODIFIED=false")
+          print("WORKFLOW_CREATED=true")
+          print("COMMIT_CREATED=true")
+          print("PUSH_PERFORMED=true")
+          print("DEPLOY_PERFORMED=false")
+          PY
+          python "$RUNNER_TEMP/q7_test_i_option_a.py"
