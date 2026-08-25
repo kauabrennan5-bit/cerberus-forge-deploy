@@ -80,7 +80,7 @@ jobs:
               )
               variant = variant.replace(
                   "  v_outbox_id text;\nBEGIN",
-                  "  v_outbox_id text;\n  v_test_i_classid bigint;\n  v_test_i_objid bigint;\n  v_test_i_deadline timestamptz;\n  v_test_i_label text;\nBEGIN",
+                  "  v_outbox_id text;\n  v_test_i_classid integer;\n  v_test_i_objid integer;\n  v_test_i_deadline timestamptz;\n  v_test_i_label text;\nBEGIN",
                   1,
               )
               marker = "  -- O lock de linha serializa requests para o mesmo assinante após o INSERT.\n"
@@ -98,8 +98,8 @@ jobs:
                   "      WHERE locktype = 'advisory'\n"
                   "        AND granted\n"
                   "        AND mode = 'ShareLock'\n"
-                  "        AND classid = (v_test_i_classid & 4294967295)::oid\n"
-                  "        AND objid = (v_test_i_objid & 4294967295)::oid\n"
+                  "        AND classid = ((v_test_i_classid::bigint + 4294967296) % 4294967296)::oid\n"
+                  "        AND objid = ((v_test_i_objid::bigint + 4294967296) % 4294967296)::oid\n"
                   "    ) < 2 LOOP\n"
                   "      IF clock_timestamp() >= v_test_i_deadline THEN\n"
                   "        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'TEST_ONLY_BARRIER_TIMEOUT';\n"
