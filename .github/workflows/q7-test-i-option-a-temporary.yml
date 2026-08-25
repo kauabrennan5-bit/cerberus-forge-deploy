@@ -127,8 +127,8 @@ jobs:
               return rows[0][0] if rows else None
 
           def set_barrier(connection, key, label):
-              execute_sql(connection, "SELECT set_config('q7.test_i_barrier_key', %s, true)", (key,))
-              execute_sql(connection, "SELECT set_config('q7.test_i_label', %s, true)", (label,))
+              execute_sql(connection, "SELECT set_config('q7.test_i_barrier_key', %s, false)", (key,))
+              execute_sql(connection, "SELECT set_config('q7.test_i_label', %s, false)", (label,))
 
           def fixture_insert(connection, email):
               execute_sql(
