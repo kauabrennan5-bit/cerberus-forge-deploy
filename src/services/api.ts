@@ -165,7 +165,7 @@ export async function trackProductClickApi(data: any): Promise<boolean> {
   }
 }
 
-export async function subscribeNewsletter(email: string, marketingConsent: boolean): Promise<{ success: boolean; error?: string }> {
+export async function subscribeNewsletter(email: string, marketingConsent: boolean): Promise<{ success: boolean; error?: string; result?: string; replayed?: boolean }> {
   try {
     const res = await fetch(getApiUrl('/api/newsletter'), {
       method: 'POST',
@@ -174,8 +174,11 @@ export async function subscribeNewsletter(email: string, marketingConsent: boole
     });
     const payload = await res.json().catch(() => ({}));
 
-    if (res.status === 201) {
-      return { success: true };
+    if ((res.status === 201 || res.status === 200) && payload.success === true) {
+      const successResponse: { success: true; result?: string; replayed?: boolean } = { success: true };
+      if (typeof payload.result === 'string') successResponse.result = payload.result;
+      if (typeof payload.replayed === 'boolean') successResponse.replayed = payload.replayed;
+      return successResponse;
     }
 
     if (res.status === 400 && payload.code === 'INVALID_EMAIL') {
@@ -188,6 +191,10 @@ export async function subscribeNewsletter(email: string, marketingConsent: boole
 
     if (res.status === 409 && payload.code === 'RECONSENT_REQUIRED') {
       return { success: false, error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.' };
+    }
+
+    if (res.status === 409 && payload.code === 'IDEMPOTENCY_COLLISION') {
+      return { success: false, error: 'A intenção de inscrição não coincide com a intenção já registrada.' };
     }
 
     if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') {

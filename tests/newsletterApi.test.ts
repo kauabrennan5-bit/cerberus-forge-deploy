@@ -34,6 +34,20 @@ describe('subscribeNewsletter', () => {
     assert.deepEqual(requestBody, { email: 'valid@example.com', marketingConsent: true });
   });
 
+  it('treats HTTP 200 replay as a successful idempotent result', async () => {
+    globalThis.fetch = async () => jsonResponse(200, {
+      success: true,
+      result: 'replayed',
+      replayed: true,
+    });
+
+    assert.deepEqual(await subscribeNewsletter('valid@example.com', true), {
+      success: true,
+      result: 'replayed',
+      replayed: true,
+    });
+  });
+
   it('returns the specific validation message for HTTP 400 INVALID_EMAIL', async () => {
     globalThis.fetch = async () => jsonResponse(400, {
       success: false,

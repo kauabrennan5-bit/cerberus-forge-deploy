@@ -14,13 +14,17 @@ import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import {
-  buildNewsletterSubscriptionRecord,
   buildUnsubscribeUpdate,
   hashUnsubscribeToken,
   isExplicitMarketingConsent,
   isValidNewsletterEmail,
   normalizeNewsletterEmail,
 } from "./server/services/newsletterConsent";
+import {
+  buildNewsletterQ7RpcArgs,
+  classifyNewsletterQ7Error,
+  extractNewsletterQ7Row,
+} from "./server/services/newsletterQ7";
 import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./server/services/telegramDiagnostics";
 // FASE 25B (Commit 1) — Painel de leitura Telegram: registro do menu via setMyCommands.
 import { registerTelegramCommands } from "./server/services/telegramPanel";
@@ -276,30 +280,45 @@ async function startServer() {
     }
     try {
       const client = productsRepository.requireSupabase();
-      const { data: existing, error: lookupError } = await client
-        .from("newsletter_subscribers")
-        .select("status")
-        .eq("email", email)
-        .limit(1)
-        .maybeSingle();
-      if (lookupError) throw lookupError;
-      if (existing && existing.status !== "subscribed") {
-        return res.status(409).json({
-          success: false,
-          code: "RECONSENT_REQUIRED",
-          error: "Este contato exige um fluxo explícito de reativação.",
-        });
+      const q7Args = buildNewsletterQ7RpcArgs(email, req.body?.marketingConsent);
+      const { data, error } = await client.rpc("confirm_newsletter_consent_with_outbox", q7Args);
+      if (error) {
+        const q7Code = classifyNewsletterQ7Error(error);
+        if (q7Code === "NEWSLETTER_RECONSENT_REQUIRED") {
+          return res.status(409).json({
+            success: false,
+            code: "RECONSENT_REQUIRED",
+            error: "Este contato exige um fluxo explícito de reativação.",
+          });
+        }
+        if (q7Code === "CONSENT_REQUIRED") {
+          return res.status(400).json({
+            success: false,
+            code: "CONSENT_REQUIRED",
+            error: "É necessário confirmar o consentimento para receber comunicações por e-mail.",
+          });
+        }
+        if (q7Code === "OUTBOX_IDEMPOTENCY_COLLISION") {
+          return res.status(409).json({
+            success: false,
+            code: "IDEMPOTENCY_COLLISION",
+            error: "A intenção de inscrição não coincide com a intenção já registrada.",
+          });
+        }
+        throw error;
       }
 
-      const subscription = buildNewsletterSubscriptionRecord(email);
-      const { error } = await client.from("newsletter_subscribers").upsert(
-        subscription,
-        { onConflict: "email", ignoreDuplicates: true },
-      );
-      if (error) throw error;
-      return res.status(201).json({ success: true, message: "Inscrição registrada." });
+      const q7Row = extractNewsletterQ7Row(data);
+      if (!q7Row) throw new Error("NEWSLETTER_Q7_INVALID_RESPONSE");
+      return res.status(q7Row.replayed ? 200 : 201).json({
+        success: true,
+        message: q7Row.replayed ? "Inscrição já registrada." : "Inscrição registrada.",
+        result: q7Row.result,
+        replayed: q7Row.replayed,
+      });
     } catch (error: any) {
-      console.error("[Newsletter] Falha ao registrar inscrição:", error?.message || error);
+      const q7Code = classifyNewsletterQ7Error(error);
+      console.error("[Newsletter] Falha ao registrar inscrição:", q7Code);
       return res.status(503).json({ success: false, code: "NEWSLETTER_UNAVAILABLE", error: "Cadastro temporariamente indisponível." });
     }
   });
