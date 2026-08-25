@@ -13,6 +13,7 @@ import { processProductUrl } from "./server/services/productAutomation";
 import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
+import { startNewsletterOutboxWorker } from "./server/services/newsletterOutboxScheduler";
 import {
   buildUnsubscribeUpdate,
   hashUnsubscribeToken,
@@ -1396,6 +1397,12 @@ NUNCA modifique ou invente preços ou imagens.`,
       cerberusOperator.startOperatorScheduler();
     } catch (error: any) {
       console.error("[OPERATOR SCHEDULER] Falha ao iniciar scheduler; HTTP e Telegram continuam disponíveis:", error?.message || error);
+    }
+
+    try {
+      startNewsletterOutboxWorker();
+    } catch {
+      console.error("[NEWSLETTER-OUTBOX] worker.failed_to_start");
     }
   });
 }
