@@ -55,6 +55,7 @@ jobs:
               "synthetic_remaining": True,
               "q7_present": False,
               "security_invariants": "NOT_TESTED",
+              "test_only_mechanism_remaining": True,
               "secret_exposed": False,
               "secret_persisted": False,
               "external_effects": False,
@@ -165,8 +166,9 @@ jobs:
                       RESULT["cleanup"] = "PASS" if not RESULT["synthetic_remaining"] else "FAIL"
                       RESULT["baseline_restored"] = bool(after == before) if before is not None else False
                       RESULT["real_subscribers_modified"] = bool(before is not None and after != before)
-                      security_row = scalar(connection, "SELECT (NOT p.prosecdef) AND pg_get_functiondef(p.oid) LIKE '%SET search_path = pg_catalog, public%' AND has_function_privilege('service_role', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox' LIMIT 1")
+                      security_row = scalar(connection, "SELECT (NOT p.prosecdef) AND p.proconfig @> ARRAY['search_path=pg_catalog, public'] AND has_function_privilege('service_role', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox' LIMIT 1")
                       test_only_objects = int(scalar(connection, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname LIKE 'q7_test_i%'") or 0) + int(scalar(connection, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'q7_test_i%'") or 0) + int(scalar(connection, "SELECT count(*) FROM pg_trigger t JOIN pg_class r ON r.oid = t.tgrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'public' AND t.tgname LIKE 'q7_test_i%' AND NOT t.tgisinternal") or 0)
+                      RESULT["test_only_mechanism_remaining"] = test_only_objects != 0
                       RESULT["security_invariants"] = "PASS" if security_row is True and test_only_objects == 0 else "FAIL"
                   except Exception:
                       RESULT["cleanup"] = "FAIL"
@@ -187,7 +189,7 @@ jobs:
           print(f"BASELINE_RESTORED={str(RESULT['baseline_restored']).lower()}")
           print(f"REAL_SUBSCRIBERS_MODIFIED={str(RESULT['real_subscribers_modified']).lower()}")
           print(f"SYNTHETIC_FIXTURES_REMAINING={str(RESULT['synthetic_remaining']).lower()}")
-          print(f"TEST_ONLY_MECHANISM_REMAINING={str(RESULT['security_invariants'] != 'PASS').lower()}")
+          print(f"TEST_ONLY_MECHANISM_REMAINING={str(RESULT['test_only_mechanism_remaining']).lower()}")
           print(f"SECURITY_INVARIANTS={RESULT['security_invariants']}")
           print("EXTERNAL_EFFECTS=false")
           print("SECRET_EXPOSED=false")
