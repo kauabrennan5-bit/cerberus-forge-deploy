@@ -145,7 +145,8 @@ jobs:
               second_c = call_rpc(connection, EMAIL_C, PREFIX + "-corr-c", PREFIX + "-caus-c", PREFIX + "-idem-c", PAYLOAD_C2)
               c_outbox = int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_C,)) or 0)
               c_payload = scalar(connection, "SELECT payload FROM public.newsletter_outbox WHERE subscriber_email = %s", (EMAIL_C,))
-              RESULT["i_c"] = "PASS" if result_value(first_c) == "created" and not second_c["ok"] and second_c["error"] == "OUTBOX_IDEMPOTENCY_COLLISION" and c_outbox == 1 else "FAIL"
+              c_payload_intact = c_payload == PAYLOAD_C1
+              RESULT["i_c"] = "PASS" if result_value(first_c) == "created" and not second_c["ok"] and second_c["error"] == "OUTBOX_IDEMPOTENCY_COLLISION" and c_outbox == 1 and c_payload_intact else "FAIL"
 
               execute(connection, "SELECT 1")
           except Exception:
@@ -158,15 +159,15 @@ jobs:
                       RESULT["cleanup"] = "FAIL"
                   try:
                       after = baseline(connection)
-                      RESULT["synthetic_remaining"] = any(
-                          int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE email = ANY(%s)", (list(EMAILS),)) or 0) != 0,
-                      ) or any(
-                          int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = ANY(%s)", (list(EMAILS),)) or 0) != 0,
-                      )
+                      fixture_subscriber_count = int(scalar(connection, "SELECT count(*) FROM public.newsletter_subscribers WHERE email = ANY(%s)", (list(EMAILS),)) or 0)
+                      fixture_outbox_count = int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = ANY(%s)", (list(EMAILS),)) or 0)
+                      RESULT["synthetic_remaining"] = fixture_subscriber_count != 0 or fixture_outbox_count != 0
                       RESULT["cleanup"] = "PASS" if not RESULT["synthetic_remaining"] else "FAIL"
                       RESULT["baseline_restored"] = bool(after == before) if before is not None else False
                       RESULT["real_subscribers_modified"] = bool(before is not None and after != before)
-                      RESULT["security_invariants"] = "PASS" if int(scalar(connection, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname LIKE 'q7_test_i%'") or 0) == 0 and int(scalar(connection, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'q7_test_i%'") or 0) == 0 else "FAIL"
+                      security_row = scalar(connection, "SELECT (NOT p.prosecdef) AND pg_get_functiondef(p.oid) LIKE '%SET search_path = pg_catalog, public%' AND has_function_privilege('service_role', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'confirm_newsletter_consent_with_outbox' LIMIT 1")
+                      test_only_objects = int(scalar(connection, "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname LIKE 'q7_test_i%'") or 0) + int(scalar(connection, "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE 'q7_test_i%'") or 0) + int(scalar(connection, "SELECT count(*) FROM pg_trigger t JOIN pg_class r ON r.oid = t.tgrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'public' AND t.tgname LIKE 'q7_test_i%' AND NOT t.tgisinternal") or 0)
+                      RESULT["security_invariants"] = "PASS" if security_row is True and test_only_objects == 0 else "FAIL"
                   except Exception:
                       RESULT["cleanup"] = "FAIL"
                   connection.close()
