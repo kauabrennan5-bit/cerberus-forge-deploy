@@ -64,6 +64,11 @@ jobs:
               "test_only_commit": True,
               "test_only_push": True,
               "technical_block": False,
+              "i_a_observed": "",
+              "i_b_observed": "",
+              "i_c_observed": "",
+              "i_b_subscriber_count": -1,
+              "i_b_outbox_count": -1,
           }
 
           FIXTURE_PREFIX = "q7ti-" + uuid.uuid4().hex
@@ -218,6 +223,16 @@ jobs:
               row = result.get("row") if result else None
               return row[0] if row else None
 
+          def result_summary(results):
+              values = []
+              for item in results:
+                  value = row_result(item)
+                  if value is not None:
+                      values.append(value)
+                  else:
+                      values.append('ERROR:' + str(item.get('error', 'UNKNOWN')))
+              return '|'.join(values)
+
           def outbox_count(connection, email):
               return int(scalar(connection, "SELECT count(*) FROM public.newsletter_outbox WHERE subscriber_email = %s", (email,)) or 0)
 
@@ -300,6 +315,7 @@ jobs:
                   ready_a_all = ready_a_all and reached_a_a
                   ready_b_all = ready_b_all and reached_a_b
                   rows_a = [row_result(item) for item in results_a]
+                  RESULT["i_a_observed"] = result_summary(results_a)
                   state_a = subscriber_count(management, EMAIL_A) == 1 and outbox_count(management, EMAIL_A) == 1
                   case_a = bool(independent_a and overlap_a and sorted(rows_a) == ["created", "replayed"] and state_a)
                   RESULT["i_a"] = "PASS" if case_a else "FAIL"
@@ -316,7 +332,10 @@ jobs:
                   ready_a_all = ready_a_all and reached_b_a
                   ready_b_all = ready_b_all and reached_b_b
                   rows_b = [row_result(item) for item in results_b]
-                  state_b = subscriber_count(management, EMAIL_B) == 1 and outbox_count(management, EMAIL_B) == 2
+                  RESULT["i_b_observed"] = result_summary(results_b)
+                  RESULT["i_b_subscriber_count"] = subscriber_count(management, EMAIL_B)
+                  RESULT["i_b_outbox_count"] = outbox_count(management, EMAIL_B)
+                  state_b = RESULT["i_b_subscriber_count"] == 1 and RESULT["i_b_outbox_count"] == 2
                   case_b = bool(independent_b and overlap_b and rows_b == ["created", "created"] and state_b)
                   RESULT["i_b"] = "PASS" if case_b else "FAIL"
                   RESULT["overlap_b"] = RESULT["overlap_b"] or overlap_b
@@ -331,6 +350,7 @@ jobs:
                   ready_a_all = ready_a_all and reached_c_a
                   ready_b_all = ready_b_all and reached_c_b
                   rows_c = [row_result(item) for item in results_c]
+                  RESULT["i_c_observed"] = result_summary(results_c)
                   errors_c = [item.get("error") for item in results_c if not item.get("ok")]
                   state_c = subscriber_count(management, EMAIL_C) == 1 and outbox_count(management, EMAIL_C) == 1
                   payload_intact = bool(scalar(management, "SELECT (payload = %s::jsonb)::int FROM public.newsletter_outbox WHERE subscriber_email = %s", (Jsonb(payload_a), EMAIL_C)) == 1)
@@ -403,6 +423,11 @@ jobs:
           print(f"I_A={RESULT['i_a']}")
           print(f"I_B={RESULT['i_b']}")
           print(f"I_C={RESULT['i_c']}")
+          print(f"I_A_OBSERVED={RESULT['i_a_observed']}")
+          print(f"I_B_OBSERVED={RESULT['i_b_observed']}")
+          print(f"I_B_SUBSCRIBER_COUNT={RESULT['i_b_subscriber_count']}")
+          print(f"I_B_OUTBOX_COUNT={RESULT['i_b_outbox_count']}")
+          print(f"I_C_OBSERVED={RESULT['i_c_observed']}")
           print(f"TWO_INDEPENDENT_SESSIONS={str(RESULT['two_sessions']).lower()}")
           print(f"OVERLAP_A_REACHED={str(RESULT['overlap_a']).lower()}")
           print(f"OVERLAP_B_REACHED={str(RESULT['overlap_b']).lower()}")
