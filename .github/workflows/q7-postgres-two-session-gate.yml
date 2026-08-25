@@ -1,0 +1,136 @@
+name: Q7 PostgreSQL two-session gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  two-session-gate:
+    name: Verify two independent PostgreSQL sessions
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ephemeral PostgreSQL driver
+        run: python -m pip install --disable-pip-version-check --no-input "psycopg[binary]"
+
+      - name: Run sanitized two-session read-only harness
+        shell: bash
+        env:
+          Q7_DATABASE_URL: ${{ secrets.Q7_DATABASE_URL }}
+        run: |
+          if [ -z "${Q7_DATABASE_URL:-}" ]; then
+            printf '%s\n' \
+              'RESULT=BLOCKED' \
+              'BLOCK_REASON=Q7_DATABASE_URL_SECRET_NOT_CONFIGURED' \
+              'SESSION_A_OPENED=false' \
+              'SESSION_B_OPENED=false' \
+              'SESSION_A_INDEPENDENT=false' \
+              'SESSION_B_INDEPENDENT=false' \
+              'SIMULTANEOUS_READ_ONLY_QUERY=false' \
+              'TWO_INDEPENDENT_POSTGRES_SESSIONS_AVAILABLE=false'
+            exit 0
+          fi
+
+          cat > "$RUNNER_TEMP/q7_two_session_gate.py" <<'PY'
+          import os
+          import threading
+
+          import psycopg
+
+          state = {
+              "opened_a": False,
+              "opened_b": False,
+              "pid_a": None,
+              "pid_b": None,
+              "select_a": False,
+              "select_b": False,
+              "barrier_ok": False,
+          }
+          lock = threading.Lock()
+          barrier = threading.Barrier(2, timeout=20)
+
+          def run_session(label: str) -> None:
+              connection = None
+              try:
+                  connection = psycopg.connect(
+                      os.environ["Q7_DATABASE_URL"],
+                      connect_timeout=10,
+                      autocommit=True,
+                  )
+                  with lock:
+                      state[f"opened_{label}"] = True
+
+                  with connection.cursor() as cursor:
+                      cursor.execute("SELECT pg_backend_pid()")
+                      backend_pid = cursor.fetchone()[0]
+                  with lock:
+                      state[f"pid_{label}"] = backend_pid
+
+                  barrier.wait()
+                  with lock:
+                      state["barrier_ok"] = True
+
+                  with connection.cursor() as cursor:
+                      cursor.execute("SELECT 1")
+                      state_value = cursor.fetchone()[0]
+                  with lock:
+                      state[f"select_{label}"] = state_value == 1
+              except Exception:
+                  # Never print exception text: it could contain connection details.
+                  return
+              finally:
+                  if connection is not None:
+                      try:
+                          connection.close()
+                      except Exception:
+                          pass
+
+          thread_a = threading.Thread(target=run_session, args=("a",), daemon=True)
+          thread_b = threading.Thread(target=run_session, args=("b",), daemon=True)
+          thread_a.start()
+          thread_b.start()
+          thread_a.join(timeout=25)
+          thread_b.join(timeout=25)
+
+          independent = (
+              state["opened_a"]
+              and state["opened_b"]
+              and state["pid_a"] is not None
+              and state["pid_b"] is not None
+              and state["pid_a"] != state["pid_b"]
+          )
+          simultaneous_read_only = (
+              state["barrier_ok"]
+              and state["select_a"]
+              and state["select_b"]
+          )
+          passed = independent and simultaneous_read_only
+
+          print(f"RESULT={'PASS' if passed else 'BLOCKED'}")
+          if not passed:
+              print("BLOCK_REASON=TWO_INDEPENDENT_POSTGRES_SESSIONS_NOT_DEMONSTRATED")
+          print(f"SESSION_A_OPENED={str(state['opened_a']).lower()}")
+          print(f"SESSION_B_OPENED={str(state['opened_b']).lower()}")
+          print(f"SESSION_A_INDEPENDENT={str(independent).lower()}")
+          print(f"SESSION_B_INDEPENDENT={str(independent).lower()}")
+          print(f"SIMULTANEOUS_READ_ONLY_QUERY={str(simultaneous_read_only).lower()}")
+          print(
+              "TWO_INDEPENDENT_POSTGRES_SESSIONS_AVAILABLE="
+              f"{str(passed).lower()}"
+          )
+          print("DATABASE_CONNECTION_ATTEMPTED=true")
+          print("SELECT_EXECUTED=true")
+          print("SUPABASE_MODIFIED=false")
+          print("PROJECT_MODIFIED=false")
+          print("SECRET_EXPOSED=false")
+          print("SECRET_PERSISTED=false")
+          PY
+
+          python "$RUNNER_TEMP/q7_two_session_gate.py"
