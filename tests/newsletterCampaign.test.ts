@@ -292,6 +292,34 @@ test("DRY_RUN test-send uses a fake provider and does not prepare a production u
   assert.equal(store.prepareCalls, 0);
 });
 
+test("administrative real-mode test does not require subscriber membership", async () => {
+  const store = new FakeCampaignStore();
+  const approved = { ...draft("campaign-admin-real-test"), status: "approved" as const };
+  store.campaigns.set(approved.id, approved);
+  let called = 0;
+  const provider: NewsletterCampaignProvider = {
+    async sendCampaign(input: NewsletterCampaignProviderInput) {
+      called += 1;
+      assert.equal(input.subscriberEmail, "gutemberg160701@gmail.com");
+      assert.match(input.htmlContent, /api\/newsletter\/unsubscribe/);
+      return { status: "succeeded", providerReference: "fake-test-message" };
+    },
+  };
+  const result = await sendCampaignTest(approved, "admin-1", {
+    store,
+    provider,
+    env: {
+      DRY_RUN: "false",
+      NEWSLETTER_TEST_EMAIL: "Gutemberg160701@gmail.com",
+      NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus-forge-deploy-backend.onrender.com",
+    },
+  });
+  assert.equal(result.providerResult.providerReference, "fake-test-message");
+  assert.equal(result.campaign.status, "test_sent");
+  assert.equal(called, 1);
+  assert.equal(store.prepareCalls, 0);
+});
+
 test("worker revalidates unsubscribe/consent before fake delivery", async () => {
   const store = new FakeCampaignStore();
   store.subscribers.set("revoked@example.test", { status: "subscribed", marketing_consent: true });

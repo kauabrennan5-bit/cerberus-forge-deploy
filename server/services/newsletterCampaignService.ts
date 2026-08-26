@@ -28,6 +28,7 @@ export type CampaignServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: Date;
   productLoader?: (productId: string) => Promise<Product | null>;
+  provider?: NewsletterCampaignProvider;
 };
 
 export async function createCampaignForProduct(
@@ -95,19 +96,15 @@ export async function sendCampaignTest(
   const testEmail = (env.NEWSLETTER_TEST_EMAIL || "").trim().toLowerCase();
   if (!testEmail) throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
   const store = options.store || createSupabaseNewsletterCampaignStore();
-  const eligibility = await store.readSubscriber(testEmail);
-  if (!eligibility || eligibility.status !== "subscribed" || eligibility.marketing_consent !== true) {
-    throw new Error("NEWSLETTER_TEST_EMAIL_NOT_ELIGIBLE");
-  }
-  const token = env.DRY_RUN === "true"
-    ? `dry-run-token-${campaign.id}`
-    : await store.prepareUnsubscribeToken(testEmail);
+  // The administrative test destination is intentionally outside the subscriber list.
+  // Real campaign recipients receive persisted canonical unsubscribe tokens in the worker.
+  const token = `campaign-test-token-${campaign.id}`;
   const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
   if (!publicBaseUrl) throw new Error("CAMPAIGN_PUBLIC_BASE_URL_MISSING");
   const unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
   const htmlContent = campaign.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
   const textContent = campaign.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
-  const provider: NewsletterCampaignProvider = env.DRY_RUN === "true"
+  const provider: NewsletterCampaignProvider = options.provider || (env.DRY_RUN === "true"
     ? createDryRunCampaignProvider()
     : createBrevoNewsletterProvider({
         apiKey: env.BREVO_API_KEY || "",
@@ -115,7 +112,7 @@ export async function sendCampaignTest(
         senderName: env.NEWSLETTER_SENDER_NAME,
         subject: campaign.subject,
         timeoutMs: Number(env.NEWSLETTER_PROVIDER_TIMEOUT_MS || 15_000),
-      });
+      }));
   const providerResult = await provider.sendCampaign({
     campaignId: campaign.id,
     recipientId: `test:${campaign.id}`,
