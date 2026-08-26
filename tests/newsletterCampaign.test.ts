@@ -209,39 +209,34 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
     heroImageUrl: "https://cerberusfinds.com/assets/newsletter/products/luminaria-bauhaus-clean.png",
     heroImageStatus: "clean",
   });
-  assert.match(rendered.html, /bgcolor="#0a0a0a"/);
-  assert.match(rendered.html, /bgcolor="#141414"/);
-  assert.match(rendered.html, /bgcolor="#c0392b"/);
+  assert.match(rendered.html, /bgcolor="#0B0908"/);
+  assert.match(rendered.html, /bgcolor="#181512"/);
+  assert.match(rendered.html, /bgcolor="#C0392B"/);
   assert.match(rendered.html, /font-family:Georgia,'Times New Roman',serif/);
   assert.match(rendered.html, /<meta name="color-scheme" content="dark">/);
   assert.match(rendered.html, /<meta name="supported-color-schemes" content="dark">/);
   assert.doesNotMatch(rendered.html, /gmail-blend-screen|gmail-blend-difference|mix-blend-mode/);
-  assert.match(rendered.html, /-webkit-text-fill-color:#ffffff/);
-  assert.doesNotMatch(rendered.html, /data-ogsc="/);
-  assert.match(rendered.html, /\[data-ogsc\]/);
-  assert.match(rendered.html, /\[data-ogsb\]/);
-  assert.match(rendered.html, /<font color="#ffffff"/);
-  assert.match(rendered.html, /<font color="#e86b5f"/);
-  assert.match(rendered.html, /color="#ffffff"/);
-  assert.match(rendered.html, /filter:none!important/);
-  assert.doesNotMatch(rendered.html, /gradient|background-image/);
-  assert.match(rendered.html, /class="email-card"[^>]+style="[^"]*border:0/);
-  assert.match(rendered.html, /class="email-price-card" bgcolor="#141414"[^>]+border:0/);
-  assert.match(rendered.html, /\*,table,td,div\{border:0!important;outline:0!important;box-shadow:none!important;\}/);
+  assert.match(rendered.html, /-webkit-text-fill-color:#E8E1D3/);
+  assert.doesNotMatch(rendered.html, /data-ogsc=|data-ogsb=|\[data-ogsc\]|\[data-ogsb\]/);
+  assert.match(rendered.html, /<font color="#E8E1D3"/);
+  assert.match(rendered.html, /<font color="#B8B0A3"/);
+  assert.match(rendered.html, /<font color="#C0392B"/);
+  assert.match(rendered.html, /<font color="#FFFFFF"/);
+  assert.doesNotMatch(rendered.html, /filter:|gradient|background-image/);
+  assert.match(rendered.html, /class="email-price-card"[^>]+border-top:1px solid #3A342E/);
   assert.doesNotMatch(rendered.html, /#b0b0b0|#888888/);
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
   assert.doesNotMatch(rendered.html, /<td align="right"/);
   const tableTags = rendered.html.match(/<table\b[^>]*>/gi) ?? [];
   assert.ok(tableTags.length >= 8);
-  assert.equal(tableTags.every(table => /bgcolor="#(?:0a0a0a|141414|c0392b)"/i.test(table)), true);
+  assert.equal(tableTags.every(table => /bgcolor="#(?:0B0908|181512|3A342E|8A1F1F|C0392B)"/i.test(table)), true);
   assert.doesNotMatch(rendered.html, /<span\b(?![^>]*display:none)/i);
   assert.match(rendered.html, /CERBERUS FINDS/);
-  assert.match(rendered.html, /Seleção editorial/);
+  assert.match(rendered.html, /Curadoria independente/);
   assert.match(rendered.html, /<img src="https:\/\/cerberusfinds\.com\/assets\/newsletter\/social\/instagram\.png" width="24" height="24" alt="Instagram"/);
   assert.match(rendered.html, /luminaria-bauhaus-clean\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
-  assert.doesNotMatch(rendered.html, /#0b0908|#181512|#8a1f1f|#e8e1d3|#211c18/);
-  assert.doesNotMatch(rendered.html, /class="email-card"[^>]+border:1px solid #2b2b2b/);
+  assert.match(rendered.html, /#0B0908|#181512|#8A1F1F|#E8E1D3|#C0392B/);
   assert.match(rendered.html, /Preço verificado/);
   assert.match(rendered.html, /Sobre esta seleção/);
   assert.match(rendered.html, /Este e-mail pode conter links de afiliado/);
@@ -275,8 +270,8 @@ test("renderer adds editorial footer links only when configured and preserves th
     ],
   });
   assert.match(rendered.html, /Uma seleção editorial encontrada para você|Uma peça escolhida com olhar curatorial/);
-  assert.match(rendered.html, /Por que selecionamos isso/);
-  assert.match(rendered.html, /Ver no navegador/);
+  assert.match(rendered.html, /Sobre esta seleção/);
+  assert.match(rendered.html, /Ver online/);
   assert.match(rendered.html, /Política de privacidade/);
   assert.match(rendered.html, /Termos e condições/);
   assert.match(rendered.html, /Instagram/);
@@ -336,13 +331,13 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
   assert.doesNotMatch(rendered.html, /<td align="right"/);
   assert.match(rendered.html, /Curadoria independente/);
-  assert.doesNotMatch(rendered.html, /data-ogsc="/);
-  assert.match(rendered.html, /color="#ffffff"/);
-  assert.match(rendered.html, /bgcolor="#0a0a0a"/);
+  assert.doesNotMatch(rendered.html, /data-ogsc=|data-ogsb=|\[data-ogsc\]|\[data-ogsb\]/);
+  assert.match(rendered.html, /color="#E8E1D3"/);
+  assert.match(rendered.html, /bgcolor="#0B0908"/);
   assert.match(rendered.html, /assets\/newsletter\/social\/instagram\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed/);
-  assert.doesNotMatch(rendered.html, /data-ogsc="/);
-  assert.match(rendered.html, /<font color="#ffffff"/);
+  assert.doesNotMatch(rendered.html, /data-ogsc=|data-ogsb=|\[data-ogsc\]|\[data-ogsb\]/);
+  assert.match(rendered.html, /<font color="#E8E1D3"/);
   assert.doesNotMatch(rendered.html, /gradient|background-image/);
   assert.equal(rendered.offerUrl, "");
 
@@ -379,11 +374,11 @@ test("welcome Telegram command creates pending campaign without recipients or pr
 
 test("renderer omits unconfigured legal, social and browser-view blocks", () => {
   const rendered = renderNewsletterCampaign({ ...product, curatorNote: undefined, ofertaPromocional: undefined }, { trackingCampaignId: "campaign-minimal" });
-  assert.equal(rendered.html.includes("Ver no navegador"), false);
+  assert.equal(rendered.html.includes("Ver online"), false);
   assert.equal(rendered.html.includes("Política de privacidade"), false);
   assert.equal(rendered.html.includes("Termos e condições"), false);
   assert.equal(rendered.html.includes("Encontre a Cerberus Finds"), false);
-  assert.equal(rendered.html.includes("Por que selecionamos isso"), false);
+  assert.equal(rendered.html.includes("Sobre esta seleção"), false);
   assert.equal(rendered.html.includes("{{UNSUBSCRIBE_URL}}"), true);
   assert.equal(rendered.html.includes("App Store"), false);
   assert.equal(rendered.html.includes("Google Play"), false);
