@@ -222,7 +222,11 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /<font color="#B8B0A3"/);
   assert.match(rendered.html, /<font color="#C0392B"/);
   assert.match(rendered.html, /<font color="#FFFFFF"/);
-  assert.doesNotMatch(rendered.html, /filter:|gradient|background-image/);
+  assert.doesNotMatch(rendered.html, /filter:|gradient/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-cta-red\.png"/);
+  assert.match(rendered.html, /background-image:url\('https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png'\)/);
   assert.match(rendered.html, /class="email-price-card"[^>]+border-top:1px solid #3A342E/);
   assert.doesNotMatch(rendered.html, /#b0b0b0|#888888/);
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
@@ -252,6 +256,12 @@ test("social PNG assets are high-resolution sources displayed at 24px", () => {
     assert.equal(png.toString("ascii", 1, 4), "PNG");
     assert.equal(png.readUInt32BE(16), 72);
     assert.equal(png.readUInt32BE(20), 72);
+  }
+  for (const name of ["cerberus-canvas-dark", "cerberus-surface-dark", "cerberus-cta-red"]) {
+    const png = readFileSync(new URL(`../public/assets/newsletter/backgrounds/${name}.png`, import.meta.url));
+    assert.equal(png.toString("ascii", 1, 4), "PNG");
+    assert.equal(png.readUInt32BE(16), 101);
+    assert.equal(png.readUInt32BE(20), 101);
   }
   const rendered = renderNewsletterCampaign(product, { socialLinks: [{ label: "Instagram", url: "" }] });
   assert.match(rendered.html, /width="24" height="24"/);
@@ -338,7 +348,9 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed/);
   assert.doesNotMatch(rendered.html, /data-ogsc=|data-ogsb=|\[data-ogsc\]|\[data-ogsb\]/);
   assert.match(rendered.html, /<font color="#E8E1D3"/);
-  assert.doesNotMatch(rendered.html, /gradient|background-image/);
+  assert.doesNotMatch(rendered.html, /gradient/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
   assert.equal(rendered.offerUrl, "");
 
   const store = new FakeCampaignStore();
