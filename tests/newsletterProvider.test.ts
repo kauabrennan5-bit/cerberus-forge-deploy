@@ -34,6 +34,10 @@ describe("newsletter Brevo provider adapter", () => {
     const body = JSON.parse(String(capturedInit?.body));
     assert.equal(body.messageVersions.length, 1);
     assert.deepEqual(body.messageVersions[0].to, [{ email: "recipient@example.com" }]);
+    assert.match(body.messageVersions[0].htmlContent, /Bem-vindo à/);
+    assert.match(body.messageVersions[0].htmlContent, /Sua inscrição foi confirmada/);
+    assert.equal(body.messageVersions[0].htmlContent.includes("{{UNSUBSCRIBE_URL}}"), false);
+    assert.match(body.messageVersions[0].textContent, /confirmou sua inscrição/);
     assert.match(body.headers.idempotencyKey, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     assert.equal(JSON.stringify(body).includes("test-api-key-placeholder"), false);
   });

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { isValidNewsletterEmail, normalizeNewsletterEmail } from "./newsletterConsent";
 import { sanitizeOperationalText } from "./operationalDiagnostics";
+import { renderNewsletterWelcomeCampaign } from "./newsletterCampaignTemplate";
+import { getNewsletterInstitutionalOptions } from "./newsletterInstitutional";
 
 export type NewsletterProviderResult =
   | { status: "succeeded"; providerReference?: string }
@@ -94,6 +96,7 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
 
   const senderName = (options.senderName || DEFAULT_SENDER_NAME).trim() || DEFAULT_SENDER_NAME;
   const subject = (options.subject || DEFAULT_SUBJECT).trim() || DEFAULT_SUBJECT;
+  const institutional = getNewsletterInstitutionalOptions();
   const endpoint = options.endpoint || DEFAULT_BREVO_ENDPOINT;
   const timeoutMs = Math.max(1_000, Math.min(60_000, Math.floor(options.timeoutMs || DEFAULT_TIMEOUT_MS)));
   const fetchImpl = options.fetchImpl || fetch;
@@ -174,8 +177,22 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
       return sendMessage({
         subscriberEmail: input.subscriberEmail,
         subject,
-        htmlContent: renderNewsletterHtml(),
-        textContent: "Você confirmou sua inscrição no Cerberus Finds. Novas seleções, recomendações e ofertas serão enviadas conforme sua preferência.",
+        htmlContent: renderNewsletterWelcomeCampaign({
+          subject,
+          preheader: "Sua inscrição no Cerberus Finds foi confirmada.",
+          includeUnsubscribe: false,
+          privacyUrl: institutional.privacyUrl,
+          termsUrl: institutional.termsUrl,
+          socialLinks: institutional.socialLinks,
+        }).html,
+        textContent: renderNewsletterWelcomeCampaign({
+          subject,
+          preheader: "Sua inscrição no Cerberus Finds foi confirmada.",
+          includeUnsubscribe: false,
+          privacyUrl: institutional.privacyUrl,
+          termsUrl: institutional.termsUrl,
+          socialLinks: institutional.socialLinks,
+        }).text,
         idempotencyKey,
       });
     },
@@ -205,9 +222,6 @@ function toProviderUuid(idempotencyKey: string): string {
   return `${digest.slice(0, 8).join("")}-${digest.slice(8, 12).join("")}-${digest.slice(12, 16).join("")}-${digest.slice(16, 20).join("")}-${digest.slice(20, 32).join("")}`;
 }
 
-function renderNewsletterHtml(): string {
-  return "<!doctype html><html lang=\"pt-BR\"><body><p>Você confirmou sua inscrição no Cerberus Finds.</p><p>Novas seleções, recomendações e ofertas serão enviadas conforme sua preferência.</p></body></html>";
-}
 
 function parseJson(value: string): Record<string, unknown> {
   try {
