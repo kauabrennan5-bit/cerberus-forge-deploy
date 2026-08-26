@@ -221,7 +221,12 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.equal(rendered.html.includes("background-image:linear-gradient(#0a0a0a,#0a0a0a)"), true);
   assert.match(rendered.html, /class="email-card"[^>]+style="[^"]*border:0/);
   assert.match(rendered.html, /class="email-price-card" bgcolor="#141414"[^>]+border:0/);
-  assert.match(rendered.html, /table,td,div\{border:0!important;\}/);
+  assert.match(rendered.html, /\*,table,td,div\{border:0!important;outline:0!important;box-shadow:none!important;\}/);
+  assert.doesNotMatch(rendered.html, /#b0b0b0|#888888/);
+  assert.doesNotMatch(rendered.html, /border-(left|right):/);
+  assert.doesNotMatch(rendered.html, /<td align="right"/);
+  assert.match(rendered.html, /CERBERUS FINDS/);
+  assert.match(rendered.html, /Seleção editorial/);
   assert.match(rendered.html, /<img src="https:\/\/cerberusfinds\.com\/assets\/newsletter\/social\/instagram\.png" width="24" height="24" alt="Instagram"/);
   assert.match(rendered.html, /luminaria-bauhaus-clean\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
@@ -318,6 +323,10 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.match(rendered.html, /Cancelar inscrição/);
   assert.doesNotMatch(rendered.html, /gmail-blend-screen|gmail-blend-difference|mix-blend-mode/);
   assert.match(rendered.html, /background-image:linear-gradient\(#0a0a0a,#0a0a0a\)/);
+  assert.doesNotMatch(rendered.html, /#b0b0b0|#888888/);
+  assert.doesNotMatch(rendered.html, /border-(left|right):/);
+  assert.doesNotMatch(rendered.html, /<td align="right"/);
+  assert.match(rendered.html, /Curadoria independente/);
   assert.match(rendered.html, /bgcolor="#0a0a0a"/);
   assert.match(rendered.html, /assets\/newsletter\/social\/instagram\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed/);
