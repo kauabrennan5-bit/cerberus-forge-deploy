@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase as configuredSupabase, requireSupabase } from "./productsRepository";
-import type { CampaignCounts, EmailCampaign, EmailCampaignStatus } from "../services/newsletterCampaignState";
+import type { CampaignCounts, EmailCampaign, EmailCampaignStatus, EmailCampaignType } from "../services/newsletterCampaignState";
 import { issueUnsubscribeToken } from "../services/newsletterConsent";
 
 export type EmailCampaignRecipientStatus = "pending" | "sent" | "failed" | "skipped_unsubscribed";
@@ -278,6 +278,7 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
 function toCampaignRow(campaign: EmailCampaign): Record<string, unknown> {
   return {
     id: campaign.id,
+    campaign_type: campaign.campaignType,
     product_id: campaign.productId,
     subject: campaign.subject,
     body_html: campaign.bodyHtml,
@@ -301,9 +302,11 @@ function toCampaignRow(campaign: EmailCampaign): Record<string, unknown> {
 }
 
 function fromCampaignRow(row: Record<string, unknown>): EmailCampaign {
+  const campaignType = (row.campaign_type || "product") as EmailCampaignType;
   return {
     id: String(row.id),
-    productId: String(row.product_id),
+    campaignType,
+    productId: nullableString(row.product_id),
     subject: String(row.subject),
     bodyHtml: String(row.body_html),
     bodyText: String(row.body_text),

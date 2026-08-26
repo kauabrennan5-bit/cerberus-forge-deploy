@@ -8,6 +8,7 @@ import {
 } from "../server/services/newsletterCampaignState.ts";
 import {
   renderNewsletterCampaign,
+  renderNewsletterWelcomeCampaign,
   resolveCampaignOfferUrl,
 } from "../server/services/newsletterCampaignTemplate.ts";
 import {
@@ -24,6 +25,7 @@ import { NewsletterProviderError } from "../server/services/newsletterProvider.t
 import {
   confirmGeneralSend,
   createCampaignForProduct,
+  createWelcomeCampaignForSubscribers,
   retryFailedCampaign,
   sendCampaignTest,
   startGeneralSend,
@@ -32,6 +34,7 @@ import {
   campaignCompletionKeyboard,
   campaignKeyboard,
   handleNewsletterCampaignCallback,
+  handleWelcomeCampaignCommand,
   renderCampaignCompletionReport,
   renderRecentCampaignsForTelegram,
 } from "../server/services/newsletterCampaignTelegram.ts";
@@ -228,6 +231,48 @@ test("campaign creation includes real institutional paths and placeholder social
   assert.match(created.bodyHtml, /TikTok ainda não configurado/);
   assert.match(created.bodyHtml, /Facebook ainda não configurado/);
   assert.equal(created.bodyHtml.includes("example.com"), false);
+});
+
+test("welcome campaign renders institutional copy and keeps product reference null", async () => {
+  const rendered = renderNewsletterWelcomeCampaign({
+    privacyUrl: "https://cerberusfinds.com/politica-de-privacidade",
+    termsUrl: "https://cerberusfinds.com/termos-e-condicoes",
+    socialLinks: [{ label: "Instagram", url: "not-a-url" }],
+  });
+  assert.match(rendered.html, /Bem-vindo à/);
+  assert.match(rendered.html, /Você recebeu esta mensagem porque autorizou/);
+  assert.match(rendered.html, /Cancelar inscrição/);
+  assert.equal(rendered.offerUrl, "");
+
+  const store = new FakeCampaignStore();
+  const created = await createWelcomeCampaignForSubscribers("admin-1", {
+    store,
+    env: { PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+  });
+  assert.equal(created.campaignType, "welcome");
+  assert.equal(created.productId, null);
+  assert.equal(created.status, "draft");
+  assert.match(created.bodyHtml, /Política de privacidade/);
+});
+
+test("welcome Telegram command creates pending campaign without recipients or provider", async () => {
+  const store = new FakeCampaignStore();
+  const sent: any[] = [];
+  const handled = await handleWelcomeCampaignCommand("admin-1", 123, {
+    store,
+    env: { PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+    answerCallbackQuery: async () => undefined,
+    editTelegramMessageText: async () => undefined,
+    sendTelegramMessage: async (...args: any[]) => { sent.push(args); return undefined; },
+  });
+  assert.equal(handled, true);
+  assert.equal(store.recipients.length, 0);
+  assert.equal(sent.length, 1);
+  const created = [...store.campaigns.values()][0];
+  assert.equal(created.campaignType, "welcome");
+  assert.equal(created.productId, null);
+  assert.equal(created.status, "pending_approval");
+  assert.equal(sent[0][2].inline_keyboard[0][0].callback_data, `campaign_approve:${created.id}`);
 });
 
 test("renderer omits unconfigured legal, social and browser-view blocks", () => {

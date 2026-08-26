@@ -116,7 +116,53 @@ export function renderNewsletterCampaign(
   return { subject, html, text, offerUrl };
 }
 
-export function resolveCampaignOfferUrl(product: Pick<Product, "link" | "paginaPonteUrl">): string {
+export function renderNewsletterWelcomeCampaign(
+  options: NewsletterCampaignRenderOptions = {},
+): RenderedNewsletterCampaign {
+  const subject = normalizeRequiredText(options.subject || "Bem-vindo à Cerberus Finds", "subject");
+  const preheader = normalizeRequiredText(options.preheader || "Você agora faz parte da lista editorial da Cerberus Finds.", "preheader");
+  const disclosure = normalizeRequiredText(options.disclosure || DEFAULT_DISCLOSURE, "disclosure");
+  const unsubscribeUrl = options.unsubscribeUrl?.trim() || UNSUBSCRIBE_URL_PLACEHOLDER;
+  const viewInBrowserUrl = normalizeHttpUrl(options.viewInBrowserUrl);
+  const privacyUrl = normalizeHttpUrl(options.privacyUrl);
+  const termsUrl = normalizeHttpUrl(options.termsUrl);
+  const socialLinks = normalizeSocialLinks(options.socialLinks);
+  const htmlViewLink = viewInBrowserUrl
+    ? `<p style="margin:0 0 22px;text-align:right;"><a href="${escapeHtml(viewInBrowserUrl)}" target="_blank" rel="noopener" style="color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.4;text-decoration:underline;">Ver no navegador</a></p>`
+    : "";
+  const htmlLinks = socialLinks.length
+    ? `<tr><td style="padding:0 36px 20px;text-align:center;"><p style="margin:0;color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.5;letter-spacing:1px;text-transform:uppercase;">Encontre a Cerberus Finds</p><p style="margin:10px 0 0;">${socialLinks.map(link => {
+      const icon = escapeHtml(link.icon || socialMonogram(link.label));
+      const iconStyle = "display:inline-block;width:30px;height:30px;margin:0 4px;border:1px solid #3a342e;color:#e8e1d3;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:30px;font-weight:700;text-align:center;text-decoration:none;";
+      return link.url
+        ? `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener" aria-label="${escapeHtml(link.label)}" style="${iconStyle}background:#211c18;">${icon}</a>`
+        : `<span aria-label="${escapeHtml(link.label)} ainda não configurado" style="${iconStyle}border-style:dashed;color:#6d6259;">${icon}</span>`;
+    }).join("")}</p></td></tr>`
+    : "";
+  const htmlInstitutionalLinks = privacyUrl || termsUrl
+    ? `<p style="margin:0 0 13px;color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.6;">${privacyUrl ? `<a href="${escapeHtml(privacyUrl)}" target="_blank" rel="noopener" style="color:#e8e1d3;text-decoration:underline;">Política de privacidade</a>` : ""}${privacyUrl && termsUrl ? `<span style="color:#5e5148;padding:0 8px;">|</span>` : ""}${termsUrl ? `<a href="${escapeHtml(termsUrl)}" target="_blank" rel="noopener" style="color:#e8e1d3;text-decoration:underline;">Termos e condições</a>` : ""}</p>`
+    : "";
+  const emailStyles = `<style>body{margin:0!important;padding:0!important;background:#0b0908;color:#e8e1d3;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}table{border-spacing:0;}a{color:inherit;}@media only screen and (max-width:620px){.email-shell{width:100%!important;}.email-card{border-radius:0!important;}.email-pad{padding-left:20px!important;padding-right:20px!important;}.email-title{font-size:32px!important;}.email-copy{font-size:15px!important;}}@media (prefers-color-scheme:dark){.email-body{background:#0b0908!important;}.email-card{background:#181512!important;}.email-title,.email-copy{color:#e8e1d3!important;}}</style>`;
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><meta name="supported-color-schemes" content="dark light">${emailStyles}</head><body class="email-body" style="margin:0;padding:0;background:#0b0908;color:#e8e1d3;"><span style="display:none!important;max-height:0;max-width:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(preheader)}</span><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background:#0b0908;"><tr><td align="center" style="padding:24px 12px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-shell" style="width:100%;max-width:640px;border-collapse:collapse;"><tr><td class="email-card" style="background:#181512;border:1px solid #3a342e;border-radius:12px;overflow:hidden;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;"><tr><td class="email-pad" style="padding:24px 36px 18px;">${htmlViewLink}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td valign="middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td style="width:31px;height:31px;background:#8a1f1f;color:#e8e1d3;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:31px;font-weight:700;text-align:center;">CF</td><td style="padding-left:11px;color:#e8e1d3;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.3;font-weight:700;letter-spacing:2px;">CERBERUS FINDS</td></tr></table></td><td align="right" valign="middle"><span style="color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;letter-spacing:1.5px;text-transform:uppercase;">Curadoria independente</span></td></tr></table></td></tr><tr><td style="padding:0 36px;"><div style="height:1px;background:#3a342e;font-size:1px;line-height:1px;">&nbsp;</div></td></tr><tr><td class="email-pad" style="padding:42px 36px 30px;"><p style="margin:0 0 12px;color:#c97964;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:2px;text-transform:uppercase;">Boas-vindas</p><h1 class="email-title" style="margin:0 0 24px;color:#e8e1d3;font-family:Georgia,'Times New Roman',serif;font-size:42px;line-height:1.06;font-weight:700;letter-spacing:-0.5px;">Bem-vindo à<br>Cerberus Finds</h1><p class="email-copy" style="margin:0;color:#e8e1d3;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.65;">Sua inscrição foi confirmada. A partir de agora, você receberá novas seleções, recomendações e ofertas escolhidas com olhar curatorial.</p><p class="email-copy" style="margin:18px 0 0;color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.65;">A proposta é simples: menos ruído, mais achados que merecem a sua atenção. Quando uma seleção fizer sentido, ela chegará até você com contexto, transparência e um caminho claro para conhecer a oferta.</p></td></tr><tr><td class="email-pad" style="padding:0 36px 28px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#211c18;border-left:3px solid #8a1f1f;"><tr><td style="padding:20px;"><p style="margin:0 0 8px;color:#c97964;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.4;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;">O que você pode esperar</p><p class="email-copy" style="margin:0;color:#e8e1d3;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;">Seleções editoriais, recomendações e ofertas de parceiros, sempre com identificação da operação, disclosure de afiliado e opção de descadastro individual.</p></td></tr></table></td></tr>${htmlLinks}<tr><td style="padding:0 36px;"><div style="height:1px;background:#3a342e;font-size:1px;line-height:1px;">&nbsp;</div></td></tr><tr><td class="email-pad" style="padding:24px 36px 30px;text-align:center;">${htmlInstitutionalLinks}<p style="margin:0 0 11px;color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.6;">${escapeHtml(disclosure)}</p><p style="margin:0;color:#9b9085;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.6;">Você recebeu esta mensagem porque autorizou comunicações de marketing do Cerberus Finds. <a href="${escapeHtml(unsubscribeUrl)}" style="color:#e8e1d3;text-decoration:underline;">Cancelar inscrição</a>.</p><p style="margin:17px 0 0;color:#5e5148;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;letter-spacing:1px;">CERBERUS FINDS · CURADORIA INDEPENDENTE</p></td></tr></table></td></tr></table></td></tr></table></td></tr></table></body></html>`;
+  const text = [
+    "CERBERUS FINDS",
+    "BOAS-VINDAS",
+    "Bem-vindo à Cerberus Finds",
+    "",
+    "Sua inscrição foi confirmada.",
+    "A partir de agora, você receberá novas seleções, recomendações e ofertas escolhidas com olhar curatorial.",
+    "",
+    "Você recebeu esta mensagem porque autorizou comunicações de marketing do Cerberus Finds.",
+    privacyUrl ? `Política de privacidade: ${privacyUrl}` : "",
+    termsUrl ? `Termos e condições: ${termsUrl}` : "",
+    disclosure,
+    `Cancelar inscrição: ${unsubscribeUrl}`,
+  ].filter(Boolean).join("\n");
+  return { subject, html, text, offerUrl: "" };
+}
+
+export function resolveCampaignOfferUrl(
+product: Pick<Product, "link" | "paginaPonteUrl">): string {
   const candidate = (product.paginaPonteUrl || product.link || "").trim();
   if (!/^https?:\/\/[^\s]+$/i.test(candidate)) {
     throw new Error("CAMPAIGN_OFFER_URL_INVALID");

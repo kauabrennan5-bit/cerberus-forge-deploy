@@ -20,6 +20,7 @@ import {
 } from "./newsletterCampaignState";
 import {
   renderNewsletterCampaign,
+  renderNewsletterWelcomeCampaign,
   UNSUBSCRIBE_URL_PLACEHOLDER,
 } from "./newsletterCampaignTemplate";
 import { getNewsletterInstitutionalOptions } from "./newsletterInstitutional";
@@ -51,6 +52,24 @@ export async function createCampaignForProduct(
     socialLinks: institutional.socialLinks,
   });
   const draft = createCampaignDraft(product.id, actorTelegramId, rendered, options.now || new Date(), campaignId);
+  return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);
+}
+
+export async function createWelcomeCampaignForSubscribers(
+  actorTelegramId: string,
+  options: CampaignServiceOptions = {},
+): Promise<EmailCampaign> {
+  const env = options.env || process.env;
+  const campaignId = crypto.randomUUID();
+  const institutional = getNewsletterInstitutionalOptions(env);
+  const rendered = renderNewsletterWelcomeCampaign({
+    subject: env.NEWSLETTER_WELCOME_SUBJECT || undefined,
+    trackingCampaignId: campaignId,
+    privacyUrl: institutional.privacyUrl,
+    termsUrl: institutional.termsUrl,
+    socialLinks: institutional.socialLinks,
+  });
+  const draft = createCampaignDraft(null, actorTelegramId, rendered, options.now || new Date(), campaignId, "welcome");
   return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);
 }
 
@@ -188,7 +207,21 @@ export async function processCampaignDryRun(
   });
 }
 
-export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: Product): string {
+export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: Product | null): string {
+  if (campaign.campaignType === "welcome") {
+    return [
+      "📧 <b>PRÉVIA DE CAMPANHA</b>",
+      "Tipo: <b>Boas-vindas institucional</b>",
+      `Status: <code>${campaign.status}</code>`,
+      `Assunto: <b>${escapeTelegram(campaign.subject)}</b>`,
+      `Destinatários elegíveis: <b>${campaign.counts.total}</b>`,
+      `Sucesso: <b>${campaign.counts.success}</b> · Falhas: <b>${campaign.counts.failed}</b> · Ignorados: <b>${campaign.counts.skipped}</b>`,
+      "",
+      "A mensagem é enviada somente a assinantes com consentimento de marketing ativo.",
+      "O HTML inclui identificação da Cerberus Finds, disclosure, links legais e descadastro individual.",
+    ].join("\n");
+  }
+  if (!product) throw new Error("CAMPAIGN_PRODUCT_NOT_FOUND");
   const price = Number.isFinite(product.ofertaPromocional?.price)
     ? `R$ ${product.ofertaPromocional!.price.toFixed(2).replace(".", ",")}`
     : `R$ ${product.preco.toFixed(2).replace(".", ",")}`;

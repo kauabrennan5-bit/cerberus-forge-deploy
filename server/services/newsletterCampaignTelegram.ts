@@ -5,6 +5,7 @@ import {
   cancelCampaign,
   confirmGeneralSend,
   createCampaignForProduct,
+  createWelcomeCampaignForSubscribers,
   renderCampaignTelegramPreview,
   retryFailedCampaign,
   sendCampaignTest,
@@ -45,6 +46,17 @@ export async function handleNewsletterCampaignCallback(
       const campaign = await createCampaignForProduct(productId, senderId, { store, env });
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia criada para aprovação.");
+      return renderCampaign(deps, chatId, messageId, pending, [
+        [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${pending.id}` }],
+        [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${pending.id}` }],
+        [{ text: "❌ Cancelar campanha", callback_data: `campaign_cancel:${pending.id}` }],
+      ]);
+    }
+
+    if (data === "campaign_welcome") {
+      const campaign = await createWelcomeCampaignForSubscribers(senderId, { store, env });
+      const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
+      await deps.answerCallbackQuery(callbackId, "Campanha de boas-vindas criada para aprovação.");
       return renderCampaign(deps, chatId, messageId, pending, [
         [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${pending.id}` }],
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${pending.id}` }],
@@ -135,7 +147,9 @@ export function renderCampaignCompletionReport(campaign: EmailCampaign): string 
   return [
     heading,
     `Campanha: <code>${escapeTelegram(campaign.id)}</code>`,
-    `Produto: <code>${escapeTelegram(campaign.productId)}</code>`,
+    campaign.campaignType === "welcome"
+      ? "Tipo: <b>Boas-vindas institucional</b>"
+      : `Produto: <code>${escapeTelegram(campaign.productId)}</code>`,
     `Destinatários: <b>${campaign.counts.total}</b>`,
     `Sucesso: <b>${campaign.counts.success}</b>`,
     `Falhas: <b>${campaign.counts.failed}</b>`,
@@ -194,6 +208,23 @@ export async function handleNewsletterCampaignText(
     if (chatId) await deps.sendTelegramMessage(chatId, `⚠️ ${campaignErrorMessage(error)}`);
   }
   return true;
+}
+
+export async function handleWelcomeCampaignCommand(
+  senderId: string,
+  chatId: number | string | undefined,
+  deps: CampaignTelegramDeps,
+): Promise<boolean> {
+  try {
+    const store = deps.store || createSupabaseNewsletterCampaignStore();
+    const env = deps.env || process.env;
+    const campaign = await createWelcomeCampaignForSubscribers(senderId, { store, env });
+    const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
+    return renderCampaign(deps, chatId, undefined, pending, campaignKeyboard(pending));
+  } catch (error) {
+    if (chatId) await deps.sendTelegramMessage(chatId, `⚠️ ${campaignErrorMessage(error)}`);
+    return true;
+  }
 }
 
 export type TelegramCampaignListView = {
@@ -282,14 +313,17 @@ async function renderCampaign(
   keyboard: any[][],
 ): Promise<boolean> {
   if (!chatId) return true;
-  const product = await getCampaignProduct(campaign.productId, deps.productLoader);
+  const product = campaign.campaignType === "welcome"
+    ? null
+    : await getCampaignProduct(campaign.productId, deps.productLoader);
   const text = renderCampaignTelegramPreview(campaign, product);
   if (messageId) await deps.editTelegramMessageText(chatId, messageId, text, { inline_keyboard: keyboard });
   else await deps.sendTelegramMessage(chatId, text, { inline_keyboard: keyboard });
   return true;
 }
 
-async function getCampaignProduct(productId: string, productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>) {
+async function getCampaignProduct(productId: string | null, productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>) {
+  if (!productId) return null;
   const product = await (productLoader || productsRepository.getProductByIdOrSlug)(productId);
   if (!product) throw new Error("CAMPAIGN_PRODUCT_NOT_FOUND");
   return product;
@@ -316,6 +350,8 @@ function campaignErrorMessage(error: unknown): string {
     "CAMPAIGN_PROVIDER_NOT_CONFIGURED",
     "CAMPAIGN_SUBJECT_INVALID",
     "CAMPAIGN_SUBJECT_LOCKED",
+    "CAMPAIGN_TYPE_INVALID",
+    "WELCOME_PRODUCT_FORBIDDEN",
   ]);
   return known.has(message) ? message : "CAMPAIGN_OPERATION_FAILED";
 }

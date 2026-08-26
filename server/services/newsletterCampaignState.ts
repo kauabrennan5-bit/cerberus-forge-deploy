@@ -11,6 +11,8 @@ export const EMAIL_CAMPAIGN_STATUSES = [
   "cancelled",
 ] as const;
 export type EmailCampaignStatus = (typeof EMAIL_CAMPAIGN_STATUSES)[number];
+export const EMAIL_CAMPAIGN_TYPES = ["product", "welcome"] as const;
+export type EmailCampaignType = (typeof EMAIL_CAMPAIGN_TYPES)[number];
 
 export type CampaignCounts = {
   total: number;
@@ -21,7 +23,8 @@ export type CampaignCounts = {
 
 export type EmailCampaign = {
   id: string;
-  productId: string;
+  campaignType: EmailCampaignType;
+  productId: string | null;
   subject: string;
   bodyHtml: string;
   bodyText: string;
@@ -57,18 +60,28 @@ export class CampaignStateError extends Error {
 }
 
 export function createCampaignDraft(
-  productId: string,
+  productId: string | null,
   createdByTelegramId: string,
   rendered: RenderedNewsletterCampaign,
   now = new Date(),
   id?: string,
+  campaignType: EmailCampaignType = "product",
 ): EmailCampaign {
   const actor = normalizeActor(createdByTelegramId);
   const campaignId = id || crypto.randomUUID();
-  if (!productId.trim()) throw new CampaignStateError("PRODUCT_ID_REQUIRED", "Produto obrigatório.");
+  if (!EMAIL_CAMPAIGN_TYPES.includes(campaignType)) {
+    throw new CampaignStateError("CAMPAIGN_TYPE_INVALID", "Tipo de campanha inválido.");
+  }
+  if (campaignType === "product" && !productId?.trim()) {
+    throw new CampaignStateError("PRODUCT_ID_REQUIRED", "Produto obrigatório.");
+  }
+  if (campaignType === "welcome" && productId !== null) {
+    throw new CampaignStateError("WELCOME_PRODUCT_FORBIDDEN", "Campanha de boas-vindas não pode referenciar produto.");
+  }
   return {
     id: campaignId,
-    productId: productId.trim(),
+    campaignType,
+    productId: productId?.trim() || null,
     subject: rendered.subject,
     bodyHtml: rendered.html,
     bodyText: rendered.text,

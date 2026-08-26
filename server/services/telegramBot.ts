@@ -25,6 +25,7 @@ import type { ShopeePromotionEvidence } from "./scraper";
 import {
   handleNewsletterCampaignCallback,
   handleNewsletterCampaignText,
+  handleWelcomeCampaignCommand,
   renderRecentCampaignsForTelegram,
 } from "./newsletterCampaignTelegram";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
@@ -1827,12 +1828,24 @@ async function renderCycleState(input: string): Promise<string> {
       return;
     }
 
-    if (text.startsWith("/campanhas") || text.startsWith("/campaigns")) {
+    if (text === "/campanhas" || text.startsWith("/campanhas ") || text === "/campaigns" || text.startsWith("/campaigns ")) {
       if (chatId) {
         const campaigns = await createSupabaseNewsletterCampaignStore().listRecentCampaigns(10);
         const view = renderRecentCampaignsForTelegram(campaigns);
         logTelegramEvent("handler", { chat_id: chatId, handler: "campaign_list", campaigns_count: campaigns.length, response_method: "sendMessage" });
         await sendTelegramMessage(chatId, view.text, { inline_keyboard: view.keyboard });
+      }
+      return;
+    }
+
+    if (text === "/boasvindas" || text.startsWith("/boasvindas ")) {
+      if (chatId) {
+        logTelegramEvent("handler", { chat_id: chatId, handler: "welcome_campaign_create", response_method: "sendMessage" });
+        await handleWelcomeCampaignCommand(String(senderId), chatId, {
+          answerCallbackQuery,
+          editTelegramMessageText,
+          sendTelegramMessage,
+        });
       }
       return;
     }
