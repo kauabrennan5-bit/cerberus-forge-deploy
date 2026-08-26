@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Product } from "../src/types.ts";
 import {
@@ -218,10 +219,13 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /-webkit-text-fill-color:#f2f2f2/);
   assert.match(rendered.html, /filter:none!important/);
   assert.equal(rendered.html.includes("background-image:linear-gradient(#0a0a0a,#0a0a0a)"), true);
+  assert.match(rendered.html, /class="email-card"[^>]+style="[^"]*border:0/);
+  assert.match(rendered.html, /class="email-price-card" bgcolor="#141414"[^>]+border:1px solid #c0392b/);
   assert.match(rendered.html, /<img src="https:\/\/cerberusfinds\.com\/assets\/newsletter\/social\/instagram\.png" width="24" height="24" alt="Instagram"/);
   assert.match(rendered.html, /luminaria-bauhaus-clean\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
   assert.doesNotMatch(rendered.html, /#0b0908|#181512|#8a1f1f|#e8e1d3|#211c18/);
+  assert.doesNotMatch(rendered.html, /class="email-card"[^>]+border:1px solid #2b2b2b/);
   assert.match(rendered.html, /Preço verificado/);
   assert.match(rendered.html, /Sobre esta seleção/);
   assert.match(rendered.html, /Este e-mail pode conter links de afiliado/);
@@ -229,6 +233,17 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
 
   const withoutValidatedHero = renderNewsletterCampaign(product);
   assert.doesNotMatch(withoutValidatedHero.html, /<img[^>]+src="https:\/\/cdn\.example\.test\/kitchen\.jpg"/);
+});
+
+test("social PNG assets are high-resolution sources displayed at 24px", () => {
+  for (const name of ["facebook", "instagram", "pinterest", "tiktok", "x", "youtube"]) {
+    const png = readFileSync(new URL(`../public/assets/newsletter/social/${name}.png`, import.meta.url));
+    assert.equal(png.toString("ascii", 1, 4), "PNG");
+    assert.equal(png.readUInt32BE(16), 72);
+    assert.equal(png.readUInt32BE(20), 72);
+  }
+  const rendered = renderNewsletterCampaign(product, { socialLinks: [{ label: "Instagram", url: "" }] });
+  assert.match(rendered.html, /width="24" height="24"/);
 });
 
 test("renderer adds editorial footer links only when configured and preserves the premium hierarchy", () => {
