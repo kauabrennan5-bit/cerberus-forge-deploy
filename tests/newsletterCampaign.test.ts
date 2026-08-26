@@ -212,8 +212,11 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /bgcolor="#141414"/);
   assert.match(rendered.html, /bgcolor="#c0392b"/);
   assert.match(rendered.html, /font-family:Georgia,'Times New Roman',serif/);
-  assert.match(rendered.html, /<meta name="color-scheme" content="dark">/);
-  assert.match(rendered.html, /<meta name="supported-color-schemes" content="dark">/);
+  assert.match(rendered.html, /<meta name="color-scheme" content="light dark">/);
+  assert.match(rendered.html, /<meta name="supported-color-schemes" content="light dark">/);
+  assert.match(rendered.html, /gmail-blend-screen/);
+  assert.match(rendered.html, /gmail-blend-difference/);
+  assert.equal(rendered.html.includes("background-image:linear-gradient(#0a0a0a,#0a0a0a)"), true);
   assert.match(rendered.html, /<img src="https:\/\/cerberusfinds\.com\/assets\/newsletter\/social\/instagram\.png" width="24" height="24" alt="Instagram"/);
   assert.match(rendered.html, /luminaria-bauhaus-clean\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
@@ -296,6 +299,8 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.match(rendered.html, /Bem-vindo à/);
   assert.match(rendered.html, /Você recebeu esta mensagem porque autorizou/);
   assert.match(rendered.html, /Cancelar inscrição/);
+  assert.match(rendered.html, /gmail-blend-screen/);
+  assert.match(rendered.html, /gmail-blend-difference/);
   assert.match(rendered.html, /bgcolor="#0a0a0a"/);
   assert.match(rendered.html, /assets\/newsletter\/social\/instagram\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed/);
