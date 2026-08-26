@@ -132,6 +132,7 @@ export async function sendCampaignTest(
   const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
   if (!publicBaseUrl) throw new Error("CAMPAIGN_PUBLIC_BASE_URL_MISSING");
   const unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
+  const testSubject = `[Teste controlado] ${campaign.subject}`;
   const htmlContent = campaign.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
   const textContent = campaign.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
   const provider: NewsletterCampaignProvider = options.provider || (env.DRY_RUN === "true"
@@ -147,7 +148,7 @@ export async function sendCampaignTest(
     campaignId: campaign.id,
     recipientId: `test:${campaign.id}`,
     subscriberEmail: testEmail,
-    subject: campaign.subject,
+    subject: testSubject,
     htmlContent,
     textContent,
     idempotencyKey: `campaign-test-v1:${campaign.id}`,

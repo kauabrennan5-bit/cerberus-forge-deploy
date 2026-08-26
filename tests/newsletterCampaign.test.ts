@@ -516,6 +516,7 @@ test("administrative real-mode test does not require subscriber membership", asy
     async sendCampaign(input: NewsletterCampaignProviderInput) {
       called += 1;
       assert.equal(input.subscriberEmail, "gutemberg160701@gmail.com");
+      assert.equal(input.subject, "[Teste controlado] Nova seleção: Conjunto de cozinha editorial");
       assert.match(input.htmlContent, /api\/newsletter\/unsubscribe/);
       return { status: "succeeded", providerReference: "fake-test-message" };
     },
