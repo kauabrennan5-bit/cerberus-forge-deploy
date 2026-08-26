@@ -217,6 +217,9 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /<meta name="supported-color-schemes" content="dark">/);
   assert.doesNotMatch(rendered.html, /gmail-blend-screen|gmail-blend-difference|mix-blend-mode/);
   assert.match(rendered.html, /-webkit-text-fill-color:#ffffff/);
+  assert.match(rendered.html, /data-ogsc="color: #ffffff;"/);
+  assert.match(rendered.html, /color="#ffffff"/);
+  assert.ok((rendered.html.match(/data-ogsc="color: #ffffff;"/g) ?? []).length >= 8);
   assert.match(rendered.html, /filter:none!important/);
   assert.equal(rendered.html.includes("background-image:linear-gradient(#0a0a0a,#0a0a0a)"), true);
   assert.match(rendered.html, /class="email-card"[^>]+style="[^"]*border:0/);
@@ -327,6 +330,8 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
   assert.doesNotMatch(rendered.html, /<td align="right"/);
   assert.match(rendered.html, /Curadoria independente/);
+  assert.match(rendered.html, /data-ogsc="color: #ffffff;"/);
+  assert.match(rendered.html, /color="#ffffff"/);
   assert.match(rendered.html, /bgcolor="#0a0a0a"/);
   assert.match(rendered.html, /assets\/newsletter\/social\/instagram\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed/);
