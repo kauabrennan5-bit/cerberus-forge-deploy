@@ -190,6 +190,41 @@ export async function handleNewsletterCampaignText(
   return true;
 }
 
+export type TelegramCampaignListView = {
+  text: string;
+  keyboard: any[][];
+};
+
+export function renderRecentCampaignsForTelegram(campaigns: EmailCampaign[]): TelegramCampaignListView {
+  const visible = campaigns.slice(0, 10);
+  const text = visible.length === 0
+    ? "📧 <b>CAMPANHAS RECENTES</b>\n\nNenhuma campanha encontrada."
+    : [
+        "📧 <b>CAMPANHAS RECENTES</b>",
+        "Selecione uma campanha para reabrir o cartão e continuar somente pelo gate disponível.",
+        ...visible.map((campaign, index) => `${index + 1}. <b>${escapeTelegram(campaign.status)}</b> · ${escapeTelegram(campaign.subject)}`),
+      ].join("\n\n");
+  const keyboard = visible.map(campaign => [{
+    text: `${campaignStatusLabel(campaign.status)} · ${campaign.subject.slice(0, 42)}`,
+    callback_data: `campaign_view:${campaign.id}`,
+  }]);
+  return { text, keyboard };
+}
+
+function campaignStatusLabel(status: EmailCampaign["status"]): string {
+  const labels: Record<EmailCampaign["status"], string> = {
+    draft: "📝 Rascunho",
+    pending_approval: "⏳ Aguardando aprovação",
+    approved: "✅ Aprovada; aguardando teste",
+    test_sent: "🧪 Teste enviado",
+    sending: "🚚 Enviando",
+    sent: "🏁 Concluída",
+    failed: "⚠️ Com falhas",
+    cancelled: "❌ Cancelada",
+  };
+  return labels[status];
+}
+
 function campaignKeyboard(campaign: EmailCampaign): any[][] {
   switch (campaign.status) {
     case "draft":

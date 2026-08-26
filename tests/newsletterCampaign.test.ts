@@ -32,7 +32,9 @@ import {
   campaignCompletionKeyboard,
   handleNewsletterCampaignCallback,
   renderCampaignCompletionReport,
+  renderRecentCampaignsForTelegram,
 } from "../server/services/newsletterCampaignTelegram.ts";
+import { TELEGRAM_PANEL_COMMANDS, renderReadPanelMenu } from "../server/services/telegramPanel.ts";
 
 const product: Product = {
   id: "prod-campaign-1",
@@ -61,6 +63,7 @@ class FakeCampaignStore implements NewsletterCampaignStore {
   async createCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
   async getCampaign(campaignId: string): Promise<EmailCampaign | null> { const value = this.campaigns.get(campaignId); return value ? structuredClone(value) : null; }
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
+  async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> { return [...this.campaigns.values()].slice(-Math.max(1, limit)).reverse().map(row => structuredClone(row)); }
   async createEligibleRecipients(campaignId: string): Promise<number> {
     const eligible = [...this.subscribers.entries()].filter(([, value]) => value.status === "subscribed" && value.marketing_consent).map(([email]) => email);
     for (const email of eligible) {
@@ -140,6 +143,26 @@ function makeRecipient(campaignId: string, email: string): EmailCampaignRecipien
 function draft(id = "campaign-1"): EmailCampaign {
   return createCampaignDraft("prod-campaign-1", "admin-1", renderNewsletterCampaign(product, { trackingCampaignId: id }), new Date("2026-08-26T00:00:00.000Z"), id);
 }
+
+test("telegram menu exposes campaign recovery and only valid command names", () => {
+  assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanhas"), true);
+  assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "discover-batch"), false);
+  assert.equal(TELEGRAM_PANEL_COMMANDS.every(command => /^[a-z0-9_]+$/.test(command.command)), true);
+  assert.match(renderReadPanelMenu(), /\/campanhas/);
+});
+
+test("campaign list renders recovery buttons for existing statuses without touching recipients", () => {
+  const pending = draft("campaign-list-pending");
+  pending.status = "pending_approval";
+  const testSent = draft("campaign-list-test-sent");
+  testSent.status = "test_sent";
+  const rendered = renderRecentCampaignsForTelegram([testSent, pending]);
+  assert.match(rendered.text, /CAMPANHAS RECENTES/);
+  assert.match(rendered.text, /test_sent/);
+  assert.equal(rendered.keyboard.length, 2);
+  assert.equal(rendered.keyboard[0][0].callback_data, `campaign_view:${testSent.id}`);
+  assert.equal(rendered.keyboard[1][0].callback_data, `campaign_view:${pending.id}`);
+});
 
 test("renderer uses canonical bridge, escapes content, renders offer, disclosure and unsubscribe placeholder", () => {
   const rendered = renderNewsletterCampaign({ ...product, produto: "Produto <script>", displayTitle: "Produto <script>" }, { trackingCampaignId: "campaign-1" });

@@ -30,6 +30,7 @@ export type CampaignSubscriberEligibility = {
 export interface NewsletterCampaignStore {
   createCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
   getCampaign(campaignId: string): Promise<EmailCampaign | null>;
+  listRecentCampaigns(limit: number): Promise<EmailCampaign[]>;
   updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
   createEligibleRecipients(campaignId: string): Promise<number>;
   claimRecipient(campaignId: string, leaseToken: string, leaseMs: number): Promise<{ recipient: EmailCampaignRecipient; leaseToken: string } | null>;
@@ -84,6 +85,17 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .single();
     if (error || !data) throw error || new Error("EMAIL_CAMPAIGN_UPDATE_FAILED");
     return fromCampaignRow(data);
+  }
+
+  async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> {
+    const boundedLimit = Math.max(1, Math.min(20, Math.trunc(limit)));
+    const { data, error } = await this.client
+      .from("email_campaigns")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(boundedLimit);
+    if (error) throw error;
+    return (data || []).map(fromCampaignRow);
   }
 
   async createEligibleRecipients(campaignId: string): Promise<number> {

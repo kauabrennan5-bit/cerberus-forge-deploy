@@ -22,7 +22,12 @@ import * as telegramPanel from "./telegramPanel";
 // FASE 25C (Commit 2) — orquestrador /shopee N (discovery → Affiliate → scraper → cards).
 import { inspectShopeePromotionFields, inspectShopeePromotionOffer, runShopeeCommand } from "./shopeeCommand";
 import type { ShopeePromotionEvidence } from "./scraper";
-import { handleNewsletterCampaignCallback, handleNewsletterCampaignText } from "./newsletterCampaignTelegram";
+import {
+  handleNewsletterCampaignCallback,
+  handleNewsletterCampaignText,
+  renderRecentCampaignsForTelegram,
+} from "./newsletterCampaignTelegram";
+import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -1819,6 +1824,16 @@ async function renderCycleState(input: string): Promise<string> {
       return;
     }
 
+    if (text.startsWith("/campanhas") || text.startsWith("/campaigns")) {
+      if (chatId) {
+        const campaigns = await createSupabaseNewsletterCampaignStore().listRecentCampaigns(10);
+        const view = renderRecentCampaignsForTelegram(campaigns);
+        logTelegramEvent("handler", { chat_id: chatId, handler: "campaign_list", campaigns_count: campaigns.length, response_method: "sendMessage" });
+        await sendTelegramMessage(chatId, view.text, { inline_keyboard: view.keyboard });
+      }
+      return;
+    }
+
     if (text.startsWith("/listar") || text.startsWith("/produtos")) {
       if (chatId) {
         const listView = await renderProductList(0);
@@ -1926,8 +1941,9 @@ async function renderCycleState(input: string): Promise<string> {
       }
       return;
     }
-    if (text === "/discover-batch" || text.startsWith("/discover-batch ")) {
-      const args = text.slice("/discover-batch".length).trim();
+    if (text === "/discover-batch" || text.startsWith("/discover-batch ") || text === "/discover_batch" || text.startsWith("/discover_batch ")) {
+      const commandLength = text.startsWith("/discover_batch") ? "/discover_batch".length : "/discover-batch".length;
+      const args = text.slice(commandLength).trim();
       if (chatId) {
         const response = await runDiscoverBatchCommand(args);
         await sendTelegramMessage(chatId, response);
