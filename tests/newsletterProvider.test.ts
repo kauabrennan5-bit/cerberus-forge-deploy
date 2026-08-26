@@ -36,6 +36,9 @@ describe("newsletter Brevo provider adapter", () => {
     assert.deepEqual(body.messageVersions[0].to, [{ email: "recipient@example.com" }]);
     assert.match(body.messageVersions[0].htmlContent, /Bem-vindo à/);
     assert.match(body.messageVersions[0].htmlContent, /Sua inscrição foi confirmada/);
+    assert.match(body.messageVersions[0].htmlContent, /bgcolor="#0a0a0a"/);
+    assert.match(body.messageVersions[0].htmlContent, /assets\/newsletter\/social\/instagram\.png/);
+    assert.doesNotMatch(body.messageVersions[0].htmlContent, /socialMonogram|border-style:dashed|{{UNSUBSCRIBE_URL}}/);
     assert.equal(body.messageVersions[0].htmlContent.includes("{{UNSUBSCRIBE_URL}}"), false);
     assert.match(body.messageVersions[0].textContent, /confirmou sua inscrição/);
     assert.match(body.headers.idempotencyKey, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);

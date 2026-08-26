@@ -21,6 +21,28 @@ export function buildInstitutionalUrl(path: string, env: NodeJS.ProcessEnv = pro
   return new URL(path, `${resolvePublicSiteUrl(env)}/`).toString();
 }
 
+export function buildNewsletterAssetUrl(path: string, env: NodeJS.ProcessEnv = process.env): string {
+  return new URL(path.replace(/^\/+/, ""), `${resolvePublicSiteUrl(env)}/`).toString();
+}
+
+const NEWSLETTER_SOCIAL_ICON_PATHS: Record<SocialNetwork, string> = {
+  instagram: "assets/newsletter/social/instagram.png",
+  tiktok: "assets/newsletter/social/tiktok.png",
+  facebook: "assets/newsletter/social/facebook.png",
+  youtube: "assets/newsletter/social/youtube.png",
+  x: "assets/newsletter/social/x.png",
+  pinterest: "assets/newsletter/social/pinterest.png",
+};
+
+const NEWSLETTER_CLEAN_HERO_PATHS: Record<string, string> = {
+  "prod-1787414659793": "assets/newsletter/products/luminaria-bauhaus-clean.png",
+};
+
+export function getNewsletterHeroImageUrl(productId: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const path = NEWSLETTER_CLEAN_HERO_PATHS[productId];
+  return path ? buildNewsletterAssetUrl(path, env) : undefined;
+}
+
 export function getNewsletterInstitutionalOptions(env: NodeJS.ProcessEnv = process.env): {
   privacyUrl: string;
   termsUrl: string;
@@ -33,6 +55,7 @@ export function getNewsletterInstitutionalOptions(env: NodeJS.ProcessEnv = proce
     socialLinks: networks.map(network => ({
       label: SOCIAL_LABELS[network],
       url: SOCIAL_LINKS[network].trim(),
+      iconUrl: buildNewsletterAssetUrl(NEWSLETTER_SOCIAL_ICON_PATHS[network], env),
     })),
   };
 }

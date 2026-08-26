@@ -39,6 +39,7 @@ import {
   renderRecentCampaignsForTelegram,
 } from "../server/services/newsletterCampaignTelegram.ts";
 import { TELEGRAM_PANEL_COMMANDS, renderReadPanelMenu } from "../server/services/telegramPanel.ts";
+import { getNewsletterHeroImageUrl } from "../server/services/newsletterInstitutional.ts";
 
 const product: Product = {
   id: "prod-campaign-1",
@@ -193,6 +194,33 @@ test("renderer uses canonical bridge, escapes content, renders offer, disclosure
   assert.equal(resolveCampaignOfferUrl(product), product.paginaPonteUrl);
 });
 
+test("renderer enforces the official dark palette, explicit table backgrounds and real PNG social icons", () => {
+  const rendered = renderNewsletterCampaign(product, {
+    socialLinks: [{
+      label: "Instagram",
+      url: "",
+      iconUrl: "https://cerberusfinds.com/assets/newsletter/social/instagram.png",
+    }],
+    heroImageUrl: "https://cerberusfinds.com/assets/newsletter/products/luminaria-bauhaus-clean.png",
+    heroImageStatus: "clean",
+  });
+  assert.match(rendered.html, /bgcolor="#0a0a0a"/);
+  assert.match(rendered.html, /bgcolor="#141414"/);
+  assert.match(rendered.html, /bgcolor="#c0392b"/);
+  assert.match(rendered.html, /font-family:Georgia,'Times New Roman',serif/);
+  assert.match(rendered.html, /<img src="https:\/\/cerberusfinds\.com\/assets\/newsletter\/social\/instagram\.png" width="24" height="24" alt="Instagram"/);
+  assert.match(rendered.html, /luminaria-bauhaus-clean\.png/);
+  assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
+  assert.doesNotMatch(rendered.html, /#0b0908|#181512|#8a1f1f|#e8e1d3|#211c18/);
+  assert.match(rendered.html, /Preço verificado/);
+  assert.match(rendered.html, /Sobre esta seleção/);
+  assert.match(rendered.html, /Este e-mail pode conter links de afiliado/);
+  assert.match(rendered.html, /{{UNSUBSCRIBE_URL}}/);
+
+  const withoutValidatedHero = renderNewsletterCampaign(product);
+  assert.doesNotMatch(withoutValidatedHero.html, /<img[^>]+src="https:\/\/cdn\.example\.test\/kitchen\.jpg"/);
+});
+
 test("renderer adds editorial footer links only when configured and preserves the premium hierarchy", () => {
   const rendered = renderNewsletterCampaign(product, {
     trackingCampaignId: "campaign-editorial",
@@ -211,6 +239,8 @@ test("renderer adds editorial footer links only when configured and preserves th
   assert.match(rendered.html, /Política de privacidade/);
   assert.match(rendered.html, /Termos e condições/);
   assert.match(rendered.html, /Instagram/);
+  assert.match(rendered.html, /assets\/newsletter\/social\/instagram\.png/);
+  assert.match(rendered.html, /width="24" height="24"/);
   assert.match(rendered.html, /TikTok ainda não configurado/);
   assert.equal(rendered.html.includes('href="not-a-url"'), false);
   assert.equal(rendered.html.includes("Baixe nosso app"), false);
@@ -228,9 +258,19 @@ test("campaign creation includes real institutional paths and placeholder social
   assert.match(created.bodyHtml, /https:\/\/cerberusfinds\.com\/politica-de-privacidade/);
   assert.match(created.bodyHtml, /https:\/\/cerberusfinds\.com\/termos-e-condicoes/);
   assert.match(created.bodyHtml, /Instagram ainda não configurado/);
+  assert.match(created.bodyHtml, /assets\/newsletter\/social\/instagram\.png/);
+  assert.doesNotMatch(created.bodyHtml, /<img[^>]+src="https:\/\/cdn\.example\.test\/kitchen\.jpg"/);
   assert.match(created.bodyHtml, /TikTok ainda não configurado/);
   assert.match(created.bodyHtml, /Facebook ainda não configurado/);
   assert.equal(created.bodyHtml.includes("example.com"), false);
+});
+
+test("institutional assets resolve to the configured public base and only known clean hero is allowed", () => {
+  assert.equal(
+    getNewsletterHeroImageUrl("prod-1787414659793", { PUBLIC_SITE_URL: "https://cerberusfinds.com" }),
+    "https://cerberusfinds.com/assets/newsletter/products/luminaria-bauhaus-clean.png",
+  );
+  assert.equal(getNewsletterHeroImageUrl("prod-campaign-1", { PUBLIC_SITE_URL: "https://cerberusfinds.com" }), undefined);
 });
 
 test("welcome campaign renders institutional copy and keeps product reference null", async () => {
@@ -242,6 +282,9 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.match(rendered.html, /Bem-vindo à/);
   assert.match(rendered.html, /Você recebeu esta mensagem porque autorizou/);
   assert.match(rendered.html, /Cancelar inscrição/);
+  assert.match(rendered.html, /bgcolor="#0a0a0a"/);
+  assert.match(rendered.html, /assets\/newsletter\/social\/instagram\.png/);
+  assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed/);
   assert.equal(rendered.offerUrl, "");
 
   const store = new FakeCampaignStore();

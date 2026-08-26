@@ -23,7 +23,10 @@ import {
   renderNewsletterWelcomeCampaign,
   UNSUBSCRIBE_URL_PLACEHOLDER,
 } from "./newsletterCampaignTemplate";
-import { getNewsletterInstitutionalOptions } from "./newsletterInstitutional";
+import {
+  getNewsletterHeroImageUrl,
+  getNewsletterInstitutionalOptions,
+} from "./newsletterInstitutional";
 
 export type CampaignServiceOptions = {
   store?: NewsletterCampaignStore;
@@ -44,12 +47,15 @@ export async function createCampaignForProduct(
   const env = options.env || process.env;
   const campaignId = crypto.randomUUID();
   const institutional = getNewsletterInstitutionalOptions(env);
+  const heroImageUrl = getNewsletterHeroImageUrl(product.id, env);
   const rendered = renderNewsletterCampaign(product, {
     subject: env.NEWSLETTER_CAMPAIGN_SUBJECT || undefined,
     trackingCampaignId: campaignId,
     privacyUrl: institutional.privacyUrl,
     termsUrl: institutional.termsUrl,
     socialLinks: institutional.socialLinks,
+    heroImageUrl,
+    heroImageStatus: heroImageUrl ? "clean" : "unavailable",
   });
   const draft = createCampaignDraft(product.id, actorTelegramId, rendered, options.now || new Date(), campaignId);
   return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);
