@@ -14,6 +14,7 @@ import * as cerberusOperator from "./server/services/cerberusOperator";
 import { createProductionProductPipeline } from "./server/services/productPipeline";
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import { startNewsletterOutboxWorker } from "./server/services/newsletterOutboxScheduler";
+import { startNewsletterCampaignWorker } from "./server/services/newsletterCampaignScheduler";
 import {
   buildUnsubscribeUpdate,
   hashUnsubscribeToken,
@@ -324,27 +325,47 @@ async function startServer() {
     }
   });
 
-  // Descadastro local idempotente. A futura integração de envio deverá gravar
-  // somente o hash do token neste registro; o token em texto puro nunca é persistido.
+  // Descadastro local idempotente. O token em texto puro nunca é persistido; apenas
+  // seu hash é comparado com o registro existente. GET serve ao link do e-mail e
+  // POST permanece disponível para clientes que preferem enviar JSON.
+  const applyUnsubscribe = async (token: string): Promise<void> => {
+    if (token.length < 32 || token.length > 256) throw new Error("INVALID_UNSUBSCRIBE_TOKEN");
+    const client = productsRepository.requireSupabase();
+    const { error } = await client
+      .from("newsletter_subscribers")
+      .update(buildUnsubscribeUpdate())
+      .eq("unsubscribe_token_hash", hashUnsubscribeToken(token))
+      .eq("status", "subscribed")
+      .gt("unsubscribe_token_expires_at", new Date().toISOString())
+      .select("status")
+      .limit(1);
+    if (error) throw error;
+  };
+
+  app.get("/api/newsletter/unsubscribe", async (req, res) => {
+    const token = typeof req.query?.token === "string" ? req.query.token.trim() : "";
+    try {
+      await applyUnsubscribe(token);
+      return res.status(200).type("html").send("<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Descadastro concluído</title><p>Seu descadastro foi concluído. Você não receberá novas campanhas de marketing.</p></html>");
+    } catch (error: any) {
+      if (error?.message === "INVALID_UNSUBSCRIBE_TOKEN") {
+        return res.status(400).type("html").send("<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Link inválido</title><p>O link de descadastro é inválido ou expirou.</p></html>");
+      }
+      console.error("[Newsletter] Falha ao processar descadastro GET:", error?.message || error);
+      return res.status(503).type("html").send("<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Indisponível</title><p>Descadastro temporariamente indisponível.</p></html>");
+    }
+  });
+
   app.post("/api/newsletter/unsubscribe", async (req, res) => {
     const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
-    if (token.length < 32 || token.length > 256) {
-      return res.status(400).json({ success: false, code: "INVALID_UNSUBSCRIBE_TOKEN", error: "Token de descadastro inválido." });
-    }
     try {
-      const client = productsRepository.requireSupabase();
-      const { error } = await client
-        .from("newsletter_subscribers")
-        .update(buildUnsubscribeUpdate())
-        .eq("unsubscribe_token_hash", hashUnsubscribeToken(token))
-        .eq("status", "subscribed")
-        .gt("unsubscribe_token_expires_at", new Date().toISOString())
-        .select("status")
-        .limit(1);
-      if (error) throw error;
+      await applyUnsubscribe(token);
       return res.status(204).send();
     } catch (error: any) {
-      console.error("[Newsletter] Falha ao processar descadastro:", error?.message || error);
+      if (error?.message === "INVALID_UNSUBSCRIBE_TOKEN") {
+        return res.status(400).json({ success: false, code: "INVALID_UNSUBSCRIBE_TOKEN", error: "Token de descadastro inválido." });
+      }
+      console.error("[Newsletter] Falha ao processar descadastro POST:", error?.message || error);
       return res.status(503).json({ success: false, code: "NEWSLETTER_UNAVAILABLE", error: "Descadastro temporariamente indisponível." });
     }
   });
@@ -1403,6 +1424,12 @@ NUNCA modifique ou invente preços ou imagens.`,
       startNewsletterOutboxWorker();
     } catch {
       console.error("[NEWSLETTER-OUTBOX] worker.failed_to_start");
+    }
+
+    try {
+      startNewsletterCampaignWorker();
+    } catch {
+      console.error("[NEWSLETTER-CAMPAIGN] worker.failed_to_start");
     }
   });
 }

@@ -22,6 +22,7 @@ import * as telegramPanel from "./telegramPanel";
 // FASE 25C (Commit 2) — orquestrador /shopee N (discovery → Affiliate → scraper → cards).
 import { inspectShopeePromotionFields, inspectShopeePromotionOffer, runShopeeCommand } from "./shopeeCommand";
 import type { ShopeePromotionEvidence } from "./scraper";
+import { handleNewsletterCampaignCallback, handleNewsletterCampaignText } from "./newsletterCampaignTelegram";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -459,8 +460,10 @@ export function buildProductListView(products: ProductListItem[], pageInput: num
     const ref = product.ref || "SEM-REF";
     text += `${statusEmoji} <b>${product.produto.slice(0, 32)}</b>\n` +
             `REF: <code>${ref}</code> | R$ ${product.preco.toFixed(2).replace(".", ",")}\n\n`;
+    const campaignAvailable = product.ativo === true;
     buttons.push([
       { text: `👁️ ${ref}`, callback_data: `product_view:${product.id}` },
+      ...(campaignAvailable ? [{ text: "📧 E-mail", callback_data: `campaign_email:${product.id}` }] : []),
       { text: "✏️ Editar", callback_data: `product_edit:${product.id}` },
       { text: product.ativo !== false ? "⏸️ Pausar" : "🟢 Ativar", callback_data: `product_toggle:${product.id}` }
     ]);
@@ -550,6 +553,13 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
     logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: true });
+
+    const campaignHandled = await handleNewsletterCampaignCallback(data, callbackId, String(senderId), chatId, messageId, {
+      answerCallbackQuery,
+      editTelegramMessageText,
+      sendTelegramMessage,
+    });
+    if (campaignHandled) return;
 
     // --- NAMESPACE: ADMIN / MENU ---
     if (data === "admin_menu" || data === "admin_back") {
@@ -907,9 +917,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
                  `<b>Status:</b> ${product.ativo !== false ? "🟢 Ativo" : "⏸️ Pausado"}\n` +
                  `<b>Destaque:</b> ${product.destaque ? "Sim" : "Não"}\n`;
 
+      const campaignAvailable = product.ativo === true && (!product.status || product.status === "approved" || product.status === "published");
       const keyboard = {
         inline_keyboard: [
           [{ text: "🎯 Ver Analytics", callback_data: `analytics_product:${product.id}:7d` }],
+          ...(campaignAvailable ? [[{ text: "📧 Criar campanha", callback_data: `campaign_email:${product.id}` }]] : []),
           [{ text: "✏️ Editar", callback_data: `product_edit:${product.id}` }, { text: "🗄️ Arquivar", callback_data: `product_del_confirm:${product.id}` }],
           [{ text: "🔗 Abrir no Site", url: `https://cerberusfinds.com/produto/${product.slug || product.id}` }],
           [{ text: "⬅️ Voltar", callback_data: "products_list:0" }]
@@ -1979,6 +1991,15 @@ async function renderCycleState(input: string): Promise<string> {
 
     // --- ESTADOS DE USUÁRIO / MÁQUINAS DE ESTADO ---
     const userState = await telegramRepo.getUserState(senderId);
+
+    if (userState?.action === "campaign_subject") {
+      const campaignHandled = await handleNewsletterCampaignText(text, String(senderId), chatId, {
+        answerCallbackQuery,
+        editTelegramMessageText,
+        sendTelegramMessage,
+      });
+      if (campaignHandled) return;
+    }
 
     if (userState && userState.action.startsWith("edit_field:")) {
       const field = userState.action.split(":")[1];

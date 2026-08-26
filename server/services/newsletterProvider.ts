@@ -25,9 +25,25 @@ export interface NewsletterProviderInput {
   payload: Record<string, unknown>;
 }
 
+export interface NewsletterCampaignProviderInput {
+  campaignId: string;
+  recipientId: string;
+  subscriberEmail: string;
+  subject: string;
+  htmlContent: string;
+  textContent: string;
+  idempotencyKey: string;
+}
+
 export interface NewsletterProvider {
   project(input: NewsletterProviderInput, idempotencyKey: string): Promise<NewsletterProviderResult>;
 }
+
+export interface NewsletterCampaignProvider {
+  sendCampaign(input: NewsletterCampaignProviderInput): Promise<NewsletterProviderResult>;
+}
+
+export type BrevoNewsletterProvider = NewsletterProvider & NewsletterCampaignProvider;
 
 export interface BrevoNewsletterProviderOptions {
   apiKey: string;
@@ -65,7 +81,7 @@ export function getNewsletterProviderConfigStatus(env: NodeJS.ProcessEnv = proce
   };
 }
 
-export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOptions): NewsletterProvider {
+export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOptions): BrevoNewsletterProvider {
   const apiKey = options.apiKey.trim();
   const senderEmail = normalizeNewsletterEmail(options.senderEmail);
   if (!apiKey || !isValidNewsletterEmail(senderEmail)) {
@@ -82,65 +98,97 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
   const timeoutMs = Math.max(1_000, Math.min(60_000, Math.floor(options.timeoutMs || DEFAULT_TIMEOUT_MS)));
   const fetchImpl = options.fetchImpl || fetch;
 
+  const sendMessage = async (input: {
+    subscriberEmail: string;
+    subject: string;
+    htmlContent: string;
+    textContent: string;
+    idempotencyKey: string;
+  }): Promise<NewsletterProviderResult> => {
+    const subscriberEmail = normalizeNewsletterEmail(input.subscriberEmail);
+    if (!isValidNewsletterEmail(subscriberEmail) || !input.idempotencyKey.trim()) {
+      throw new NewsletterProviderError("permanent_4xx", "INVALID_PROVIDER_INPUT", "Entrada inválida para o provider.");
+    }
+    const normalizedSubject = input.subject.replace(/\s+/g, " ").trim();
+    if (!normalizedSubject || !input.htmlContent.trim() || !input.textContent.trim()) {
+      throw new NewsletterProviderError("permanent_4xx", "INVALID_PROVIDER_CONTENT", "Conteúdo inválido para o provider.");
+    }
+
+    const providerIdempotencyKey = toProviderUuid(input.idempotencyKey);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "api-key": apiKey,
+        },
+        body: JSON.stringify({
+          sender: { email: senderEmail, name: senderName },
+          subject: normalizedSubject,
+          htmlContent: input.htmlContent,
+          textContent: input.textContent,
+          messageVersions: [{
+            to: [{ email: subscriberEmail }],
+            subject: normalizedSubject,
+            htmlContent: input.htmlContent,
+            textContent: input.textContent,
+          }],
+          headers: { idempotencyKey: providerIdempotencyKey },
+        }),
+        signal: controller.signal,
+      });
+      const responseText = await response.text();
+      const responseBody = parseJson(responseText);
+
+      if (response.ok) {
+        return {
+          status: "succeeded",
+          providerReference: extractProviderReference(responseBody),
+        };
+      }
+
+      if (isProviderDuplicate(response.status, responseBody, responseText)) {
+        return {
+          status: "duplicate",
+          providerReference: extractProviderReference(responseBody),
+        };
+      }
+
+      throw classifyBrevoHttpFailure(response.status);
+    } catch (error) {
+      if (error instanceof NewsletterProviderError) throw error;
+      if (isAbortError(error)) {
+        throw new NewsletterProviderError("timeout", "PROVIDER_TIMEOUT", "Timeout ao enviar mensagem ao provider.");
+      }
+      throw new NewsletterProviderError("unknown", "PROVIDER_TRANSPORT_ERROR", "Falha de transporte ao enviar mensagem ao provider.");
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
   return {
     async project(input, idempotencyKey) {
-      const subscriberEmail = normalizeNewsletterEmail(input.subscriberEmail);
-      if (!isValidNewsletterEmail(subscriberEmail) || !idempotencyKey.trim()) {
-        throw new NewsletterProviderError("permanent_4xx", "INVALID_PROVIDER_INPUT", "Entrada inválida para o provider.");
+      return sendMessage({
+        subscriberEmail: input.subscriberEmail,
+        subject,
+        htmlContent: renderNewsletterHtml(),
+        textContent: "Você confirmou sua inscrição no Cerberus Finds. Novas seleções, recomendações e ofertas serão enviadas conforme sua preferência.",
+        idempotencyKey,
+      });
+    },
+    async sendCampaign(input) {
+      if (!input.campaignId.trim() || !input.recipientId.trim()) {
+        throw new NewsletterProviderError("permanent_4xx", "INVALID_CAMPAIGN_PROVIDER_INPUT", "Identidade da campanha inválida.");
       }
-
-      const providerIdempotencyKey = toProviderUuid(idempotencyKey);
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await fetchImpl(endpoint, {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-            "api-key": apiKey,
-          },
-          body: JSON.stringify({
-            sender: { email: senderEmail, name: senderName },
-            subject,
-            htmlContent: renderNewsletterHtml(),
-            messageVersions: [{ to: [{ email: subscriberEmail }] }],
-            headers: { idempotencyKey: providerIdempotencyKey },
-          }),
-          signal: controller.signal,
-        });
-        const responseText = await response.text();
-        const responseBody = parseJson(responseText);
-
-        if (response.ok) {
-          return {
-            status: "succeeded",
-            providerReference: extractProviderReference(responseBody),
-          };
-        }
-
-        if (isProviderDuplicate(response.status, responseBody, responseText)) {
-          return {
-            status: "duplicate",
-            providerReference: extractProviderReference(responseBody),
-          };
-        }
-
-        throw classifyBrevoHttpFailure(response.status);
-      } catch (error) {
-        if (error instanceof NewsletterProviderError) throw error;
-        if (isAbortError(error)) {
-          throw new NewsletterProviderError("timeout", "PROVIDER_TIMEOUT", "Timeout ao enviar mensagem ao provider.");
-        }
-        throw new NewsletterProviderError("unknown", "PROVIDER_TRANSPORT_ERROR", "Falha de transporte ao enviar mensagem ao provider.");
-      } finally {
-        clearTimeout(timeout);
-      }
+      return sendMessage(input);
     },
   };
 }
 
-export function createConfiguredNewsletterProvider(env: NodeJS.ProcessEnv = process.env): NewsletterProvider {
+export function createConfiguredNewsletterProvider(env: NodeJS.ProcessEnv = process.env): BrevoNewsletterProvider {
   return createBrevoNewsletterProvider({
     apiKey: env.BREVO_API_KEY || "",
     senderEmail: env.NEWSLETTER_SENDER_EMAIL || "",

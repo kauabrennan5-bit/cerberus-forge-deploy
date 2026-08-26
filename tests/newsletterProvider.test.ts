@@ -38,6 +38,31 @@ describe("newsletter Brevo provider adapter", () => {
     assert.equal(JSON.stringify(body).includes("test-api-key-placeholder"), false);
   });
 
+  it("sends campaign content through the same Brevo adapter with stable idempotency", async () => {
+    let capturedInit: RequestInit | undefined;
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init;
+      return new Response(JSON.stringify({ messageIds: ["campaign-message-1"] }), { status: 201 });
+    }) as typeof fetch;
+    const provider = createBrevoNewsletterProvider({ apiKey: "campaign-test-key", senderEmail: "sender@example.com", fetchImpl });
+    const result = await provider.sendCampaign({
+      campaignId: "campaign-1",
+      recipientId: "recipient-1",
+      subscriberEmail: "recipient@example.com",
+      subject: "Seleção editorial",
+      htmlContent: "<p>Oferta</p><a href=\"https://example.test/api/newsletter/unsubscribe?token=fake\">Sair</a>",
+      textContent: "Oferta\\nSair: https://example.test/api/newsletter/unsubscribe?token=fake",
+      idempotencyKey: "campaign-recipient-v1:stable",
+    });
+    assert.deepEqual(result, { status: "succeeded", providerReference: "campaign-message-1" });
+    const body = JSON.parse(String(capturedInit?.body));
+    assert.equal(body.messageVersions[0].htmlContent.includes("api/newsletter/unsubscribe"), true);
+    assert.equal(body.messageVersions[0].textContent.includes("api/newsletter/unsubscribe"), true);
+    assert.equal(body.messageVersions[0].to[0].email, "recipient@example.com");
+    assert.equal(body.headers.idempotencyKey, body.headers.idempotencyKey);
+    assert.equal(JSON.stringify(body).includes("campaign-test-key"), false);
+  });
+
   it("maps provider duplicate and transient/permanent HTTP failures without exposing response bodies", async () => {
     const duplicateFetch = (async () => new Response(JSON.stringify({ code: "duplicate_parameter" }), { status: 400 })) as typeof fetch;
     const duplicateProvider = createBrevoNewsletterProvider({ apiKey: "k", senderEmail: "sender@example.com", fetchImpl: duplicateFetch });
