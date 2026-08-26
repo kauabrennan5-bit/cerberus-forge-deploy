@@ -67,7 +67,10 @@ function sanitizeTelegramApiError(value: unknown): string | undefined {
 function logTelegramEvent(event: string, details: Record<string, string | number | boolean | undefined>): void {
   const sanitized = Object.entries(details)
     .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}=${String(value)}`)
+    .map(([key, value]) => {
+      if (key === "chat_id" && !/^-?\d+$/.test(String(value))) return `${key}=[REDACTED_NON_NUMERIC_CHAT_ID]`;
+      return `${key}=${String(value)}`;
+    })
     .join(" ");
   console.info(`[Telegram] ${event}${sanitized ? ` ${sanitized}` : ""}`);
 }

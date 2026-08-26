@@ -58,4 +58,20 @@ describe("Telegram truthful delivery", () => {
     assert.equal(result.ok, false);
     assert.match(result.failureReason ?? "", /request timeout/i);
   });
+
+  it("não registra chat_id não numérico no log", async () => {
+    const logLines: string[] = [];
+    const originalInfo = console.info;
+    console.info = (...args: unknown[]) => logLines.push(args.map(String).join(" "));
+    const tokenLikeChatId = "123456:TEST_TOKEN_SHOULD_NOT_APPEAR";
+    try {
+      globalThis.fetch = async () => telegramResponse(200, { ok: false, description: "Forbidden" });
+      const result = await sendTelegramMessage(tokenLikeChatId, "teste");
+      assert.equal(result.ok, false);
+      assert.equal(logLines.some(line => line.includes("chat_id=[REDACTED_NON_NUMERIC_CHAT_ID]")), true);
+      assert.equal(logLines.some(line => line.includes(tokenLikeChatId)), false);
+    } finally {
+      console.info = originalInfo;
+    }
+  });
 });

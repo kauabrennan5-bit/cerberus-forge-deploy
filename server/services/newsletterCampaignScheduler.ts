@@ -101,6 +101,10 @@ async function maybeSendCampaignReport(
   reportedTerminalStates.add(reportKey);
   const chatId = (env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
   if (!chatId) return;
+  if (!/^-?\d+$/.test(chatId)) {
+    console.error(`[NEWSLETTER-CAMPAIGN] report_blocked reason=TELEGRAM_ADMIN_CHAT_ID_INVALID`);
+    return;
+  }
   try {
     const { sendTelegramMessage } = await import("./telegramBot");
     const { campaignCompletionKeyboard, renderCampaignCompletionReport } = await import("./newsletterCampaignTelegram");
