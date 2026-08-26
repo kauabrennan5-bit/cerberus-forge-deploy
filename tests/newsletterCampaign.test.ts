@@ -16,6 +16,11 @@ import {
   campaignRecipientIdempotencyKey,
   processNewsletterCampaignOnce,
 } from "../server/services/newsletterCampaignWorker.ts";
+import {
+  DEFAULT_NEWSLETTER_ASSET_BASE_URL,
+  getNewsletterHeroImageUrl,
+  resolveNewsletterAssetBaseUrl,
+} from "../server/services/newsletterInstitutional.ts";
 import type {
   EmailCampaignRecipient,
   NewsletterCampaignStore,
@@ -39,7 +44,6 @@ import {
   renderRecentCampaignsForTelegram,
 } from "../server/services/newsletterCampaignTelegram.ts";
 import { TELEGRAM_PANEL_COMMANDS, renderReadPanelMenu } from "../server/services/telegramPanel.ts";
-import { getNewsletterHeroImageUrl } from "../server/services/newsletterInstitutional.ts";
 
 const product: Product = {
   id: "prod-campaign-1",
@@ -208,6 +212,8 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /bgcolor="#141414"/);
   assert.match(rendered.html, /bgcolor="#c0392b"/);
   assert.match(rendered.html, /font-family:Georgia,'Times New Roman',serif/);
+  assert.match(rendered.html, /<meta name="color-scheme" content="dark">/);
+  assert.match(rendered.html, /<meta name="supported-color-schemes" content="dark">/);
   assert.match(rendered.html, /<img src="https:\/\/cerberusfinds\.com\/assets\/newsletter\/social\/instagram\.png" width="24" height="24" alt="Instagram"/);
   assert.match(rendered.html, /luminaria-bauhaus-clean\.png/);
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
@@ -268,8 +274,16 @@ test("campaign creation includes real institutional paths and placeholder social
 test("institutional assets resolve to the configured public base and only known clean hero is allowed", () => {
   assert.equal(
     getNewsletterHeroImageUrl("prod-1787414659793", { PUBLIC_SITE_URL: "https://cerberusfinds.com" }),
-    "https://cerberusfinds.com/assets/newsletter/products/luminaria-bauhaus-clean.png",
+    `${DEFAULT_NEWSLETTER_ASSET_BASE_URL}/assets/newsletter/products/luminaria-bauhaus-clean-email.jpg`,
   );
+  assert.equal(
+    getNewsletterHeroImageUrl("prod-1787414659793", {
+      PUBLIC_SITE_URL: "https://cerberusfinds.com",
+      NEWSLETTER_PUBLIC_ASSET_BASE_URL: "https://assets.example.test/newsletter",
+    }),
+    "https://assets.example.test/newsletter/assets/newsletter/products/luminaria-bauhaus-clean-email.jpg",
+  );
+  assert.equal(resolveNewsletterAssetBaseUrl({ NEWSLETTER_PUBLIC_ASSET_BASE_URL: "not-a-url" }), DEFAULT_NEWSLETTER_ASSET_BASE_URL);
   assert.equal(getNewsletterHeroImageUrl("prod-campaign-1", { PUBLIC_SITE_URL: "https://cerberusfinds.com" }), undefined);
 });
 

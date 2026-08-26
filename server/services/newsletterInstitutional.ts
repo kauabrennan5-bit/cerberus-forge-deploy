@@ -21,8 +21,21 @@ export function buildInstitutionalUrl(path: string, env: NodeJS.ProcessEnv = pro
   return new URL(path, `${resolvePublicSiteUrl(env)}/`).toString();
 }
 
+export const DEFAULT_NEWSLETTER_ASSET_BASE_URL = "https://cerberus-forge-deploy-backend.onrender.com";
+
+export function resolveNewsletterAssetBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = (env.NEWSLETTER_PUBLIC_ASSET_BASE_URL || env.NEWSLETTER_PUBLIC_BASE_URL || DEFAULT_NEWSLETTER_ASSET_BASE_URL).trim();
+  try {
+    const url = new URL(configured);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error("NEWSLETTER_ASSET_BASE_URL_PROTOCOL_INVALID");
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return DEFAULT_NEWSLETTER_ASSET_BASE_URL;
+  }
+}
+
 export function buildNewsletterAssetUrl(path: string, env: NodeJS.ProcessEnv = process.env): string {
-  return new URL(path.replace(/^\/+/, ""), `${resolvePublicSiteUrl(env)}/`).toString();
+  return new URL(path.replace(/^\/+/, ""), `${resolveNewsletterAssetBaseUrl(env)}/`).toString();
 }
 
 const NEWSLETTER_SOCIAL_ICON_PATHS: Record<SocialNetwork, string> = {
@@ -35,7 +48,7 @@ const NEWSLETTER_SOCIAL_ICON_PATHS: Record<SocialNetwork, string> = {
 };
 
 const NEWSLETTER_CLEAN_HERO_PATHS: Record<string, string> = {
-  "prod-1787414659793": "assets/newsletter/products/luminaria-bauhaus-clean.png",
+  "prod-1787414659793": "assets/newsletter/products/luminaria-bauhaus-clean-email.jpg",
 };
 
 export function getNewsletterHeroImageUrl(productId: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
