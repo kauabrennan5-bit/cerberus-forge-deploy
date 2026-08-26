@@ -49,7 +49,7 @@ export interface AppConfig {
   adminPassword: string;
 }
 
-export type ViewMode = 'catalog' | 'admin' | 'product-detail';
+export type ViewMode = 'catalog' | 'admin' | 'product-detail' | 'privacy' | 'terms';
 
 export interface ExtractionResult {
   produto: string;

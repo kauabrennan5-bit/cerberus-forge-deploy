@@ -22,6 +22,7 @@ import {
   renderNewsletterCampaign,
   UNSUBSCRIBE_URL_PLACEHOLDER,
 } from "./newsletterCampaignTemplate";
+import { getNewsletterInstitutionalOptions } from "./newsletterInstitutional";
 
 export type CampaignServiceOptions = {
   store?: NewsletterCampaignStore;
@@ -41,9 +42,13 @@ export async function createCampaignForProduct(
   if (!product || product.ativo !== true || !approvedStatus) throw new Error("CAMPAIGN_PRODUCT_NOT_ELIGIBLE");
   const env = options.env || process.env;
   const campaignId = crypto.randomUUID();
+  const institutional = getNewsletterInstitutionalOptions(env);
   const rendered = renderNewsletterCampaign(product, {
     subject: env.NEWSLETTER_CAMPAIGN_SUBJECT || undefined,
     trackingCampaignId: campaignId,
+    privacyUrl: institutional.privacyUrl,
+    termsUrl: institutional.termsUrl,
+    socialLinks: institutional.socialLinks,
   });
   const draft = createCampaignDraft(product.id, actorTelegramId, rendered, options.now || new Date(), campaignId);
   return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);
@@ -122,7 +127,13 @@ export async function sendCampaignTest(
     textContent,
     idempotencyKey: `campaign-test-v1:${campaign.id}`,
   });
-  const tested = transitionCampaign(campaign, { type: "record_test_sent", actorTelegramId }, options.now || new Date());
+  const providerReference = providerResult.providerReference?.trim();
+  if (!providerReference) throw new Error("CAMPAIGN_TEST_PROVIDER_REFERENCE_MISSING");
+  const tested = transitionCampaign(campaign, {
+    type: "record_test_sent",
+    actorTelegramId,
+    providerReference,
+  }, options.now || new Date());
   return { campaign: await store.updateCampaign(tested), providerResult };
 }
 

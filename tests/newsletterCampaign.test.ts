@@ -151,11 +151,63 @@ test("renderer uses canonical bridge, escapes content, renders offer, disclosure
   assert.equal(resolveCampaignOfferUrl(product), product.paginaPonteUrl);
 });
 
+test("renderer adds editorial footer links only when configured and preserves the premium hierarchy", () => {
+  const rendered = renderNewsletterCampaign(product, {
+    trackingCampaignId: "campaign-editorial",
+    preheader: "Uma peça escolhida com olhar curatorial.",
+    viewInBrowserUrl: "https://cerberusfinds.com/arquivo/campaign-editorial",
+    privacyUrl: "https://cerberusfinds.com/politica-de-privacidade",
+    termsUrl: "https://cerberusfinds.com/termos-e-condicoes",
+    socialLinks: [
+      { label: "Instagram", url: "https://instagram.com/cerberusfinds" },
+      { label: "TikTok", url: "not-a-url" },
+    ],
+  });
+  assert.match(rendered.html, /Uma seleção editorial encontrada para você|Uma peça escolhida com olhar curatorial/);
+  assert.match(rendered.html, /Por que selecionamos isso/);
+  assert.match(rendered.html, /Ver no navegador/);
+  assert.match(rendered.html, /Política de privacidade/);
+  assert.match(rendered.html, /Termos e condições/);
+  assert.match(rendered.html, /Instagram/);
+  assert.match(rendered.html, /TikTok ainda não configurado/);
+  assert.equal(rendered.html.includes('href="not-a-url"'), false);
+  assert.equal(rendered.html.includes("Baixe nosso app"), false);
+  assert.equal(rendered.html.includes("App Store"), false);
+  assert.match(rendered.text, /Economia de R\$ 30,00/);
+});
+
+test("campaign creation includes real institutional paths and placeholder social icons without external calls", async () => {
+  const store = new FakeCampaignStore();
+  const created = await createCampaignForProduct("prod-campaign-1", "admin-1", {
+    store,
+    productLoader: async () => ({ ...product, status: "published" }),
+    env: { DRY_RUN: "true", PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+  });
+  assert.match(created.bodyHtml, /https:\/\/cerberusfinds\.com\/politica-de-privacidade/);
+  assert.match(created.bodyHtml, /https:\/\/cerberusfinds\.com\/termos-e-condicoes/);
+  assert.match(created.bodyHtml, /Instagram ainda não configurado/);
+  assert.match(created.bodyHtml, /TikTok ainda não configurado/);
+  assert.match(created.bodyHtml, /Facebook ainda não configurado/);
+  assert.equal(created.bodyHtml.includes("example.com"), false);
+});
+
+test("renderer omits unconfigured legal, social and browser-view blocks", () => {
+  const rendered = renderNewsletterCampaign({ ...product, curatorNote: undefined, ofertaPromocional: undefined }, { trackingCampaignId: "campaign-minimal" });
+  assert.equal(rendered.html.includes("Ver no navegador"), false);
+  assert.equal(rendered.html.includes("Política de privacidade"), false);
+  assert.equal(rendered.html.includes("Termos e condições"), false);
+  assert.equal(rendered.html.includes("Encontre a Cerberus Finds"), false);
+  assert.equal(rendered.html.includes("Por que selecionamos isso"), false);
+  assert.equal(rendered.html.includes("{{UNSUBSCRIBE_URL}}"), true);
+  assert.equal(rendered.html.includes("App Store"), false);
+  assert.equal(rendered.html.includes("Google Play"), false);
+});
+
 test("state machine refuses general send before approved test and requires explicit confirmation", () => {
   const pending = transitionCampaign(draft(), { type: "submit_for_approval", actorTelegramId: "admin-1" });
   const approved = transitionCampaign(pending, { type: "approve", actorTelegramId: "admin-1" });
   assert.throws(() => transitionCampaign(approved, { type: "begin_sending", actorTelegramId: "admin-1" }), /Envio geral exige teste enviado/);
-  const tested = transitionCampaign(approved, { type: "record_test_sent", actorTelegramId: "admin-1" });
+  const tested = transitionCampaign(approved, { type: "record_test_sent", actorTelegramId: "admin-1", providerReference: "provider-test-1" });
   const confirmed = transitionCampaign(tested, { type: "confirm_general_send", actorTelegramId: "admin-1" });
   const sending = transitionCampaign(confirmed, { type: "begin_sending", actorTelegramId: "admin-1" });
   assert.equal(sending.status, "sending");
@@ -289,6 +341,7 @@ test("DRY_RUN test-send uses a fake provider and does not prepare a production u
   });
   assert.equal(result.providerResult.status, "succeeded");
   assert.equal(result.campaign.status, "test_sent");
+  assert.equal(result.campaign.testProviderMessageId, "dry-run:test:campaign-test");
   assert.equal(store.prepareCalls, 0);
 });
 
@@ -316,8 +369,47 @@ test("administrative real-mode test does not require subscriber membership", asy
   });
   assert.equal(result.providerResult.providerReference, "fake-test-message");
   assert.equal(result.campaign.status, "test_sent");
+  assert.equal(result.campaign.testProviderMessageId, "fake-test-message");
+  assert.ok(result.campaign.testSentAt);
   assert.equal(called, 1);
   assert.equal(store.prepareCalls, 0);
+  assert.equal(store.recipients.length, 0);
+});
+
+test("administrative duplicate test persists the provider reference without recipients", async () => {
+  const store = new FakeCampaignStore();
+  const approved = { ...draft("campaign-admin-duplicate"), status: "approved" as const };
+  store.campaigns.set(approved.id, approved);
+  const result = await sendCampaignTest(approved, "admin-1", {
+    store,
+    provider: { sendCampaign: async () => ({ status: "duplicate", providerReference: "duplicate-message" }) },
+    env: {
+      NEWSLETTER_TEST_EMAIL: "gutemberg160701@gmail.com",
+      NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus-forge-deploy-backend.onrender.com",
+    },
+  });
+  assert.equal(result.providerResult.status, "duplicate");
+  assert.equal(result.campaign.status, "test_sent");
+  assert.equal(result.campaign.testProviderMessageId, "duplicate-message");
+  assert.equal(store.recipients.length, 0);
+});
+
+test("administrative test refuses to enter test_sent when provider reference is missing", async () => {
+  const store = new FakeCampaignStore();
+  const approved = { ...draft("campaign-admin-no-reference"), status: "approved" as const };
+  store.campaigns.set(approved.id, approved);
+  await assert.rejects(
+    () => sendCampaignTest(approved, "admin-1", {
+      store,
+      provider: { sendCampaign: async () => ({ status: "succeeded" }) },
+      env: { NEWSLETTER_TEST_EMAIL: "gutemberg160701@gmail.com", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberusfinds.com" },
+    }),
+    /CAMPAIGN_TEST_PROVIDER_REFERENCE_MISSING/,
+  );
+  const persisted = await store.getCampaign(approved.id);
+  assert.equal(persisted?.status, "approved");
+  assert.equal(persisted?.testProviderMessageId, null);
+  assert.equal(store.recipients.length, 0);
 });
 
 test("worker revalidates unsubscribe/consent before fake delivery", async () => {

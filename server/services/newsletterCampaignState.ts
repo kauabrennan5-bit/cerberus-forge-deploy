@@ -32,6 +32,7 @@ export type EmailCampaign = {
   approvedAt: string | null;
   testSentAt: string | null;
   testSentByTelegramId: string | null;
+  testProviderMessageId: string | null;
   generalSendConfirmedAt: string | null;
   generalSendConfirmedByTelegramId: string | null;
   sentAt: string | null;
@@ -42,7 +43,7 @@ export type CampaignTransition =
   | { type: "submit_for_approval"; actorTelegramId: string }
   | { type: "approve"; actorTelegramId: string }
   | { type: "cancel"; actorTelegramId: string }
-  | { type: "record_test_sent"; actorTelegramId: string }
+  | { type: "record_test_sent"; actorTelegramId: string; providerReference: string }
   | { type: "confirm_general_send"; actorTelegramId: string }
   | { type: "begin_sending"; actorTelegramId: string }
   | { type: "finish_sending"; actorTelegramId: string; counts: CampaignCounts }
@@ -78,6 +79,7 @@ export function createCampaignDraft(
     approvedAt: null,
     testSentAt: null,
     testSentByTelegramId: null,
+    testProviderMessageId: null,
     generalSendConfirmedAt: null,
     generalSendConfirmedByTelegramId: null,
     sentAt: null,
@@ -118,9 +120,14 @@ export function transitionCampaign(
 
   if (transition.type === "record_test_sent") {
     expectStatus(campaign, "approved", "TEST_REQUIRED_AFTER_APPROVAL");
+    const providerReference = transition.providerReference.trim();
+    if (!providerReference) {
+      throw new CampaignStateError("TEST_PROVIDER_REFERENCE_REQUIRED", "Referência do provider ausente.");
+    }
     next.status = "test_sent";
     next.testSentAt = timestamp;
     next.testSentByTelegramId = actor;
+    next.testProviderMessageId = providerReference;
     return next;
   }
 

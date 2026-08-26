@@ -13,6 +13,8 @@ import { ProductGrid } from './components/ProductGrid';
 import { ProductDetail } from './components/ProductDetail';
 import { AdminForm } from './components/AdminForm';
 import { SettingsModal } from './components/SettingsModal';
+import { InstitutionalPage } from './components/InstitutionalPage';
+import { INSTITUTIONAL_PATHS } from './config/institutional';
 
 const CONFIG_STORAGE_KEY = 'cerberus_finds_config_v2';
 const FAVORITES_STORAGE_KEY = 'cerberus_finds_favorites_v1';
@@ -30,6 +32,8 @@ export default function App() {
   const [currentView, setCurrentView] = useState<ViewMode>(() => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname;
+      if (path === INSTITUTIONAL_PATHS.privacy) return 'privacy';
+      if (path === INSTITUTIONAL_PATHS.terms) return 'terms';
       if (path.startsWith('/produto/')) return 'product-detail';
       if (path.startsWith('/admin')) return 'admin';
 
@@ -187,11 +191,14 @@ export default function App() {
     if (view !== 'product-detail') {
       setSelectedProduct(null);
       if (typeof window !== 'undefined') {
-        if (view === 'admin') {
-          window.history.pushState({}, '', '/admin');
-        } else {
-          window.history.pushState({}, '', '/');
-        }
+        const path = view === 'admin'
+          ? '/admin'
+          : view === 'privacy'
+            ? INSTITUTIONAL_PATHS.privacy
+            : view === 'terms'
+              ? INSTITUTIONAL_PATHS.terms
+              : '/';
+        window.history.pushState({}, '', path);
       }
     }
     setCurrentView(view);
@@ -220,7 +227,13 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
-      if (path.startsWith('/admin')) {
+      if (path === INSTITUTIONAL_PATHS.privacy) {
+        setCurrentView('privacy');
+        setSelectedProduct(null);
+      } else if (path === INSTITUTIONAL_PATHS.terms) {
+        setCurrentView('terms');
+        setSelectedProduct(null);
+      } else if (path.startsWith('/admin')) {
         setCurrentView('admin');
         setSelectedProduct(null);
       } else if (path.startsWith('/produto/')) {
@@ -300,6 +313,14 @@ export default function App() {
           />
         )}
 
+        {(currentView === 'privacy' || currentView === 'terms') && (
+          <InstitutionalPage
+            kind={currentView}
+            onBackToSite={() => handleSelectView('catalog')}
+            onNavigate={(path) => handleSelectView(path === INSTITUTIONAL_PATHS.privacy ? 'privacy' : 'terms')}
+          />
+        )}
+
         {currentView === 'admin' && (
           <AdminForm
             config={config}
@@ -330,6 +351,7 @@ export default function App() {
       </main>
 
       {/* Gothic / Archival Footer */}
+      {currentView !== 'privacy' && currentView !== 'terms' && (
       <footer className="border-t border-[#3A342E] bg-[#141210] py-8 px-4 text-center text-xs text-[#E8E1D3]/60 w-full max-w-full min-w-0">
         <div className="max-w-7xl mx-auto min-w-0 flex flex-col lg:flex-row items-center justify-between gap-5 font-sans">
           <div className="flex items-center space-x-3">
@@ -342,12 +364,24 @@ export default function App() {
             </span>
           </div>
 
-          <div className="flex items-center space-x-6 text-xs font-display uppercase tracking-widest text-[#E8E1D3]/80">
+          <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-display uppercase tracking-widest text-[#E8E1D3]/80">
             <button
               onClick={() => handleSelectView('catalog')}
               className="hover:text-[#8A1F1F] transition-colors"
             >
               Acervo
+            </button>
+            <button
+              onClick={() => handleSelectView('privacy')}
+              className="hover:text-[#8A1F1F] transition-colors"
+            >
+              Privacidade
+            </button>
+            <button
+              onClick={() => handleSelectView('terms')}
+              className="hover:text-[#8A1F1F] transition-colors"
+            >
+              Termos
             </button>
           </div>
 
@@ -383,6 +417,7 @@ export default function App() {
           </form>
         </div>
       </footer>
+      )}
 
       {/* Settings Modal */}
       <SettingsModal
