@@ -230,9 +230,9 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /class="email-eyebrow"[^>]*color:#E86B5F/);
   assert.doesNotMatch(rendered.html, /<td width="8"[^>]*#8A1F1F/);
   assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
-  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
+  assert.doesNotMatch(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
   assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-cta-red\.png"/);
-  assert.match(rendered.html, /background-image:url\('https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png'\)/);
+  assert.doesNotMatch(rendered.html, /background-image:url\('https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png'\)/);
   assert.match(rendered.html, /class="email-price-card"[^>]+border-top:1px solid #3A342E/);
   assert.doesNotMatch(rendered.html, /#b0b0b0|#888888/);
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
@@ -360,7 +360,7 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /<td width="8"[^>]*#8A1F1F/);
   assert.doesNotMatch(rendered.html, /gradient/);
   assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
-  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
+  assert.doesNotMatch(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
   assert.equal(rendered.offerUrl, "");
 
   const store = new FakeCampaignStore();
