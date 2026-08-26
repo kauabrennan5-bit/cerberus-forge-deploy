@@ -30,6 +30,7 @@ import {
 } from "../server/services/newsletterCampaignService.ts";
 import {
   campaignCompletionKeyboard,
+  campaignKeyboard,
   handleNewsletterCampaignCallback,
   renderCampaignCompletionReport,
   renderRecentCampaignsForTelegram,
@@ -162,6 +163,21 @@ test("campaign list renders recovery buttons for existing statuses without touch
   assert.equal(rendered.keyboard.length, 2);
   assert.equal(rendered.keyboard[0][0].callback_data, `campaign_view:${testSent.id}`);
   assert.equal(rendered.keyboard[1][0].callback_data, `campaign_view:${pending.id}`);
+});
+
+test("test_sent keyboard shows confirmation before confirmation and start only after both confirmation fields exist", () => {
+  const unconfirmed = { ...draft("campaign-keyboard-unconfirmed"), status: "test_sent" as const };
+  assert.equal(campaignKeyboard(unconfirmed)[0][0].text, "✅ Confirmar envio geral");
+  assert.equal(campaignKeyboard(unconfirmed)[0][0].callback_data, `campaign_confirm_general:${unconfirmed.id}`);
+
+  const confirmed = {
+    ...unconfirmed,
+    generalSendConfirmedAt: "2026-08-26T05:55:00.000Z",
+    generalSendConfirmedByTelegramId: "admin-1",
+  };
+  assert.equal(campaignKeyboard(confirmed)[0][0].text, "🚀 Iniciar envio geral");
+  assert.equal(campaignKeyboard(confirmed)[0][0].callback_data, `campaign_start:${confirmed.id}`);
+  assert.equal(unconfirmed.status, "test_sent");
 });
 
 test("renderer uses canonical bridge, escapes content, renders offer, disclosure and unsubscribe placeholder", () => {
@@ -532,6 +548,31 @@ test("Telegram callback approval/test paths use injected transports and mask the
   assert.equal(sent.some(message => message.includes("o***@example.test")), true);
   assert.equal(sent.some(message => message.includes("operator@example.test")), false);
   assert.equal(answers.length >= 2, true);
+});
+
+test("Telegram confirmation callback re-renders the confirmed start button without creating recipients", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = { ...draft("campaign-confirm-rerender"), status: "test_sent" as const };
+  store.campaigns.set(campaign.id, campaign);
+  const markups: any[] = [];
+  const answers: string[] = [];
+  const deps = {
+    store,
+    env: { DRY_RUN: "true", NEWSLETTER_TEST_EMAIL: "operator@example.test", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberusfinds.com" },
+    productLoader: async () => product,
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async (_chat: number | string, _message: number, _text: string, replyMarkup?: unknown) => { markups.push(replyMarkup); },
+    sendTelegramMessage: async () => undefined,
+  };
+
+  await handleNewsletterCampaignCallback(`campaign_confirm_general:${campaign.id}`, "callback-confirm", "admin-1", 1, 777, deps);
+  const saved = store.campaigns.get(campaign.id);
+  assert.equal(saved?.status, "test_sent");
+  assert.equal(saved?.generalSendConfirmedByTelegramId, "admin-1");
+  assert.equal(store.recipients.length, 0);
+  assert.match(answers[0], /Confirmação registrada/);
+  assert.equal(markups[0]["inline_keyboard"][0][0].text, "🚀 Iniciar envio geral");
+  assert.equal(markups[0]["inline_keyboard"][0][0].callback_data, `campaign_start:${campaign.id}`);
 });
 
 test("Telegram completion report includes counts and retry only for failed campaigns", () => {

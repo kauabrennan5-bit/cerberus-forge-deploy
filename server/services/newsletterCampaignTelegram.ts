@@ -225,7 +225,7 @@ function campaignStatusLabel(status: EmailCampaign["status"]): string {
   return labels[status];
 }
 
-function campaignKeyboard(campaign: EmailCampaign): any[][] {
+export function campaignKeyboard(campaign: EmailCampaign): any[][] {
   switch (campaign.status) {
     case "draft":
       return [
@@ -242,11 +242,18 @@ function campaignKeyboard(campaign: EmailCampaign): any[][] {
         [{ text: "🧪 Enviar teste controlado", callback_data: `campaign_test:${campaign.id}` }],
         [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
-    case "test_sent":
+    case "test_sent": {
+      const generalSendConfirmed = Boolean(campaign.generalSendConfirmedAt && campaign.generalSendConfirmedByTelegramId);
       return [
-        [{ text: "✅ Confirmar envio geral", callback_data: `campaign_confirm_general:${campaign.id}` }],
+        [{
+          text: generalSendConfirmed ? "🚀 Iniciar envio geral" : "✅ Confirmar envio geral",
+          callback_data: generalSendConfirmed
+            ? `campaign_start:${campaign.id}`
+            : `campaign_confirm_general:${campaign.id}`,
+        }],
         [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
+    }
     case "sending":
       return [[{ text: "🔄 Atualizar status", callback_data: `campaign_view:${campaign.id}` }]];
     case "failed":
