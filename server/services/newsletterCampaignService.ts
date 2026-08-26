@@ -153,9 +153,14 @@ export async function startGeneralSend(
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
   const store = options.store || createSupabaseNewsletterCampaignStore();
-  const sending = transitionCampaign(campaign, { type: "begin_sending", actorTelegramId }, options.now || new Date());
+  const now = options.now || new Date();
+  const sending = transitionCampaign(campaign, { type: "begin_sending", actorTelegramId }, now);
   await store.createEligibleRecipients(campaign.id);
   const counts = await store.summarizeRecipients(campaign.id);
+  if (counts.total === 0) {
+    const completed = transitionCampaign(sending, { type: "finish_sending", actorTelegramId, counts }, now);
+    return store.updateCampaign(completed);
+  }
   return store.updateCampaign({ ...sending, counts });
 }
 

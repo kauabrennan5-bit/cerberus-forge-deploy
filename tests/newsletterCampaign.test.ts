@@ -369,6 +369,27 @@ test("campaign service enforces confirmation before persisting general sending",
   assert.equal(sending.counts.total, 1);
 });
 
+test("campaign start with zero eligible subscribers closes safely without recipients", async () => {
+  const store = new FakeCampaignStore();
+  const confirmed = {
+    ...draft("campaign-zero-eligible"),
+    status: "test_sent" as const,
+    testSentAt: new Date("2026-08-26T05:50:00.000Z").toISOString(),
+    testSentByTelegramId: "admin-1",
+    generalSendConfirmedAt: new Date("2026-08-26T05:55:00.000Z").toISOString(),
+    generalSendConfirmedByTelegramId: "admin-1",
+  };
+  store.campaigns.set(confirmed.id, confirmed);
+  const completed = await startGeneralSend(confirmed, "admin-1", {
+    store,
+    now: new Date("2026-08-26T06:00:00.000Z"),
+  });
+  assert.equal(completed.status, "sent");
+  assert.deepEqual(completed.counts, { total: 0, success: 0, failed: 0, skipped: 0 });
+  assert.equal(completed.sentAt, "2026-08-26T06:00:00.000Z");
+  assert.equal(store.recipients.length, 0);
+});
+
 test("DRY_RUN test-send uses a fake provider and does not prepare a production unsubscribe token", async () => {
   const store = new FakeCampaignStore();
   store.subscribers.set("test@example.test", { status: "subscribed", marketing_consent: true });
@@ -578,12 +599,15 @@ test("Telegram confirmation callback re-renders the confirmed start button witho
 test("Telegram completion report includes counts and retry only for failed campaigns", () => {
   const failed = { ...draft("campaign-report"), status: "failed" as const, counts: { total: 3, success: 1, failed: 1, skipped: 1 } };
   const sent = { ...failed, status: "sent" as const, counts: { total: 3, success: 2, failed: 0, skipped: 1 } };
+  const zeroRecipientSent = { ...draft("campaign-zero-report"), status: "sent" as const, counts: { total: 0, success: 0, failed: 0, skipped: 0 } };
   const report = renderCampaignCompletionReport(failed);
+  const zeroRecipientReport = renderCampaignCompletionReport(zeroRecipientSent);
   assert.match(report, /Produto:/);
   assert.match(report, /Destinatários: <b>3<\/b>/);
   assert.match(report, /Falhas: <b>1<\/b>/);
   assert.equal(campaignCompletionKeyboard(failed)[0][0].callback_data, "campaign_retry:campaign-report");
   assert.deepEqual(campaignCompletionKeyboard(sent), []);
+  assert.match(zeroRecipientReport, /encerrada sem envio: não havia destinatários elegíveis/);
   assert.equal(report.includes("operator@example.test"), false);
 });
 

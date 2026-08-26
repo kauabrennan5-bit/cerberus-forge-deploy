@@ -125,7 +125,13 @@ export async function handleNewsletterCampaignCallback(
 }
 
 export function renderCampaignCompletionReport(campaign: EmailCampaign): string {
+  const noRecipients = campaign.counts.total === 0;
   const heading = campaign.status === "failed" ? "⚠️ <b>RELATÓRIO DE CAMPANHA COM FALHAS</b>" : "✅ <b>RELATÓRIO FINAL DA CAMPANHA</b>";
+  const outcome = noRecipients
+    ? "Campanha encerrada sem envio: não havia destinatários elegíveis."
+    : campaign.status === "failed"
+      ? "As falhas permanecem retryable até uma ação humana de retry."
+      : "Nenhum retry é necessário.";
   return [
     heading,
     `Campanha: <code>${escapeTelegram(campaign.id)}</code>`,
@@ -134,7 +140,7 @@ export function renderCampaignCompletionReport(campaign: EmailCampaign): string 
     `Sucesso: <b>${campaign.counts.success}</b>`,
     `Falhas: <b>${campaign.counts.failed}</b>`,
     `Ignorados: <b>${campaign.counts.skipped}</b>`,
-    campaign.status === "failed" ? "As falhas permanecem retryable até uma ação humana de retry." : "Nenhum retry é necessário.",
+    outcome,
   ].join("\n");
 }
 
