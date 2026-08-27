@@ -1,5 +1,40 @@
 [
   {
+    "id": "prod-1787807366108",
+    "ref": "REF-021",
+    "slug": "abajur-de-led-cogumelo-luminaria-retro-usb-para-estudo-quarto-sala-decoracao-vintage",
+    "produto": "Abajur de Led Cogumelo Luminária Retrô USB para Estudo Quarto Sala Decoração Vintage",
+    "displayTitle": "Abajur LED Cogumelo Luminária Retrô USB",
+    "preco": 79.99,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/br-11134207-81z1k-mgrnd81se2gw92",
+      "https://down-br.img.susercontent.com/file/br-11134207-81z1k-mgrnd81sfh1cf6",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8259j-mg7cos0nf5e083",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8257v-mg7cotjufnrg9f",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8258z-mg7costkpgjv33",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825a0-mg7cou6cnjt561",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825b9-mg7couxtxcsq32",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825aj-mg7cow0f98257a",
+      "https://down-br.img.susercontent.com/file/sg-11134201-82580-mg7cowy0h7gs1c"
+    ],
+    "link": "https://s.shopee.com.br/4qFA9DeagJ",
+    "categoria": "Acessórios",
+    "descricao": "Luminária estilo retrô com formato de cogumelo e iluminação LED via USB. Ideal para compor ambientes de estudo e descanso com uma estética aconchegante.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-27T05:09:26.218383+00:00",
+    "ofertaPromocional": {
+      "price": 79.99,
+      "condition": "coupon",
+      "benefits": [
+        "Envie"
+      ],
+      "source": "admin_confirmed",
+      "confirmedAt": 1787807212587
+    },
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1787801194424",
     "ref": "REF-020",
     "slug": "abajur-cogumelo-moderno-laranja-vermelho-preto-luminaria-de-mesa-led-portatil-recarregavel-usb-5v",
