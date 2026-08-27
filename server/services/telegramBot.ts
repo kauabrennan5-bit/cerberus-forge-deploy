@@ -1972,7 +1972,17 @@ async function renderCycleState(input: string): Promise<string> {
     const matches = text.match(urlRegex);
     if (matches && matches.length > 0) {
       for (const link of matches) {
-        if (chatId) await sendTelegramMessage(chatId, `🔎 Analisando peça de <b>${detectMarketplace(link)}</b>...`);
+        const marketplace = detectMarketplace(link);
+        if (marketplace === "Shopee") {
+          // Links Shopee precisam passar primeiro pela aquisição oficial. O
+          // fluxo genérico antigo chamava apenas o scraper, que não consegue
+          // extrair uma página confiável de shortlinks afiliados. O orquestrador
+          // resolve o shortlink, confirma shop/item + offerLink na Affiliate API,
+          // e só depois usa o scraper na productLink canônica.
+          if (chatId) await runShopeeCommand(`1 ${link}`);
+          continue;
+        }
+        if (chatId) await sendTelegramMessage(chatId, `🔎 Analisando peça de <b>${marketplace}</b>...`);
         const extResult = await extractProductForReview(link);
         if (!extResult.success || !extResult.data) {
           if (chatId) await sendTelegramMessage(chatId, `❌ Falha ao extrair: ${extResult.error || "Erro desconhecido"}`);

@@ -72,8 +72,15 @@ export async function resolveShortUrlIfNeeded(urlStr: string): Promise<{ resolve
       return { resolvedUrl: target, marketplace: "Outros" };
     }
 
-    if (parsed.hostname.toLowerCase() === "meli.la" || parsed.hostname.toLowerCase().endsWith(".meli.la")) {
-      marketplace = "Mercado Livre";
+    const host = parsed.hostname.toLowerCase();
+    const isShortMarketplaceLink =
+      host === "meli.la" ||
+      host.endsWith(".meli.la") ||
+      host === "s.shopee.com.br" ||
+      host === "shopee.ee" ||
+      host.endsWith(".shopee.ee");
+    if (isShortMarketplaceLink) {
+      if (host === "meli.la" || host.endsWith(".meli.la")) marketplace = "Mercado Livre";
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);
       try {

@@ -39,6 +39,7 @@ import {
 } from "../repositories/telegramRepository";
 import type { PendingReview } from "./telegramBot";
 import { discoverShopeeProducts } from "./shopeeDiscovery";
+import { resolveShortUrlIfNeeded } from "./marketplace";
 
 // ---------------------------------------------------------------
 // Constantes do lote
@@ -184,9 +185,10 @@ export type ShopeeDiscoveryMode = "term" | "urls";
 
 function parseShopeeDiscovery(args: string[]): { mode: ShopeeDiscoveryMode; query: string; urls: string[] } {
   // Se todos os argumentos (a partir do 2º) forem URLs Shopee válidas, entra no modo direto.
+  // Links curtos oficiais são aceitos aqui e resolvidos antes da extração de identidade.
   const rest = args.slice(1);
-  const urlPattern = /^https?:\/\/shopee\.com\.br\/[\w\-./]*\/\d+\/\d+$/;
-  const allUrls = rest.length > 0 && rest.every((a) => urlPattern.test(a.replace(/[#?].*$/, "").replace(/\/$/, "")));
+  const urlPattern = /^https?:\/\/(?:[^/?#]+\.)?(?:shopee\.com\.br|shopee\.com|shopee\.ee)(?:[/?#]|$)/i;
+  const allUrls = rest.length > 0 && rest.every((a) => urlPattern.test(a));
   if (allUrls) {
     return { mode: "urls", query: "", urls: rest.map((a) => a.replace(/[#?].*$/, "").replace(/\/$/, "")) };
   }
@@ -543,6 +545,14 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
   }
   const discoveryMode: ShopeeDiscoveryMode = parsed.mode ?? "term";
   let directUrls: string[] = parsed.urls ?? [];
+  if (discoveryMode === "urls" && directUrls.length > 0) {
+    const resolvedUrls: string[] = [];
+    for (const directUrl of directUrls) {
+      const resolution = await resolveShortUrlIfNeeded(directUrl);
+      resolvedUrls.push(resolution.resolvedUrl);
+    }
+    directUrls = resolvedUrls;
+  }
   const candidateTarget = Math.min(
     MAX_DISCOVERY_CANDIDATES,
     Math.max(parsed.count, parsed.count * DISCOVERY_OVERFETCH_MULTIPLIER),

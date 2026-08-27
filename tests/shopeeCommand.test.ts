@@ -122,6 +122,13 @@ describe("parseShopeeCommand", () => {
     assert.equal(b.count, 5);
     assert.equal(b.query, "achados shopee");
   });
+
+  it("aceita shortlink oficial Shopee como URL direta, sem tratá-lo como termo", () => {
+    const parsed = parseShopeeCommand("1 https://s.shopee.com.br/50YaCO4kF9");
+    assert.equal(parsed.error, null);
+    assert.equal(parsed.mode, "urls");
+    assert.deepEqual(parsed.urls, ["https://s.shopee.com.br/50YaCO4kF9"]);
+  });
 });
 
 describe("identificadores do lote", () => {

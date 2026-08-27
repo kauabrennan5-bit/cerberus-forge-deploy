@@ -30,6 +30,22 @@ test("resolveShortUrlIfNeeded classifica meli.la sem falhar mesmo sem rede", asy
   assert.ok(result.resolvedUrl.includes("meli.la"));
 });
 
+test("resolveShortUrlIfNeeded resolve shortlink Shopee antes da extração", async () => {
+  const target = "https://s.shopee.com.br/50YaCO4kF9";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({
+    url: "https://shopee.com.br/opaanlp/1643586969/58205778996",
+  })) as unknown as typeof fetch;
+
+  try {
+    const result = await resolveShortUrlIfNeeded(target);
+    assert.equal(result.marketplace, "Shopee");
+    assert.equal(result.resolvedUrl, "https://shopee.com.br/opaanlp/1643586969/58205778996");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("Pipeline avalia meli.la corretamente sem erro de marketplace não reconhecido", async () => {
   const mockAdapters = {
     getProducts: async () => [],
