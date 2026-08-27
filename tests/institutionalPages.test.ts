@@ -19,9 +19,8 @@ test("privacy page renders institutional sections and explicit legal placeholder
   assert.equal(html.includes("[INSERIR CNPJ]"), false);
   assert.equal(html.includes("[INSERIR ENDEREÇO]"), false);
   assert.equal(html.includes("[INSERIR E-MAIL DE CONTATO]"), false);
-  assert.match(html, /\/api\/newsletter\/unsubscribe/);
-  assert.match(html, /Brevo/);
-  assert.match(html, /Supabase/);
+  assert.match(html, /link individual de descadastro/);
+  assert.doesNotMatch(html, /BREVO_API_KEY|Supabase|Brevo/);
   assert.match(html, /Política de Privacidade foi atualizada em/);
 });
 
@@ -36,6 +35,17 @@ test("terms page renders required editorial and third-party sections without inv
   assert.match(html, /Termos e Condições foram atualizados em/);
   assert.match(html, new RegExp(INSTITUTIONAL_PATHS.privacy.replaceAll("/", "\\/")));
   assert.match(html, new RegExp(INSTITUTIONAL_PATHS.terms.replaceAll("/", "\\/")));
+});
+
+test("institutional page renders configured social links as real anchors", () => {
+  const html = renderToStaticMarkup(React.createElement(InstitutionalPage, {
+    ...pageProps,
+    kind: "privacy",
+    socialLinks: [{ network: "instagram", label: "Instagram", url: "https://instagram.com/cerberusfinds" }],
+  }));
+  assert.match(html, /href="https:\/\/instagram\.com\/cerberusfinds"/);
+  assert.match(html, /Instagram/);
+  assert.doesNotMatch(html, /href=""/);
 });
 
 test("social configuration starts empty and does not produce broken links", () => {

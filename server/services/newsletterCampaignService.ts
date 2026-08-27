@@ -74,7 +74,7 @@ export async function createCampaignForProduct(
     throw new Error(`CAMPAIGN_PRODUCT_NOT_READY:${readiness.errors.join(",")}`);
   }
   const campaignId = crypto.randomUUID();
-  const institutional = getNewsletterInstitutionalOptions(env);
+  const institutional = await getNewsletterInstitutionalOptions(env);
   const heroImageUrl = readiness.product.primaryImageUrl;
   const rendered = renderNewsletterCampaign(product, {
     subject: env.NEWSLETTER_CAMPAIGN_SUBJECT || undefined,
@@ -105,7 +105,7 @@ export async function createWeeklyCollectionCampaign(
     verifyImageAccessibility: options.verifyImageAccessibility !== false,
     imageProbe: options.imageProbe,
   });
-  const institutional = getNewsletterInstitutionalOptions(env);
+  const institutional = await getNewsletterInstitutionalOptions(env);
   const rendered = renderNewsletterCollectionCampaign(selection.products, {
     subject: env.NEWSLETTER_COLLECTION_SUBJECT || undefined,
     collectionTitle: `${selection.products.length} NOVOS ACHADOS`,
@@ -133,7 +133,7 @@ export async function createWelcomeCampaignForSubscribers(
 ): Promise<EmailCampaign> {
   const env = options.env || process.env;
   const campaignId = crypto.randomUUID();
-  const institutional = getNewsletterInstitutionalOptions(env);
+  const institutional = await getNewsletterInstitutionalOptions(env);
   const rendered = renderNewsletterWelcomeCampaign({
     subject: env.NEWSLETTER_WELCOME_SUBJECT || undefined,
     trackingCampaignId: campaignId,

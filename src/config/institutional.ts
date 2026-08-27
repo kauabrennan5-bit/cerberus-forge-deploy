@@ -7,6 +7,12 @@ export type SocialNetwork = "instagram" | "tiktok" | "facebook" | "youtube" | "x
 
 export type SocialLinkConfig = Record<SocialNetwork, string>;
 
+export type ConfiguredSocialLink = {
+  label: string;
+  url: string;
+  network: SocialNetwork;
+};
+
 /**
  * URLs sociais deliberadamente vazias até que os perfis oficiais sejam
  * informados. O template ignora valores vazios e nunca cria links fictícios.
@@ -29,7 +35,7 @@ export const SOCIAL_LABELS: Record<SocialNetwork, string> = {
   pinterest: "Pinterest",
 };
 
-export function getConfiguredSocialLinks(config: SocialLinkConfig = SOCIAL_LINKS): Array<{ label: string; url: string; network: SocialNetwork }> {
+export function getConfiguredSocialLinks(config: SocialLinkConfig = SOCIAL_LINKS): ConfiguredSocialLink[] {
   return (Object.keys(config) as SocialNetwork[])
     .map(network => ({ network, label: SOCIAL_LABELS[network], url: config[network].trim() }))
     .filter(link => /^https?:\/\/[^\s]+$/i.test(link.url));

@@ -31,6 +31,16 @@ import {
   renderRecentCampaignsForTelegram,
 } from "./newsletterCampaignTelegram";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
+import { resolvePublicSiteUrl } from "./newsletterInstitutional";
+import {
+  isSocialNetwork,
+  normalizeSocialLinkUrl,
+  readCanonicalSocialLinks,
+  removeCanonicalSocialLink,
+  SOCIAL_NETWORKS,
+  upsertCanonicalSocialLink,
+} from "./socialLinks";
+import { SOCIAL_LABELS, type SocialNetwork } from "../../src/config/institutional";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -57,6 +67,14 @@ export async function telegramApiFetch(method: string, payload: Record<string, u
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function escapeTelegramHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;");
 }
 
 function sanitizeTelegramApiError(value: unknown): string | undefined {
@@ -596,6 +614,7 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
       [{ text: "🧠 Curadoria", callback_data: "product_approvals:0" }, { text: "⏳ Aprovações", callback_data: "product_approvals:0" }],
       [{ text: "🚀 Publicações", callback_data: "products_list:0" }, { text: "📊 Analytics", callback_data: "analytics_overview" }],
       [{ text: "🗂️ Campanha 2 semanal", callback_data: "campaign_collection" }],
+      [{ text: "🔗 Redes sociais", callback_data: "social_links" }],
       [{ text: "🧠 Operator", callback_data: "operator_home" }, { text: "⚙️ Configurações", callback_data: "admin_system" }]
     ]
   };
@@ -605,6 +624,28 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
   } else {
     await sendTelegramMessage(chatId, text, keyboard);
   }
+}
+
+function renderSocialLinksSettings(config: Record<SocialNetwork, string>): { text: string; keyboard: { inline_keyboard: any[][] } } {
+  const lines = SOCIAL_NETWORKS.map(network => {
+    const url = config[network];
+    return `${url ? "🟢" : "⚪️"} <b>${SOCIAL_LABELS[network]}</b>: ${url ? `<code>${escapeTelegramHtml(url)}</code>` : "<i>não configurado</i>"}`;
+  });
+  const buttons = SOCIAL_NETWORKS.map(network => ([
+    { text: `✏️ ${SOCIAL_LABELS[network]}`, callback_data: `social_edit:${network}` },
+    ...(config[network] ? [{ text: "🗑 Limpar", callback_data: `social_clear:${network}` }] : []),
+  ]));
+  buttons.push([{ text: "⬅️ Menu Principal", callback_data: "admin_menu" }]);
+  return {
+    text: "🔗 <b>REDES SOCIAIS</b>\n\n" +
+      "Cadastre os links oficiais em HTTPS. A configuração salva aqui será usada pelo site e pelas novas newsletters.\n\n" +
+      lines.join("\n"),
+    keyboard: { inline_keyboard: buttons },
+  };
+}
+
+async function getSocialLinksSettings(): Promise<{ text: string; keyboard: { inline_keyboard: any[][] } }> {
+  return renderSocialLinksSettings(await readCanonicalSocialLinks());
 }
 
 /**
@@ -914,6 +955,49 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       return;
     }
 
+    if (data === "social_links") {
+      await answerCallbackQuery(callbackId);
+      try {
+        const view = await getSocialLinksSettings();
+        if (chatId && messageId) await editTelegramMessageText(chatId, messageId, view.text, view.keyboard);
+      } catch (error: any) {
+        console.error("[Telegram] Falha ao carregar redes sociais:", error?.code || error?.message || "unknown_error");
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ A configuração de redes sociais está indisponível. Aplique a migration correspondente antes de editar links.");
+      }
+      return;
+    }
+
+    if (data.startsWith("social_edit:")) {
+      const network = data.slice("social_edit:".length);
+      if (!isSocialNetwork(network)) {
+        await answerCallbackQuery(callbackId, "Rede social inválida.", true);
+        return;
+      }
+      await telegramRepo.setUserState(senderId, { action: `social_link:${network}` });
+      await answerCallbackQuery(callbackId, `Envie o link do ${SOCIAL_LABELS[network]}.`);
+      if (chatId) await sendTelegramMessage(chatId, `🔗 <b>${SOCIAL_LABELS[network].toUpperCase()}</b>\n\nEnvie uma URL HTTPS oficial para salvar. Para remover o link atual, envie apenas <code>-</code>.`);
+      return;
+    }
+
+    if (data.startsWith("social_clear:")) {
+      const network = data.slice("social_clear:".length);
+      if (!isSocialNetwork(network)) {
+        await answerCallbackQuery(callbackId, "Rede social inválida.", true);
+        return;
+      }
+      try {
+        await removeCanonicalSocialLink(network);
+        await telegramRepo.deleteUserState(senderId);
+        await answerCallbackQuery(callbackId, "Link removido.");
+        const view = await getSocialLinksSettings();
+        if (chatId && messageId) await editTelegramMessageText(chatId, messageId, view.text, view.keyboard);
+      } catch (error: any) {
+        console.error("[Telegram] Falha ao remover rede social:", error?.code || error?.message || "unknown_error");
+        await answerCallbackQuery(callbackId, "Não foi possível remover agora.", true);
+      }
+      return;
+    }
+
     if (data === "admin_system") {
       await answerCallbackQuery(callbackId);
       const report = await cerberusOperator.runSystemHealthCheck();
@@ -1003,7 +1087,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           [{ text: "🎯 Ver Analytics", callback_data: `analytics_product:${product.id}:7d` }],
           ...(campaignAvailable ? [[{ text: "📧 Criar campanha", callback_data: `campaign_email:${product.id}` }]] : []),
           [{ text: "✏️ Editar", callback_data: `product_edit:${product.id}` }, { text: "🗄️ Arquivar", callback_data: `product_del_confirm:${product.id}` }],
-          [{ text: "🔗 Abrir no Site", url: `https://cerberusfinds.com/produto/${product.slug || product.id}` }],
+          [{ text: "🔗 Abrir no Site", url: `${resolvePublicSiteUrl()}/produto/${encodeURIComponent(product.slug || product.id)}` }],
           [{ text: "⬅️ Voltar", callback_data: "products_list:0" }]
         ]
       };
@@ -1899,6 +1983,19 @@ async function renderCycleState(input: string): Promise<string> {
       return;
     }
 
+    if (text === "/redes" || text.startsWith("/redes ") || text === "/redes-sociais" || text.startsWith("/redes-sociais ")) {
+      if (chatId) {
+        try {
+          const view = await getSocialLinksSettings();
+          await sendTelegramMessage(chatId, view.text, view.keyboard);
+        } catch (error: any) {
+          console.error("[Telegram] Falha ao abrir redes sociais:", error?.code || error?.message || "unknown_error");
+          await sendTelegramMessage(chatId, "⚠️ A configuração de redes sociais está indisponível. Aplique a migration correspondente antes de editar links.");
+        }
+      }
+      return;
+    }
+
     if (text === "/campanhas" || text.startsWith("/campanhas ") || text === "/campaigns" || text.startsWith("/campaigns ")) {
       if (chatId) {
         const campaigns = await createSupabaseNewsletterCampaignStore().listRecentCampaigns(10);
@@ -2054,6 +2151,48 @@ async function renderCycleState(input: string): Promise<string> {
       }
       return;
     }
+    const userState = await telegramRepo.getUserState(senderId);
+
+    if (userState?.action.startsWith("social_link:")) {
+      const network = userState.action.slice("social_link:".length);
+      if (!isSocialNetwork(network)) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ Rede social inválida. Abra novamente a tela de Redes sociais.");
+        return;
+      }
+      const trimmed = text.trim();
+      try {
+        if (trimmed === "-") {
+          await removeCanonicalSocialLink(network);
+          await telegramRepo.deleteUserState(senderId);
+          if (chatId) {
+            await sendTelegramMessage(chatId, `✅ Link do <b>${SOCIAL_LABELS[network]}</b> removido.`);
+            const view = await getSocialLinksSettings();
+            await sendTelegramMessage(chatId, view.text, view.keyboard);
+          }
+          return;
+        }
+
+        const normalizedUrl = normalizeSocialLinkUrl(trimmed);
+        if (!normalizedUrl) {
+          if (chatId) await sendTelegramMessage(chatId, "❌ URL inválida. Envie um link HTTPS sem espaços, ou <code>-</code> para remover.");
+          return;
+        }
+
+        await upsertCanonicalSocialLink(network, normalizedUrl);
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) {
+          await sendTelegramMessage(chatId, `✅ Link do <b>${SOCIAL_LABELS[network]}</b> salvo. Site e novas newsletters usarão essa URL canônica.`);
+          const view = await getSocialLinksSettings();
+          await sendTelegramMessage(chatId, view.text, view.keyboard);
+        }
+      } catch (error: any) {
+        console.error("[Telegram] Falha ao salvar rede social:", error?.code || error?.message || "unknown_error");
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ Não foi possível salvar agora. Confirme se a migration de redes sociais já foi aplicada.");
+      }
+      return;
+    }
+
     // --- DETECÇÃO DE LINKS (FLUXO DE PUBLICAÇÃO) ---
     const urlRegex = /(https?:\/\/[^\s]+)/gi;
     const matches = text.match(urlRegex);
@@ -2121,8 +2260,6 @@ async function renderCycleState(input: string): Promise<string> {
     }
 
     // --- ESTADOS DE USUÁRIO / MÁQUINAS DE ESTADO ---
-    const userState = await telegramRepo.getUserState(senderId);
-
     if (userState?.action === "campaign_subject") {
       const campaignHandled = await handleNewsletterCampaignText(text, String(senderId), chatId, {
         answerCallbackQuery,

@@ -1,12 +1,13 @@
-import { useEffect, useState, useCallback, type FormEvent } from 'react';
+import { useEffect, useState, useCallback, useRef, type FormEvent } from 'react';
 // Mobile refinement: preserve the Cerberus archival dark/red identity while keeping every public layout region intrinsically contained across narrow viewports.
 import { AppConfig, Product, ViewMode } from './types';
 import { initMetaPixel, initTikTokPixel } from './lib/pixels';
 import { captureUTMs } from './lib/utm';
 import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
-import { getProducts, subscribeNewsletter } from './services/api';
+import { getProducts, getPublicSocialLinks, subscribeNewsletter, type PublicSocialLink } from './services/api';
 import { orderCatalogProducts } from './lib/catalogOrder';
 import { getRelatedProducts } from './lib/relatedProducts';
+import { CATALOG_SCROLL_STORAGE_KEY, parseCatalogScroll, serializeCatalogScroll } from './lib/catalogScroll';
 
 import { Header } from './components/Header';
 import { ProductGrid } from './components/ProductGrid';
@@ -46,6 +47,7 @@ export default function App() {
   });
 
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const catalogScrollYRef = useRef<number | null>(null);
   const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(false);
 
   const [favorites, setFavorites] = useState<string[]>(() => {
@@ -75,6 +77,43 @@ export default function App() {
   const [newsletterConsent, setNewsletterConsent] = useState(false);
   const [newsletterStatus, setNewsletterStatus] = useState<string | null>(null);
   const [isSubscribing, setIsSubscribing] = useState(false);
+  const [socialLinks, setSocialLinks] = useState<PublicSocialLink[]>([]);
+
+  const restoreCatalogScroll = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    let target = catalogScrollYRef.current;
+    if (target === null) {
+      try {
+        target = parseCatalogScroll(window.sessionStorage.getItem(CATALOG_SCROLL_STORAGE_KEY), window.location.pathname);
+      } catch {
+        target = null;
+      }
+    }
+    if (target === null) return;
+    catalogScrollYRef.current = target;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => window.scrollTo({ top: target ?? 0, behavior: 'auto' }));
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !("scrollRestoration" in window.history)) return;
+    const previous = window.history.scrollRestoration;
+    window.history.scrollRestoration = 'manual';
+    return () => {
+      window.history.scrollRestoration = previous;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    getPublicSocialLinks().then((links) => {
+      if (active) setSocialLinks(links);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Initialize Tracking (UTMs, Pixels, GA4) on mount and when config changes
   useEffect(() => {
@@ -172,9 +211,18 @@ export default function App() {
     setSelectedProduct(product);
     setCurrentView('product-detail');
     if (typeof window !== 'undefined') {
+      if (currentView === 'catalog') {
+        const currentScrollY = window.scrollY;
+        catalogScrollYRef.current = currentScrollY;
+        try {
+          window.sessionStorage.setItem(CATALOG_SCROLL_STORAGE_KEY, serializeCatalogScroll(currentScrollY, window.location.pathname));
+        } catch {
+          // A restauração baseada em sessionStorage é uma melhoria; a navegação continua funcional sem ela.
+        }
+      }
       const slug = product.slug || product.id;
       window.history.pushState({}, '', `/produto/${slug}`);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'auto' });
     }
   };
 
@@ -184,6 +232,7 @@ export default function App() {
     setSelectedProduct(null);
     if (typeof window !== 'undefined') {
       window.history.pushState({}, '', '/');
+      restoreCatalogScroll();
     }
   };
 
@@ -202,6 +251,7 @@ export default function App() {
       }
     }
     setCurrentView(view);
+    if (view === 'catalog') restoreCatalogScroll();
   };
 
   const handleNewsletterSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -251,6 +301,7 @@ export default function App() {
         } else {
           setCurrentView('catalog');
           setSelectedProduct(null);
+          restoreCatalogScroll();
         }
       }
     };
@@ -318,6 +369,7 @@ export default function App() {
             kind={currentView}
             onBackToSite={() => handleSelectView('catalog')}
             onNavigate={(path) => handleSelectView(path === INSTITUTIONAL_PATHS.privacy ? 'privacy' : 'terms')}
+            socialLinks={socialLinks}
           />
         )}
 
@@ -354,14 +406,26 @@ export default function App() {
       {currentView !== 'privacy' && currentView !== 'terms' && (
       <footer className="border-t border-[#3A342E] bg-[#141210] py-8 px-4 text-center text-xs text-[#E8E1D3]/60 w-full max-w-full min-w-0">
         <div className="max-w-7xl mx-auto min-w-0 flex flex-col lg:flex-row items-center justify-between gap-5 font-sans">
-          <div className="flex items-center space-x-3">
-            <span className="font-gothic text-xl text-[#E8E1D3] tracking-wide uppercase">
-              CERBERUS FINDS
-            </span>
-            <span className="text-[10px] text-[#8A1F1F]">|</span>
-            <span className="text-[11px] font-condensed uppercase tracking-wider text-[#E8E1D3]/70">
-              UNDERGROUND ARCHIVAL CURATION
-            </span>
+          <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-center">
+            <div className="flex items-center space-x-3">
+              <span className="font-gothic text-xl text-[#E8E1D3] tracking-wide uppercase">
+                CERBERUS FINDS
+              </span>
+              <span className="text-[10px] text-[#8A1F1F]">|</span>
+              <span className="text-[11px] font-condensed uppercase tracking-wider text-[#E8E1D3]/70">
+                UNDERGROUND ARCHIVAL CURATION
+              </span>
+            </div>
+            {socialLinks.length > 0 && (
+              <div className="flex items-center gap-2" aria-label="Encontre a Cerberus Finds nas redes sociais">
+                <span className="mr-1 text-[9px] font-display uppercase tracking-widest text-[#E8E1D3]/45">Encontre</span>
+                {socialLinks.map((link) => (
+                  <a key={link.network} href={link.url} target="_blank" rel="noreferrer" aria-label={link.label} title={link.label} className="flex h-8 w-8 items-center justify-center border border-[#3A342E] bg-[#0B0908] p-1.5 transition-colors hover:border-[#8A1F1F]">
+                    <img src={`/assets/newsletter/social/${link.network}.png`} alt={link.label} className="h-full w-full object-contain" />
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-display uppercase tracking-widest text-[#E8E1D3]/80">
@@ -371,18 +435,26 @@ export default function App() {
             >
               Acervo
             </button>
-            <button
-              onClick={() => handleSelectView('privacy')}
+            <a
+              href={INSTITUTIONAL_PATHS.privacy}
+              onClick={(event) => {
+                event.preventDefault();
+                handleSelectView('privacy');
+              }}
               className="hover:text-[#8A1F1F] transition-colors"
             >
               Privacidade
-            </button>
-            <button
-              onClick={() => handleSelectView('terms')}
+            </a>
+            <a
+              href={INSTITUTIONAL_PATHS.terms}
+              onClick={(event) => {
+                event.preventDefault();
+                handleSelectView('terms');
+              }}
               className="hover:text-[#8A1F1F] transition-colors"
             >
               Termos
-            </button>
+            </a>
           </div>
 
           <form onSubmit={handleNewsletterSubmit} className="w-full max-w-md flex flex-col items-stretch gap-1.5 text-left" noValidate>

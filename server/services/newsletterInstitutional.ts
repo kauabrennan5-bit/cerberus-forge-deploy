@@ -1,21 +1,23 @@
 import {
   INSTITUTIONAL_PATHS,
   SOCIAL_LABELS,
-  SOCIAL_LINKS,
   type SocialNetwork,
 } from "../../src/config/institutional";
 import type { Product } from "../../src/types";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import type { NewsletterSocialLink } from "./newsletterCampaignTemplate";
+import { emptySocialLinkConfig, readCanonicalSocialLinks, SOCIAL_NETWORKS, type SocialLinksClient } from "./socialLinks";
+
+export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-static-catalog.onrender.com";
 
 export function resolvePublicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = (env.PUBLIC_SITE_URL || "https://cerberusfinds.com").trim();
+  const configured = (env.PUBLIC_SITE_URL || env.STATIC_CATALOG_URL || DEFAULT_PUBLIC_SITE_URL).trim();
   try {
     const url = new URL(configured);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("PUBLIC_SITE_URL_PROTOCOL_INVALID");
     return url.toString().replace(/\/$/, "");
   } catch {
-    return "https://cerberusfinds.com";
+    return DEFAULT_PUBLIC_SITE_URL;
   }
 }
 
@@ -61,18 +63,26 @@ export function getNewsletterHeroImageUrl(
   return resolveCanonicalProductImage(product).primaryImageUrl;
 }
 
-export function getNewsletterInstitutionalOptions(env: NodeJS.ProcessEnv = process.env): {
+export async function getNewsletterInstitutionalOptions(
+  env: NodeJS.ProcessEnv = process.env,
+  socialClient?: SocialLinksClient | null,
+): Promise<{
   privacyUrl: string;
   termsUrl: string;
   socialLinks: NewsletterSocialLink[];
-} {
-  const networks = Object.keys(SOCIAL_LINKS) as SocialNetwork[];
+}> {
+  let socialConfig = emptySocialLinkConfig();
+  try {
+    socialConfig = await readCanonicalSocialLinks(socialClient);
+  } catch (error: any) {
+    console.warn("[Institutional] Links sociais indisponíveis; usando configuração vazia:", error?.code || "read_failed");
+  }
   return {
     privacyUrl: buildInstitutionalUrl(INSTITUTIONAL_PATHS.privacy, env),
     termsUrl: buildInstitutionalUrl(INSTITUTIONAL_PATHS.terms, env),
-    socialLinks: networks.map(network => ({
+    socialLinks: SOCIAL_NETWORKS.map(network => ({
       label: SOCIAL_LABELS[network],
-      url: SOCIAL_LINKS[network].trim(),
+      url: socialConfig[network].trim(),
       iconUrl: buildNewsletterAssetUrl(NEWSLETTER_SOCIAL_ICON_PATHS[network], env),
     })),
   };

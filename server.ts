@@ -32,6 +32,7 @@ import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./
 // FASE 25B (Commit 1) — Painel de leitura Telegram: registro do menu via setMyCommands.
 import { registerTelegramCommands } from "./server/services/telegramPanel";
 import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
+import { listPublicSocialLinks } from "./server/services/socialLinks";
 import { setCommercialBrainClient } from "./server/repositories/commercialBrainRepository";
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
 import { registerPolicyEngineRoutes } from "./server/routes/policyEngineRoutes";
@@ -342,6 +343,18 @@ async function startServer() {
       .limit(1);
     if (error) throw error;
   };
+
+  app.get("/api/institutional/social-links", async (req, res) => {
+    if (!enforceRateLimit(newsletterRateLimiter, req, res)) return;
+    try {
+      const links = await listPublicSocialLinks();
+      res.setHeader("Cache-Control", "no-store");
+      return res.status(200).json({ success: true, links });
+    } catch (error: any) {
+      console.error("[Institutional] Falha ao carregar links sociais:", error?.code || error?.message || "unknown_error");
+      return res.status(503).json({ success: false, error: "Links sociais temporariamente indisponíveis." });
+    }
+  });
 
   app.get("/api/newsletter/unsubscribe", async (req, res) => {
     const token = typeof req.query?.token === "string" ? req.query.token.trim() : "";

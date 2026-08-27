@@ -36,6 +36,7 @@ export const TELEGRAM_PANEL_COMMANDS: Array<{ command: string; description: stri
   { command: "listar", description: "Listar produtos do catálogo" },
   { command: "produtos", description: "Catálogo de produtos" },
   { command: "categorias", description: "Gestão de categorias" },
+  { command: "redes", description: "Atualizar links das redes sociais" },
   { command: "discover", description: "Descobrir produtos por URL ou busca" },
   { command: "discover_batch", description: "Descoberta em lote" },
   { command: "campanhas", description: "Reabrir campanhas recentes" },
@@ -89,7 +90,8 @@ export function renderReadPanelMenu(): string {
     "/pendentes — propostas aguardando decisão\n" +
     "/aprovados — aprovadas e catálogo atual\n\n" +
     "📦 <b>CATÁLOGO</b>\n" +
-    "/listar · /produtos · /categorias\n\n" +
+    "/listar · /produtos · /categorias\n" +
+    "/redes — atualizar links oficiais das redes sociais\n\n" +
     "🔎 <b>DESCOBERTA E ANÁLISE</b>\n" +
     "/discover · /discover_batch\n" +
     "/campanhas — reabrir campanhas recentes\n" +

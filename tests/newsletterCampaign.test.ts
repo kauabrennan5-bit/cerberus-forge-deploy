@@ -180,10 +180,12 @@ function draft(id = "campaign-1"): EmailCampaign {
 test("telegram menu exposes campaign recovery and only valid command names", () => {
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanhas"), true);
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanha2"), true);
+  assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "redes"), true);
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "discover-batch"), false);
   assert.equal(TELEGRAM_PANEL_COMMANDS.every(command => /^[a-z0-9_]+$/.test(command.command)), true);
   assert.match(renderReadPanelMenu(), /\/campanhas/);
   assert.match(renderReadPanelMenu(), /\/campanha2/);
+  assert.match(renderReadPanelMenu(), /\/redes/);
 });
 
 test("campaign list renders recovery buttons for existing statuses without touching recipients", () => {

@@ -1,6 +1,6 @@
 import React from "react";
 import { CerberusLogo } from "./CerberusLogo";
-import { getConfiguredSocialLinks, INSTITUTIONAL_PATHS, SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
+import { getConfiguredSocialLinks, INSTITUTIONAL_PATHS, SOCIAL_LABELS, type ConfiguredSocialLink, type SocialNetwork } from "../config/institutional";
 
 type InstitutionalPageKind = "privacy" | "terms";
 
@@ -8,11 +8,12 @@ type InstitutionalPageProps = {
   kind: InstitutionalPageKind;
   onBackToSite: () => void;
   onNavigate: (path: string) => void;
+  socialLinks?: readonly ConfiguredSocialLink[];
 };
 
 const LAST_UPDATED = new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(new Date());
 
-export const InstitutionalPage: React.FC<InstitutionalPageProps> = ({ kind, onBackToSite, onNavigate }) => {
+export const InstitutionalPage: React.FC<InstitutionalPageProps> = ({ kind, onBackToSite, onNavigate, socialLinks }) => {
   const isPrivacy = kind === "privacy";
   return (
     <div className="min-h-[70vh] w-full px-3 py-8 sm:px-6 sm:py-14">
@@ -46,7 +47,7 @@ export const InstitutionalPage: React.FC<InstitutionalPageProps> = ({ kind, onBa
           {isPrivacy ? <PrivacyContent /> : <TermsContent />}
         </article>
 
-        <InstitutionalFooter onNavigate={onNavigate} onBackToSite={onBackToSite} />
+        <InstitutionalFooter onNavigate={onNavigate} onBackToSite={onBackToSite} socialLinks={socialLinks} />
       </div>
     </div>
   );
@@ -70,13 +71,13 @@ const PrivacyContent: React.FC = () => (
     </DocSection>
 
     <DocSection title="4. Newsletter, consentimento e descadastro">
-      <p>A inscrição exige uma ação afirmativa de consentimento para receber comunicações de marketing. O rodapé das mensagens contém um link individual de descadastro, processado pelo mecanismo canônico do projeto em <code>/api/newsletter/unsubscribe</code>. O pedido de descadastro interrompe a elegibilidade para novas campanhas conforme o estado persistido pelo sistema.</p>
-      <p>As campanhas processadas pelo backend podem utilizar o provedor de envio Brevo, que aparece na implementação operacional do projeto. O disparo depende dos gates de aprovação e das configurações do ambiente; esta página não autoriza nenhum envio.</p>
+      <p>A inscrição exige uma ação afirmativa de consentimento para receber comunicações de marketing. O rodapé das mensagens contém um link individual de descadastro, e o pedido de descadastro interrompe a elegibilidade para novas comunicações conforme o estado registrado pela operação.</p>
+      <p>As comunicações dependem de uma preparação operacional e de controles de envio. Esta página explica o tratamento de informações, mas não autoriza nenhum disparo por si só.</p>
     </DocSection>
 
     <DocSection title="5. Ofertas, terceiros e compartilhamento necessário">
       <p>A Cerberus Finds não conclui a compra, não processa o pagamento e não realiza a entrega dos produtos apresentados. O clique no CTA pode levar a uma página ponte ou ao site de um marketplace/parceiro. As condições finais, disponibilidade, pagamento, entrega e atendimento são definidos pelo terceiro responsável pela oferta.</p>
-      <p>Quando necessário para operar o site, a informação pode ser processada por prestadores técnicos configurados no backend. O projeto utiliza Supabase como parte da infraestrutura de persistência. Não são afirmadas localizações específicas de servidores ou práticas além das observadas na implementação.</p>
+      <p>Quando necessário para operar o site, informações podem ser tratadas por prestadores técnicos que apoiam hospedagem, segurança, comunicação e funcionamento da plataforma. O compartilhamento fica limitado ao necessário para essas finalidades.</p>
     </DocSection>
 
     <DocSection title="6. Segurança e retenção">
@@ -85,7 +86,7 @@ const PrivacyContent: React.FC = () => (
     </DocSection>
 
     <DocSection title="7. Direitos e canal de contato">
-      <p>Pedidos de informação, correção, atualização ou exclusão devem ser encaminhados pelo canal oficial da operação. O projeto auditado não contém um e-mail institucional público configurado, portanto nenhum canal é inventado nesta página.</p>
+      <p>Pedidos de informação, correção, atualização ou exclusão devem ser encaminhados pelo canal oficial disponibilizado pela operação nas páginas e comunicações vigentes. Nenhum endereço de contato é inventado nesta página.</p>
     </DocSection>
 
     <DocSection title="8. Alterações">
@@ -132,7 +133,7 @@ const TermsContent: React.FC = () => (
 
     <DocSection title="9. Alterações, contato e jurisdição">
       <p>Estas condições podem ser atualizadas para refletir mudanças no site e no catálogo. A versão vigente será a publicada nesta página.</p>
-      <p>O projeto auditado não contém um e-mail institucional público configurado, e a legislação ou jurisdição aplicáveis não são especificadas nesta versão. Nenhuma informação é inventada para preencher essas lacunas.</p>
+      <p>O contato oficial, quando disponibilizado, será indicado nas páginas e comunicações vigentes. A legislação ou jurisdição aplicáveis não são especificadas nesta versão; nenhuma informação é inventada para preencher essa lacuna.</p>
     </DocSection>
 
     <DocSection title="10. Transparência">
@@ -142,8 +143,8 @@ const TermsContent: React.FC = () => (
   </>
 );
 
-const InstitutionalFooter: React.FC<{ onNavigate: (path: string) => void; onBackToSite: () => void }> = ({ onNavigate, onBackToSite }) => {
-  const configuredSocialLinks = getConfiguredSocialLinks();
+const InstitutionalFooter: React.FC<{ onNavigate: (path: string) => void; onBackToSite: () => void; socialLinks?: readonly ConfiguredSocialLink[] }> = ({ onNavigate, onBackToSite, socialLinks }) => {
+  const configuredSocialLinks = socialLinks ? [...socialLinks] : getConfiguredSocialLinks();
   const allSocialNetworks = Object.keys(SOCIAL_LABELS) as SocialNetwork[];
   return (
     <footer className="mt-10 border-t border-[#3A342E] pt-7 text-xs text-[#E8E1D3]/60">
@@ -152,7 +153,9 @@ const InstitutionalFooter: React.FC<{ onNavigate: (path: string) => void; onBack
         {allSocialNetworks.map(network => {
           const link = configuredSocialLinks.find(item => item.network === network);
           return link ? (
-            <a key={network} href={link.url} target="_blank" rel="noreferrer" aria-label={link.label} className="flex h-8 min-w-8 items-center justify-center border border-[#3A342E] px-2 text-[9px] font-display uppercase tracking-wider text-[#E8E1D3]/80 hover:border-[#8A1F1F] hover:text-[#E8E1D3]">{socialMonogram(network)}</a>
+            <a key={network} href={link.url} target="_blank" rel="noreferrer" aria-label={link.label} className="flex h-8 min-w-8 items-center justify-center border border-[#3A342E] bg-[#0B0908] p-1.5 hover:border-[#8A1F1F]">
+              <img src={`/assets/newsletter/social/${network}.png`} alt={link.label} className="h-full w-full object-contain" />
+            </a>
           ) : (
             <span key={network} aria-label={`${SOCIAL_LABELS[network]} ainda não configurado`} className="flex h-8 min-w-8 items-center justify-center border border-dashed border-[#3A342E]/70 px-2 text-[9px] font-display uppercase tracking-wider text-[#E8E1D3]/25">{socialMonogram(network)}</span>
           );

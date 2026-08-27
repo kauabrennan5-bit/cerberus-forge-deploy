@@ -96,7 +96,6 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
 
   const senderName = (options.senderName || DEFAULT_SENDER_NAME).trim() || DEFAULT_SENDER_NAME;
   const subject = (options.subject || DEFAULT_SUBJECT).trim() || DEFAULT_SUBJECT;
-  const institutional = getNewsletterInstitutionalOptions();
   const endpoint = options.endpoint || DEFAULT_BREVO_ENDPOINT;
   const timeoutMs = Math.max(1_000, Math.min(60_000, Math.floor(options.timeoutMs || DEFAULT_TIMEOUT_MS)));
   const fetchImpl = options.fetchImpl || fetch;
@@ -174,6 +173,7 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
 
   return {
     async project(input, idempotencyKey) {
+      const institutional = await getNewsletterInstitutionalOptions();
       return sendMessage({
         subscriberEmail: input.subscriberEmail,
         subject,

@@ -1,3 +1,5 @@
+import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
+
 export interface CreateProductInput {
   senha?: string;
   produto: string;
@@ -9,6 +11,12 @@ export interface CreateProductInput {
   descricao?: string;
   paginaPonteUrl?: string;
 }
+
+export type PublicSocialLink = {
+  network: SocialNetwork;
+  label: string;
+  url: string;
+};
 
 export interface ApiResponse<T = any> {
   success: boolean;
@@ -46,6 +54,23 @@ function getApiUrl(path: string): string {
  * e é a única fonte usada pela vitrine para renderizar produtos. Operações
  * administrativas continuam usando os endpoints do backend abaixo.
  */
+export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
+  try {
+    const res = await fetch(getApiUrl('/api/institutional/social-links'), { cache: 'no-store' });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!data || data.success !== true || !Array.isArray(data.links)) return [];
+    return data.links.filter((link: any): link is PublicSocialLink =>
+      typeof link?.network === 'string' &&
+      Object.prototype.hasOwnProperty.call(SOCIAL_LABELS, link.network) &&
+      typeof link?.label === 'string' &&
+      /^https:\/\/[^\s]+$/i.test(link?.url || '')
+    );
+  } catch {
+    return [];
+  }
+}
+
 export async function getProducts(): Promise<any[]> {
   const catalogUrl = `/data/products.json?v=${Date.now()}`;
   const response = await fetch(catalogUrl, { cache: 'no-store' });
