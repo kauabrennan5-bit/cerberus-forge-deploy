@@ -104,7 +104,7 @@ export function renderReadPanelMenu(): string {
     "/recommendations · /affiliates · /cycle\n\n" +
     "🛒 <b>SHOPEE AFFILIATE (PREVIEW)</b>\n" +
     "/shopee N — lote Shopee com cards de decisão humana\n" +
-    "/publicar <id> — encaminhar review à publicação (confirmação humana)\n\n" +
+    "/publicar &lt;id&gt; — encaminhar review à publicação (confirmação humana)\n\n" +
     "/start · /help\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
     "DECISION ≠ ACTION · nada é publicado sem decisão humana."

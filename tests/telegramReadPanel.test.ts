@@ -39,6 +39,8 @@ test("renderReadPanelMenu retorna menu consolidado sem executar nada", () => {
   assert.match(menu, /shopee/i);
   assert.match(menu, /publicar/i);
   assert.match(menu, /DECISION ≠ ACTION/i);
+  assert.match(menu, /\/publicar &lt;id&gt;/i, "placeholder do comando deve ser entidade HTML segura");
+  assert.doesNotMatch(menu, /\/publicar <id>/i, "menu não pode conter tag HTML literal inválida");
 });
 
 // ------------------------------------------------------------------
