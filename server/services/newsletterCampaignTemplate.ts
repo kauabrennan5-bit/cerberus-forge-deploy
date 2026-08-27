@@ -44,6 +44,14 @@ export type NewsletterProductCollectionRenderOptions = {
   trackingCampaignId?: string;
 };
 
+export type NewsletterCollectionCampaignRenderOptions = NewsletterCampaignRenderOptions & {
+  collectionTitle?: string;
+  collectionKicker?: string;
+  collectionIntro?: string;
+  finalBrowseUrl?: string;
+  finalBrowseLabel?: string;
+};
+
 export type RenderedNewsletterProductCollection = {
   html: string;
   text: string;
@@ -187,18 +195,89 @@ export function renderNewsletterProductCollection(
           utm_content: canonical.id,
         })
       : canonical.destinationUrl;
+    const offer = normalizeOffer(product.ofertaPromocional);
+    const currentPrice = offer?.price || canonical.price;
+    const category = canonical.category
+      ? `<p style="margin:0 0 9px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;">${accentEmailText(escapeHtml(canonical.category))}</p>`
+      : "";
+    const previousPrice = offer && product.preco > offer.price ? formatPrice(product.preco) : "";
+    const priceHtml = `<p style="margin:0;color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.4;font-weight:700;">${primaryEmailText(escapeHtml(formatPrice(currentPrice)))}</p>${previousPrice ? `<p style="margin:5px 0 0;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.4;text-decoration:line-through;">${secondaryEmailText(escapeHtml(previousPrice))}</p>` : ""}`;
     return {
       offerUrl,
-      text: `${canonical.title} — R$ ${canonical.price.toFixed(2).replace(".", ",")} — ${offerUrl}`,
-      html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};margin:0 0 18px;"><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 16px;background:${COLORS.surface};background-color:${COLORS.surface};"><img class="email-collection-image" src="${escapeHtml(image.primaryImageUrl)}" alt="${escapeHtml(canonical.title)}" width="592" style="display:block;width:100%;max-width:592px;height:auto;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" /></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 10px;background:${COLORS.surface};background-color:${COLORS.surface};"><h2 style="margin:0;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:25px;line-height:1.08;font-weight:700;">${primaryEmailText(escapeHtml(canonical.title))}</h2><p style="margin:9px 0 0;color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.4;font-weight:700;">${primaryEmailText(`R$ ${canonical.price.toFixed(2).replace(".", ",")}`)}</p></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 18px;background:${COLORS.surface};background-color:${COLORS.surface};"><a href="${escapeHtml(offerUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 18px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:1.7px;text-decoration:none;text-transform:uppercase;">${ctaEmailText("Ver oferta")}</a></td></tr></table>`,
+      text: `${canonical.title} — ${formatPrice(currentPrice)} — ${offerUrl}`,
+      html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};margin:0;"><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 16px;background:${COLORS.surface};background-color:${COLORS.surface};"><img class="email-collection-image" src="${escapeHtml(image.primaryImageUrl)}" alt="${escapeHtml(canonical.title)}" width="592" style="display:block;width:100%;max-width:592px;height:auto;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" /></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 10px;background:${COLORS.surface};background-color:${COLORS.surface};">${category}<h2 class="email-collection-title" style="margin:0;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:24px;line-height:1.08;font-weight:700;">${primaryEmailText(escapeHtml(canonical.title))}</h2>${priceHtml}</td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:13px 0 22px;background:${COLORS.surface};background-color:${COLORS.surface};"><a href="${escapeHtml(offerUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 18px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:1.7px;text-decoration:none;text-transform:uppercase;">${ctaEmailText("VER OFERTA")}</a></td></tr></table>`,
     };
   });
 
+  const first = cards[0];
+  const pairs: typeof cards[] = [];
+  for (let index = 1; index < cards.length; index += 2) pairs.push(cards.slice(index, index + 2));
+  const featureHtml = `<tr><td class="email-collection-feature" bgcolor="${COLORS.surface}" style="padding:0 0 30px;background:${COLORS.surface};background-color:${COLORS.surface};">${first.html}</td></tr>`;
+  const gridHtml = pairs.map(pair => `<tr class="email-collection-grid-row"><td bgcolor="${COLORS.surface}" style="padding:0;background:${COLORS.surface};background-color:${COLORS.surface};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-collection-grid-table" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr>${pair.map(card => `<td class="email-collection-grid-cell" width="50%" valign="top" bgcolor="${COLORS.surface}" style="width:50%;padding:0 9px 22px;background:${COLORS.surface};background-color:${COLORS.surface};">${card.html}</td>`).join("")}${pair.length === 1 ? `<td class="email-collection-grid-cell email-collection-grid-spacer" width="50%" bgcolor="${COLORS.surface}" style="width:50%;padding:0 9px 22px;background:${COLORS.surface};background-color:${COLORS.surface};">&nbsp;</td>` : ""}</tr></table></td></tr>`).join("");
+
   return {
-    html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${cards.map(card => card.html).join("")}</table>`,
-    text: cards.map(card => card.text).join("\\n"),
+    html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${featureHtml}${gridHtml}</table>`,
+    text: cards.map((card, index) => `${String(index + 1).padStart(2, "0")}. ${card.text}`).join("\\n"),
     offerUrls: cards.map(card => card.offerUrl),
   };
+}
+
+export function renderNewsletterCollectionCampaign(
+  products: readonly Product[],
+  options: NewsletterCollectionCampaignRenderOptions = {},
+): RenderedNewsletterCampaign {
+  if (products.length === 0) throw new Error("NEWSLETTER_COLLECTION_EMPTY");
+  const collectionTitle = normalizeRequiredText(options.collectionTitle || `${products.length} NOVOS ACHADOS`, "collectionTitle");
+  const collectionKicker = normalizeRequiredText(options.collectionKicker || "Novidades", "collectionKicker");
+  const collectionIntro = normalizeRequiredText(options.collectionIntro || "Produtos que acabaram de entrar na curadoria da Cerberus Finds.", "collectionIntro");
+  const trackingCampaignId = options.trackingCampaignId?.trim();
+  const renderedCollection = renderNewsletterProductCollection(products, { trackingCampaignId });
+  const subject = normalizeRequiredText(options.subject || `Novidades da semana: ${collectionTitle}`, "subject");
+  const preheader = normalizeRequiredText(options.preheader || collectionIntro, "preheader");
+  const disclosure = normalizeRequiredText(options.disclosure || DEFAULT_DISCLOSURE, "disclosure");
+  const includeUnsubscribe = options.includeUnsubscribe !== false;
+  const unsubscribeUrl = includeUnsubscribe ? (options.unsubscribeUrl?.trim() || UNSUBSCRIBE_URL_PLACEHOLDER) : "";
+  const viewInBrowserUrl = normalizeHttpUrl(options.viewInBrowserUrl);
+  const privacyUrl = normalizeHttpUrl(options.privacyUrl);
+  const termsUrl = normalizeHttpUrl(options.termsUrl);
+  const socialLinks = normalizeSocialLinks(options.socialLinks);
+  const finalBrowseUrl = normalizeHttpUrl(options.finalBrowseUrl);
+  const finalBrowseLabel = normalizeRequiredText(options.finalBrowseLabel || "VER TODAS AS NOVIDADES", "finalBrowseLabel");
+  const canvasBackgroundUrl = buildNewsletterAssetUrl("assets/newsletter/backgrounds/cerberus-canvas-dark.png");
+  const ctaBackgroundUrl = buildNewsletterAssetUrl("assets/newsletter/backgrounds/cerberus-cta-red.png");
+  const htmlViewLink = viewInBrowserUrl
+    ? `<tr><td align="right" bgcolor="${COLORS.surface}" style="padding:0 0 18px;background:${COLORS.surface};background-color:${COLORS.surface};"><a href="${escapeHtml(viewInBrowserUrl)}" target="_blank" rel="noopener" style="color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;letter-spacing:1.6px;text-decoration:underline;text-transform:uppercase;">${secondaryEmailText("Ver online")}</a></td></tr>`
+    : "";
+  const htmlInstitutionalLinks = privacyUrl || termsUrl
+    ? `<p class="email-footer-copy" style="margin:0 0 16px;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.6;">${privacyUrl ? `<a href="${escapeHtml(privacyUrl)}" target="_blank" rel="noopener" style="color:${COLORS.ivory};text-decoration:underline;">${ivoryEmailText("Política de privacidade")}</a>` : ""}${privacyUrl && termsUrl ? `<font color="${COLORS.ivory}" style="color:${COLORS.ivory}!important;padding:0 8px;">|</font>` : ""}${termsUrl ? `<a href="${escapeHtml(termsUrl)}" target="_blank" rel="noopener" style="color:${COLORS.ivory};text-decoration:underline;">${ivoryEmailText("Termos e condições")}</a>` : ""}</p>`
+    : "";
+  const htmlUnsubscribe = includeUnsubscribe
+    ? `<p class="email-footer-copy" style="margin:0;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.65;">${secondaryEmailText("Você recebeu esta mensagem porque autorizou comunicações de marketing do Cerberus Finds.")} <a href="${escapeHtml(unsubscribeUrl)}" style="color:${COLORS.ivory};text-decoration:underline;">${ivoryEmailText("Cancelar inscrição")}</a>.</p>`
+    : `<p class="email-footer-copy" style="margin:0;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.65;">${secondaryEmailText("Você recebeu esta mensagem porque confirmou sua inscrição no Cerberus Finds.")}</p>`;
+  const htmlLinks = renderSocialLinks(socialLinks);
+  const finalCta = finalBrowseUrl
+    ? `<tr><td class="email-content-cell" align="center" bgcolor="${COLORS.surface}" style="padding:4px 36px 34px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 16px;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:17px;line-height:1.45;font-weight:700;">${ivoryEmailText("Quer ver mais?")}</p><a href="${escapeHtml(finalBrowseUrl)}" target="_blank" rel="noopener" style="display:block;padding:16px 20px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.3;font-weight:700;letter-spacing:1.8px;text-decoration:none;text-transform:uppercase;">${ctaEmailText(escapeHtml(finalBrowseLabel))}</a></td></tr>`
+    : `<tr><td class="email-content-cell" align="center" bgcolor="${COLORS.surface}" style="padding:4px 36px 34px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:17px;line-height:1.45;font-weight:700;">${ivoryEmailText("Continue acompanhando as próximas descobertas da Cerberus Finds.")}</p></td></tr>`;
+  const emailStyles = `<style>body{margin:0!important;padding:0!important;background:${COLORS.body}!important;color:${COLORS.secondary}!important;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}table{border-spacing:0;}img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}a{text-decoration:none;}@media only screen and (max-width:620px){.email-shell{width:100%!important;}.email-pad,.email-content-cell{padding-left:20px!important;padding-right:20px!important;}.email-collection-grid-table,.email-collection-grid-table tbody,.email-collection-grid-table tr{display:block!important;width:100%!important;}.email-collection-grid-cell{display:block!important;width:100%!important;padding:0 0 24px!important;}.email-collection-grid-spacer{display:none!important;}.email-collection-title{font-size:25px!important;}}@media (prefers-color-scheme:dark){body{background:${COLORS.body}!important;color:${COLORS.ivory}!important;}.email-shell,.email-surface,.email-pad,.email-collection-grid-table{background:${COLORS.surface}!important;background-color:${COLORS.surface}!important;}.email-collection-title{color:${COLORS.white}!important;-webkit-text-fill-color:${COLORS.white}!important;}}</style>`;
+  const html = protectGmailTextColors(addEmailBackgroundAssets(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">${emailStyles}</head><body bgcolor="${COLORS.body}" style="margin:0;padding:0;background:${COLORS.body};background-color:${COLORS.body};color:${COLORS.secondary};color-scheme:dark;"><span style="display:none!important;max-height:0;max-width:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(preheader)}</span><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.body}" style="width:100%;border-collapse:collapse;background:${COLORS.body};background-color:${COLORS.body};"><tr><td align="center" bgcolor="${COLORS.body}" style="padding:0;background:${COLORS.body};background-color:${COLORS.body};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-shell" bgcolor="${COLORS.surface}" style="width:100%;max-width:640px;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr><td class="email-surface" bgcolor="${COLORS.surface}" style="padding:28px 36px 0;background:${COLORS.surface};background-color:${COLORS.surface};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${htmlViewLink}<tr><td align="center" bgcolor="${COLORS.surface}" style="padding:0 0 22px;background:${COLORS.surface};background-color:${COLORS.surface};">${renderNewsletterHeader("Curadoria independente")}</td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:30px 0 28px;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 13px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;">${accentEmailText(escapeHtml(collectionKicker))}</p><h1 class="email-title" style="margin:0 0 17px;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:42px;line-height:1.04;font-weight:700;letter-spacing:-0.6px;">${primaryEmailText(escapeHtml(collectionTitle))}</h1><p class="email-body-copy" style="margin:0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.65;">${ivoryEmailText(escapeHtml(collectionIntro))}</p></td></tr></table></td></tr><tr><td class="email-content-cell" bgcolor="${COLORS.surface}" style="padding:0 36px 10px;background:${COLORS.surface};background-color:${COLORS.surface};">${renderedCollection.html}</td></tr>${finalCta}${htmlLinks}<tr><td class="email-content-cell" bgcolor="${COLORS.surface}" style="padding:26px 36px 30px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};border-top:1px solid ${COLORS.border};">${htmlInstitutionalLinks}<p class="email-footer-copy" style="margin:0 0 12px;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.65;">${secondaryEmailText(escapeHtml(disclosure))}</p>${htmlUnsubscribe}<p class="email-footer-copy" style="margin:19px 0 0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2px;">${ivoryEmailText("CERBERUS FINDS · CURADORIA INDEPENDENTE")}</p></td></tr></table></td></tr></table></td></tr></table></body></html>`, { body: canvasBackgroundUrl, cta: ctaBackgroundUrl }));
+  const text = [
+    "CERBERUS FINDS",
+    collectionKicker.toUpperCase(),
+    collectionTitle,
+    collectionIntro,
+    "",
+    renderedCollection.text,
+    "",
+    finalBrowseUrl ? `${finalBrowseLabel}: ${finalBrowseUrl}` : "Continue acompanhando as próximas descobertas da Cerberus Finds.",
+    privacyUrl ? `Política de privacidade: ${privacyUrl}` : "",
+    termsUrl ? `Termos e condições: ${termsUrl}` : "",
+    ...socialLinks.filter(link => link.url).map(link => `${link.label}: ${link.url}`),
+    disclosure,
+    "",
+    "Você recebeu esta mensagem porque autorizou comunicações de marketing do Cerberus Finds.",
+    `Cancelar inscrição: ${unsubscribeUrl}`,
+  ].filter(Boolean).join("\\n");
+  return { subject, html, text, offerUrl: renderedCollection.offerUrls[0] || "" };
 }
 
 export function renderNewsletterWelcomeCampaign(

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase as configuredSupabase, requireSupabase } from "./productsRepository";
-import type { CampaignCounts, EmailCampaign, EmailCampaignStatus, EmailCampaignType } from "../services/newsletterCampaignState";
+import type { CampaignCounts, CampaignProductLink, EmailCampaign, EmailCampaignStatus, EmailCampaignType } from "../services/newsletterCampaignState";
 import { issueUnsubscribeToken } from "../services/newsletterConsent";
 
 export type EmailCampaignRecipientStatus = "pending" | "sent" | "failed" | "skipped_unsubscribed";
@@ -29,6 +29,8 @@ export type CampaignSubscriberEligibility = {
 
 export interface NewsletterCampaignStore {
   createCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
+  createCampaignProducts(campaignId: string, products: CampaignProductLink[]): Promise<void>;
+  listCampaignProducts(campaignId: string): Promise<CampaignProductLink[]>;
   getCampaign(campaignId: string): Promise<EmailCampaign | null>;
   listRecentCampaigns(limit: number): Promise<EmailCampaign[]>;
   updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
@@ -63,7 +65,34 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .select("*")
       .single();
     if (error || !data) throw error || new Error("EMAIL_CAMPAIGN_CREATE_FAILED");
-    return fromCampaignRow(data);
+    return this.hydrateCampaign(fromCampaignRow(data));
+  }
+
+  async createCampaignProducts(campaignId: string, products: CampaignProductLink[]): Promise<void> {
+    if (products.length === 0) return;
+    const rows = products.map(product => ({
+      campaign_id: campaignId,
+      product_id: product.productId,
+      position: product.position,
+      layout: product.layout,
+    }));
+    const { error } = await this.client.from("email_campaign_products").insert(rows);
+    if (error) throw error;
+  }
+
+  async listCampaignProducts(campaignId: string): Promise<CampaignProductLink[]> {
+    const { data, error } = await this.client
+      .from("email_campaign_products")
+      .select("product_id, position, layout")
+      .eq("campaign_id", campaignId)
+      .order("position", { ascending: true })
+      .limit(50);
+    if (error) throw error;
+    return (data || []).map(row => ({
+      productId: String(row.product_id),
+      position: Number(row.position),
+      layout: row.layout === "feature" ? "feature" : "grid",
+    }));
   }
 
   async getCampaign(campaignId: string): Promise<EmailCampaign | null> {
@@ -73,7 +102,7 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .eq("id", campaignId)
       .maybeSingle();
     if (error) throw error;
-    return data ? fromCampaignRow(data) : null;
+    return data ? this.hydrateCampaign(fromCampaignRow(data)) : null;
   }
 
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> {
@@ -84,7 +113,7 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .select("*")
       .single();
     if (error || !data) throw error || new Error("EMAIL_CAMPAIGN_UPDATE_FAILED");
-    return fromCampaignRow(data);
+    return this.hydrateCampaign(fromCampaignRow(data));
   }
 
   async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> {
@@ -95,7 +124,7 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .order("created_at", { ascending: false })
       .limit(boundedLimit);
     if (error) throw error;
-    return (data || []).map(fromCampaignRow);
+    return Promise.all((data || []).map(row => this.hydrateCampaign(fromCampaignRow(row))));
   }
 
   async createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number> {
@@ -242,7 +271,7 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .order("created_at", { ascending: true })
       .limit(Math.max(1, Math.min(100, limit)));
     if (error) throw error;
-    return (data || []).map(fromCampaignRow);
+    return Promise.all((data || []).map(row => this.hydrateCampaign(fromCampaignRow(row))));
   }
 
   async listRetryableRecipients(campaignId: string): Promise<EmailCampaignRecipient[]> {
@@ -262,6 +291,11 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
     });
     if (error) throw error;
     return Number(data || 0);
+  }
+
+  private async hydrateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> {
+    if (campaign.campaignType !== "collection") return campaign;
+    return { ...campaign, collectionProducts: await this.listCampaignProducts(campaign.id) };
   }
 
   private async updateOwnedRecipient(recipientId: string, leaseToken: string, patch: Record<string, unknown>): Promise<EmailCampaignRecipient | null> {
@@ -312,6 +346,9 @@ function fromCampaignRow(row: Record<string, unknown>): EmailCampaign {
     id: String(row.id),
     campaignType,
     productId: nullableString(row.product_id),
+    collectionProducts: Array.isArray(row.collection_products)
+      ? row.collection_products as CampaignProductLink[]
+      : [],
     subject: String(row.subject),
     bodyHtml: String(row.body_html),
     bodyText: String(row.body_text),

@@ -26,6 +26,7 @@ import type { ShopeePromotionEvidence } from "./scraper";
 import {
   handleNewsletterCampaignCallback,
   handleNewsletterCampaignText,
+  handleCollectionCampaignCommand,
   handleWelcomeCampaignCommand,
   renderRecentCampaignsForTelegram,
 } from "./newsletterCampaignTelegram";
@@ -527,6 +528,7 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
       [{ text: "📦 Produtos", callback_data: "products_list:0" }, { text: "🔎 Descobrir", callback_data: "admin_add" }],
       [{ text: "🧠 Curadoria", callback_data: "product_approvals:0" }, { text: "⏳ Aprovações", callback_data: "product_approvals:0" }],
       [{ text: "🚀 Publicações", callback_data: "products_list:0" }, { text: "📊 Analytics", callback_data: "analytics_overview" }],
+      [{ text: "🗂️ Campanha 2 semanal", callback_data: "campaign_collection" }],
       [{ text: "🧠 Operator", callback_data: "operator_home" }, { text: "⚙️ Configurações", callback_data: "admin_system" }]
     ]
   };
@@ -1835,6 +1837,18 @@ async function renderCycleState(input: string): Promise<string> {
         const view = renderRecentCampaignsForTelegram(campaigns);
         logTelegramEvent("handler", { chat_id: chatId, handler: "campaign_list", campaigns_count: campaigns.length, response_method: "sendMessage" });
         await sendTelegramMessage(chatId, view.text, { inline_keyboard: view.keyboard });
+      }
+      return;
+    }
+
+    if (text === "/campanha2" || text.startsWith("/campanha2 ") || text === "/colecao" || text.startsWith("/colecao ")) {
+      if (chatId) {
+        logTelegramEvent("handler", { chat_id: chatId, handler: "collection_campaign_create", response_method: "sendMessage" });
+        await handleCollectionCampaignCommand(String(senderId), chatId, {
+          answerCallbackQuery,
+          editTelegramMessageText,
+          sendTelegramMessage,
+        });
       }
       return;
     }

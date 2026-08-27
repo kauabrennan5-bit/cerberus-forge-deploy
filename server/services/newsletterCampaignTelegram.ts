@@ -5,6 +5,7 @@ import {
   cancelCampaign,
   confirmGeneralSend,
   createCampaignForProduct,
+  createWeeklyCollectionCampaign,
   createWelcomeCampaignForSubscribers,
   renderCampaignTelegramPreview,
   retryFailedCampaign,
@@ -26,6 +27,11 @@ export type CampaignTelegramDeps = {
   store?: NewsletterCampaignStore;
   env?: NodeJS.ProcessEnv;
   productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>;
+  productsLoader?: () => Promise<import("../../src/types").Product[]>;
+  now?: Date;
+  collectionSince?: Date;
+  collectionUntil?: Date;
+  verifyImageAccessibility?: boolean;
 };
 
 export async function handleNewsletterCampaignCallback(
@@ -41,6 +47,25 @@ export async function handleNewsletterCampaignCallback(
 
   try {
     const store = deps.store || createSupabaseNewsletterCampaignStore();
+    if (data === "campaign_collection") {
+      const campaign = await createWeeklyCollectionCampaign(senderId, {
+        store,
+        env,
+        productsLoader: deps.productsLoader,
+        now: deps.now,
+        collectionSince: deps.collectionSince,
+        collectionUntil: deps.collectionUntil,
+        verifyImageAccessibility: deps.verifyImageAccessibility,
+      });
+      const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
+      await deps.answerCallbackQuery(callbackId, "Campanha 2 criada para aprovação.");
+      return renderCampaign(deps, chatId, messageId, pending, [
+        [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${pending.id}` }],
+        [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${pending.id}` }],
+        [{ text: "❌ Cancelar campanha", callback_data: `campaign_cancel:${pending.id}` }],
+      ]);
+    }
+
     if (data.startsWith("campaign_email:")) {
       const productId = data.slice("campaign_email:".length);
       const campaign = await createCampaignForProduct(productId, senderId, { store, env });
@@ -203,11 +228,42 @@ export async function handleNewsletterCampaignText(
     if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
     const updated = await updateCampaignSubjectAndPersist(campaign, text, { store, env: deps.env || process.env });
     await telegramRepo.deleteUserState(senderId);
-      if (chatId) await deps.sendTelegramMessage(chatId, `✅ Assunto atualizado.\n\n${renderCampaignTelegramPreview(updated, await getCampaignProduct(updated.productId, deps.productLoader))}`, campaignKeyboard(updated));
+      if (chatId) {
+        const collectionProducts = updated.campaignType === "collection" ? await getCampaignProducts(updated, deps.productLoader) : [];
+        const product = updated.campaignType === "welcome" || updated.campaignType === "collection"
+          ? null
+          : await getCampaignProduct(updated.productId, deps.productLoader);
+        await deps.sendTelegramMessage(chatId, `✅ Assunto atualizado.\n\n${renderCampaignTelegramPreview(updated, product, collectionProducts)}`, campaignKeyboard(updated));
+      }
   } catch (error) {
     if (chatId) await deps.sendTelegramMessage(chatId, `⚠️ ${campaignErrorMessage(error)}`);
   }
   return true;
+}
+
+export async function handleCollectionCampaignCommand(
+  senderId: string,
+  chatId: number | string | undefined,
+  deps: CampaignTelegramDeps,
+): Promise<boolean> {
+  try {
+    const store = deps.store || createSupabaseNewsletterCampaignStore();
+    const env = deps.env || process.env;
+    const campaign = await createWeeklyCollectionCampaign(senderId, {
+      store,
+      env,
+      productsLoader: deps.productsLoader,
+      now: deps.now,
+      collectionSince: deps.collectionSince,
+      collectionUntil: deps.collectionUntil,
+      verifyImageAccessibility: deps.verifyImageAccessibility,
+    });
+    const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
+    return renderCampaign(deps, chatId, undefined, pending, campaignKeyboard(pending));
+  } catch (error) {
+    if (chatId) await deps.sendTelegramMessage(chatId, `⚠️ ${campaignErrorMessage(error)}`);
+    return true;
+  }
 }
 
 export async function handleWelcomeCampaignCommand(
@@ -313,13 +369,22 @@ async function renderCampaign(
   keyboard: any[][],
 ): Promise<boolean> {
   if (!chatId) return true;
-  const product = campaign.campaignType === "welcome"
+  const collectionProducts = campaign.campaignType === "collection"
+    ? await getCampaignProducts(campaign, deps.productLoader)
+    : [];
+  const product = campaign.campaignType === "welcome" || campaign.campaignType === "collection"
     ? null
     : await getCampaignProduct(campaign.productId, deps.productLoader);
-  const text = renderCampaignTelegramPreview(campaign, product);
+  const text = renderCampaignTelegramPreview(campaign, product, collectionProducts);
   if (messageId) await deps.editTelegramMessageText(chatId, messageId, text, { inline_keyboard: keyboard });
   else await deps.sendTelegramMessage(chatId, text, { inline_keyboard: keyboard });
   return true;
+}
+
+async function getCampaignProducts(campaign: EmailCampaign, productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>) {
+  const products = await Promise.all(campaign.collectionProducts.map(link => getCampaignProduct(link.productId, productLoader)));
+  if (products.some(product => !product)) throw new Error("CAMPAIGN_COLLECTION_PRODUCT_NOT_FOUND");
+  return products as import("../../src/types").Product[];
 }
 
 async function getCampaignProduct(productId: string | null, productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>) {
@@ -351,7 +416,12 @@ function campaignErrorMessage(error: unknown): string {
     "CAMPAIGN_SUBJECT_INVALID",
     "CAMPAIGN_SUBJECT_LOCKED",
     "CAMPAIGN_TYPE_INVALID",
+    "CAMPAIGN_COLLECTION_PRODUCT_NOT_FOUND",
+    "CAMPAIGN_COLLECTION_SIZE_INVALID",
+    "CAMPAIGN_COLLECTION_MINIMUM_INVALID",
+    "CAMPAIGN_COLLECTION_DATE_WINDOW_INVALID",
     "WELCOME_PRODUCT_FORBIDDEN",
   ]);
+  if (message.startsWith("CAMPAIGN_COLLECTION_NOT_ENOUGH_PRODUCTS:")) return "CAMPAIGN_COLLECTION_NOT_ENOUGH_PRODUCTS";
   return known.has(message) ? message : "CAMPAIGN_OPERATION_FAILED";
 }

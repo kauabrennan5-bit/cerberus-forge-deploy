@@ -16,13 +16,19 @@ import {
 import {
   createCampaignDraft,
   transitionCampaign,
+  type CampaignProductLink,
   type EmailCampaign,
 } from "./newsletterCampaignState";
 import {
   renderNewsletterCampaign,
+  renderNewsletterCollectionCampaign,
   renderNewsletterWelcomeCampaign,
   UNSUBSCRIBE_URL_PLACEHOLDER,
 } from "./newsletterCampaignTemplate";
+import {
+  getStartOfCurrentIsoWeek,
+  selectNewestNewsletterProducts,
+} from "./newsletterCampaignCollection";
 import {
   getNewsletterInstitutionalOptions,
 } from "./newsletterInstitutional";
@@ -37,6 +43,9 @@ export type CampaignServiceOptions = {
   env?: NodeJS.ProcessEnv;
   now?: Date;
   productLoader?: (productId: string) => Promise<Product | null>;
+  productsLoader?: () => Promise<Product[]>;
+  collectionSince?: Date;
+  collectionUntil?: Date;
   provider?: NewsletterCampaignProvider;
   /** Probe injetável para validar acessibilidade da imagem principal sem duplicar lógica. */
   imageProbe?: ProductImageProbe;
@@ -74,6 +83,44 @@ export async function createCampaignForProduct(
   });
   const draft = createCampaignDraft(product.id, actorTelegramId, rendered, options.now || new Date(), campaignId);
   return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);
+}
+
+export async function createWeeklyCollectionCampaign(
+  actorTelegramId: string,
+  options: CampaignServiceOptions = {},
+): Promise<EmailCampaign> {
+  const env = options.env || process.env;
+  const now = options.now || new Date();
+  const campaignId = crypto.randomUUID();
+  const products = await (options.productsLoader || productsRepository.getProducts)();
+  const selection = await selectNewestNewsletterProducts(products, {
+    collectionSize: Number(env.NEWSLETTER_COLLECTION_SIZE || 10),
+    minimumProducts: Number(env.NEWSLETTER_COLLECTION_MINIMUM_PRODUCTS || 5),
+    since: options.collectionSince || getStartOfCurrentIsoWeek(now),
+    until: options.collectionUntil,
+    verifyImageAccessibility: options.verifyImageAccessibility !== false,
+    imageProbe: options.imageProbe,
+  });
+  const institutional = getNewsletterInstitutionalOptions(env);
+  const rendered = renderNewsletterCollectionCampaign(selection.products, {
+    subject: env.NEWSLETTER_COLLECTION_SUBJECT || undefined,
+    collectionTitle: `${selection.products.length} NOVOS ACHADOS`,
+    trackingCampaignId: campaignId,
+    privacyUrl: institutional.privacyUrl,
+    termsUrl: institutional.termsUrl,
+    socialLinks: institutional.socialLinks,
+    finalBrowseUrl: env.NEWSLETTER_COLLECTION_BROWSE_URL || undefined,
+  });
+  const collectionProducts: CampaignProductLink[] = selection.products.map((product, index) => ({
+    productId: product.id,
+    position: index + 1,
+    layout: index === 0 ? "feature" : "grid",
+  }));
+  const draft = createCampaignDraft(null, actorTelegramId, rendered, now, campaignId, "collection", collectionProducts);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const persisted = await store.createCampaign(draft);
+  await store.createCampaignProducts(persisted.id, collectionProducts);
+  return { ...persisted, collectionProducts };
 }
 
 export async function createWelcomeCampaignForSubscribers(
@@ -230,7 +277,24 @@ export async function processCampaignDryRun(
   });
 }
 
-export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: Product | null): string {
+export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: Product | null, collectionProducts: Product[] = []): string {
+  if (campaign.campaignType === "collection") {
+    return [
+      "📧 <b>PRÉVIA DE CAMPANHA</b>",
+      "Tipo: <b>Campanha 2 · coleção semanal</b>",
+      `Status: <code>${campaign.status}</code>`,
+      `Assunto: <b>${escapeTelegram(campaign.subject)}</b>`,
+      `Produtos na coleção: <b>${collectionProducts.length}</b>`,
+      collectionProducts.length > 0
+        ? collectionProducts.map((item, index) => `${index + 1}. ${escapeTelegram(item.displayTitle || item.produto)}`).join("\n")
+        : "Produtos: aguardando resolução da coleção.",
+      `Destinatários elegíveis: <b>${campaign.counts.total}</b>`,
+      `Sucesso: <b>${campaign.counts.success}</b> · Falhas: <b>${campaign.counts.failed}</b> · Ignorados: <b>${campaign.counts.skipped}</b>`,
+      "",
+      "Cada produto usa imagem canônica, CTA VER OFERTA e UTM individual.",
+      "O rodapé mantém disclosure de afiliado, links legais e descadastro individual.",
+    ].join("\n");
+  }
   if (campaign.campaignType === "welcome") {
     return [
       "📧 <b>PRÉVIA DE CAMPANHA</b>",

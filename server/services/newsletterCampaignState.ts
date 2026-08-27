@@ -11,8 +11,14 @@ export const EMAIL_CAMPAIGN_STATUSES = [
   "cancelled",
 ] as const;
 export type EmailCampaignStatus = (typeof EMAIL_CAMPAIGN_STATUSES)[number];
-export const EMAIL_CAMPAIGN_TYPES = ["product", "welcome"] as const;
+export const EMAIL_CAMPAIGN_TYPES = ["product", "welcome", "collection"] as const;
 export type EmailCampaignType = (typeof EMAIL_CAMPAIGN_TYPES)[number];
+
+export type CampaignProductLink = {
+  productId: string;
+  position: number;
+  layout: "feature" | "grid";
+};
 
 export type CampaignCounts = {
   total: number;
@@ -25,6 +31,8 @@ export type EmailCampaign = {
   id: string;
   campaignType: EmailCampaignType;
   productId: string | null;
+  /** Produtos ordenados da coleção; vazio para campanhas individuais e welcome. */
+  collectionProducts: CampaignProductLink[];
   subject: string;
   bodyHtml: string;
   bodyText: string;
@@ -68,6 +76,7 @@ export function createCampaignDraft(
   now = new Date(),
   id?: string,
   campaignType: EmailCampaignType = "product",
+  collectionProducts: CampaignProductLink[] = [],
 ): EmailCampaign {
   const actor = normalizeActor(createdByTelegramId);
   const campaignId = id || crypto.randomUUID();
@@ -80,10 +89,30 @@ export function createCampaignDraft(
   if (campaignType === "welcome" && productId !== null) {
     throw new CampaignStateError("WELCOME_PRODUCT_FORBIDDEN", "Campanha de boas-vindas não pode referenciar produto.");
   }
+  const normalizedCollectionProducts = collectionProducts.map(link => ({
+    productId: link.productId.trim(),
+    position: Math.trunc(link.position),
+    layout: link.layout,
+  }));
+  if (campaignType !== "collection" && normalizedCollectionProducts.length > 0) {
+    throw new CampaignStateError("COLLECTION_PRODUCTS_FORBIDDEN", "Somente campanhas collection podem referenciar vários produtos.");
+  }
+  if (campaignType === "collection") {
+    if (productId !== null) {
+      throw new CampaignStateError("COLLECTION_PRODUCT_FORBIDDEN", "Campanha collection não usa produto primário.");
+    }
+    if (normalizedCollectionProducts.length === 0 || normalizedCollectionProducts.some(link => !link.productId || link.position < 1 || !["feature", "grid"].includes(link.layout))) {
+      throw new CampaignStateError("COLLECTION_PRODUCTS_REQUIRED", "Campanha collection exige produtos ordenados.");
+    }
+    if (new Set(normalizedCollectionProducts.map(link => link.productId)).size !== normalizedCollectionProducts.length) {
+      throw new CampaignStateError("COLLECTION_PRODUCTS_DUPLICATE", "Campanha collection não pode repetir produto.");
+    }
+  }
   return {
     id: campaignId,
     campaignType,
     productId: productId?.trim() || null,
+    collectionProducts: normalizedCollectionProducts,
     subject: rendered.subject,
     bodyHtml: rendered.html,
     bodyText: rendered.text,

@@ -39,6 +39,7 @@ export const TELEGRAM_PANEL_COMMANDS: Array<{ command: string; description: stri
   { command: "discover", description: "Descobrir produtos por URL ou busca" },
   { command: "discover_batch", description: "Descoberta em lote" },
   { command: "campanhas", description: "Reabrir campanhas recentes" },
+  { command: "campanha2", description: "Criar campanha semanal multi-produto" },
   { command: "boasvindas", description: "Criar campanha de boas-vindas" },
   { command: "research", description: "Pesquisa de candidato" },
   { command: "assess", description: "Avaliação de candidato" },
@@ -92,6 +93,7 @@ export function renderReadPanelMenu(): string {
     "🔎 <b>DESCOBERTA E ANÁLISE</b>\n" +
     "/discover · /discover_batch\n" +
     "/campanhas — reabrir campanhas recentes\n" +
+    "/campanha2 — criar campanha semanal multi-produto\n" +
     "/boasvindas — criar campanha institucional de boas-vindas\n" +
     "/research · /assess\n" +
     "/priority · /opportunities · /risks\n\n" +

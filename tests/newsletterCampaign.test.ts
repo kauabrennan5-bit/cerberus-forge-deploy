@@ -5,10 +5,12 @@ import type { Product } from "../src/types.ts";
 import {
   createCampaignDraft,
   transitionCampaign,
+  type CampaignProductLink,
   type EmailCampaign,
 } from "../server/services/newsletterCampaignState.ts";
 import {
   renderNewsletterCampaign,
+  renderNewsletterCollectionCampaign,
   renderNewsletterProductCollection,
   renderNewsletterWelcomeCampaign,
   resolveCampaignOfferUrl,
@@ -40,6 +42,7 @@ import {
   retryFailedCampaign,
   sendCampaignTest,
   startGeneralSend,
+  createWeeklyCollectionCampaign,
 } from "../server/services/newsletterCampaignService.ts";
 import {
   campaignCompletionKeyboard,
@@ -50,6 +53,7 @@ import {
   renderRecentCampaignsForTelegram,
 } from "../server/services/newsletterCampaignTelegram.ts";
 import { TELEGRAM_PANEL_COMMANDS, renderReadPanelMenu } from "../server/services/telegramPanel.ts";
+import { getStartOfCurrentIsoWeek, selectNewestNewsletterProducts } from "../server/services/newsletterCampaignCollection.ts";
 
 const product: Product = {
   id: "prod-campaign-1",
@@ -70,13 +74,16 @@ const product: Product = {
 
 class FakeCampaignStore implements NewsletterCampaignStore {
   campaigns = new Map<string, EmailCampaign>();
+  campaignProducts = new Map<string, CampaignProductLink[]>();
   recipients: EmailCampaignRecipient[] = [];
   subscribers = new Map<string, { status: "subscribed" | "unsubscribed" | "suppressed"; marketing_consent: boolean }>();
   providerToken = "opaque-token-for-test-only";
   prepareCalls = 0;
 
   async createCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
-  async getCampaign(campaignId: string): Promise<EmailCampaign | null> { const value = this.campaigns.get(campaignId); return value ? structuredClone(value) : null; }
+  async createCampaignProducts(campaignId: string, products: CampaignProductLink[]): Promise<void> { this.campaignProducts.set(campaignId, structuredClone(products)); }
+  async listCampaignProducts(campaignId: string): Promise<CampaignProductLink[]> { return structuredClone(this.campaignProducts.get(campaignId) || []); }
+  async getCampaign(campaignId: string): Promise<EmailCampaign | null> { const value = this.campaigns.get(campaignId); return value ? { ...structuredClone(value), collectionProducts: structuredClone(this.campaignProducts.get(campaignId) || value.collectionProducts) } : null; }
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
   async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> { return [...this.campaigns.values()].slice(-Math.max(1, limit)).reverse().map(row => structuredClone(row)); }
   async createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number> {
@@ -164,9 +171,11 @@ function draft(id = "campaign-1"): EmailCampaign {
 
 test("telegram menu exposes campaign recovery and only valid command names", () => {
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanhas"), true);
+  assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanha2"), true);
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "discover-batch"), false);
   assert.equal(TELEGRAM_PANEL_COMMANDS.every(command => /^[a-z0-9_]+$/.test(command.command)), true);
   assert.match(renderReadPanelMenu(), /\/campanhas/);
+  assert.match(renderReadPanelMenu(), /\/campanha2/);
 });
 
 test("campaign list renders recovery buttons for existing statuses without touching recipients", () => {
@@ -944,4 +953,166 @@ test("canonical product and campaign renderers do not expose secrets or credenti
   const futureProduct = { ...product, id: "prod-secret-scan", imagens: ["https://img.example.test/safe.jpg"] };
   const html = renderNewsletterProductCollection([futureProduct], { trackingCampaignId: "campaign-safe" }).html;
   assert.doesNotMatch(html, /BREVO_API_KEY|SUPABASE_SERVICE_ROLE_KEY|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
+});
+
+
+function makeCollectionProduct(index: number, overrides: Partial<Product> = {}): Product {
+  const createdAt = new Date(Date.parse("2026-08-27T12:00:00.000Z") - index * 60 * 60 * 1000).toISOString();
+  return {
+    ...product,
+    id: `prod-collection-${index}`,
+    ref: `REF-C${String(index).padStart(2, "0")}`,
+    produto: `Achado editorial ${index}`,
+    displayTitle: `Achado editorial ${index}`,
+    imagens: [`https://img.example.test/collection-${index}.jpg`],
+    createdAt,
+    ...overrides,
+  };
+}
+
+test("weekly collection selector returns the newest configurable ten products", async () => {
+  const products = Array.from({ length: 12 }, (_, index) => makeCollectionProduct(index));
+  const selected = await selectNewestNewsletterProducts(products, {
+    collectionSize: 10,
+    minimumProducts: 5,
+    verifyImageAccessibility: false,
+  });
+  assert.equal(selected.products.length, 10);
+  assert.equal(selected.products[0].id, "prod-collection-0");
+  assert.equal(new Set(selected.products.map(item => item.id)).size, 10);
+});
+
+test("weekly collection selector accepts fewer available products when the configured minimum is met", async () => {
+  const products = Array.from({ length: 6 }, (_, index) => makeCollectionProduct(index));
+  const selected = await selectNewestNewsletterProducts(products, {
+    collectionSize: 10,
+    minimumProducts: 5,
+    verifyImageAccessibility: false,
+  });
+  assert.equal(selected.products.length, 6);
+});
+
+test("weekly collection selector skips unavailable products and reports explicit reasons", async () => {
+  const products = [
+    makeCollectionProduct(0, { imagens: [] }),
+    makeCollectionProduct(1, { imagens: ["http://img.example.test/insecure.jpg"] }),
+    makeCollectionProduct(2, { preco: 0 }),
+    makeCollectionProduct(3, { link: "not-a-url", paginaPonteUrl: "" }),
+    makeCollectionProduct(4),
+    makeCollectionProduct(5),
+    makeCollectionProduct(6),
+    makeCollectionProduct(7),
+    makeCollectionProduct(8),
+  ];
+  const selected = await selectNewestNewsletterProducts(products, {
+    collectionSize: 5,
+    minimumProducts: 5,
+    verifyImageAccessibility: false,
+  });
+  assert.deepEqual(selected.products.map(item => item.id), [
+    "prod-collection-4",
+    "prod-collection-5",
+    "prod-collection-6",
+    "prod-collection-7",
+    "prod-collection-8",
+  ]);
+  assert.match(selected.skipped.map(item => item.reason).join("|"), /PRODUCT_IMAGE_MISSING/);
+  assert.match(selected.skipped.map(item => item.reason).join("|"), /PRODUCT_IMAGE_HTTPS_INVALID/);
+  assert.match(selected.skipped.map(item => item.reason).join("|"), /PRODUCT_PRICE_INVALID/);
+  assert.match(selected.skipped.map(item => item.reason).join("|"), /PRODUCT_DESTINATION_URL_INVALID/);
+});
+
+test("weekly collection selector respects the current-week date window and fails when the minimum cannot be met", async () => {
+  const currentWeek = getStartOfCurrentIsoWeek(new Date("2026-08-27T15:00:00.000Z"));
+  const outside = makeCollectionProduct(0, { createdAt: "2026-08-20T12:00:00.000Z" });
+  const inside = Array.from({ length: 4 }, (_, index) => makeCollectionProduct(index + 1));
+  await assert.rejects(
+    () => selectNewestNewsletterProducts([outside, ...inside], {
+      collectionSize: 10,
+      minimumProducts: 5,
+      since: currentWeek,
+      until: new Date("2026-09-01T00:00:00.000Z"),
+      verifyImageAccessibility: false,
+    }),
+    /CAMPAIGN_COLLECTION_NOT_ENOUGH_PRODUCTS:4:5/,
+  );
+});
+
+test("collection renderer supports ten products, variable sizes, canonical images and individual UTMs", () => {
+  const products = Array.from({ length: 10 }, (_, index) => makeCollectionProduct(index));
+  const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-collection" });
+  assert.equal((rendered.html.match(/class="email-collection-image"/g) || []).length, 10);
+  assert.equal((rendered.html.match(/VER OFERTA/g) || []).length, 10);
+  assert.equal(rendered.offerUrls.length, 10);
+  assert.match(rendered.html, /email-collection-feature/);
+  assert.match(rendered.html, /email-collection-grid-table/);
+  assert.match(rendered.html, /email-collection-grid-cell/);
+  assert.match(rendered.offerUrls[0], /utm_content=prod-collection-0/);
+  assert.match(rendered.offerUrls[9], /utm_content=prod-collection-9/);
+  assert.match(rendered.text, /01\. Achado editorial 0/);
+
+  const variable = renderNewsletterProductCollection(products.slice(0, 6));
+  assert.equal((variable.html.match(/class="email-collection-image"/g) || []).length, 6);
+});
+
+test("full collection campaign keeps the Cerberus editorial shell and email safety constraints", () => {
+  const products = Array.from({ length: 8 }, (_, index) => makeCollectionProduct(index));
+  const rendered = renderNewsletterCollectionCampaign(products, {
+    trackingCampaignId: "campaign-collection-shell",
+    privacyUrl: "https://cerberusfinds.com/privacidade",
+    termsUrl: "https://cerberusfinds.com/termos",
+    finalBrowseUrl: "https://cerberusfinds.com/",
+    socialLinks: [{ label: "Instagram", url: "https://instagram.com/cerberusfinds" }],
+  });
+  assert.match(rendered.subject, /Novidades da semana/);
+  assert.match(rendered.html, /8 novos achados/i);
+  assert.match(rendered.html, /NOVIDADES/);
+  assert.match(rendered.html, /VER OFERTA/);
+  assert.match(rendered.html, /VER TODAS AS NOVIDADES/);
+  assert.match(rendered.html, /UNSUBSCRIBE_URL_PLACEHOLDER|\{\{UNSUBSCRIBE_URL\}\}/);
+  assert.match(rendered.html, /Política de privacidade/);
+  assert.match(rendered.html, /Termos e condições/);
+  assert.match(rendered.html, /Encontre a Cerberus Finds/);
+  assert.match(rendered.html, /background-color:#0B0908/);
+  assert.match(rendered.html, /background-color:#181512/);
+  assert.match(rendered.html, /@media only screen and \(max-width:620px\)/);
+  assert.doesNotMatch(rendered.html, /<script|gradient|mix-blend-mode|gmail-blend-screen|gmail-blend-difference|app store|google play|qr code|\bBREVO\b|\bSUPABASE\b|\bRender\b|email_campaign_products/i);
+  assert.doesNotMatch(rendered.html, /NEWSLETTER_TEST_EMAIL|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
+});
+
+test("collection campaign creation persists ordered associations without creating recipients", async () => {
+  const store = new FakeCampaignStore();
+  const products = Array.from({ length: 6 }, (_, index) => makeCollectionProduct(index));
+  const campaign = await createWeeklyCollectionCampaign("admin-collection", {
+    store,
+    productsLoader: async () => products,
+    collectionSince: new Date("2026-08-24T00:00:00.000Z"),
+    collectionUntil: new Date("2026-09-01T00:00:00.000Z"),
+    now: new Date("2026-08-27T15:00:00.000Z"),
+    verifyImageAccessibility: false,
+    env: {
+      DRY_RUN: "true",
+      PUBLIC_SITE_URL: "https://cerberusfinds.com",
+      NEWSLETTER_COLLECTION_SIZE: "6",
+      NEWSLETTER_COLLECTION_MINIMUM_PRODUCTS: "5",
+    },
+  });
+  assert.equal(campaign.campaignType, "collection");
+  assert.equal(campaign.status, "draft");
+  assert.equal(campaign.productId, null);
+  assert.equal(campaign.collectionProducts.length, 6);
+  assert.deepEqual(campaign.collectionProducts.map(link => link.position), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(campaign.collectionProducts.map(link => link.layout), ["feature", "grid", "grid", "grid", "grid", "grid"]);
+  assert.equal(store.recipients.length, 0);
+  assert.equal(store.campaignProducts.get(campaign.id)?.length, 6);
+});
+
+test("campaign 1 state remains single-product and cannot accept collection associations", () => {
+  assert.throws(
+    () => createCampaignDraft("prod-campaign-1", "admin-1", renderNewsletterCampaign(product), new Date(), "campaign-single", "product", [{ productId: "prod-extra", position: 1, layout: "feature" }]),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "COLLECTION_PRODUCTS_FORBIDDEN",
+  );
+  const individual = draft("campaign-still-individual");
+  assert.equal(individual.campaignType, "product");
+  assert.equal(individual.collectionProducts.length, 0);
 });
