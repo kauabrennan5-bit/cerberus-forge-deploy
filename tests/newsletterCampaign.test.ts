@@ -476,8 +476,8 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
   assert.doesNotMatch(rendered.html, /<td align="right"/);
   assert.match(rendered.html, /Curadoria independente/);
-  assert.match(rendered.html, /class="email-welcome-logo"[^>]+width="132" height="88"/);
-  assert.match(rendered.html, /class="email-welcome-brand-mark" width="144" height="98"/);
+  assert.match(rendered.html, /class="email-welcome-logo"[^>]+width="176" height="117"/);
+  assert.match(rendered.html, /class="email-welcome-brand-mark" width="190" height="128"/);
   assert.doesNotMatch(rendered.html, /data-ogsc=|data-ogsb=|\[data-ogsc\]|\[data-ogsb\]/);
   assert.match(rendered.html, /color="#E8E1D3"/);
   assert.match(rendered.html, /bgcolor="#0B0908"/);
@@ -1422,13 +1422,31 @@ test("GRID-2 reserves aligned title, price and CTA areas for varied editorial co
     makeCollectionProduct(2, { displayTitle: "Título muito longo para confirmar que a área editorial permanece previsível sem cortar o nome importante do produto", produto: "Título muito longo para confirmar que a área editorial permanece previsível sem cortar o nome importante do produto", categoria: "Casa e decoração", preco: 12999.99 }),
   ];
   const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-grid-heights" });
-  assert.equal((rendered.html.match(/class="email-collection-grid-image-cell" height="156"/g) || []).length, 2);
-  assert.equal((rendered.html.match(/class="email-collection-grid-title" height="72"/g) || []).length, 2);
-  assert.equal((rendered.html.match(/class="email-collection-grid-price" height="34"/g) || []).length, 2);
-  assert.equal((rendered.html.match(/class="email-collection-grid-action" height="45"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-image-cell" height="164"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-title" height="88"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-price" height="36"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-action" height="48"/g) || []).length, 2);
   assert.equal((rendered.html.match(/VER OFERTA/g) || []).length, 3);
   assert.equal(rendered.offerUrls.filter((url) => /utm_content=/.test(url)).length, 3);
   assert.doesNotMatch(rendered.html, /text-overflow|line-clamp|display\s*:\s*(?:flex|grid)/i);
+});
+
+test("editorial blocks have distinct treatments and collapse to one column at the required mobile breakpoint", () => {
+  const rendered = renderNewsletterCollectionCampaign(Array.from({ length: 7 }, (_, index) => makeCollectionProduct(index)), {
+    trackingCampaignId: "campaign-editorial-rhythm",
+  });
+  assert.match(rendered.html, /email-collection-feature-kicker/);
+  assert.match(rendered.html, /editorial-micro-a/);
+  assert.match(rendered.html, /editorial-micro-b/);
+  assert.match(rendered.html, /email-collection-horizontal-copy-table/);
+  assert.match(rendered.html, /email-collection-compact-table/);
+  assert.match(rendered.html, /@media only screen and \(max-width:620px\)/);
+  assert.match(rendered.html, /email-collection-grid-table,.email-collection-grid-table tbody,.email-collection-grid-table tr\{display:block!important;width:100%!important;\}/);
+  assert.match(rendered.html, /email-collection-grid-cell\{display:block!important;width:100%!important;padding:0 0 22px!important;/);
+  assert.doesNotMatch(rendered.html, /display\s*:\s*(?:flex|grid)|linear-gradient|position\s*:\s*absolute/i);
+  assert.doesNotMatch(rendered.html, /class="email-collection-grid-card"[^>]*style="[^"]*border-top/i);
+  assert.doesNotMatch(rendered.html, /class="email-collection-horizontal-table"[^>]*style="[^"]*border-(?:top|bottom)/i);
+  assert.doesNotMatch(rendered.html, /class="email-collection-compact-table"[^>]*style="[^"]*border-top/i);
 });
 
 test("collection quantities preserve one image, CTA and individual UTM per product", () => {
@@ -1471,8 +1489,8 @@ test("MASTHEAD is the first editorial block and Variant A is universal", () => {
   assert.equal(rendered.mastheadImageUrl, null);
   assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
   assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-official.png");
-  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="132" height="88"/);
-  assert.match(rendered.html, /class="email-masthead-brand-mark" width="144" height="98"/);
+  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="176" height="117"/);
+  assert.match(rendered.html, /class="email-masthead-brand-mark" width="190" height="128"/);
   assert.match(rendered.html, /alt="Logo Cerberus Finds"/);
   assert.match(rendered.html, /CERBERUS FINDS/);
   assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
@@ -1552,10 +1570,10 @@ test("full collection campaign keeps the Cerberus editorial shell and email safe
   assert.match(rendered.html, /background-color:#0B0908/);
   assert.match(rendered.html, /background-color:#181512/);
   assert.match(rendered.html, /@media only screen and \(max-width:620px\)/);
-  assert.match(rendered.html, /email-collection-grid-cell\{padding:0 4px 16px!important;/);
-  assert.match(rendered.html, /email-collection-grid-title\{height:58px!important;/);
-  assert.match(rendered.html, /@media only screen and \(max-width:374px\).*email-collection-grid-cell\{display:block!important;width:100%!important;/);
-  assert.match(rendered.html, /email-collection-grid-action a\{font-size:9px!important;padding:8px 8px!important;/);
+  assert.match(rendered.html, /email-collection-grid-table,.email-collection-grid-table tbody,.email-collection-grid-table tr\{display:block!important;width:100%!important;\}/);
+  assert.match(rendered.html, /email-collection-grid-cell\{display:block!important;width:100%!important;padding:0 0 22px!important;/);
+  assert.match(rendered.html, /email-collection-grid-title\{height:92px!important;/);
+  assert.match(rendered.html, /email-collection-grid-action a\{font-size:10px!important;padding:9px 12px!important;/);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
   assert.equal(imageTags.length, 10);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
