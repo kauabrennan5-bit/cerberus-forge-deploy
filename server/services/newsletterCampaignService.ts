@@ -38,6 +38,8 @@ import {
 } from "../../src/lib/productCanonical";
 import { normalizeNewsletterEmail } from "./newsletterConsent";
 
+const campaignTestLocks = new Map<string, Promise<void>>();
+
 export type CampaignServiceOptions = {
   store?: NewsletterCampaignStore;
   env?: NodeJS.ProcessEnv;
@@ -143,13 +145,35 @@ export async function createWelcomeCampaignForSubscribers(
   return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);
 }
 
+async function readCurrentCampaign(store: NewsletterCampaignStore, campaignId: string): Promise<EmailCampaign> {
+  const current = await store.getCampaign(campaignId);
+  if (!current) throw new Error("CAMPAIGN_NOT_FOUND");
+  return current;
+}
+
+async function withCampaignTestLock<T>(campaignId: string, operation: () => Promise<T>): Promise<T> {
+  const previous = campaignTestLocks.get(campaignId) || Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>(resolve => { release = resolve; });
+  campaignTestLocks.set(campaignId, tail);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (campaignTestLocks.get(campaignId) === tail) campaignTestLocks.delete(campaignId);
+  }
+}
+
 export async function submitCampaignForApproval(
   campaign: EmailCampaign,
   actorTelegramId: string,
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
-  const transitioned = transitionCampaign(campaign, { type: "submit_for_approval", actorTelegramId }, options.now || new Date());
-  return (options.store || createSupabaseNewsletterCampaignStore()).updateCampaign(transitioned);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const current = await readCurrentCampaign(store, campaign.id);
+  const transitioned = transitionCampaign(current, { type: "submit_for_approval", actorTelegramId }, options.now || new Date());
+  return store.updateCampaign(transitioned);
 }
 
 export async function approveCampaign(
@@ -157,8 +181,10 @@ export async function approveCampaign(
   actorTelegramId: string,
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
-  const transitioned = transitionCampaign(campaign, { type: "approve", actorTelegramId }, options.now || new Date());
-  return (options.store || createSupabaseNewsletterCampaignStore()).updateCampaign(transitioned);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const current = await readCurrentCampaign(store, campaign.id);
+  const transitioned = transitionCampaign(current, { type: "approve", actorTelegramId }, options.now || new Date());
+  return store.updateCampaign(transitioned);
 }
 
 export async function cancelCampaign(
@@ -166,8 +192,10 @@ export async function cancelCampaign(
   actorTelegramId: string,
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
-  const transitioned = transitionCampaign(campaign, { type: "cancel", actorTelegramId }, options.now || new Date());
-  return (options.store || createSupabaseNewsletterCampaignStore()).updateCampaign(transitioned);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const current = await readCurrentCampaign(store, campaign.id);
+  const transitioned = transitionCampaign(current, { type: "cancel", actorTelegramId }, options.now || new Date());
+  return store.updateCampaign(transitioned);
 }
 
 export async function updateCampaignSubjectAndPersist(
@@ -176,8 +204,10 @@ export async function updateCampaignSubjectAndPersist(
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
   const { updateCampaignSubject } = await import("./newsletterCampaignState");
-  const updated = updateCampaignSubject(campaign, subject);
-  return (options.store || createSupabaseNewsletterCampaignStore()).updateCampaign(updated);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const current = await readCurrentCampaign(store, campaign.id);
+  const updated = updateCampaignSubject(current, subject);
+  return store.updateCampaign(updated);
 }
 
 export async function sendCampaignTest(
@@ -185,46 +215,54 @@ export async function sendCampaignTest(
   actorTelegramId: string,
   options: CampaignServiceOptions = {},
 ): Promise<{ campaign: EmailCampaign; providerResult: NewsletterProviderResult }> {
-  if (campaign.status !== "approved") throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
-  const env = options.env || process.env;
-  const testEmail = getConfiguredNewsletterTestEmail(env);
-  if (!testEmail) throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
-  const store = options.store || createSupabaseNewsletterCampaignStore();
-  // The administrative test destination is intentionally outside the subscriber list.
-  // Real campaign recipients receive persisted canonical unsubscribe tokens in the worker.
-  const token = `campaign-test-token-${campaign.id}`;
-  const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
-  if (!publicBaseUrl) throw new Error("CAMPAIGN_PUBLIC_BASE_URL_MISSING");
-  const unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
-  const testSubject = `[Teste controlado] ${campaign.subject}`;
-  const htmlContent = campaign.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
-  const textContent = campaign.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
-  const provider: NewsletterCampaignProvider = options.provider || (env.DRY_RUN === "true"
-    ? createDryRunCampaignProvider()
-    : createBrevoNewsletterProvider({
-        apiKey: env.BREVO_API_KEY || "",
-        senderEmail: env.NEWSLETTER_SENDER_EMAIL || "",
-        senderName: env.NEWSLETTER_SENDER_NAME,
-        subject: campaign.subject,
-        timeoutMs: Number(env.NEWSLETTER_PROVIDER_TIMEOUT_MS || 15_000),
-      }));
-  const providerResult = await provider.sendCampaign({
-    campaignId: campaign.id,
-    recipientId: `test:${campaign.id}`,
-    subscriberEmail: testEmail,
-    subject: testSubject,
-    htmlContent,
-    textContent,
-    idempotencyKey: `campaign-test-v1:${campaign.id}`,
+  return withCampaignTestLock(campaign.id, async () => {
+    const env = options.env || process.env;
+    const store = options.store || createSupabaseNewsletterCampaignStore();
+    const current = await readCurrentCampaign(store, campaign.id);
+    if (current.status !== "approved") {
+      if (current.status === "test_sent" && current.testProviderMessageId?.trim()) {
+        throw new Error("CAMPAIGN_TEST_ALREADY_SENT");
+      }
+      throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
+    }
+    const testEmail = getConfiguredNewsletterTestEmail(env);
+    if (!testEmail) throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
+    // The administrative test destination is intentionally outside the subscriber list.
+    // Real campaign recipients receive persisted canonical unsubscribe tokens in the worker.
+    const token = `campaign-test-token-${current.id}`;
+    const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
+    if (!publicBaseUrl) throw new Error("CAMPAIGN_PUBLIC_BASE_URL_MISSING");
+    const unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
+    const testSubject = `[Teste controlado] ${current.subject}`;
+    const htmlContent = current.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
+    const textContent = current.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
+    const provider: NewsletterCampaignProvider = options.provider || (env.DRY_RUN === "true"
+      ? createDryRunCampaignProvider()
+      : createBrevoNewsletterProvider({
+          apiKey: env.BREVO_API_KEY || "",
+          senderEmail: env.NEWSLETTER_SENDER_EMAIL || "",
+          senderName: env.NEWSLETTER_SENDER_NAME,
+          subject: current.subject,
+          timeoutMs: Number(env.NEWSLETTER_PROVIDER_TIMEOUT_MS || 15_000),
+        }));
+    const providerResult = await provider.sendCampaign({
+      campaignId: current.id,
+      recipientId: `test:${current.id}`,
+      subscriberEmail: testEmail,
+      subject: testSubject,
+      htmlContent,
+      textContent,
+      idempotencyKey: `campaign-test-v1:${current.id}`,
+    });
+    const providerReference = providerResult.providerReference?.trim();
+    if (!providerReference) throw new Error("CAMPAIGN_TEST_PROVIDER_REFERENCE_MISSING");
+    const tested = transitionCampaign(current, {
+      type: "record_test_sent",
+      actorTelegramId,
+      providerReference,
+    }, options.now || new Date());
+    return { campaign: await store.updateCampaign(tested), providerResult };
   });
-  const providerReference = providerResult.providerReference?.trim();
-  if (!providerReference) throw new Error("CAMPAIGN_TEST_PROVIDER_REFERENCE_MISSING");
-  const tested = transitionCampaign(campaign, {
-    type: "record_test_sent",
-    actorTelegramId,
-    providerReference,
-  }, options.now || new Date());
-  return { campaign: await store.updateCampaign(tested), providerResult };
 }
 
 export async function confirmGeneralSend(
@@ -233,7 +271,8 @@ export async function confirmGeneralSend(
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
   const store = options.store || createSupabaseNewsletterCampaignStore();
-  const confirmed = transitionCampaign(campaign, { type: "confirm_general_send", actorTelegramId }, options.now || new Date());
+  const current = await readCurrentCampaign(store, campaign.id);
+  const confirmed = transitionCampaign(current, { type: "confirm_general_send", actorTelegramId }, options.now || new Date());
   return store.updateCampaign(confirmed);
 }
 
@@ -245,9 +284,10 @@ export async function startGeneralSend(
   const store = options.store || createSupabaseNewsletterCampaignStore();
   const env = options.env || process.env;
   const now = options.now || new Date();
-  const sending = transitionCampaign(campaign, { type: "begin_sending", actorTelegramId }, now);
-  await store.createEligibleRecipients(campaign.id, getConfiguredNewsletterTestEmail(env));
-  const counts = await store.summarizeRecipients(campaign.id);
+  const current = await readCurrentCampaign(store, campaign.id);
+  const sending = transitionCampaign(current, { type: "begin_sending", actorTelegramId }, now);
+  await store.createEligibleRecipients(current.id, getConfiguredNewsletterTestEmail(env));
+  const counts = await store.summarizeRecipients(current.id);
   if (counts.total === 0) {
     const completed = transitionCampaign(sending, { type: "finish_sending", actorTelegramId, counts }, now);
     return store.updateCampaign(completed);
@@ -261,9 +301,10 @@ export async function retryFailedCampaign(
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
   const store = options.store || createSupabaseNewsletterCampaignStore();
-  const retrying = transitionCampaign(campaign, { type: "retry_failed", actorTelegramId }, options.now || new Date());
-  await store.resetFailedRecipients(campaign.id);
-  const counts = await store.summarizeRecipients(campaign.id);
+  const current = await readCurrentCampaign(store, campaign.id);
+  const retrying = transitionCampaign(current, { type: "retry_failed", actorTelegramId }, options.now || new Date());
+  await store.resetFailedRecipients(current.id);
+  const counts = await store.summarizeRecipients(current.id);
   return store.updateCampaign({ ...retrying, counts });
 }
 

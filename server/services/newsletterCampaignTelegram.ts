@@ -15,10 +15,13 @@ import {
   updateCampaignSubjectAndPersist,
 } from "./newsletterCampaignService";
 import type { EmailCampaign } from "./newsletterCampaignState";
+import type { NewsletterCampaignProvider } from "./newsletterProvider";
 import {
   createSupabaseNewsletterCampaignStore,
   type NewsletterCampaignStore,
 } from "../repositories/newsletterCampaignRepository";
+
+const campaignCallbackLocks = new Map<string, Promise<void>>();
 
 export type CampaignTelegramDeps = {
   answerCallbackQuery: (callbackId: string, text?: string, showAlert?: boolean) => Promise<unknown>;
@@ -26,6 +29,7 @@ export type CampaignTelegramDeps = {
   sendTelegramMessage: (chatId: number | string, text: string, replyMarkup?: unknown) => Promise<unknown>;
   store?: NewsletterCampaignStore;
   env?: NodeJS.ProcessEnv;
+  provider?: NewsletterCampaignProvider;
   productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>;
   productsLoader?: () => Promise<import("../../src/types").Product[]>;
   now?: Date;
@@ -45,7 +49,31 @@ export async function handleNewsletterCampaignCallback(
   deps: CampaignTelegramDeps,
 ): Promise<boolean> {
   if (!data.startsWith("campaign_")) return false;
+  const campaignId = data.split(":")[1] || "";
+  if (!campaignId) return handleNewsletterCampaignCallbackOnce(data, callbackId, senderId, chatId, messageId, deps);
+  const previous = campaignCallbackLocks.get(campaignId) || Promise.resolve();
+  let release!: () => void;
+  const tail = new Promise<void>(resolve => { release = resolve; });
+  campaignCallbackLocks.set(campaignId, tail);
+  await previous;
+  try {
+    return await handleNewsletterCampaignCallbackOnce(data, callbackId, senderId, chatId, messageId, deps);
+  } finally {
+    release();
+    if (campaignCallbackLocks.get(campaignId) === tail) campaignCallbackLocks.delete(campaignId);
+  }
+}
+
+async function handleNewsletterCampaignCallbackOnce(
+  data: string,
+  callbackId: string,
+  senderId: string,
+  chatId: number | string | undefined,
+  messageId: number | undefined,
+  deps: CampaignTelegramDeps,
+): Promise<boolean> {
   const env = deps.env || process.env;
+  const campaignId = data.split(":")[1] || "";
 
   try {
     const store = deps.store || createSupabaseNewsletterCampaignStore();
@@ -64,7 +92,7 @@ export async function handleNewsletterCampaignCallback(
       });
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Campanha 2 criada para aprovação.");
-      return renderCampaign(deps, chatId, messageId, pending, [
+      return renderCampaignWithFallback(deps, chatId, messageId, pending, [
         [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${pending.id}` }],
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${pending.id}` }],
         [{ text: "❌ Cancelar campanha", callback_data: `campaign_cancel:${pending.id}` }],
@@ -76,7 +104,7 @@ export async function handleNewsletterCampaignCallback(
       const campaign = await createCampaignForProduct(productId, senderId, { store, env });
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia criada para aprovação.");
-      return renderCampaign(deps, chatId, messageId, pending, [
+      return renderCampaignWithFallback(deps, chatId, messageId, pending, [
         [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${pending.id}` }],
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${pending.id}` }],
         [{ text: "❌ Cancelar campanha", callback_data: `campaign_cancel:${pending.id}` }],
@@ -87,14 +115,13 @@ export async function handleNewsletterCampaignCallback(
       const campaign = await createWelcomeCampaignForSubscribers(senderId, { store, env });
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Campanha de boas-vindas criada para aprovação.");
-      return renderCampaign(deps, chatId, messageId, pending, [
+      return renderCampaignWithFallback(deps, chatId, messageId, pending, [
         [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${pending.id}` }],
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${pending.id}` }],
         [{ text: "❌ Cancelar campanha", callback_data: `campaign_cancel:${pending.id}` }],
       ]);
     }
 
-    const campaignId = data.split(":")[1] || "";
     const campaign = await store.getCampaign(campaignId);
     if (!campaign) {
       await deps.answerCallbackQuery(callbackId, "Campanha não encontrada ou expirada.", true);
@@ -103,54 +130,62 @@ export async function handleNewsletterCampaignCallback(
 
     if (data.startsWith("campaign_view:")) {
       await deps.answerCallbackQuery(callbackId);
-      return renderCampaign(deps, chatId, messageId, campaign, campaignKeyboard(campaign));
+      return renderCampaignWithFallback(deps, chatId, messageId, campaign, campaignKeyboard(campaign));
     }
 
     if (data.startsWith("campaign_submit:")) {
+      if (campaign.status !== "draft") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia enviada para aprovação.");
-      return renderCampaign(deps, chatId, messageId, pending, campaignKeyboard(pending));
+      return renderCampaignWithFallback(deps, chatId, messageId, pending, campaignKeyboard(pending));
     }
 
     if (data.startsWith("campaign_approve:")) {
+      if (campaign.status !== "pending_approval") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const approved = await approveCampaign(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia aprovada. Agora envie o teste controlado.");
-      return renderCampaign(deps, chatId, messageId, approved, campaignKeyboard(approved));
+      return renderCampaignWithFallback(deps, chatId, messageId, approved, campaignKeyboard(approved));
     }
 
     if (data.startsWith("campaign_test:")) {
-      const result = await sendCampaignTest(campaign, senderId, { store, env });
+      if (campaign.status !== "approved") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      const result = await sendCampaignTest(campaign, senderId, { store, env, provider: deps.provider });
       await deps.answerCallbackQuery(callbackId, result.providerResult.status === "duplicate" ? "Teste já processado." : "Teste processado.");
-      const rendered = await renderCampaign(deps, chatId, messageId, result.campaign, campaignKeyboard(result.campaign));
+      const rendered = await renderCampaignWithFallback(deps, chatId, messageId, result.campaign, campaignKeyboard(result.campaign));
       if (chatId) await deps.sendTelegramMessage(chatId, renderCampaignTestConfirmation(result.campaign, env.NEWSLETTER_TEST_EMAIL, env));
       return rendered;
     }
 
     if (data.startsWith("campaign_confirm_general:")) {
+      if (campaign.status !== "test_sent") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const confirmed = await confirmGeneralSend(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Confirmação registrada. Revise antes de iniciar o envio geral.");
-      return renderCampaign(deps, chatId, messageId, confirmed, campaignKeyboard(confirmed));
+      return renderCampaignWithFallback(deps, chatId, messageId, confirmed, campaignKeyboard(confirmed));
     }
 
     if (data.startsWith("campaign_start:")) {
+      if (campaign.status !== "test_sent" && campaign.status !== "failed") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const sending = await startGeneralSend(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Envio geral enfileirado.");
-      return renderCampaign(deps, chatId, messageId, sending, campaignKeyboard(sending));
+      return renderCampaignWithFallback(deps, chatId, messageId, sending, campaignKeyboard(sending));
     }
 
     if (data.startsWith("campaign_retry:")) {
+      if (campaign.status !== "failed") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const retrying = await retryFailedCampaign(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Retry enfileirado para falhas.");
-      return renderCampaign(deps, chatId, messageId, retrying, campaignKeyboard(retrying));
+      return renderCampaignWithFallback(deps, chatId, messageId, retrying, campaignKeyboard(retrying));
     }
 
     if (data.startsWith("campaign_cancel:")) {
+      if (campaign.status === "sent" || campaign.status === "cancelled") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const cancelled = await cancelCampaign(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Campanha cancelada.");
-      return renderCampaign(deps, chatId, messageId, cancelled, campaignKeyboard(cancelled));
+      return renderCampaignWithFallback(deps, chatId, messageId, cancelled, campaignKeyboard(cancelled));
     }
 
     if (data.startsWith("campaign_subject_edit:")) {
+      if (campaign.status !== "draft" && campaign.status !== "pending_approval") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       await telegramRepo.setUserState(senderId, { action: "campaign_subject", reviewId: campaign.id });
       await deps.answerCallbackQuery(callbackId, "Digite o novo assunto.");
       if (chatId) await deps.sendTelegramMessage(chatId, "✏️ <b>EDITAR ASSUNTO DA CAMPANHA</b>\n\nDigite um assunto entre 1 e 255 caracteres. Envie /cancelar para abandonar.");
@@ -160,8 +195,20 @@ export async function handleNewsletterCampaignCallback(
     await deps.answerCallbackQuery(callbackId, "Ação de campanha não suportada.", true);
     return true;
   } catch (error) {
-    await deps.answerCallbackQuery(callbackId, campaignErrorMessage(error), true);
-    if (chatId) await deps.sendTelegramMessage(chatId, `⚠️ ${campaignErrorMessage(error)}`);
+    const errorMessage = campaignErrorMessage(error);
+    await deps.answerCallbackQuery(callbackId, errorMessage, true);
+    if (chatId) {
+      await deps.sendTelegramMessage(chatId, `⚠️ ${errorMessage}`);
+      if (campaignId) {
+        try {
+          const store = deps.store || createSupabaseNewsletterCampaignStore();
+          const current = await store.getCampaign(campaignId);
+          if (current) await renderCampaignWithFallback(deps, chatId, messageId, current, campaignKeyboard(current));
+        } catch {
+          await deps.sendTelegramMessage(chatId, "⚠️ Não foi possível recarregar o estado atual da campanha.");
+        }
+      }
+    }
     return true;
   }
 }
@@ -241,7 +288,19 @@ export async function handleNewsletterCampaignText(
         await deps.sendTelegramMessage(chatId, `✅ Assunto atualizado.\n\n${renderCampaignTelegramPreview(updated, product, collectionProducts)}`, campaignKeyboard(updated));
       }
   } catch (error) {
-    if (chatId) await deps.sendTelegramMessage(chatId, `⚠️ ${campaignErrorMessage(error)}`);
+    const errorMessage = campaignErrorMessage(error);
+    if (chatId) {
+      await deps.sendTelegramMessage(chatId, `⚠️ ${errorMessage}`);
+      if (state?.reviewId) {
+        try {
+          const store = deps.store || createSupabaseNewsletterCampaignStore();
+          const current = await store.getCampaign(state.reviewId);
+          if (current) await renderCampaignWithFallback(deps, chatId, undefined, current, campaignKeyboard(current));
+        } catch {
+          await deps.sendTelegramMessage(chatId, "⚠️ Não foi possível recarregar o estado atual da campanha.");
+        }
+      }
+    }
   }
   return true;
 }
@@ -368,6 +427,40 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
   }
 }
 
+async function handleIncompatibleCampaignCallback(
+  deps: CampaignTelegramDeps,
+  callbackId: string,
+  chatId: number | string | undefined,
+  messageId: number | undefined,
+  campaign: EmailCampaign,
+): Promise<boolean> {
+  const statusMessage = `Ação ignorada de forma idempotente: o estado autoritativo atual é ${campaign.status}.`;
+  await deps.answerCallbackQuery(callbackId, statusMessage, true);
+  return renderCampaignWithFallback(deps, chatId, messageId, campaign, campaignKeyboard(campaign));
+}
+
+async function renderCampaignWithFallback(
+  deps: CampaignTelegramDeps,
+  chatId: number | string | undefined,
+  messageId: number | undefined,
+  campaign: EmailCampaign,
+  keyboard: any[][],
+): Promise<boolean> {
+  try {
+    return await renderCampaign(deps, chatId, messageId, campaign, keyboard);
+  } catch {
+    if (!chatId) return true;
+    const staleCardMessage = [
+      "⚠️ <b>CARTÃO DE CAMPANHA DESATUALIZADO</b>",
+      `Estado autoritativo: <code>${escapeTelegram(campaign.status)}</code>`,
+      "O cartão anterior não pôde ser redesenhado automaticamente.",
+      "Nenhuma ação adicional foi executada. Use a listagem de campanhas para reabrir o estado atual.",
+    ].join("\n");
+    await deps.sendTelegramMessage(chatId, staleCardMessage);
+    return true;
+  }
+}
+
 async function renderCampaign(
   deps: CampaignTelegramDeps,
   chatId: number | string | undefined,
@@ -415,7 +508,16 @@ function campaignErrorMessage(error: unknown): string {
     "CAMPAIGN_PRODUCT_NOT_ELIGIBLE",
     "CAMPAIGN_PRODUCT_NOT_FOUND",
     "CAMPAIGN_NOT_FOUND",
+    "CAMPAIGN_NOT_DRAFT",
+    "CAMPAIGN_NOT_PENDING_APPROVAL",
     "CAMPAIGN_TEST_REQUIRES_APPROVAL",
+    "CAMPAIGN_TEST_ALREADY_SENT",
+    "TEST_REQUIRED_AFTER_APPROVAL",
+    "CAMPAIGN_TERMINAL",
+    "RETRY_ONLY_FAILED_CAMPAIGN",
+    "GENERAL_SEND_GATE_REQUIRED",
+    "GENERAL_SEND_CONFIRMATION_REQUIRED",
+    "CAMPAIGN_NOT_SENDING",
     "NEWSLETTER_TEST_EMAIL_MISSING",
     "NEWSLETTER_TEST_EMAIL_NOT_ELIGIBLE",
     "CAMPAIGN_PUBLIC_BASE_URL_MISSING",

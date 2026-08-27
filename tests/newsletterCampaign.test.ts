@@ -544,6 +544,7 @@ test("campaign service enforces confirmation before persisting general sending",
   );
   assert.equal(store.recipients.length, 0);
   const confirmed = { ...tested, generalSendConfirmedAt: new Date().toISOString(), generalSendConfirmedByTelegramId: "admin-1" };
+  store.campaigns.set(confirmed.id, confirmed);
   const sending = await startGeneralSend(confirmed, "admin-1", { store });
   assert.equal(sending.status, "sending");
   assert.equal(sending.counts.total, 1);
@@ -785,6 +786,149 @@ test("Telegram callback approval/test paths use injected transports and mask the
   assert.equal(answers.length >= 2, true);
 });
 
+test("legitimate pending approval updates the Telegram card to approved with only the test gate", async () => {
+  const store = new FakeCampaignStore();
+  const pending = { ...draft("campaign-legitimate-approval"), status: "pending_approval" as const };
+  store.campaigns.set(pending.id, pending);
+  const markups: any[] = [];
+  const answers: string[] = [];
+  const deps = {
+    store,
+    productLoader: async () => product,
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async (_chat: number | string, _message: number, text: string, markup?: any) => { markups.push({ text, markup }); },
+    sendTelegramMessage: async () => undefined,
+  };
+  await handleNewsletterCampaignCallback(`campaign_approve:${pending.id}`, "callback-legitimate", "admin-1", 1, 776, deps);
+  assert.equal(store.campaigns.get(pending.id)?.status, "approved");
+  assert.match(answers[0], /Prévia aprovada/);
+  assert.match(markups[0].text, /Status: <code>approved<\/code>/);
+  assert.equal(markups[0].markup.inline_keyboard[0][0].callback_data, `campaign_test:${pending.id}`);
+  assert.equal(markups[0].markup.inline_keyboard.some((row: any[]) => row.some(button => String(button.callback_data).includes("campaign_confirm_general"))), false);
+});
+
+test("stale approval card reloads test_sent state and blocks without a provider call", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = {
+    ...draft("campaign-stale-approval"),
+    status: "test_sent" as const,
+    approvedAt: "2026-08-27T05:21:38.000Z",
+    approvedByTelegramId: "admin-1",
+    testSentAt: "2026-08-27T05:22:16.000Z",
+    testSentByTelegramId: "admin-1",
+    testProviderMessageId: "provider-reference-1",
+  };
+  store.campaigns.set(campaign.id, campaign);
+  const answers: string[] = [];
+  const edited: Array<{ text: string; markup?: any }> = [];
+  let providerCalls = 0;
+  const deps = {
+    store,
+    env: { NEWSLETTER_TEST_EMAIL: "operator@example.test", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberusfinds.com" },
+    productLoader: async () => product,
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async (_chat: number | string, _message: number, text: string, markup?: any) => { edited.push({ text, markup }); },
+    sendTelegramMessage: async () => undefined,
+  };
+  await handleNewsletterCampaignCallback(`campaign_approve:${campaign.id}`, "callback-stale", "admin-1", 1, 777, deps);
+  assert.equal(providerCalls, 0);
+  assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
+  assert.match(answers[0], /test_sent/);
+  assert.match(edited[0].text, /Status: <code>test_sent<\/code>/);
+  assert.equal(edited[0].markup.inline_keyboard[0][0].callback_data, `campaign_confirm_general:${campaign.id}`);
+});
+
+test("stale approval card reloads sent state and blocks without overwriting it", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = {
+    ...draft("campaign-stale-sent"),
+    status: "sent" as const,
+    approvedAt: "2026-08-27T05:21:38.000Z",
+    approvedByTelegramId: "admin-1",
+    testSentAt: "2026-08-27T05:22:16.000Z",
+    testSentByTelegramId: "admin-1",
+    testProviderMessageId: "provider-reference-2",
+    generalSendConfirmedAt: "2026-08-27T05:23:00.000Z",
+    generalSendConfirmedByTelegramId: "admin-1",
+    sentAt: "2026-08-27T05:24:00.000Z",
+  };
+  store.campaigns.set(campaign.id, campaign);
+  const answers: string[] = [];
+  const edited: string[] = [];
+  const deps = {
+    store,
+    productLoader: async () => product,
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async (_chat: number | string, _message: number, text: string) => { edited.push(text); },
+    sendTelegramMessage: async () => undefined,
+  };
+  await handleNewsletterCampaignCallback(`campaign_approve:${campaign.id}`, "callback-sent", "admin-1", 1, 778, deps);
+  assert.equal(store.campaigns.get(campaign.id)?.status, "sent");
+  assert.match(answers[0], /sent/);
+  assert.match(edited[0], /Status: <code>sent<\/code>/);
+});
+
+test("test_sent campaign rejects a second test before calling the provider", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = {
+    ...draft("campaign-second-test"),
+    status: "test_sent" as const,
+    approvedAt: "2026-08-27T05:21:38.000Z",
+    approvedByTelegramId: "admin-1",
+    testSentAt: "2026-08-27T05:22:16.000Z",
+    testSentByTelegramId: "admin-1",
+    testProviderMessageId: "provider-reference-3",
+  };
+  store.campaigns.set(campaign.id, campaign);
+  let calls = 0;
+  const answers: string[] = [];
+  const deps = {
+    store,
+    productLoader: async () => product,
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async () => undefined,
+    sendTelegramMessage: async () => undefined,
+  };
+  await handleNewsletterCampaignCallback(`campaign_test:${campaign.id}`, "callback-second-test", "admin-1", 1, 779, {
+    ...deps,
+    provider: { sendCampaign: async () => { calls += 1; return { status: "succeeded", providerReference: "must-not-be-used" }; } },
+  } as typeof deps & { provider?: NewsletterCampaignProvider });
+  assert.equal(calls, 0);
+  assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
+  assert.match(answers[0], /test_sent/);
+});
+
+test("two concurrent test callbacks produce one provider call and one persisted transition", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = { ...draft("campaign-concurrent-test"), status: "approved" as const };
+  store.campaigns.set(campaign.id, campaign);
+  let calls = 0;
+  const answers: string[] = [];
+  const deps = {
+    store,
+    env: { NEWSLETTER_TEST_EMAIL: "operator@example.test", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberusfinds.com" },
+    productLoader: async () => product,
+    provider: {
+      sendCampaign: async () => {
+        calls += 1;
+        await new Promise(resolve => setTimeout(resolve, 5));
+        return { status: "succeeded" as const, providerReference: "provider-concurrent-1" };
+      },
+    },
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async () => undefined,
+    sendTelegramMessage: async () => undefined,
+  };
+  await Promise.all([
+    handleNewsletterCampaignCallback(`campaign_test:${campaign.id}`, "callback-concurrent-1", "admin-1", 1, 780, deps),
+    handleNewsletterCampaignCallback(`campaign_test:${campaign.id}`, "callback-concurrent-2", "admin-1", 1, 781, deps),
+  ]);
+  assert.equal(calls, 1);
+  assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
+  assert.equal(store.recipients.length, 0);
+  assert.equal(answers.filter(answer => /test_sent/.test(answer)).length, 1);
+});
+
 test("Telegram confirmation callback re-renders the confirmed start button without creating recipients", async () => {
   const store = new FakeCampaignStore();
   const campaign = { ...draft("campaign-confirm-rerender"), status: "test_sent" as const };
@@ -955,6 +1099,60 @@ test("canonical product and campaign renderers do not expose secrets or credenti
   assert.doesNotMatch(html, /BREVO_API_KEY|SUPABASE_SERVICE_ROLE_KEY|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
 });
 
+test("closed editorial planner uses the exact sequence for 1, 3, 5 and 7 products", () => {
+  const expected: Record<number, string[]> = {
+    1: ["HERO", "MICROEDITORIAL"],
+    3: ["HERO", "MICROEDITORIAL", "GRID-2"],
+    5: ["HERO", "MICROEDITORIAL", "GRID-2", "MICROEDITORIAL", "DESTAQUE-HORIZONTAL", "COMPACTO"],
+    7: ["HERO", "MICROEDITORIAL", "GRID-2", "MICROEDITORIAL", "DESTAQUE-HORIZONTAL", "COMPACTO", "GRID-2"],
+  };
+  for (const [count, sequence] of Object.entries(expected)) {
+    const products = Array.from({ length: Number(count) }, (_, index) => makeCollectionProduct(index));
+    const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: `campaign-${count}` });
+    assert.deepEqual(rendered.blockSequence, sequence);
+    assert.equal(rendered.offerUrls.length, Number(count));
+    assert.equal(new Set(rendered.offerUrls).size, Number(count));
+    assert.equal((rendered.html.match(/class="email-collection-image"/g) || []).length, Number(count));
+    assert.equal((rendered.html.match(/VER OFERTA/g) || []).length, Number(count));
+    assert.equal(rendered.altCoverage?.descriptiveAltImages, Number(count));
+    assert.equal(rendered.altCoverage?.totalImages, Number(count));
+    for (const product of products) assert.match(rendered.offerUrls[products.indexOf(product)], new RegExp(`utm_content=${product.id}`));
+  }
+});
+
+test("collection visible surface uses only customer-safe fields and descriptive image alts", () => {
+  const internal = makeCollectionProduct(0, {
+    id: "db-internal-001",
+    ref: "REF-INTERNAL-001",
+    status: "archived",
+    lifecycleState: "archive_pending",
+    createdBy: "provider-secret-owner",
+    rawTitle: "BREVO_PROVIDER_ARCHIVE_TITLE",
+    createdAt: "2026-08-27T00:00:00.000Z",
+    categoria: "affiliate_preview",
+    displayTitle: "Luminária de Mesa em Vidro",
+    produto: "Luminária de Mesa em Vidro",
+  });
+  const rendered = renderNewsletterProductCollection([internal], { trackingCampaignId: "campaign-safe-fields" });
+  assert.deepEqual(rendered.publicFieldAudit?.rendered, ["displayTitle/produto", "preco/ofertaPromocional", "categoria pública", "imagens canônicas", "destino rastreável"]);
+  assert.ok(rendered.publicFieldAudit?.excludedInternal.includes("status"));
+  assert.ok(rendered.publicFieldAudit?.excludedInternal.includes("providerRef"));
+  assert.doesNotMatch(rendered.text, /db-internal-001|REF-INTERNAL-001|archive_pending|provider-secret-owner|BREVO_PROVIDER_ARCHIVE_TITLE|affiliate_preview|AFILIADO/i);
+  const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
+  assert.equal(imageTags.length, 1);
+  assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
+  assert.doesNotMatch(rendered.html, /display\s*:\s*(?:flex|grid)|linear-gradient|mix-blend-mode|<script/i);
+});
+
+
+test("known marketplace image overlays fail closed instead of being silently cropped", () => {
+  const overlaid = makeCollectionProduct(0, { imageEditorialStatus: "overlay_suspected" });
+  assert.throws(
+    () => renderNewsletterProductCollection([overlaid]),
+    /NEWSLETTER_COLLECTION_IMAGE_OVERLAY_SUSPECTED:1/,
+  );
+});
+
 
 function makeCollectionProduct(index: number, overrides: Partial<Product> = {}): Product {
   const createdAt = new Date(Date.parse("2026-08-27T12:00:00.000Z") - index * 60 * 60 * 1000).toISOString();
@@ -1076,6 +1274,9 @@ test("full collection campaign keeps the Cerberus editorial shell and email safe
   assert.match(rendered.html, /background-color:#0B0908/);
   assert.match(rendered.html, /background-color:#181512/);
   assert.match(rendered.html, /@media only screen and \(max-width:620px\)/);
+  const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
+  assert.equal(imageTags.length, 9);
+  assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /<script|gradient|mix-blend-mode|gmail-blend-screen|gmail-blend-difference|app store|google play|qr code|\bBREVO\b|\bSUPABASE\b|\bRender\b|email_campaign_products/i);
   assert.doesNotMatch(rendered.html, /NEWSLETTER_TEST_EMAIL|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
 });
