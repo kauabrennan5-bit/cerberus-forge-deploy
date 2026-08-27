@@ -28,7 +28,7 @@ import {
   setupPreviewTelegramRoutes,
   setTestPreviewRegistryForTests,
 } from "../server/routes/previewTelegramRoutes";
-import { setTestFindExistingProduct } from "../server/services/productAutomation";
+import { setTestFindExistingProduct, setTestImageReview } from "../server/services/productAutomation";
 import { handleTelegramWebhookUpdate } from "../server/services/telegramBot";
 import { createProductionProductPipeline } from "../server/services/productPipeline";
 
@@ -250,6 +250,13 @@ test.beforeEach(() => {
   process.env.TELEGRAM_BOT_TOKEN = "mock-telegram-bot-token";
   installFakeFindExistingProduct();
   setScraperHtml({ empty: false });
+  setTestImageReview(async (images) => ({
+    status: "ready",
+    rawImageUrls: images,
+    primaryImageUrl: images.at(0),
+    galleryImageUrls: images.slice(1),
+    assessments: images.map((url) => ({ url, decision: "clean", confidence: "HIGH", reason: "fixture visual limpo" })),
+  }));
 });
 
 test.afterEach(() => {
@@ -257,6 +264,7 @@ test.afterEach(() => {
   restoreTelegramRepo();
   restoreFindExistingProduct();
   setTestPreviewRegistryForTests();
+  setTestImageReview(null);
   delete process.env.ADMIN_PASSWORD;
   delete process.env.TELEGRAM_ALLOWED_USER_IDS;
   delete process.env.SHOPEE_APP_ID;
@@ -524,7 +532,7 @@ test("scraper com anúncio bloqueado → fail-closed 424 (sem card e sem review)
     // a mensagem de bloqueio anti-bot ou o código interno de extração.
     const reason = String(res.body.failureReason ?? res.body.error);
     assert.ok(
-      /scraper_extraction_failed|bloqueou a requisição|bloqueio anti-bot/.test(reason),
+      /scraper_extraction_failed|IMAGE_REVIEW_REQUIRED|bloqueou a requisição|bloqueio anti-bot/.test(reason),
       `failureReason indica falha de extração/bloqueio: ${reason}`,
     );
     // Nada chega ao Telegram e nada é persistido.
@@ -539,7 +547,7 @@ test("scraper com item divergente → fail-closed 424 por identidade",
     // O nó oficial pertence a shop_id=1530442944/item_id=23794344926, mas a URL
     // informada (a mesma retornada pelo productLink oficial) aponta para OUTRO
     // item — o fake serve o HTML do item 99999999999/88888888888.
-    setScraperHtml({ title: "Item Divergente de Teste" });
+    setScraperHtml({ title: "Luminária Divergente de Teste" });
     const nodes = DEFAULT_NODES.map((n) => ({
       ...n,
       productLink: "https://shopee.com.br/outro-i.99999999999.88888888888",

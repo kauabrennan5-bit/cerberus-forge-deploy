@@ -1,4 +1,5 @@
 import type { Product } from '../types';
+import { resolvePublicProductCategory } from './productCategory';
 
 /**
  * Seleciona exclusivamente o texto seguro para a vitrine. O título canônico
@@ -8,6 +9,18 @@ import type { Product } from '../types';
 export function getProductDisplayTitle(product: Pick<Product, 'produto' | 'displayTitle'>): string {
   const displayTitle = product.displayTitle?.replace(/\s+/g, ' ').trim();
   return displayTitle || product.produto.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Mantém site e e-mail na mesma taxonomia pública e impede vazamento de
+ * categorias internas como "AFILIADO". A inferência usa o conteúdo do item,
+ * nunca IDs ou mapas específicos de produto.
+ */
+export function getProductDisplayCategory(product: Pick<Product, 'categoria' | 'produto' | 'displayTitle' | 'descricao'>): string {
+  return resolvePublicProductCategory(product.categoria, {
+    title: product.displayTitle || product.produto,
+    description: product.descricao,
+  });
 }
 
 export interface ProductCardPricePresentation {

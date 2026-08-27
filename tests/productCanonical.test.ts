@@ -8,13 +8,15 @@ import {
   toCanonicalProduct,
 } from "../src/lib/productCanonical.ts";
 import type { Product } from "../src/types.ts";
+import { curateProductImages } from "../src/lib/productImageCuration.ts";
+import { getProductDisplayCategory } from "../src/lib/productPresentation.ts";
 
 const baseProduct: Product = {
   id: "prod-canonical-test",
   ref: "REF-CANONICAL",
   produto: "Produto canônico de teste",
   displayTitle: "Produto canônico de teste",
-  categoria: "Teste",
+  categoria: "Decoração",
   descricao: "Descrição suficiente para o teste local.",
   preco: 99.9,
   imagens: ["https://cdn.example.test/primary.jpg"],
@@ -24,19 +26,39 @@ const baseProduct: Product = {
   destaque: false,
 };
 
-test("resolve the first valid HTTPS image in database order", () => {
-  const result = resolveCanonicalProductImage({
-    imagens: [
-      "https://cdn.example.test/first.jpg",
-      "https://cdn.example.test/second.jpg",
-    ],
-  });
-  assert.equal(result.status, "ready");
-  assert.equal(result.primaryImageUrl, "https://cdn.example.test/first.jpg");
-  assert.deepEqual(result.publicHttpsImageUrls, [
-    "https://cdn.example.test/first.jpg",
-    "https://cdn.example.test/second.jpg",
+test("selects the only clean commercial image among five candidates", () => {
+  const images = Array.from({ length: 5 }, (_, index) => `https://cdn.example.test/image-${index + 1}.jpg`);
+  const curation = curateProductImages(images, [
+    ...images.slice(0, 4).map(url => ({ url, decision: "technical" as const, confidence: "HIGH" as const, reason: "medidas embutidas" })),
+    { url: images[4], decision: "clean", confidence: "HIGH", reason: "produto isolado sem overlay" },
   ]);
+  assert.equal(curation.status, "ready");
+  assert.equal(curation.primaryImageUrl, images[4]);
+  assert.deepEqual(curation.galleryImageUrls, []);
+  const result = resolveCanonicalProductImage({ imagens: [images[4]], imageCuration: curation, imageEditorialStatus: "clean" });
+  assert.equal(result.primaryImageUrl, images[4]);
+  assert.deepEqual(result.rawImageUrls, images);
+});
+
+test("blocks a product when every candidate image is technical", () => {
+  const images = ["https://cdn.example.test/technical-a.jpg", "https://cdn.example.test/technical-b.jpg"];
+  const curation = curateProductImages(images, images.map(url => ({ url, decision: "technical" as const, confidence: "HIGH" as const, reason: "cotas visíveis" })));
+  assert.equal(curation.status, "review_required");
+  assert.equal(curation.reason, "no_commercial_image");
+  const result = resolveCanonicalProductImage({ imagens: images, imageCuration: curation, imageEditorialStatus: "review_required" });
+  assert.equal(result.status, "incomplete");
+  assert.equal(result.reason, "image_review_required");
+});
+
+test("canonical image resolution does not choose an unreviewed first raw image", () => {
+  const raw = ["https://cdn.example.test/technical.jpg", "https://cdn.example.test/clean.jpg"];
+  const curation = curateProductImages(raw, [
+    { url: raw[0], decision: "technical", confidence: "HIGH", reason: "overlay" },
+    { url: raw[1], decision: "clean", confidence: "HIGH", reason: "clean" },
+  ]);
+  const result = resolveCanonicalProductImage({ imagens: [raw[1]], imageCuration: curation, imageEditorialStatus: "clean" });
+  assert.equal(result.primaryImageUrl, raw[1]);
+  assert.deepEqual(result.galleryImageUrls, []);
 });
 
 test("ignores invalid, empty, HTTP and private image candidates while preserving valid order", () => {
@@ -88,6 +110,44 @@ test("fails readiness when the injected image probe reports inaccessible", async
   assert.match(readiness.errors.join(","), /PRODUCT_IMAGE_INACCESSIBLE/);
 });
 
+test("readiness blocks internal category and image review required", async () => {
+  const readiness = await assessProductReadiness({
+    ...baseProduct,
+    categoria: "affiliate_preview",
+    imageEditorialStatus: "review_required",
+    imageCuration: {
+      status: "review_required",
+      rawImageUrls: baseProduct.imagens,
+      galleryImageUrls: [],
+      assessments: [],
+      reason: "no_commercial_image",
+    },
+  }, { channel: "campaign", verifyImageAccessibility: false });
+  assert.equal(readiness.ready, false);
+  assert.match(readiness.errors.join(","), /IMAGE_REVIEW_REQUIRED/);
+  assert.match(readiness.errors.join(","), /PUBLIC_CATEGORY_REVIEW_REQUIRED/);
+});
+
+test("clean visual curation satisfies commercial image readiness", async () => {
+  const primary = "https://cdn.example.test/clean-primary.jpg";
+  const curation = curateProductImages([primary], [{ url: primary, decision: "clean", confidence: "HIGH", reason: "produto isolado" }]);
+  const readiness = await assessProductReadiness({
+    ...baseProduct,
+    categoria: "Decoração",
+    imagens: [primary],
+    imageCuration: curation,
+    imageEditorialStatus: "clean",
+  }, { channel: "campaign", verifyImageAccessibility: false });
+  assert.equal(readiness.ready, true);
+  assert.equal(readiness.product.primaryImageUrl, primary);
+});
+
+test("site, email and Telegram category projection share the same public lighting label", () => {
+  const product = { ...baseProduct, produto: "Abajur LED Cogumelo", displayTitle: "Abajur LED Cogumelo", categoria: "affiliate_preview" };
+  assert.equal(getProductDisplayCategory(product), "Iluminação");
+  assert.equal(toCanonicalProduct(product).category, "Iluminação");
+});
+
 test("accepts an REF-016-shaped product without any product-id lookup", async () => {
   const ref016: Product = {
     ...baseProduct,
@@ -126,12 +186,14 @@ test("main visual consumers use the shared canonical image resolver", () => {
     "server/services/newsletterCampaignService.ts",
     "server/services/newsletterCampaignTemplate.ts",
     "server/services/telegramBot.ts",
+    "server/routes/previewTelegramRoutes.ts",
+    "server/services/shopeeCommand.ts",
     "scripts/productOpenGraph.js",
   ];
   for (const relativePath of consumers) {
     const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
     assert.match(source, /resolveCanonicalProductImage|assessProductReadiness/);
-    assert.doesNotMatch(source, /imagens[^\\n]*\\[0\\]/);
+    assert.doesNotMatch(source, /(?:imagens|images|finalImages)[^\\n]*\\[0\\]/);
   }
 });
 

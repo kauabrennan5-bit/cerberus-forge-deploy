@@ -274,7 +274,13 @@ export interface PendingReview {
   curatorNote?: string;
   categoria: string;
   preco: number;
+  /** Imagens comerciais ordenadas: principal canônica seguida da galeria revisada. */
   imagens: string[];
+  /** URLs observadas na fonte, preservadas para auditoria da revisão. */
+  imagensOriginais?: string[];
+  imagemPrincipal?: string;
+  imagensGaleria?: string[];
+  imageEditorialStatus?: "clean" | "review_required" | "overlay_suspected";
   normalizedUrl: string;
   descricao?: string;
   status?: "pending" | "publishing" | "published" | "cancelled" | "expired" | "rejected" | "error";
@@ -368,6 +374,10 @@ async function refreshReviewLifecycle(review: PendingReview): Promise<LifecycleR
     categoria: review.categoria,
     preco: review.preco > 0 ? review.preco : null,
     imagens: review.imagens,
+    imagensOriginais: review.imagensOriginais,
+    imagemPrincipal: review.imagemPrincipal,
+    imagensGaleria: review.imagensGaleria,
+    imageEditorialStatus: review.imageEditorialStatus,
     normalizedUrl: review.normalizedUrl,
     descricao: review.descricao || "",
     marketplace: detectMarketplace(review.normalizedUrl),
@@ -406,11 +416,42 @@ function getPublicationCompletenessErrors(review: PendingReview): string[] {
   if (!displayTitle || displayTitle === rawTitle) errors.push("título editorial ausente");
   if (!Number.isFinite(review.preco) || review.preco <= 0) errors.push("preço válido ausente");
   if (!Array.isArray(review.imagens) || review.imagens.filter((image) => typeof image === "string" && image.trim()).length === 0) {
-    errors.push("imagem válida ausente");
+    errors.push("imagem comercial válida ausente");
   }
+  if (review.imageEditorialStatus === "review_required" || review.imageEditorialStatus === "overlay_suspected") errors.push("IMAGE_REVIEW_REQUIRED");
   if (description.length < 24) errors.push("descrição editorial ausente");
 
   return errors;
+}
+
+function getReviewImageCandidate(review: PendingReview): {
+  imagens: string[];
+  imagensOriginais: string[];
+  imagemPrincipal?: string;
+  imagensGaleria: string[];
+  imageCuration?: {
+    status: "ready";
+    rawImageUrls: string[];
+    primaryImageUrl: string;
+    galleryImageUrls: string[];
+    assessments: [];
+  };
+  imageEditorialStatus: "clean" | "review_required";
+} {
+  const canonical = resolveCanonicalProductImage(review);
+  const primaryImageUrl = review.imagemPrincipal || canonical.primaryImageUrl;
+  const galleryImageUrls = review.imagensGaleria ?? canonical.galleryImageUrls;
+  const ready = Boolean(primaryImageUrl && canonical.status === "ready");
+  return {
+    imagens: canonical.publicHttpsImageUrls,
+    imagensOriginais: review.imagensOriginais ?? canonical.rawImageUrls,
+    imagemPrincipal: primaryImageUrl,
+    imagensGaleria: galleryImageUrls,
+    imageCuration: ready && primaryImageUrl
+      ? { status: "ready", rawImageUrls: review.imagensOriginais ?? canonical.rawImageUrls, primaryImageUrl, galleryImageUrls, assessments: [] }
+      : undefined,
+    imageEditorialStatus: review.imageEditorialStatus === "clean" ? "clean" : review.imageEditorialStatus ? "review_required" : (ready ? "clean" : "review_required"),
+  };
 }
 
 function logAndValidateReviewCallback(
@@ -1329,7 +1370,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           curatorNote: review.curatorNote,
           categoria: review.categoria,
           preco: review.preco,
-          imagens: review.imagens,
+          ...getReviewImageCandidate(review),
           normalizedUrl: review.normalizedUrl,
           link: publicationLink.link,
           descricao: stripRawAffiliateProvenance(review.descricao),
@@ -1783,7 +1824,7 @@ async function renderCycleState(input: string): Promise<string> {
             curatorNote: review.curatorNote,
             categoria: review.categoria,
             preco: review.preco,
-            imagens: review.imagens,
+            ...getReviewImageCandidate(review),
             normalizedUrl: review.normalizedUrl,
             link: publicationLink.link || review.normalizedUrl,
             descricao: review.descricao,

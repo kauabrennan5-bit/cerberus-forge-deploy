@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 // Mobile refinement: preserve the existing archival grid while making filters, headings, and controls wrap within the viewport.
 import { Product } from '../types';
-import { getProductDisplayTitle } from '../lib/productPresentation';
+import { getProductDisplayCategory, getProductDisplayTitle } from '../lib/productPresentation';
 import { ProductCard } from './ProductCard';
 import { Search, RefreshCw, AlertCircle, Sparkles, ChevronDown, ChevronUp, ArrowUpRight, X, Heart } from 'lucide-react';
 import { CerberusLogo } from './CerberusLogo';
@@ -57,7 +57,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
   const categories = useMemo(() => {
     return BASE_CATEGORIES.map((name) => ({
       name,
-      count: products.filter((product) => product.categoria.toLowerCase() === name.toLowerCase()).length,
+      count: products.filter((product) => getProductDisplayCategory(product).toLowerCase() === name.toLowerCase()).length,
     }));
   }, [products]);
 
@@ -72,14 +72,14 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
       // Category filter
       const matchesCategory =
         selectedCategory === 'Todos' ||
-        product.categoria.toLowerCase() === selectedCategory.toLowerCase();
+        getProductDisplayCategory(product).toLowerCase() === selectedCategory.toLowerCase();
 
       // Search filter
       const query = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !query ||
         getProductDisplayTitle(product).toLowerCase().includes(query) ||
-        product.categoria.toLowerCase().includes(query);
+        getProductDisplayCategory(product).toLowerCase().includes(query);
 
       return matchesCategory && matchesSearch;
     });

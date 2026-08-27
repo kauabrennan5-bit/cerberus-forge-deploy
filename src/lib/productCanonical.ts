@@ -2,13 +2,19 @@ import type { Product } from "../types";
 
 export type ProductChannel = "site" | "card" | "newsletter" | "campaign" | "bridge";
 
+import type { ProductImageCuration } from "./productImageCuration";
+import { resolvePublicProductCategory } from "./productCategory";
+
 export type CanonicalProductImageResolution = {
   status: "ready" | "incomplete";
   allImageUrls: string[];
   publicHttpsImageUrls: string[];
-  /** Primeira imagem pública HTTPS, apta para todos os renderers. */
+  rawImageUrls: string[];
+  galleryImageUrls: string[];
+  /** Imagem principal aprovada pela curadoria; nunca escolhida por consumer. */
   primaryImageUrl?: string;
-  reason?: "missing" | "no_valid_https_image";
+  curation?: ProductImageCuration;
+  reason?: "missing" | "no_valid_https_image" | "image_review_required";
 };
 
 export type CanonicalProduct = {
@@ -19,6 +25,8 @@ export type CanonicalProduct = {
   category: string;
   description: string;
   imageUrls: string[];
+  rawImageUrls: string[];
+  galleryImageUrls: string[];
   primaryImageUrl?: string;
   primaryUsableImageUrl?: string;
   destinationUrl: string;
@@ -37,31 +45,37 @@ export type ProductReadiness = {
 
 export type ProductImageProbe = (url: string) => Promise<boolean>;
 
-/**
- * Fonte canônica compartilhada pelos canais: a ordem de `products.imagens`
- * é preservada e a primeira URL HTTPS pública é a imagem principal. Nenhum
- * mapa por product ID participa desta decisão.
+  /**
+ * Fonte canônica compartilhada pelos canais. Produtos novos carregam
+ * `imageCuration` e só a imagem principal aprovada pode virar primary; a
+ * persistência legada continua sendo lida para compatibilidade, mas não há
+ * escolha arbitrária em consumidores nem mapa por product ID.
  */
-export function resolveCanonicalProductImage(product: Pick<Product, "imagens">): CanonicalProductImageResolution {
+export function resolveCanonicalProductImage(product: Pick<Product, "imagens"> & Partial<Pick<Product, "imageCuration" | "imageEditorialStatus">>): CanonicalProductImageResolution {
   const allImageUrls = normalizeProductImageUrls(product.imagens);
-  const publicHttpsImageUrls = allImageUrls.filter(isPublicHttpsImageUrl);
-  const primaryImageUrl = publicHttpsImageUrls[0];
+  const curation = product.imageCuration;
+  const rawImageUrls = normalizeProductImageUrls(curation?.rawImageUrls ?? allImageUrls);
+  const observedHttpsImageUrls = allImageUrls.filter(isPublicHttpsImageUrl);
+  const curatedPrimary = curation?.status === "ready" && curation.primaryImageUrl && isPublicHttpsImageUrl(curation.primaryImageUrl)
+    ? curation.primaryImageUrl
+    : undefined;
+  const curatedGallery = curation?.status === "ready"
+    ? normalizeProductImageUrls(curation.galleryImageUrls).filter(isPublicHttpsImageUrl)
+    : [];
+  const publicHttpsImageUrls = curatedPrimary
+    ? [curatedPrimary, ...curatedGallery.filter(url => url !== curatedPrimary)]
+    : observedHttpsImageUrls;
+  const galleryImageUrls = curatedPrimary ? publicHttpsImageUrls.slice(1) : normalizeProductImageUrls(curation?.galleryImageUrls ?? observedHttpsImageUrls.slice(1));
+  const primaryImageUrl = curatedPrimary || publicHttpsImageUrls.at(0);
 
+  if (product.imageEditorialStatus === "review_required" || product.imageEditorialStatus === "overlay_suspected" || curation?.status === "review_required") {
+    return { status: "incomplete", allImageUrls, publicHttpsImageUrls: [], rawImageUrls, galleryImageUrls: [], curation, reason: "image_review_required" };
+  }
   if (!primaryImageUrl) {
-    return {
-      status: "incomplete",
-      allImageUrls,
-      publicHttpsImageUrls,
-      reason: allImageUrls.length === 0 ? "missing" : "no_valid_https_image",
-    };
+    return { status: "incomplete", allImageUrls, publicHttpsImageUrls, rawImageUrls, galleryImageUrls, curation, reason: allImageUrls.length === 0 ? "missing" : "no_valid_https_image" };
   }
 
-  return {
-    status: "ready",
-    allImageUrls,
-    publicHttpsImageUrls,
-    primaryImageUrl,
-  };
+  return { status: "ready", allImageUrls, publicHttpsImageUrls, rawImageUrls, galleryImageUrls, curation, primaryImageUrl };
 }
 
 export function normalizeProductImageUrls(value: unknown): string[] {
@@ -114,9 +128,11 @@ export function toCanonicalProduct(product: Product): CanonicalProduct {
     ref: product.ref,
     title,
     price: product.preco,
-    category: (product.categoria || "").trim(),
+    category: resolvePublicProductCategory(product.categoria, { title: product.displayTitle || product.produto, description: product.descricao }) || "",
     description: (product.descricao || "").trim(),
     imageUrls: image.publicHttpsImageUrls,
+    rawImageUrls: image.rawImageUrls,
+    galleryImageUrls: image.galleryImageUrls,
     primaryImageUrl: image.primaryImageUrl,
     destinationUrl,
     slug: product.slug,
@@ -142,7 +158,13 @@ export async function assessProductReadiness(
   if (canonical.title.length < 3) errors.push("PRODUCT_TITLE_MISSING");
   if (!Number.isFinite(canonical.price) || canonical.price <= 0) errors.push("PRODUCT_PRICE_INVALID");
   if (!isValidProductDestinationUrl(canonical.destinationUrl)) errors.push("PRODUCT_DESTINATION_URL_INVALID");
-  if (image.status !== "ready") errors.push(image.reason === "missing" ? "PRODUCT_IMAGE_MISSING" : "PRODUCT_IMAGE_HTTPS_INVALID");
+  if (image.status !== "ready") {
+    if (image.reason === "missing") errors.push("PRODUCT_IMAGE_MISSING");
+    else if (image.reason === "image_review_required") errors.push("IMAGE_REVIEW_REQUIRED");
+    else errors.push("PRODUCT_IMAGE_HTTPS_INVALID");
+  }
+  if (!canonical.category) errors.push("PUBLIC_CATEGORY_REVIEW_REQUIRED");
+  if (!product.imageCuration && product.imageEditorialStatus !== "clean") warnings.push("PRODUCT_IMAGE_SUITABILITY_UNCONFIRMED");
   if (options.requireDescription && !canonical.description) errors.push("PRODUCT_DESCRIPTION_MISSING");
   if (!canonical.category) warnings.push("PRODUCT_CATEGORY_UNCONFIRMED");
   if (!canonical.description && !options.requireDescription) warnings.push("PRODUCT_DESCRIPTION_UNCONFIRMED");

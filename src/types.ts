@@ -11,6 +11,8 @@ export interface PromotionOffer {
   confirmedAt: number;
 }
 
+import type { ProductImageCuration, ProductImageEditorialStatus } from "./lib/productImageCuration";
+
 export interface Product {
   id: string;
   ref?: string;
@@ -23,6 +25,10 @@ export interface Product {
   categoria: string;
   preco: number;
   imagens: string[];
+  /** Estado editorial da imagem; produtos novos sem revisão não ficam prontos para publicação. */
+  imageEditorialStatus?: ProductImageEditorialStatus;
+  /** Separação em memória da fonte raw, principal canônica e galeria revisada. */
+  imageCuration?: ProductImageCuration;
   link: string;
   ativo: boolean;
   destaque: boolean;

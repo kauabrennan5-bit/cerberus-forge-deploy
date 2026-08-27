@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 // Mobile refinement: keep the approved product-detail composition while constraining gallery, metadata, actions, and lightbox content to the viewport.
 import { Product } from '../types';
-import { getProductDisplayTitle } from '../lib/productPresentation';
+import { getProductDisplayCategory, getProductDisplayTitle } from '../lib/productPresentation';
 import { resolveCanonicalProductImage } from '../lib/productCanonical';
 import { trackClickAndGetUrl } from '../lib/analytics';
 import { ArrowLeft, ExternalLink, Heart, Share2, Check, ChevronLeft, ChevronRight, ImageOff, ShieldCheck, Maximize2, X } from 'lucide-react';
@@ -105,6 +105,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     return normalized.length >= 8 && /\s/.test(normalized);
   });
   const displayTitle = getProductDisplayTitle(product);
+  const displayCategory = getProductDisplayCategory(product);
 
   useEffect(() => {
     setSelectedImageIndex(0);
@@ -330,7 +331,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
           <div className="space-y-2 sm:space-y-3">
             <div className="flex min-w-0 items-center justify-between gap-2 border-b border-[#3A342E] pb-1.5">
               <span className="text-[10px] sm:text-xs uppercase font-display tracking-widest text-[#8A1F1F] font-bold">
-                {product.categoria}
+                {displayCategory || 'PEÇA CURADA'}
               </span>
             </div>
 

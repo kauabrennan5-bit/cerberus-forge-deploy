@@ -223,6 +223,8 @@ export function createProductionProductPipeline(): ProductPipeline {
       categoria: candidate.categoria,
       preco: candidate.preco || 0,
       imagens: candidate.imagens,
+      imageEditorialStatus: candidate.imageEditorialStatus,
+      imageCuration: candidate.imageCuration,
       // FASE 25C (Commit 3): autoridade do link = affiliate oficial (candidate.link);
       // sem ele, a URL pública canônica. normalizedUrl permanece para auditoria.
       link: candidate.link || candidate.normalizedUrl,

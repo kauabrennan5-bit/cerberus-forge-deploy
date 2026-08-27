@@ -969,19 +969,17 @@ function printScraperDebugLog(params: {
     }
   }
 
-  // Algoritmo que escolheu images[0]
-  let image0Source = "Nenhuma imagem encontrada";
-  if (finalImages.length > 0) {
-    const firstImg = finalImages[0];
-    if (jsonLdImages.includes(firstImg)) image0Source = "JSON-LD";
-    else if (ogImages.includes(firstImg)) image0Source = "OpenGraph";
-    else if (shopeeImages.includes(firstImg)) image0Source = "Shopee CDN Regex";
-    else if (mlImages.includes(firstImg)) image0Source = "Mercado Livre CDN Regex";
-    else if (nextDataImages.includes(firstImg)) image0Source = "__NEXT_DATA__";
-    else if (initialStateImages.includes(firstImg)) image0Source = "__INITIAL_STATE__";
-    else if (domImages.includes(firstImg)) image0Source = "DOM (<img src>)";
-    else image0Source = "Dedupe/Outra Fonte";
-  }
+  // O scraper preserva candidatos raw; a escolha comercial ocorre no estágio
+  // explícito de curadoria visual e nunca por posição implícita da lista.
+  const imageCandidateSources = [
+    ["JSON-LD", jsonLdImages],
+    ["OpenGraph", ogImages],
+    ["Shopee CDN Regex", shopeeImages],
+    ["Mercado Livre CDN Regex", mlImages],
+    ["__NEXT_DATA__", nextDataImages],
+    ["__INITIAL_STATE__", initialStateImages],
+    ["DOM (<img src>)", domImages],
+  ].filter(([, urls]) => urls.length > 0).map(([source, urls]) => `${source}:${urls.length}`).join(", ") || "Nenhuma fonte de imagem encontrada";
 
   // 2. PREÇO BRUTO
   let offersPriceRaw: string | null = null;
@@ -1115,7 +1113,8 @@ ${ogImages.slice(0, 10).map(u => `    - ${u}`).join("\n") || "    (nenhuma)"}
   * DOM (${domImages.length}):
 ${domImages.slice(0, 10).map(u => `    - ${u}`).join("\n") || "    (nenhuma)"}
 
-Algoritmo que escolheu images[0]: ${image0Source} (URL: ${finalImages[0] || 'N/A'})
+Inventário de candidatos raw por fonte: ${imageCandidateSources}
+Curadoria comercial: executada posteriormente; nenhuma imagem é aprovada por ordem de extração.
 
 PREÇO
 

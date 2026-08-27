@@ -52,6 +52,7 @@ import {
 import {
   savePendingReview,
 } from "../repositories/telegramRepository";
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 
 /**
  * Extrai (shop_id, item_id) de uma URL normalizada Shopee em formato
@@ -260,8 +261,13 @@ async function persistPreviewReview(params: {
   productLink: string | null;
   affiliateUrl: string | null;
   enriched?: {
-    /** Imagens oficiais observadas pelo scraper (pode estar vazio). */
+    /** Imagens comerciais ordenadas: principal canônica + galeria revisada. */
     images: string[];
+    /** Todas as imagens HTTPS observadas, preservadas para auditoria. */
+    rawImages?: string[];
+    primaryImageUrl?: string | null;
+    galleryImages?: string[];
+    imageEditorialStatus?: "clean" | "review_required";
     /** Preço exibido observado pelo scraper (null quando ausente). */
     scraperPrice: number | null;
     /** Título curatorial do scraper/curador (opcional). */
@@ -300,6 +306,10 @@ async function persistPreviewReview(params: {
     categoria: params.enriched?.curatedCategory ?? "affiliate_preview",
     preco: displayPrice ?? 0,
     imagens: images,
+    imagensOriginais: params.enriched?.rawImages,
+    imagemPrincipal: params.enriched?.primaryImageUrl || undefined,
+    imagensGaleria: params.enriched?.galleryImages,
+    imageEditorialStatus: params.enriched?.imageEditorialStatus,
     normalizedUrl: params.productLink ?? params.normalizedUrl,
     descricao: [
       `affiliate_preview · source=affiliate_preview`,
@@ -340,6 +350,10 @@ async function enrichWithExistingScraper(params: {
   curatedTitle: string | null;
   curatedCategory: string | null;
   curatedDescription: string | null;
+  rawImages?: string[];
+  primaryImageUrl?: string | null;
+  galleryImages?: string[];
+  imageEditorialStatus?: "clean" | "review_required";
 } | null> {
   const link = params.productLink;
   if (!link) {
@@ -352,6 +366,10 @@ async function enrichWithExistingScraper(params: {
       curatedTitle: null,
       curatedCategory: null,
       curatedDescription: null,
+      rawImages: [],
+      primaryImageUrl: null,
+      galleryImages: [],
+      imageEditorialStatus: "review_required",
     };
   }
   let result: Awaited<ReturnType<typeof extractProductForReview>>;
@@ -366,6 +384,10 @@ async function enrichWithExistingScraper(params: {
       curatedTitle: null,
       curatedCategory: null,
       curatedDescription: null,
+      rawImages: [],
+      primaryImageUrl: null,
+      galleryImages: [],
+      imageEditorialStatus: "review_required",
     };
   }
   if (!result.success || !result.data) {
@@ -377,9 +399,18 @@ async function enrichWithExistingScraper(params: {
       curatedTitle: null,
       curatedCategory: null,
       curatedDescription: null,
+      rawImages: [],
+      primaryImageUrl: null,
+      galleryImages: [],
+      imageEditorialStatus: "review_required",
     };
   }
   const data = result.data;
+  const canonicalImage = resolveCanonicalProductImage({
+    imagens: data.imagens ?? [],
+    imageCuration: data.imageCuration,
+    imageEditorialStatus: data.imageEditorialStatus,
+  });
   // Verificação determinística de identidade contra a resposta oficial
   // da Affiliate API (a URL é do productLink oficial, normalizada para
   // /product/{shop_id}/{item_id} pelo próprio scraper).
@@ -398,14 +429,22 @@ async function enrichWithExistingScraper(params: {
       curatedTitle: null,
       curatedCategory: null,
       curatedDescription: null,
+      rawImages: [],
+      primaryImageUrl: null,
+      galleryImages: [],
+      imageEditorialStatus: "review_required",
     };
   }
   return {
     ok: true,
     failureReason: null,
-    images: data.imagens ?? [],
+    images: canonicalImage.publicHttpsImageUrls,
+    rawImages: data.imagensOriginais ?? canonicalImage.rawImageUrls,
+    primaryImageUrl: canonicalImage.primaryImageUrl ?? null,
+    galleryImages: canonicalImage.galleryImageUrls,
+    imageEditorialStatus: data.imageEditorialStatus ?? (canonicalImage.status === "ready" ? "clean" : "review_required"),
     scraperPrice: data.preco,
-    curatedTitle: data.produto ?? null,
+    curatedTitle: data.displayTitle ?? data.produto ?? null,
     curatedCategory: data.categoria ?? null,
     curatedDescription: data.descricao ?? null,
   };
@@ -550,7 +589,7 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
         shopId: acquisition.shopId,
         itemId: acquisition.itemId,
         status: acquisition.status,
-        imageUrl: enriched.images[0] ?? null,
+        imageUrl: enriched.primaryImageUrl ?? null,
         imageCount: enriched.images.length,
       });
 
@@ -564,6 +603,10 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
         affiliateUrl: acquisition.affiliateUrl,
         enriched: {
           images: enriched.images,
+          rawImages: enriched.rawImages,
+          primaryImageUrl: enriched.primaryImageUrl,
+          galleryImages: enriched.galleryImages,
+          imageEditorialStatus: enriched.imageEditorialStatus,
           scraperPrice: enriched.scraperPrice,
           curatedTitle: enriched.curatedTitle,
           curatedCategory: enriched.curatedCategory,
@@ -574,7 +617,7 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
         chatId,
         text,
         keyboard: buildPreviewKeyboard(reviewId),
-        imageUrl: enriched.images[0] ?? null,
+        imageUrl: enriched.primaryImageUrl ?? null,
       });
 
       const [review, sendResult] = await Promise.all([persistPromise, sendPromise]);
@@ -603,7 +646,7 @@ export function setupPreviewTelegramRoutes(deps: PreviewRouteDeps): void {
         shopId: acquisition.shopId,
         itemId: acquisition.itemId,
         cardSent: true,
-        cardAsPhoto: Boolean(enriched.images[0] ?? null),
+        cardAsPhoto: Boolean(enriched.primaryImageUrl ?? null),
         extractedImageCount: enriched.images.length,
         cardMessageId: sendResult.messageId,
       });

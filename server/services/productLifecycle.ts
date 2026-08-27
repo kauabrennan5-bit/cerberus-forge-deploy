@@ -2,6 +2,8 @@ import { generateSlug } from "../../src/data/initialProducts";
 
 import { detectMarketplace } from "./marketplace";
 import type { PromotionOffer } from "../../src/types";
+import { resolvePublicProductCategory } from "../../src/lib/productCategory";
+import { orderCanonicalImageSet, type ProductImageCuration, type ProductImageEditorialStatus } from "../../src/lib/productImageCuration";
 
 export type ProductLifecycleState =
   | "DISCOVERED" | "COLLECTING" | "COLLECTED" | "VALIDATING" | "ANALYZING" | "CURATING"
@@ -34,6 +36,13 @@ export interface ProductCandidate {
   /** Oferta confirmada manualmente; não altera o preço-base `preco`. */
   ofertaPromocional?: PromotionOffer;
   imagens: string[];
+  /** Todas as URLs HTTPS observadas, preservadas para auditoria da revisão. */
+  imagensOriginais?: string[];
+  /** Conjunto de imagem aprovado; `imagens` fica ordenado principal + galeria. */
+  imageCuration?: ProductImageCuration;
+  imagemPrincipal?: string;
+  imagensGaleria?: string[];
+  imageEditorialStatus?: ProductImageEditorialStatus;
   slug: string;
   ref?: string;
   id?: string;
@@ -119,17 +128,16 @@ export function stripRawAffiliateProvenance(value: unknown): string {
 }
 
 /**
- * FASE 25C (Commit 3) — mapeia categorias internas do fluxo de afiliado para a
- * apresentação pública. O storage interno permanece inalterado (auditoria,
- * decisões do bot e proveniência usam "affiliate_preview"); apenas a vitrine
- * exibe a categoria legível.
+ * FASE 25C — resolve a categoria que pode ser exposta publicamente. O valor
+ * técnico `affiliate_preview` continua válido apenas no fluxo interno; quando
+ * chega à normalização, a categoria real é inferida do título/descrição e nunca
+ * é publicada como "Afiliado".
  */
-const PUBLIC_CATEGORY_MAP: Record<string, string> = {
-  affiliate_preview: "Afiliado",
-};
-export function publicCategoryMapping(category: string | undefined | null): string {
-  if (!category || category.trim() === "") return "";
-  return PUBLIC_CATEGORY_MAP[category.trim()] ?? category;
+export function publicCategoryMapping(
+  category: string | undefined | null,
+  context: { title?: string | null; description?: string | null } = {},
+): string {
+  return resolvePublicProductCategory(category, context);
 }
 
 export function normalizeCandidate(input: Partial<ProductCandidate> & { normalizedUrl?: string; link?: string }): ProductCandidate {
@@ -166,11 +174,19 @@ export function normalizeCandidate(input: Partial<ProductCandidate> & { normaliz
     displayTitle,
     curatorNote,
     descricao: containsRawPayloadMarkers(rawDescription) ? "" : stripRawAffiliateProvenance(rawDescription),
-    categoria: publicCategoryMapping((input.categoria || "").trim()),
+    categoria: publicCategoryMapping((input.categoria || "").trim(), {
+      title: input.displayTitle || input.rawTitle || input.produto,
+      description: input.descricao,
+    }),
     preco: typeof input.preco === "number" && Number.isFinite(input.preco) ? input.preco : null,
     precoAntigo: typeof input.precoAntigo === "number" ? input.precoAntigo : null,
     ofertaPromocional: input.ofertaPromocional,
-    imagens: Array.isArray(input.imagens) ? input.imagens.filter(image => typeof image === "string" && /^https?:\/\//i.test(image)) : [],
+    imagens: normalizeCandidateImages(input),
+    imagensOriginais: normalizeCandidateImages({ imagens: input.imagensOriginais ?? input.imagens }),
+    imageCuration: input.imageCuration,
+    imagemPrincipal: input.imagemPrincipal,
+    imagensGaleria: input.imagensGaleria,
+    imageEditorialStatus: input.imageEditorialStatus,
     slug: input.slug || generateSlug(produto),
     ref: input.ref,
     id: input.id,
@@ -229,21 +245,34 @@ export function validateCandidate(candidate: ProductCandidate, existingProducts:
   const duplicate = detectDuplicate(candidate, existingProducts);
   if (duplicate && !duplicate.potential) errors.push(duplicate.details);
   if (duplicate?.potential) warnings.push(duplicate.details);
+    if (candidate.imageEditorialStatus !== "clean") {
+    errors.push("IMAGE_REVIEW_REQUIRED");
+  }
+  if (!candidate.categoria) errors.push("PUBLIC_CATEGORY_REVIEW_REQUIRED");
   return { outcome: errors.length ? "FAIL" : warnings.length ? "WARNING" : "PASS", errors, warnings, duplicate };
 }
+
 
 export function curateCandidate(candidate: ProductCandidate, validation: ProductValidation): ProductCuration {
   const reasons: string[] = [];
   const risks: string[] = [...validation.warnings, ...validation.errors];
   let score = 0;
   if (candidate.preco && candidate.preco > 0) { score += 25; reasons.push("Preço disponível."); }
-  if (candidate.imagens.length > 0) { score += 25; reasons.push("Imagem disponível."); }
+  if (candidate.imagens.length > 0 && candidate.imageEditorialStatus === "clean") { score += 25; reasons.push("Imagem comercial revisada disponível."); }
+  else risks.push("IMAGE_REVIEW_REQUIRED");
   if (candidate.produto.length >= 6) { score += 20; reasons.push("Título utilizável."); }
   if (candidate.categoria) { score += 15; reasons.push("Categoria sugerida."); }
   if (candidate.descricao) { score += 15; reasons.push("Descrição disponível."); }
   const confidence = score >= 85 ? "HIGH" : score >= 60 ? "MEDIUM" : "LOW";
   const recommendation: CurationRecommendation = validation.outcome === "FAIL" ? "REJECT" : validation.outcome === "WARNING" || confidence !== "HIGH" ? "REVIEW" : "PUBLISH";
   return { score, category: candidate.categoria || "Não classificada", confidence, reasons, risks, recommendation };
+}
+
+function normalizeCandidateImages(input: Partial<ProductCandidate> & { imagens?: unknown; imagensOriginais?: unknown }): string[] {
+  const source = Array.isArray(input.imagens) ? input.imagens : Array.isArray(input.imagensOriginais) ? input.imagensOriginais : [];
+  const normalized = source.filter((image): image is string => typeof image === "string" && /^https:\/\//i.test(image.trim())).map(image => image.trim()).filter((image, index, list) => list.indexOf(image) === index);
+  if (input.imageCuration?.status === "ready") return orderCanonicalImageSet(input.imageCuration);
+  return normalized;
 }
 
 export function event(type: ProductLifecycleEvent["type"], state: ProductLifecycleState, reason: string): ProductLifecycleEvent {

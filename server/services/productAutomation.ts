@@ -7,6 +7,8 @@ import { fetchProductDataFromUrl, extractTitleFromUrl, type ShopeePromotionEvide
 import { detectMarketplace } from "./marketplace";
 import { ExternalCallBudget } from "./operationalGuards";
 import { containsRawPayloadMarkers } from "./productLifecycle";
+import { PUBLIC_PRODUCT_CATEGORIES, resolvePublicProductCategory } from "../../src/lib/productCategory";
+import { curateProductImages, type ProductImageAssessment, type ProductImageCuration } from "../../src/lib/productImageCuration";
 
 export { detectMarketplace } from "./marketplace";
 
@@ -38,7 +40,6 @@ export interface ProcessProductResult {
   normalizedUrl?: string;
 }
 
-const CURATOR_CATEGORIES = new Set(["Camisetas", "Calças", "Acessórios", "Calçados", "Jaquetas", "Moletons"]);
 const PROMPT_INJECTION_PATTERNS = [
   /\b(ignore|disregard|forget|override)\b[\s\S]{0,80}\b(previous|prior|system|developer|assistant|instructions?|rules?)\b/i,
   /\b(system|developer|assistant)\s*(message|prompt|instruction)?\s*:/i,
@@ -55,6 +56,14 @@ function containsPromptInjectionText(value: unknown): boolean {
   return typeof value === "string" && PROMPT_INJECTION_PATTERNS.some(pattern => pattern.test(value));
 }
 
+let testOverrideImageReview: ((images: string[], title: string) => Promise<ProductImageCuration>) | null = null;
+
+export function setTestImageReview(
+  override: ((images: string[], title: string) => Promise<ProductImageCuration>) | null,
+): void {
+  testOverrideImageReview = override;
+}
+
 export function sanitizeCuratorOutput(
   value: unknown,
   fallbackTitle: string,
@@ -62,7 +71,7 @@ export function sanitizeCuratorOutput(
 ): { title: string; description: string; category: string } {
   const output = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const safeFallbackTitle = normalizeCuratorText(fallbackTitle, 180);
-  const safeFallbackCategory = CURATOR_CATEGORIES.has(fallbackCategory) ? fallbackCategory : "Acessórios";
+  const safeFallbackCategory = resolvePublicProductCategory(fallbackCategory, { title: fallbackTitle }) || "";
   // Aceita `produto` somente como compatibilidade com revisões já geradas.
   // O contrato novo preserva o título observado separadamente e gera apenas
   // `display_title` como texto de apresentação.
@@ -75,8 +84,52 @@ export function sanitizeCuratorOutput(
       ? title
       : safeFallbackTitle,
     description: containsRawPayloadMarkers(description) || containsPromptInjectionText(description) ? "" : description,
-    category: CURATOR_CATEGORIES.has(category) ? category : safeFallbackCategory,
+    category: resolvePublicProductCategory(category, { title: safeFallbackTitle, description }) || safeFallbackCategory,
   };
+}
+
+async function reviewScrapedImages(rawImages: string[], title: string): Promise<ProductImageCuration> {
+  const rawImageUrls = curateProductImages(rawImages).rawImageUrls;
+  if (testOverrideImageReview) return testOverrideImageReview(rawImageUrls, title);
+  if (rawImageUrls.length === 0) return curateProductImages(rawImageUrls);
+  if (!process.env.GEMINI_API_KEY) return curateProductImages(rawImageUrls);
+
+  const budget = geminiBudget.reserve("gemini");
+  if (!budget.allowed) return curateProductImages(rawImageUrls);
+
+  try {
+    const downloaded = await Promise.all(rawImageUrls.map(async (url) => {
+      const response = await fetch(url, { headers: { Accept: "image/avif,image/webp,image/jpeg,image/png" } });
+      const contentType = response.headers.get("content-type")?.split(";", 1)[0] || "";
+      if (!response.ok || !/^image\/(?:avif|webp|jpeg|png)$/i.test(contentType)) throw new Error("image_fetch_failed");
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > 8 * 1024 * 1024) throw new Error("image_size_invalid");
+      return { mimeType: contentType, data: bytes.toString("base64") };
+    }));
+
+    const prompt = `Avalie TODAS as imagens numeradas deste produto para seleção comercial de catálogo. Produto: ${title || "sem título"}. Para cada imagem, classifique somente como clean, technical, promotional, logo, collage, screenshot ou unknown. Rejeite medidas, dimensões, setas, textos promocionais, selos, logos, marcas d'água, molduras técnicas, colagens e screenshots. clean exige apresentação clara do produto, sem overlay visível, com confiança HIGH ou MEDIUM. Não invente características. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo factual curto"}]}. Inclua exatamente uma entrada para cada imagem.`;
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || process.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
+      contents: [{ role: "user", parts: [{ text: prompt }, ...downloaded.map(image => ({ inlineData: image }))] }],
+      config: { responseMimeType: "application/json" },
+    });
+    const parsed = JSON.parse(response.text || "{}");
+    const modelAssessments = Array.isArray(parsed?.images) ? parsed.images : [];
+    const assessments: ProductImageAssessment[] = rawImageUrls.map((url, index) => {
+      const item = modelAssessments.find((candidate: unknown) => candidate && typeof candidate === "object" && Number((candidate as Record<string, unknown>).index) === index + 1) as Record<string, unknown> | undefined;
+      const decision = ["clean", "technical", "promotional", "logo", "collage", "screenshot", "unknown"].includes(String(item?.decision))
+        ? String(item?.decision) as ProductImageAssessment["decision"]
+        : "unknown";
+      const confidence = ["HIGH", "MEDIUM", "LOW"].includes(String(item?.confidence))
+        ? String(item?.confidence) as ProductImageAssessment["confidence"]
+        : "LOW";
+      return { url, decision, confidence, reason: typeof item?.reason === "string" ? item.reason.slice(0, 180) : "Avaliação visual insuficiente." };
+    });
+    return curateProductImages(rawImageUrls, assessments);
+  } catch (error: any) {
+    console.warn(`[Product Image Review] avaliação indisponível: ${error?.message || "erro desconhecido"}`);
+    return curateProductImages(rawImageUrls);
+  }
 }
 
 /**
@@ -342,7 +395,13 @@ export interface ExtractedReviewData {
   precoCheckout?: number | null;
   condicaoPrecoCheckout?: "pix" | "pix_with_coupon" | null;
   evidenciaPromocional?: ShopeePromotionEvidence | null;
+  /** Imagens raw observadas; preservadas para auditoria do review. */
   imagens: string[];
+  imagensOriginais: string[];
+  imagemPrincipal?: string;
+  imagensGaleria: string[];
+  imageCuration: ProductImageCuration;
+  imageEditorialStatus: "clean" | "review_required";
   descricao: string;
   existingProduct: Product | null;
 }
@@ -394,6 +453,7 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     const scrapedPromotionEvidence = scraped.promotionEvidence;
     const scrapedImages = scraped.images || [];
     const rawContent = scraped.rawContent;
+    const imageCuration = await reviewScrapedImages(scrapedImages, scrapedTitle || "");
 
     // Tenta resgatar título pela URL se o Scraper retornou nulo ou título genérico
     if (!scrapedTitle || isGenericTitle(scrapedTitle)) {
@@ -406,9 +466,12 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     // Regra 8: Se não houver título real nem imagens reais, rejeita a extração
     const hasInvalidTitle = !scrapedTitle || isGenericTitle(scrapedTitle);
     const hasNoImages = scrapedImages.length === 0;
+    const hasNoCommercialImage = imageCuration.status !== "ready" || !imageCuration.primaryImageUrl;
 
-    if (hasInvalidTitle || hasNoImages) {
-      const blockError = "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título e imagens válidos.";
+    if (hasInvalidTitle || hasNoImages || hasNoCommercialImage) {
+      const blockError = hasNoCommercialImage
+        ? `IMAGE_REVIEW_REQUIRED:${imageCuration.reason || "no_commercial_image"}`
+        : "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título e imagens válidos.";
 
       const priceReason = scrapedPrice !== null
         ? "Preço identificado"
@@ -425,7 +488,7 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
       console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: ${scrapedImages.length}`);
       console.log(`[TELEGRAM EXTRACTION] Preço encontrado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : "null"}`);
       console.log(`[TELEGRAM EXTRACTION] Motivo caso o preço não esteja disponível: ${priceReason}`);
-      console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${blockError}`);
+        console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${blockError}`);
 
       return {
         success: false,
@@ -436,7 +499,7 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     const rawTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "";
     let curatedTitle = rawTitle;
     let curatedDescription = "";
-    let curatedCategory = inferCategoryFromTitle(curatedTitle || "Acessórios");
+    let curatedCategory = resolvePublicProductCategory("", { title: curatedTitle, description: "" });
 
     if (process.env.GEMINI_API_KEY) {
       const budget = geminiBudget.reserve("gemini");
@@ -456,8 +519,8 @@ ${rawContent.slice(0, 3000)}
 
 TAREFAS DO CURADOR:
 1. "display_title": Gere um título de exibição em PT-BR, com 6 a 8 palavras no máximo, mantendo somente nome e tipo do produto. Remova marca, SKU, idioma estrangeiro, promoções e jargões de marketplace, incluindo "PROMOÇÃO IMPERDÍVEL", "TOP SELLER", "ENVIO GRÁTIS", "FRETE GRÁTIS", "SHOPEE", "MERCADO LIVRE", "100% ORIGINAL" e "OFERTA". Não invente atributos. (Exemplo: "Camiseta Oversized de Algodão").
-2. "descricao": Escreva uma descrição curta de no máximo 2 frases no tom cru, direto e curatorial da marca Cerberus (foco em tecido, corte, caimento e estética).
-3. "categoria": Escolha EXATAMENTE uma das seguintes categorias: "Camisetas", "Calças", "Acessórios", "Calçados", "Jaquetas", "Moletons".`;
+2. "descricao": Escreva uma descrição curta de no máximo 2 frases no tom direto, factual e curatorial da marca Cerberus, usando somente materiais, forma, uso e estética observáveis.
+3. "categoria": Escolha EXATAMENTE uma categoria do conjunto público fechado: ${[...PUBLIC_PRODUCT_CATEGORIES].map(category => `"${category}"`).join(", ")}. Se não houver confiança suficiente, retorne string vazia para revisão humana.`;
 
         const geminiRes = await ai.models.generateContent({
           // `gemini-2.5-flash` foi descontinuado pelo provedor. O fallback deve
@@ -501,6 +564,8 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
       curatedTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "Produto sem Título";
     }
 
+    if (!curatedCategory) return { success: false, error: "CATEGORY_REVIEW_REQUIRED" };
+
     const mktId = extractMarketplaceId(normalizedUrl);
     const generatedSlug = generateSlug(rawTitle || curatedTitle);
     const existingProduct = await (testOverrideFindExistingProduct
@@ -539,7 +604,12 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
         precoCheckout: scrapedCheckoutPrice,
         condicaoPrecoCheckout: scrapedCheckoutPriceCondition,
         evidenciaPromocional: scrapedPromotionEvidence,
-        imagens: scrapedImages,
+        imagens: [imageCuration.primaryImageUrl!, ...imageCuration.galleryImageUrls],
+        imagensOriginais: imageCuration.rawImageUrls,
+        imagemPrincipal: imageCuration.primaryImageUrl,
+        imagensGaleria: imageCuration.galleryImageUrls,
+        imageCuration,
+        imageEditorialStatus: "clean",
         descricao: curatedDescription,
         existingProduct
       }
@@ -567,13 +637,7 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
  * Infere a categoria com base em palavras-chave no título
  */
 function inferCategoryFromTitle(title: string): string {
-  const t = title.toLowerCase();
-  if (t.includes("calça") || t.includes("jeans") || t.includes("pant") || t.includes("bermuda") || t.includes("shorts")) return "Calças";
-  if (t.includes("moletom") || t.includes("hoodie") || t.includes("blusão")) return "Moletons";
-  if (t.includes("jaqueta") || t.includes("casaco") || t.includes("blazer") || t.includes("colete") || t.includes("parka")) return "Jaquetas";
-  if (t.includes("tênis") || t.includes("sapato") || t.includes("bota") || t.includes("slipper") || t.includes("sandal") || t.includes("chinelo")) return "Calçados";
-  if (t.includes("camiseta") || t.includes("t-shirt") || t.includes("regata") || t.includes("polo") || t.includes("shirt")) return "Camisetas";
-  return "Acessórios";
+  return resolvePublicProductCategory("", { title });
 }
 
 

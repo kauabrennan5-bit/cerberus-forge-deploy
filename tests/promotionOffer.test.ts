@@ -55,6 +55,7 @@ test("pipeline canônico transporta a oferta confirmada como metadado separado d
     descricao: "Peça de teste para regressão de oferta confirmada.",
     preco: 299,
     imagens: ["https://images.example.test/luminaria.jpg"],
+    imageEditorialStatus: "clean" as const,
     ofertaPromocional: confirmedOffer,
   });
   lifecycle = pipeline.approve(lifecycle);

@@ -40,6 +40,7 @@ import {
 import type { PendingReview } from "./telegramBot";
 import { discoverShopeeProducts } from "./shopeeDiscovery";
 import { resolveShortUrlIfNeeded } from "./marketplace";
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 
 // ---------------------------------------------------------------
 // Constantes do lote
@@ -246,6 +247,10 @@ async function enrichWithExistingScraper(params: {
   ok: boolean;
   failureReason: string | null;
   images: string[];
+  rawImages?: string[];
+  primaryImageUrl?: string | null;
+  galleryImages?: string[];
+  imageEditorialStatus?: "clean" | "review_required";
   scraperPrice: number | null;
   scraperPriceMax: number | null;
   scraperCheckoutPrice: number | null;
@@ -272,9 +277,18 @@ async function enrichWithExistingScraper(params: {
         curatedTitle: null,
         description: "",
         category: null,
+        rawImages: [],
+        primaryImageUrl: null,
+        galleryImages: [],
+        imageEditorialStatus: "review_required",
       };
     }
     const data = result.data;
+    const canonicalImage = resolveCanonicalProductImage({
+      imagens: data.imagens ?? [],
+      imageCuration: data.imageCuration,
+      imageEditorialStatus: data.imageEditorialStatus,
+    });
     const extracted = extractCanonicalShopeeIds(data.normalizedUrl);
     const identityMatches =
       extracted.shopId !== null &&
@@ -282,12 +296,16 @@ async function enrichWithExistingScraper(params: {
       extracted.shopId === params.officialShopId &&
       extracted.itemId === params.officialItemId;
     if (!identityMatches) {
-      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, rawTitle: null, curatedTitle: null, description: "", category: null };
+      return { ok: false, failureReason: "scraper_identity_mismatch", images: [], rawImages: [], primaryImageUrl: null, galleryImages: [], imageEditorialStatus: "review_required", scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, rawTitle: null, curatedTitle: null, description: "", category: null };
     }
     return {
       ok: true,
       failureReason: null,
-      images: data.imagens ?? [],
+      images: canonicalImage.publicHttpsImageUrls,
+      rawImages: data.imagensOriginais ?? canonicalImage.rawImageUrls,
+      primaryImageUrl: canonicalImage.primaryImageUrl ?? null,
+      galleryImages: canonicalImage.galleryImageUrls,
+      imageEditorialStatus: data.imageEditorialStatus ?? (canonicalImage.status === "ready" ? "clean" : "review_required"),
       scraperPrice: data.preco ?? null,
       scraperPriceMax: data.precoMaximo ?? null,
       scraperCheckoutPrice: data.precoCheckout ?? null,
@@ -299,7 +317,7 @@ async function enrichWithExistingScraper(params: {
       category: data.categoria?.trim() || null,
     };
   } catch {
-    return { ok: false, failureReason: "scraper_unexpected_error", images: [], scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, rawTitle: null, curatedTitle: null, description: "", category: null };
+    return { ok: false, failureReason: "scraper_unexpected_error", images: [], rawImages: [], primaryImageUrl: null, galleryImages: [], imageEditorialStatus: "review_required", scraperPrice: null, scraperPriceMax: null, scraperCheckoutPrice: null, scraperCheckoutPriceCondition: null, promotionEvidence: null, rawTitle: null, curatedTitle: null, description: "", category: null };
   }
 }
 
@@ -328,6 +346,8 @@ function getShopeeReviewReadinessErrors(enriched: {
   curatedTitle: string | null;
   description: string;
   images: string[];
+  primaryImageUrl?: string | null;
+  imageEditorialStatus?: "clean" | "review_required";
 }): string[] {
   const errors: string[] = [];
   const rawTitle = enriched.rawTitle?.trim() ?? "";
@@ -337,9 +357,10 @@ function getShopeeReviewReadinessErrors(enriched: {
   if (!rawTitle) errors.push("título de origem ausente");
   if (!displayTitle || displayTitle === rawTitle) errors.push("título editorial ausente");
   if (description.length < 24) errors.push("descrição editorial ausente");
-  if (enriched.images.filter((image) => typeof image === "string" && image.trim()).length === 0) {
-    errors.push("imagem válida ausente");
+  if (enriched.images.filter((image) => typeof image === "string" && image.trim()).length === 0 || !enriched.primaryImageUrl) {
+    errors.push("imagem comercial válida ausente");
   }
+  if (enriched.imageEditorialStatus !== "clean") errors.push("IMAGE_REVIEW_REQUIRED");
   return errors;
 }
 
@@ -866,6 +887,10 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       categoria: enriched.category ?? "affiliate_preview",
       preco: displayPrice,
       imagens: enriched.images,
+      imagensOriginais: enriched.rawImages,
+      imagemPrincipal: enriched.primaryImageUrl || undefined,
+      imagensGaleria: enriched.galleryImages,
+      imageEditorialStatus: enriched.imageEditorialStatus,
       normalizedUrl: acquisition.productLink ?? item.publicUrl,
       descricao: enriched.description,
       status: "pending",
@@ -903,7 +928,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       shopId: acquisition.shopId,
       itemId: acquisition.itemId,
       status: acquisition.status,
-      imageUrl: enriched.images[0] ?? null,
+      imageUrl: enriched.primaryImageUrl ?? null,
       imageCount: enriched.images.length,
       batchId: lotId,
     });
@@ -911,7 +936,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       chatId,
       text,
       keyboard: buildPreviewKeyboard(reviewId),
-      imageUrl: enriched.images[0] ?? null,
+      imageUrl: enriched.primaryImageUrl ?? null,
     });
     item.reviewId = reviewId;
     item.imageCount = enriched.images.length;

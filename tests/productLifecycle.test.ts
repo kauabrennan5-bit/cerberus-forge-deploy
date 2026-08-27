@@ -10,8 +10,16 @@ const validInput = {
   categoria: "Jaquetas",
   preco: 199.9,
   imagens: ["https://cdn.example.com/product.jpg"],
+  imageEditorialStatus: "clean" as const,
   descricao: "Peça utilitária com corte reto.",
 };
+
+test("produto novo sem revisão visual não fica pronto para publicação", () => {
+  const candidate = normalizeCandidate({ ...validInput, imageEditorialStatus: undefined });
+  const validation = validateCandidate(candidate, []);
+  assert.equal(validation.outcome, "FAIL");
+  assert.match(validation.errors.join(","), /IMAGE_REVIEW_REQUIRED/);
+});
 
 test("normalização remove UTMs sem inventar dados", () => {
   const candidate = normalizeCandidate(validInput);
@@ -173,4 +181,20 @@ test("telemetria registra falhas e propostas sem conceder execução arbitrária
   assert.ok(telemetry.total > 0);
   assert.ok(telemetry.errors > 0);
   assert.equal(telemetry.recent.some(item => item.error === "PUBLICATION_ERROR"), true);
+});
+
+test("categoria técnica affiliate_preview é resolvida na origem sem vazar como Afiliado", () => {
+  const candidate = normalizeCandidate({
+    ...validInput,
+    categoria: "affiliate_preview",
+    produto: "Abajur LED Cogumelo Luminária Retrô USB",
+    displayTitle: "Abajur LED Cogumelo",
+  });
+  assert.equal(candidate.categoria, "Iluminação");
+  assert.notEqual(candidate.categoria.toLowerCase(), "afiliado");
+});
+
+test("categorias públicas válidas são preservadas na normalização", () => {
+  const candidate = normalizeCandidate({ ...validInput, categoria: "Calçados & Acessórios" });
+  assert.equal(candidate.categoria, "Calçados & Acessórios");
 });

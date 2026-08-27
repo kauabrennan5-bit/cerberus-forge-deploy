@@ -3,6 +3,8 @@ import path from "path";
 import { getProducts } from "../repositories/productsRepository";
 import { Product } from "../../src/types";
 import { containsRawPayloadMarkers } from "./productLifecycle";
+import { resolvePublicProductCategory } from "../../src/lib/productCategory";
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 
 /**
  * Script de exportação do catálogo público para formato estático (/public/data/products.json).
@@ -48,6 +50,10 @@ export async function exportStaticProductsJson(): Promise<number> {
         return false;
       }
 
+      const image = resolveCanonicalProductImage(p);
+      if (image.status !== "ready" || !image.primaryImageUrl) return false;
+      if (!resolvePublicProductCategory(p.categoria, { title: p.displayTitle || p.produto, description: p.descricao })) return false;
+
       return true;
     }).map((p: Product) => ({
       id: p.id,
@@ -57,9 +63,9 @@ export async function exportStaticProductsJson(): Promise<number> {
       displayTitle: p.displayTitle?.trim() || undefined,
       preco: Number(p.preco),
       precoAntigo: (p as any).precoAntigo ? Number((p as any).precoAntigo) : undefined,
-      imagens: Array.isArray(p.imagens) ? p.imagens : [],
+      imagens: resolveCanonicalProductImage(p).publicHttpsImageUrls,
       link: p.link,
-      categoria: p.categoria || 'Geral',
+      categoria: resolvePublicProductCategory(p.categoria, { title: p.displayTitle || p.produto, description: p.descricao }),
       descricao: containsRawPayloadMarkers(p.descricao) ? '' : p.descricao || '',
       curatorNote: p.curatorNote?.trim() || undefined,
       paginaPonteUrl: p.paginaPonteUrl || '',

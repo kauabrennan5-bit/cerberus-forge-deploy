@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
 import { Product, ProductStatus, PromotionOffer } from "../../src/types";
 import { normalizePromotionOffer } from "../services/promotionOffer";
+import { resolvePublicProductCategory } from "../../src/lib/productCategory";
 
 dotenv.config();
 
@@ -132,7 +133,10 @@ export async function getProducts(): Promise<Product[]> {
       produto: item.produto || item.title || item.name,
       rawTitle: item.raw_title || item.rawTitle || undefined,
       displayTitle: item.display_title || item.displayTitle || undefined,
-      categoria: item.categoria || item.category,
+      categoria: resolvePublicProductCategory(item.categoria || item.category, {
+        title: item.display_title || item.displayTitle || item.raw_title || item.produto || item.title || item.name,
+        description: item.descricao || item.description,
+      }),
       preco: Number(item.preco || item.price || 0),
       imagens: Array.isArray(item.imagens)
         ? item.imagens
@@ -187,6 +191,8 @@ export async function createProduct(input: {
   rawTitle?: string;
   displayTitle?: string;
   curatorNote?: string;
+  imageEditorialStatus?: Product["imageEditorialStatus"];
+  imageCuration?: Product["imageCuration"];
 }, options: { syncCatalog?: boolean } = {}): Promise<Product> {
   const products = await getProducts();
   const inputLink = input.link.trim();
@@ -260,7 +266,9 @@ export async function createProduct(input: {
     displayTitle: input.displayTitle?.trim(),
     curatorNote: input.curatorNote?.trim(),
     paginaPonteUrl: (input.paginaPonteUrl || "").trim(),
-    ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional)
+    ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional),
+    imageEditorialStatus: input.imageEditorialStatus,
+    imageCuration: input.imageCuration,
   };
 
   products.unshift(newProduct);
