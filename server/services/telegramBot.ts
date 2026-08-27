@@ -13,6 +13,7 @@ import { stripRawAffiliateProvenance } from "./productLifecycle";
 import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 import { normalizePromotionOffer } from "./promotionOffer";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import * as commercialCockpit from "./commercialCockpit";
 import { runDiscoverCommand } from "./discoveryCommands";
 // Bloco N11 — porta controlada de batch /discover-batch (somente URLs).
@@ -2007,8 +2008,9 @@ async function renderCycleState(input: string): Promise<string> {
 
         if (chatId) {
           let sentMsg: any = null;
-          if (review.imagens && review.imagens.length > 0) {
-            sentMsg = await sendTelegramPhoto(chatId, review.imagens[0], cardText, keyboard);
+          const primaryImageUrl = resolveCanonicalProductImage(review).primaryImageUrl;
+          if (primaryImageUrl) {
+            sentMsg = await sendTelegramPhoto(chatId, primaryImageUrl, cardText, keyboard);
           } else {
             sentMsg = await sendTelegramMessage(chatId, cardText, keyboard);
           }
@@ -2135,8 +2137,9 @@ async function renderCycleState(input: string): Promise<string> {
       const keyboard = buildMainReviewKeyboard(targetReview.id);
       if (chatId) {
         await sendTelegramMessage(chatId, `✅ Categoria atualizada para <b>${category}</b>.`);
+        const primaryImageUrl = resolveCanonicalProductImage(targetReview).primaryImageUrl;
         if (targetReview.cardMessageId) await editTelegramMessageCaption(chatId, targetReview.cardMessageId, updatedCardText, keyboard);
-        else if (targetReview.imagens[0]) await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
+        else if (primaryImageUrl) await sendTelegramPhoto(chatId, primaryImageUrl, updatedCardText, keyboard);
         else await sendTelegramMessage(chatId, updatedCardText, keyboard);
       }
       return;
@@ -2227,7 +2230,9 @@ async function renderCycleState(input: string): Promise<string> {
         if (targetReview.cardMessageId) {
           await editTelegramMessageCaption(chatId, targetReview.cardMessageId, updatedCardText, keyboard);
         } else {
-          await sendTelegramPhoto(chatId, targetReview.imagens[0], updatedCardText, keyboard);
+          const primaryImageUrl = resolveCanonicalProductImage(targetReview).primaryImageUrl;
+          if (primaryImageUrl) await sendTelegramPhoto(chatId, primaryImageUrl, updatedCardText, keyboard);
+          else await sendTelegramMessage(chatId, updatedCardText, keyboard);
         }
       }
     } else {

@@ -30,6 +30,7 @@ import {
   assessProductReadiness,
   type ProductImageProbe,
 } from "../../src/lib/productCanonical";
+import { normalizeNewsletterEmail } from "./newsletterConsent";
 
 export type CampaignServiceOptions = {
   store?: NewsletterCampaignStore;
@@ -137,7 +138,7 @@ export async function sendCampaignTest(
 ): Promise<{ campaign: EmailCampaign; providerResult: NewsletterProviderResult }> {
   if (campaign.status !== "approved") throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
   const env = options.env || process.env;
-  const testEmail = (env.NEWSLETTER_TEST_EMAIL || "").trim().toLowerCase();
+  const testEmail = getConfiguredNewsletterTestEmail(env);
   if (!testEmail) throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
   const store = options.store || createSupabaseNewsletterCampaignStore();
   // The administrative test destination is intentionally outside the subscriber list.
@@ -193,9 +194,10 @@ export async function startGeneralSend(
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
   const store = options.store || createSupabaseNewsletterCampaignStore();
+  const env = options.env || process.env;
   const now = options.now || new Date();
   const sending = transitionCampaign(campaign, { type: "begin_sending", actorTelegramId }, now);
-  await store.createEligibleRecipients(campaign.id);
+  await store.createEligibleRecipients(campaign.id, getConfiguredNewsletterTestEmail(env));
   const counts = await store.summarizeRecipients(campaign.id);
   if (counts.total === 0) {
     const completed = transitionCampaign(sending, { type: "finish_sending", actorTelegramId, counts }, now);
@@ -258,6 +260,10 @@ export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: 
     "O HTML completo será enviado pelo worker. O CTA usa o link canônico/página ponte do produto com o helper de UTMs existente.",
     "O rodapé inclui disclosure de afiliado e descadastro individual.",
   ].join("\n");
+}
+
+function getConfiguredNewsletterTestEmail(env: NodeJS.ProcessEnv): string {
+  return normalizeNewsletterEmail(env.NEWSLETTER_TEST_EMAIL || "");
 }
 
 function buildUnsubscribeUrl(publicBaseUrl: string, token: string): string {

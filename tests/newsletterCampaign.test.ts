@@ -79,8 +79,11 @@ class FakeCampaignStore implements NewsletterCampaignStore {
   async getCampaign(campaignId: string): Promise<EmailCampaign | null> { const value = this.campaigns.get(campaignId); return value ? structuredClone(value) : null; }
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
   async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> { return [...this.campaigns.values()].slice(-Math.max(1, limit)).reverse().map(row => structuredClone(row)); }
-  async createEligibleRecipients(campaignId: string): Promise<number> {
-    const eligible = [...this.subscribers.entries()].filter(([, value]) => value.status === "subscribed" && value.marketing_consent).map(([email]) => email);
+  async createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number> {
+    const normalizedExcludedEmail = (excludedEmail || "").trim().toLowerCase();
+    const eligible = [...this.subscribers.entries()]
+      .filter(([email, value]) => value.status === "subscribed" && value.marketing_consent && email !== normalizedExcludedEmail)
+      .map(([email]) => email);
     for (const email of eligible) {
       if (!this.recipients.some(row => row.campaignId === campaignId && row.subscriberEmail === email)) {
         this.recipients.push(makeRecipient(campaignId, email));
@@ -537,6 +540,38 @@ test("campaign service enforces confirmation before persisting general sending",
   assert.equal(sending.counts.total, 1);
 });
 
+test("general eligibility excludes configured test email but keeps normal and plus-alias subscribers", async () => {
+  const store = new FakeCampaignStore();
+  store.subscribers.set("admin@example.test", { status: "subscribed", marketing_consent: true });
+  store.subscribers.set("regular@example.test", { status: "subscribed", marketing_consent: true });
+  store.subscribers.set("regular+tag@gmail.com", { status: "subscribed", marketing_consent: true });
+  store.subscribers.set("suppressed@example.test", { status: "suppressed", marketing_consent: false });
+  const subscribersBefore = structuredClone([...store.subscribers.entries()]);
+  const confirmed = {
+    ...draft("campaign-test-recipient-exclusion"),
+    status: "test_sent" as const,
+    testSentAt: new Date().toISOString(),
+    testSentByTelegramId: "admin-1",
+    generalSendConfirmedAt: new Date().toISOString(),
+    generalSendConfirmedByTelegramId: "admin-1",
+  };
+  store.campaigns.set(confirmed.id, confirmed);
+
+  const sending = await startGeneralSend(confirmed, "admin-1", {
+    store,
+    env: { NEWSLETTER_TEST_EMAIL: " ADMIN@EXAMPLE.TEST " },
+  });
+
+  assert.equal(sending.status, "sending");
+  assert.equal(sending.counts.total, 2);
+  assert.deepEqual(
+    store.recipients.map(row => row.subscriberEmail).sort(),
+    ["regular+tag@gmail.com", "regular@example.test"],
+  );
+  assert.equal(store.recipients.some(row => row.subscriberEmail === "admin@example.test"), false);
+  assert.deepEqual([...store.subscribers.entries()], subscribersBefore);
+});
+
 test("campaign start with zero eligible subscribers closes safely without recipients", async () => {
   const store = new FakeCampaignStore();
   const confirmed = {
@@ -573,8 +608,9 @@ test("DRY_RUN test-send uses a fake provider and does not prepare a production u
   assert.equal(store.prepareCalls, 0);
 });
 
-test("administrative real-mode test does not require subscriber membership", async () => {
+test("administrative real-mode test remains exclusive to configured test email", async () => {
   const store = new FakeCampaignStore();
+  store.subscribers.set("gutemberg160701@gmail.com", { status: "subscribed", marketing_consent: true });
   const approved = { ...draft("campaign-admin-real-test"), status: "approved" as const };
   store.campaigns.set(approved.id, approved);
   let called = 0;

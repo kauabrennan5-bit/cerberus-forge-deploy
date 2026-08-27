@@ -3,6 +3,7 @@ import { AppConfig, Product } from '../types';
 import { extractProduct, createProduct, deleteProduct, verifyAdminPassword } from '../services/api';
 import { Sparkles, Lock, Trash2, Pencil, Check, AlertTriangle, Link as LinkIcon, Loader2, Upload, Image as ImageIcon, ShieldCheck } from 'lucide-react';
 import { EditProductModal } from './EditProductModal';
+import { resolveCanonicalProductImage } from '../lib/productCanonical';
 
 interface AdminFormProps {
   config: AppConfig;
@@ -804,24 +805,26 @@ export const AdminForm: React.FC<AdminFormProps> = ({
         )}
 
         <div className="divide-y divide-[#3A342E]">
-          {products.map((p) => (
-            <div key={p.id} className="py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex items-center space-x-3 min-w-0 flex-1">
-                <div className="w-10 h-10 bg-[#0B0908] border border-[#3A342E] rounded-none overflow-hidden shrink-0">
-                  {p.imagens?.[0] ? (
-                    <img src={p.imagens[0]} alt={p.produto} className="w-full h-full object-contain" />
-                  ) : (
-                    <div className="w-full h-full bg-[#0B0908]" />
-                  )}
+          {products.map((p) => {
+            const primaryImageUrl = resolveCanonicalProductImage(p).primaryImageUrl;
+            return (
+              <div key={p.id} className="py-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center space-x-3 min-w-0 flex-1">
+                  <div className="w-10 h-10 bg-[#0B0908] border border-[#3A342E] rounded-none overflow-hidden shrink-0">
+                    {primaryImageUrl ? (
+                      <img src={primaryImageUrl} alt={p.produto} className="w-full h-full object-contain" />
+                    ) : (
+                      <div className="w-full h-full bg-[#0B0908]" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-display uppercase font-bold text-sm text-[#E8E1D3] truncate">{p.produto}</p>
+                    <p className="text-[10px] font-mono text-[#8A1F1F] uppercase">{p.categoria} • R$ {p.preco.toFixed(2)}</p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="font-display uppercase font-bold text-sm text-[#E8E1D3] truncate">{p.produto}</p>
-                  <p className="text-[10px] font-mono text-[#8A1F1F] uppercase">{p.categoria} • R$ {p.preco.toFixed(2)}</p>
-                </div>
-              </div>
 
-              {/* Action Buttons: [ ✏️ Editar ] [ 🗑️ Excluir ] */}
-              <div className="flex items-center space-x-2 shrink-0">
+                {/* Action Buttons: [ ✏️ Editar ] [ 🗑️ Excluir ] */}
+                <div className="flex items-center space-x-2 shrink-0">
                 <button
                   type="button"
                   onClick={(e) => {
@@ -852,9 +855,10 @@ export const AdminForm: React.FC<AdminFormProps> = ({
                   )}
                   <span className="hidden sm:inline">Excluir</span>
                 </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

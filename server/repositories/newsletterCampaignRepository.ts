@@ -32,7 +32,7 @@ export interface NewsletterCampaignStore {
   getCampaign(campaignId: string): Promise<EmailCampaign | null>;
   listRecentCampaigns(limit: number): Promise<EmailCampaign[]>;
   updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
-  createEligibleRecipients(campaignId: string): Promise<number>;
+  createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number>;
   claimRecipient(campaignId: string, leaseToken: string, leaseMs: number): Promise<{ recipient: EmailCampaignRecipient; leaseToken: string } | null>;
   readSubscriber(email: string): Promise<CampaignSubscriberEligibility | null>;
   prepareUnsubscribeToken(email: string): Promise<string>;
@@ -98,16 +98,19 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
     return (data || []).map(fromCampaignRow);
   }
 
-  async createEligibleRecipients(campaignId: string): Promise<number> {
+  async createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number> {
+    const normalizedExcludedEmail = normalizeNewsletterEmail(excludedEmail);
     let offset = 0;
     let inserted = 0;
     const pageSize = 1000;
     while (true) {
-      const { data, error } = await this.client
+      let query = this.client
         .from("newsletter_subscribers")
         .select("email")
         .eq("status", "subscribed")
-        .eq("marketing_consent", true)
+        .eq("marketing_consent", true);
+      if (normalizedExcludedEmail) query = query.neq("email", normalizedExcludedEmail);
+      const { data, error } = await query
         .order("email", { ascending: true })
         .range(offset, offset + pageSize - 1);
       if (error) throw error;
@@ -356,4 +359,8 @@ function nullableString(value: unknown): string | null {
 function numberValue(value: unknown): number {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
+}
+
+function normalizeNewsletterEmail(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }

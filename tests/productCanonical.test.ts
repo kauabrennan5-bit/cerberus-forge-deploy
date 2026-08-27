@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   assessProductReadiness,
@@ -114,6 +115,24 @@ test("accepts a fictional new product with a valid HTTPS image and no manual map
   });
   assert.equal(future.primaryImageUrl, "https://cdn.example.test/future.webp");
   assert.equal(future.destinationUrl, "https://cerberusfinds.com/produto/canonical-test");
+});
+
+test("main visual consumers use the shared canonical image resolver", () => {
+  const consumers = [
+    "src/components/ProductCard.tsx",
+    "src/components/ProductDetail.tsx",
+    "src/components/AdminForm.tsx",
+    "server/services/newsletterInstitutional.ts",
+    "server/services/newsletterCampaignService.ts",
+    "server/services/newsletterCampaignTemplate.ts",
+    "server/services/telegramBot.ts",
+    "scripts/productOpenGraph.js",
+  ];
+  for (const relativePath of consumers) {
+    const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
+    assert.match(source, /resolveCanonicalProductImage|assessProductReadiness/);
+    assert.doesNotMatch(source, /imagens[^\\n]*\\[0\\]/);
+  }
 });
 
 test("probe accepts an image HEAD response and falls back to ranged GET", async () => {

@@ -1,4 +1,6 @@
 const DEFAULT_PUBLIC_ORIGIN = 'https://cerberusfinds.com';
+import { resolveCanonicalProductImage } from '../src/lib/productCanonical.ts';
+
 const DEFAULT_DESCRIPTION = 'Peça selecionada pela curadoria Cerberus Finds.';
 
 function escapeHtml(value) {
@@ -29,9 +31,7 @@ export function buildProductPublicUrl(product, publicOrigin = DEFAULT_PUBLIC_ORI
 export function buildProductOpenGraphTags(product, publicOrigin = DEFAULT_PUBLIC_ORIGIN) {
   const title = getProductPresentationTitle(product);
   const url = buildProductPublicUrl(product, publicOrigin);
-  const image = Array.isArray(product?.imagens) && typeof product.imagens[0] === 'string'
-    ? product.imagens[0].trim()
-    : '';
+  const image = resolveCanonicalProductImage(product).primaryImageUrl || '';
 
   const tags = [
     `<title>${escapeHtml(title)} | Cerberus Finds</title>`,
