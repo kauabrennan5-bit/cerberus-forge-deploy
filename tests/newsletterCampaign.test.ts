@@ -1212,10 +1212,10 @@ test("canonical product and campaign renderers do not expose secrets or credenti
 
 test("closed editorial planner uses the exact sequence for 1, 3, 5 and 7 products", () => {
   const expected: Record<number, string[]> = {
-    1: ["HERO", "MICROEDITORIAL"],
-    3: ["HERO", "MICROEDITORIAL", "GRID-2"],
-    5: ["HERO", "MICROEDITORIAL", "GRID-2", "MICROEDITORIAL", "DESTAQUE-HORIZONTAL", "COMPACTO"],
-    7: ["HERO", "MICROEDITORIAL", "GRID-2", "MICROEDITORIAL", "DESTAQUE-HORIZONTAL", "COMPACTO", "GRID-2"],
+    1: ["MASTHEAD", "HERO", "MICROEDITORIAL"],
+    3: ["MASTHEAD", "HERO", "MICROEDITORIAL", "GRID-2"],
+    5: ["MASTHEAD", "HERO", "MICROEDITORIAL", "GRID-2", "MICROEDITORIAL", "DESTAQUE-HORIZONTAL", "COMPACTO"],
+    7: ["MASTHEAD", "HERO", "MICROEDITORIAL", "GRID-2", "MICROEDITORIAL", "DESTAQUE-HORIZONTAL", "COMPACTO", "GRID-2"],
   };
   for (const [count, sequence] of Object.entries(expected)) {
     const products = Array.from({ length: Number(count) }, (_, index) => makeCollectionProduct(index));
@@ -1250,7 +1250,7 @@ test("collection visible surface uses only customer-safe fields and descriptive 
   assert.ok(rendered.publicFieldAudit?.excludedInternal.includes("providerRef"));
   assert.doesNotMatch(rendered.text, /db-internal-001|REF-INTERNAL-001|archive_pending|provider-secret-owner|BREVO_PROVIDER_ARCHIVE_TITLE|affiliate_preview|AFILIADO/i);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
-  assert.equal(imageTags.length, 1);
+  assert.equal(imageTags.length, 2);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /display\s*:\s*(?:flex|grid)|linear-gradient|mix-blend-mode|<script/i);
 });
@@ -1278,6 +1278,35 @@ function makeCollectionProduct(index: number, overrides: Partial<Product> = {}):
     ...overrides,
   };
 }
+
+function inspectGrid2Rows(html: string): Array<{ directCellCount: number; widths: string[] }> {
+  const rows: Array<{ directCellCount: number; widths: string[] }> = [];
+  const gridTables = [...html.matchAll(/<table\b[^>]*class="email-collection-grid-table"[^>]*>/gi)];
+  for (const opening of gridTables) {
+    const afterOpening = html.slice((opening.index ?? 0) + opening[0].length);
+    let tableDepth = 1;
+    let currentRow: { directCellCount: number; widths: string[] } | null = null;
+    const tokens = [...afterOpening.matchAll(/<\/?(?:table|tr|td)\b[^>]*>/gi)];
+    for (const token of tokens) {
+      const tag = token[0];
+      if (/^<table\b/i.test(tag)) tableDepth += 1;
+      else if (/^<\/table/i.test(tag)) {
+        tableDepth -= 1;
+        if (tableDepth === 0) break;
+      } else if (/^<tr\b/i.test(tag) && tableDepth === 1) {
+        currentRow = { directCellCount: 0, widths: [] };
+        rows.push(currentRow);
+      } else if (/^<\/tr/i.test(tag) && tableDepth === 1) {
+        currentRow = null;
+      } else if (/^<td\b/i.test(tag) && tableDepth === 1 && currentRow) {
+        currentRow.directCellCount += 1;
+        currentRow.widths.push(tag.match(/\bwidth="([^"]+)"/i)?.[1] || "");
+      }
+    }
+  }
+  return rows;
+}
+
 
 test("weekly collection selector returns the newest configurable ten products", async () => {
   const products = Array.from({ length: 12 }, (_, index) => makeCollectionProduct(index));
@@ -1370,6 +1399,48 @@ test("weekly collection campaign defaults to a temporary fourteen-day lookback",
   assert.equal(store.recipients.length, 0);
 });
 
+test("GRID-2 renders paired products as sibling table cells and not a linear list", () => {
+  const rendered = renderNewsletterProductCollection(Array.from({ length: 6 }, (_, index) => makeCollectionProduct(index)), {
+    trackingCampaignId: "campaign-grid-structure",
+  });
+  const rows = inspectGrid2Rows(rendered.html);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0], { directCellCount: 2, widths: ["50%", "50%"] });
+  assert.equal((rendered.html.match(/<img\b[^>]*class="email-collection-image"[^>]*width="286"[^>]*>/gi) || []).length, 2);
+  assert.doesNotMatch(rendered.html, /class="email-collection-grid-cell"[^>]*width="100%"/i);
+  assert.doesNotMatch(rendered.html, /display\s*:\s*(?:flex|grid)/i);
+});
+
+test("GRID-2 reserves aligned title, price and CTA areas for varied editorial content", () => {
+  const products = [
+    makeCollectionProduct(0, { displayTitle: "Curto", produto: "Curto", categoria: "Casa", preco: 9.9 }),
+    makeCollectionProduct(1, { displayTitle: "Título médio para uma peça selecionada", produto: "Título médio para uma peça selecionada", categoria: "Iluminação", preco: 129.9 }),
+    makeCollectionProduct(2, { displayTitle: "Título muito longo para confirmar que a área editorial permanece previsível sem cortar o nome importante do produto", produto: "Título muito longo para confirmar que a área editorial permanece previsível sem cortar o nome importante do produto", categoria: "Casa e decoração", preco: 12999.99 }),
+  ];
+  const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-grid-heights" });
+  assert.equal((rendered.html.match(/class="email-collection-grid-image-cell" height="156"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-title" height="72"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-price" height="34"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/class="email-collection-grid-action" height="45"/g) || []).length, 2);
+  assert.equal((rendered.html.match(/VER OFERTA/g) || []).length, 3);
+  assert.equal(rendered.offerUrls.filter((url) => /utm_content=/.test(url)).length, 3);
+  assert.doesNotMatch(rendered.html, /text-overflow|line-clamp|display\s*:\s*(?:flex|grid)/i);
+});
+
+test("collection quantities preserve one image, CTA and individual UTM per product", () => {
+  for (const count of [1, 3, 5, 7]) {
+    const products = Array.from({ length: count }, (_, index) => makeCollectionProduct(index));
+    const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: `campaign-quantity-${count}` });
+    assert.equal((rendered.html.match(/class="email-collection-image"/g) || []).length, count);
+    assert.equal((rendered.html.match(/VER OFERTA/g) || []).length, count);
+    assert.equal(rendered.offerUrls.length, count);
+    assert.equal(new Set(rendered.offerUrls).size, count);
+    for (const product of products) {
+      assert.equal(rendered.offerUrls.filter((url) => url.includes(`utm_content=${product.id}`)).length, 1);
+    }
+  }
+});
+
 test("collection renderer supports ten products, variable sizes, canonical images and individual UTMs", () => {
   const products = Array.from({ length: 10 }, (_, index) => makeCollectionProduct(index));
   const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-collection" });
@@ -1387,6 +1458,71 @@ test("collection renderer supports ten products, variable sizes, canonical image
   assert.equal((variable.html.match(/class="email-collection-image"/g) || []).length, 6);
 });
 
+test("MASTHEAD is the first editorial block and Variant A is universal", () => {
+  const rendered = renderNewsletterProductCollection(Array.from({ length: 5 }, (_, index) => makeCollectionProduct(index)), {
+    trackingCampaignId: "campaign-masthead-a",
+  });
+  assert.equal(rendered.blockSequence[0], "MASTHEAD");
+  assert.equal(rendered.mastheadVariant, "A");
+  assert.equal(rendered.mastheadImageUrl, null);
+  assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
+  assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-official.png");
+  assert.match(rendered.html, /class="email-masthead-logo"/);
+  assert.match(rendered.html, /alt="Logo Cerberus Finds"/);
+  assert.match(rendered.html, /CERBERUS FINDS/);
+  assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
+  assert.match(rendered.html, /EDIÇÃO/);
+  assert.match(rendered.html, />05<\/font>/);
+  assert.match(rendered.html, /OBJETOS PARA OLHAR DE NOVO|UM OLHAR ATENTO PARA O QUE ENTRA/);
+  assert.match(rendered.text, /MASTHEAD/);
+});
+
+test("MASTHEAD dedicated asset is optional, clean HTTPS only, and does not use a product map", () => {
+  const products = Array.from({ length: 5 }, (_, index) => makeCollectionProduct(index));
+  const dedicated = renderNewsletterProductCollection(products, {
+    trackingCampaignId: "campaign-masthead-dedicated",
+    mastheadImageStatus: "clean",
+    mastheadAssetUrl: "https://cerberusfinds.com/assets/newsletter/masthead/editorial-cover.webp",
+  });
+  assert.equal(dedicated.mastheadVariant, "B");
+  assert.equal(dedicated.mastheadImageUrl, "https://cerberusfinds.com/assets/newsletter/masthead/editorial-cover.webp");
+  assert.match(dedicated.html, /editorial-cover\.webp/);
+  assert.doesNotMatch(dedicated.html, /product-map|prod-collection-0.*editorial-cover/i);
+
+  const insecure = renderNewsletterProductCollection(products, {
+    trackingCampaignId: "campaign-masthead-dedicated-insecure",
+    mastheadImageStatus: "clean",
+    mastheadAssetUrl: "http://cerberusfinds.com/assets/newsletter/masthead/editorial-cover.webp",
+  });
+  assert.equal(insecure.mastheadVariant, "A");
+  assert.equal(insecure.mastheadImageUrl, null);
+});
+
+test("MASTHEAD Variant B uses clean canonical hero imagery and falls back to A", () => {
+  const products = Array.from({ length: 5 }, (_, index) => makeCollectionProduct(index));
+  products[0].imageEditorialStatus = "clean";
+  const variantB = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-masthead-b" });
+  assert.equal(variantB.mastheadVariant, "B");
+  assert.equal(variantB.mastheadImageUrl, products[0].imagens[0]);
+  assert.match(variantB.html, /editorial-masthead-b/);
+  assert.match(variantB.html, /class="email-masthead-image"/);
+  assert.match(variantB.html, /width="250" height="210"/);
+  assert.match(variantB.html, /alt="Imagem editorial da edição Cerberus Finds"/);
+  assert.doesNotMatch(variantB.html, /display\\s*:\\s*(?:flex|grid)/i);
+
+  const fallback = renderNewsletterProductCollection(products, {
+    trackingCampaignId: "campaign-masthead-fallback",
+    mastheadImageStatus: "unavailable",
+    mastheadLogoStatus: "unavailable",
+  });
+  assert.equal(fallback.mastheadVariant, "A");
+  assert.equal(fallback.mastheadImageUrl, null);
+  assert.equal(fallback.mastheadLogoUrl, null);
+  assert.match(fallback.html, /editorial-masthead-a/);
+  assert.match(fallback.html, /CF<\/font><\/span>/);
+  assert.doesNotMatch(fallback.html, /class="email-masthead-image"/);
+});
+
 test("full collection campaign keeps the Cerberus editorial shell and email safety constraints", () => {
   const products = Array.from({ length: 8 }, (_, index) => makeCollectionProduct(index));
   const rendered = renderNewsletterCollectionCampaign(products, {
@@ -1397,8 +1533,11 @@ test("full collection campaign keeps the Cerberus editorial shell and email safe
     socialLinks: [{ label: "Instagram", url: "https://instagram.com/cerberusfinds" }],
   });
   assert.match(rendered.subject, /Novidades da semana/);
-  assert.match(rendered.html, /8 novos achados/i);
-  assert.match(rendered.html, /NOVIDADES/);
+  assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
+  assert.match(rendered.html, /EDIÇÃO/);
+  assert.match(rendered.html, />08<\/font>/);
+  assert.match(rendered.html, /OBJETOS PARA OLHAR DE NOVO|UM OLHAR ATENTO PARA O QUE ENTRA/);
+  assert.doesNotMatch(rendered.html, /<h1[^>]*>[^<]*8 NOVOS ACHADOS<\/h1>/i);
   assert.match(rendered.html, /VER OFERTA/);
   assert.match(rendered.html, /VER TODAS AS NOVIDADES/);
   assert.match(rendered.html, /UNSUBSCRIBE_URL_PLACEHOLDER|\{\{UNSUBSCRIBE_URL\}\}/);
@@ -1408,8 +1547,12 @@ test("full collection campaign keeps the Cerberus editorial shell and email safe
   assert.match(rendered.html, /background-color:#0B0908/);
   assert.match(rendered.html, /background-color:#181512/);
   assert.match(rendered.html, /@media only screen and \(max-width:620px\)/);
+  assert.match(rendered.html, /email-collection-grid-cell\{padding:0 4px 16px!important;/);
+  assert.match(rendered.html, /email-collection-grid-title\{height:58px!important;/);
+  assert.match(rendered.html, /@media only screen and \(max-width:374px\).*email-collection-grid-cell\{display:block!important;width:100%!important;/);
+  assert.match(rendered.html, /email-collection-grid-action a\{font-size:9px!important;padding:8px 8px!important;/);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
-  assert.equal(imageTags.length, 9);
+  assert.equal(imageTags.length, 10);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /<script|gradient|mix-blend-mode|gmail-blend-screen|gmail-blend-difference|app store|google play|qr code|\bBREVO\b|\bSUPABASE\b|\bRender\b|email_campaign_products/i);
   assert.doesNotMatch(rendered.html, /NEWSLETTER_TEST_EMAIL|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);

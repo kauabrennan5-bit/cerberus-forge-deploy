@@ -6,6 +6,8 @@ import {
   toCanonicalProduct,
 } from "../../src/lib/productCanonical";
 import { buildNewsletterAssetUrl } from "./newsletterInstitutional";
+import { getProductDisplayCategory } from "../../src/lib/productPresentation";
+import { renderEditorialCollection, type EditorialBlockName, type EditorialCollectionRenderOptions, type EditorialCollectionRenderResult } from "./newsletterCampaignBlocks";
 
 export const UNSUBSCRIBE_URL_PLACEHOLDER = "{{UNSUBSCRIBE_URL}}";
 
@@ -42,9 +44,15 @@ export type RenderedNewsletterCampaign = {
 
 export type NewsletterProductCollectionRenderOptions = {
   trackingCampaignId?: string;
+  mastheadImageStatus?: "clean" | "unavailable";
+  mastheadAssetUrl?: string;
+  mastheadLogoStatus?: "available" | "unavailable";
 };
 
 export type NewsletterCollectionCampaignRenderOptions = NewsletterCampaignRenderOptions & {
+  mastheadImageStatus?: "clean" | "unavailable";
+  mastheadAssetUrl?: string;
+  mastheadLogoStatus?: "available" | "unavailable";
   collectionTitle?: string;
   collectionKicker?: string;
   collectionIntro?: string;
@@ -54,8 +62,16 @@ export type NewsletterCollectionCampaignRenderOptions = NewsletterCampaignRender
 
 export type RenderedNewsletterProductCollection = {
   html: string;
+  mastheadVariant?: "A" | "B";
+  mastheadImageUrl?: string | null;
+  mastheadLogoUrl?: string | null;
   text: string;
   offerUrls: string[];
+  blockSequence?: EditorialBlockName[];
+  imageOverlayStatus?: EditorialCollectionRenderResult["imageOverlayStatus"];
+  overlayProductPositions?: number[];
+  altCoverage?: EditorialCollectionRenderResult["altCoverage"];
+  publicFieldAudit?: EditorialCollectionRenderResult["publicFieldAudit"];
 };
 
 const COLORS = {
@@ -168,7 +184,7 @@ export function renderNewsletterCampaign(
   return { subject, html, text, offerUrl };
 }
 
-export function renderNewsletterProductCollection(
+function renderLegacyNewsletterProductCollection(
   products: readonly Product[],
   options: NewsletterProductCollectionRenderOptions = {},
 ): RenderedNewsletterProductCollection {
@@ -197,29 +213,58 @@ export function renderNewsletterProductCollection(
       : canonical.destinationUrl;
     const offer = normalizeOffer(product.ofertaPromocional);
     const currentPrice = offer?.price || canonical.price;
-    const category = canonical.category
-      ? `<p style="margin:0 0 9px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;">${accentEmailText(escapeHtml(canonical.category))}</p>`
+    const category = getProductDisplayCategory(product);
+    const categoryHtml = category
+      ? `<p class="email-collection-category" style="margin:0 0 7px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:1.35;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;">${accentEmailText(escapeHtml(category))}</p>`
       : "";
     const previousPrice = offer && product.preco > offer.price ? formatPrice(product.preco) : "";
-    const priceHtml = `<p style="margin:0;color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.4;font-weight:700;">${primaryEmailText(escapeHtml(formatPrice(currentPrice)))}</p>${previousPrice ? `<p style="margin:5px 0 0;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.4;text-decoration:line-through;">${secondaryEmailText(escapeHtml(previousPrice))}</p>` : ""}`;
+    const priceHtml = `<p style="margin:0;color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.35;font-weight:700;">${primaryEmailText(escapeHtml(formatPrice(currentPrice)))}</p>${previousPrice ? `<p style="margin:4px 0 0;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.35;text-decoration:line-through;">${secondaryEmailText(escapeHtml(previousPrice))}</p>` : ""}`;
+    const cardHtml = (variant: "feature" | "grid") => {
+      const imageClass = "email-collection-image";
+      const imageWidth = variant === "feature" ? 592 : 286;
+      const imageStyle = variant === "feature"
+        ? "display:block;width:100%;max-width:592px;height:240px;object-fit:contain;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;"
+        : "display:block;width:100%;max-width:286px;height:152px;object-fit:contain;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;";
+      const titleSize = variant === "feature" ? 27 : 17;
+      const titleLineHeight = variant === "feature" ? "1.08" : "1.14";
+      const cardPadding = variant === "feature" ? "18px 0 10px" : "11px 10px 8px";
+      const actionPadding = variant === "feature" ? "12px 0 4px" : "9px 0 2px";
+      return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-collection-card email-collection-card-${variant}" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};margin:0;"><tr><td bgcolor="${COLORS.surface}" style="padding:0;background:${COLORS.surface};background-color:${COLORS.surface};"><img class="${imageClass}" src="${escapeHtml(image.primaryImageUrl)}" alt="${escapeHtml(canonical.title)}" width="${imageWidth}" style="${imageStyle}" /></td></tr><tr><td class="email-collection-card-copy" bgcolor="${COLORS.surface}" style="padding:${cardPadding};background:${COLORS.surface};background-color:${COLORS.surface};">${categoryHtml}<h2 class="email-collection-title" style="margin:0;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:${titleSize}px;line-height:${titleLineHeight};font-weight:700;">${primaryEmailText(escapeHtml(canonical.title))}</h2><div class="email-collection-price" style="min-height:${variant === "feature" ? "20px" : "19px"};margin-top:8px;">${priceHtml}</div></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:${actionPadding};background:${COLORS.surface};background-color:${COLORS.surface};"><a href="${escapeHtml(offerUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:${variant === "feature" ? "13px 18px" : "10px 12px"};background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:${variant === "feature" ? "12px" : "10px"};line-height:1.3;font-weight:700;letter-spacing:${variant === "feature" ? "1.7px" : "1.3px"};text-decoration:none;text-transform:uppercase;">${ctaEmailText("VER OFERTA")}</a></td></tr></table>`;
+    };
     return {
       offerUrl,
       text: `${canonical.title} — ${formatPrice(currentPrice)} — ${offerUrl}`,
-      html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};margin:0;"><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 16px;background:${COLORS.surface};background-color:${COLORS.surface};"><img class="email-collection-image" src="${escapeHtml(image.primaryImageUrl)}" alt="${escapeHtml(canonical.title)}" width="592" style="display:block;width:100%;max-width:592px;height:auto;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" /></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 10px;background:${COLORS.surface};background-color:${COLORS.surface};">${category}<h2 class="email-collection-title" style="margin:0;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:24px;line-height:1.08;font-weight:700;">${primaryEmailText(escapeHtml(canonical.title))}</h2>${priceHtml}</td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:13px 0 22px;background:${COLORS.surface};background-color:${COLORS.surface};"><a href="${escapeHtml(offerUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 18px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:1.7px;text-decoration:none;text-transform:uppercase;">${ctaEmailText("VER OFERTA")}</a></td></tr></table>`,
+      featureHtml: cardHtml("feature"),
+      gridHtml: cardHtml("grid"),
     };
   });
 
   const first = cards[0];
   const pairs: typeof cards[] = [];
   for (let index = 1; index < cards.length; index += 2) pairs.push(cards.slice(index, index + 2));
-  const featureHtml = `<tr><td class="email-collection-feature" bgcolor="${COLORS.surface}" style="padding:0 0 30px;background:${COLORS.surface};background-color:${COLORS.surface};">${first.html}</td></tr>`;
-  const gridHtml = pairs.map(pair => `<tr class="email-collection-grid-row"><td bgcolor="${COLORS.surface}" style="padding:0;background:${COLORS.surface};background-color:${COLORS.surface};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-collection-grid-table" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr>${pair.map(card => `<td class="email-collection-grid-cell" width="50%" valign="top" bgcolor="${COLORS.surface}" style="width:50%;padding:0 9px 22px;background:${COLORS.surface};background-color:${COLORS.surface};">${card.html}</td>`).join("")}${pair.length === 1 ? `<td class="email-collection-grid-cell email-collection-grid-spacer" width="50%" bgcolor="${COLORS.surface}" style="width:50%;padding:0 9px 22px;background:${COLORS.surface};background-color:${COLORS.surface};">&nbsp;</td>` : ""}</tr></table></td></tr>`).join("");
+  const featureHtml = `<tr><td class="email-collection-feature" bgcolor="${COLORS.surface}" style="padding:0 0 24px;background:${COLORS.surface};background-color:${COLORS.surface};">${first.featureHtml}</td></tr>`;
+  const gridHtml = pairs.map((pair, pairIndex) => {
+    const editorialBreak = pairIndex === 0
+      ? `<tr><td colspan="2" class="email-collection-interlude" bgcolor="${COLORS.body}" style="padding:16px 12px 18px;background:${COLORS.body};background-color:${COLORS.body};"><p style="margin:0 0 5px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;">${accentEmailText("Olha o que encontramos")}</p><p style="margin:0;color:${COLORS.ivory};font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.25;font-weight:700;">${ivoryEmailText("Peças com presença, escolhidas para sair do óbvio.")}</p></td></tr>`
+      : pairIndex === 1
+        ? `<tr><td colspan="2" class="email-collection-interlude" bgcolor="${COLORS.body}" style="padding:16px 12px 18px;background:${COLORS.body};background-color:${COLORS.body};"><p style="margin:0 0 5px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;">${accentEmailText("Seu próximo achado")}</p><p style="margin:0;color:${COLORS.ivory};font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.25;font-weight:700;">${ivoryEmailText("Qual desses combina com você?")}</p></td></tr>`
+        : "";
+    return `<tr class="email-collection-grid-row"><td bgcolor="${COLORS.surface}" style="padding:0;background:${COLORS.surface};background-color:${COLORS.surface};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-collection-grid-table" bgcolor="${COLORS.surface}" style="width:100%;table-layout:fixed;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr>${pair.map(card => `<td class="email-collection-grid-cell" width="50%" valign="top" bgcolor="${COLORS.surface}" style="width:50%;padding:0 6px 18px;background:${COLORS.surface};background-color:${COLORS.surface};">${card.gridHtml}</td>`).join("")}${pair.length === 1 ? `<td class="email-collection-grid-cell email-collection-grid-spacer" width="50%" bgcolor="${COLORS.surface}" style="width:50%;padding:0 6px 18px;background:${COLORS.surface};background-color:${COLORS.surface};">&nbsp;</td>` : ""}</tr>${editorialBreak}</table></td></tr>`;
+  }).join("");
 
   return {
     html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${featureHtml}${gridHtml}</table>`,
     text: cards.map((card, index) => `${String(index + 1).padStart(2, "0")}. ${card.text}`).join("\\n"),
     offerUrls: cards.map(card => card.offerUrl),
   };
+}
+
+export function renderNewsletterProductCollection(
+  products: readonly Product[],
+  options: NewsletterProductCollectionRenderOptions = {},
+): RenderedNewsletterProductCollection {
+  const rendered: EditorialCollectionRenderResult = renderEditorialCollection(products, options as EditorialCollectionRenderOptions);
+  return rendered;
 }
 
 export function renderNewsletterCollectionCampaign(
@@ -231,7 +276,12 @@ export function renderNewsletterCollectionCampaign(
   const collectionKicker = normalizeRequiredText(options.collectionKicker || "Novidades", "collectionKicker");
   const collectionIntro = normalizeRequiredText(options.collectionIntro || "Produtos que acabaram de entrar na curadoria da Cerberus Finds.", "collectionIntro");
   const trackingCampaignId = options.trackingCampaignId?.trim();
-  const renderedCollection = renderNewsletterProductCollection(products, { trackingCampaignId });
+  const renderedCollection = renderNewsletterProductCollection(products, {
+    trackingCampaignId,
+    mastheadImageStatus: options.mastheadImageStatus,
+    mastheadAssetUrl: options.mastheadAssetUrl,
+    mastheadLogoStatus: options.mastheadLogoStatus,
+  });
   const subject = normalizeRequiredText(options.subject || `Novidades da semana: ${collectionTitle}`, "subject");
   const preheader = normalizeRequiredText(options.preheader || collectionIntro, "preheader");
   const disclosure = normalizeRequiredText(options.disclosure || DEFAULT_DISCLOSURE, "disclosure");
@@ -256,10 +306,10 @@ export function renderNewsletterCollectionCampaign(
     : `<p class="email-footer-copy" style="margin:0;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.65;">${secondaryEmailText("Você recebeu esta mensagem porque confirmou sua inscrição no Cerberus Finds.")}</p>`;
   const htmlLinks = renderSocialLinks(socialLinks);
   const finalCta = finalBrowseUrl
-    ? `<tr><td class="email-content-cell" align="center" bgcolor="${COLORS.surface}" style="padding:4px 36px 34px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 16px;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:17px;line-height:1.45;font-weight:700;">${ivoryEmailText("Quer ver mais?")}</p><a href="${escapeHtml(finalBrowseUrl)}" target="_blank" rel="noopener" style="display:block;padding:16px 20px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.3;font-weight:700;letter-spacing:1.8px;text-decoration:none;text-transform:uppercase;">${ctaEmailText(escapeHtml(finalBrowseLabel))}</a></td></tr>`
-    : `<tr><td class="email-content-cell" align="center" bgcolor="${COLORS.surface}" style="padding:4px 36px 34px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:17px;line-height:1.45;font-weight:700;">${ivoryEmailText("Continue acompanhando as próximas descobertas da Cerberus Finds.")}</p></td></tr>`;
-  const emailStyles = `<style>body{margin:0!important;padding:0!important;background:${COLORS.body}!important;color:${COLORS.secondary}!important;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}table{border-spacing:0;}img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}a{text-decoration:none;}@media only screen and (max-width:620px){.email-shell{width:100%!important;}.email-pad,.email-content-cell{padding-left:20px!important;padding-right:20px!important;}.email-collection-grid-table,.email-collection-grid-table tbody,.email-collection-grid-table tr{display:block!important;width:100%!important;}.email-collection-grid-cell{display:block!important;width:100%!important;padding:0 0 24px!important;}.email-collection-grid-spacer{display:none!important;}.email-collection-title{font-size:25px!important;}}@media (prefers-color-scheme:dark){body{background:${COLORS.body}!important;color:${COLORS.ivory}!important;}.email-shell,.email-surface,.email-pad,.email-collection-grid-table{background:${COLORS.surface}!important;background-color:${COLORS.surface}!important;}.email-collection-title{color:${COLORS.white}!important;-webkit-text-fill-color:${COLORS.white}!important;}}</style>`;
-  const html = protectGmailTextColors(addEmailBackgroundAssets(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">${emailStyles}</head><body bgcolor="${COLORS.body}" style="margin:0;padding:0;background:${COLORS.body};background-color:${COLORS.body};color:${COLORS.secondary};color-scheme:dark;"><span style="display:none!important;max-height:0;max-width:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(preheader)}</span><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.body}" style="width:100%;border-collapse:collapse;background:${COLORS.body};background-color:${COLORS.body};"><tr><td align="center" bgcolor="${COLORS.body}" style="padding:0;background:${COLORS.body};background-color:${COLORS.body};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-shell" bgcolor="${COLORS.surface}" style="width:100%;max-width:640px;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr><td class="email-surface" bgcolor="${COLORS.surface}" style="padding:28px 36px 0;background:${COLORS.surface};background-color:${COLORS.surface};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${htmlViewLink}<tr><td align="center" bgcolor="${COLORS.surface}" style="padding:0 0 22px;background:${COLORS.surface};background-color:${COLORS.surface};">${renderNewsletterHeader("Curadoria independente")}</td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:30px 0 28px;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 13px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2.4px;text-transform:uppercase;">${accentEmailText(escapeHtml(collectionKicker))}</p><h1 class="email-title" style="margin:0 0 17px;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:42px;line-height:1.04;font-weight:700;letter-spacing:-0.6px;">${primaryEmailText(escapeHtml(collectionTitle))}</h1><p class="email-body-copy" style="margin:0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.65;">${ivoryEmailText(escapeHtml(collectionIntro))}</p></td></tr></table></td></tr><tr><td class="email-content-cell" bgcolor="${COLORS.surface}" style="padding:0 36px 10px;background:${COLORS.surface};background-color:${COLORS.surface};">${renderedCollection.html}</td></tr>${finalCta}${htmlLinks}<tr><td class="email-content-cell" bgcolor="${COLORS.surface}" style="padding:26px 36px 30px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};border-top:1px solid ${COLORS.border};">${htmlInstitutionalLinks}<p class="email-footer-copy" style="margin:0 0 12px;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.65;">${secondaryEmailText(escapeHtml(disclosure))}</p>${htmlUnsubscribe}<p class="email-footer-copy" style="margin:19px 0 0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2px;">${ivoryEmailText("CERBERUS FINDS · CURADORIA INDEPENDENTE")}</p></td></tr></table></td></tr></table></td></tr></table></body></html>`, { body: canvasBackgroundUrl, cta: ctaBackgroundUrl }));
+    ? `<tr><td class="email-content-cell email-editorial-closure" align="center" bgcolor="${COLORS.surface}" style="padding:12px 36px 38px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 8px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;">${accentEmailText("Continue descobrindo")}</p><p style="margin:0 0 18px;color:${COLORS.ivory};font-family:Georgia,'Times New Roman',serif;font-size:19px;line-height:1.35;font-weight:700;">${ivoryEmailText("A curadoria continua sendo atualizada.")}</p><a href="${escapeHtml(finalBrowseUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 18px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:1.6px;text-decoration:none;text-transform:uppercase;">${ctaEmailText(escapeHtml(finalBrowseLabel))}</a></td></tr>`
+    : `<tr><td class="email-content-cell email-editorial-closure" align="center" bgcolor="${COLORS.surface}" style="padding:12px 36px 38px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 8px;color:${COLORS.accent};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2.2px;text-transform:uppercase;">${accentEmailText("Continue descobrindo")}</p><p style="margin:0;color:${COLORS.ivory};font-family:Georgia,'Times New Roman',serif;font-size:19px;line-height:1.35;font-weight:700;">${ivoryEmailText("A curadoria continua sendo atualizada.")}</p></td></tr>`;
+  const emailStyles = `<style>body{margin:0!important;padding:0!important;background:${COLORS.body}!important;color:${COLORS.secondary}!important;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;}table{border-spacing:0;}img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}a{text-decoration:none;}@media only screen and (max-width:620px){.email-shell{width:100%!important;}.email-pad,.email-content-cell{padding-left:20px!important;padding-right:20px!important;}.email-collection-grid-cell{padding:0 4px 16px!important;vertical-align:top!important;}.email-collection-grid-spacer{display:none!important;}.email-collection-feature .email-collection-image{height:220px!important;max-height:220px!important;}.email-collection-hero-meta{display:block!important;width:100%!important;}.email-collection-hero-meta tr{display:block!important;width:100%!important;}.email-collection-hero-copy,.email-collection-hero-action{display:block!important;width:100%!important;padding:0!important;text-align:left!important;}.email-collection-hero-action{padding-top:14px!important;}.email-collection-grid-image-cell{height:118px!important;}.email-collection-grid-image-cell img{height:96px!important;max-height:96px!important;}.email-collection-grid-title{height:58px!important;}.email-collection-grid-title .email-collection-title{font-size:14px!important;line-height:1.16!important;}.email-collection-grid-price{height:29px!important;padding-top:5px!important;}.email-collection-grid-action{height:40px!important;padding-top:1px!important;}.email-collection-grid-action a{font-size:9px!important;padding:8px 8px!important;letter-spacing:1px!important;}.email-collection-horizontal-table,.email-collection-horizontal-table tbody,.email-collection-horizontal-table tr{display:block!important;width:100%!important;}.email-collection-horizontal-image,.email-collection-horizontal-copy{display:block!important;width:100%!important;padding:14px 0!important;text-align:left!important;}.email-collection-horizontal-image{text-align:center!important;}.email-collection-horizontal-image img{height:150px!important;max-height:150px!important;}.email-collection-compact-copy{padding-left:0!important;}.email-collection-card a{font-size:9px!important;padding:8px 8px!important;letter-spacing:1px!important;}.email-editorial-closure{padding-left:20px!important;padding-right:20px!important;}.email-masthead{padding-bottom:28px!important;}.email-masthead-b .email-masthead-copy,.email-masthead-b .email-masthead-image{display:block!important;width:100%!important;}.email-masthead-b .email-masthead-copy{padding:0 0 18px!important;}.email-masthead-b .email-masthead-image{padding:0!important;text-align:left!important;}.email-masthead-headline{font-size:30px!important;line-height:1.04!important;}}@media only screen and (max-width:374px){.email-collection-grid-table,.email-collection-grid-table tbody,.email-collection-grid-table tr{display:block!important;width:100%!important;}.email-collection-grid-cell{display:block!important;width:100%!important;padding:0 0 16px!important;}.email-collection-grid-spacer{display:none!important;}}@media (prefers-color-scheme:dark){body{background:${COLORS.body}!important;color:${COLORS.ivory}!important;}.email-shell,.email-surface,.email-pad,.email-collection-grid-table,.email-collection-grid-card,.email-collection-horizontal-table,.email-collection-compact-copy{background:${COLORS.surface}!important;background-color:${COLORS.surface}!important;}.email-collection-title{color:${COLORS.white}!important;-webkit-text-fill-color:${COLORS.white}!important;}.editorial-micro{background:${COLORS.surface}!important;background-color:${COLORS.surface}!important;}}</style>`;
+  const html = protectGmailTextColors(addEmailBackgroundAssets(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">${emailStyles}</head><body bgcolor="${COLORS.body}" style="margin:0;padding:0;background:${COLORS.body};background-color:${COLORS.body};color:${COLORS.secondary};color-scheme:dark;"><span style="display:none!important;max-height:0;max-width:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(preheader)}</span><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.body}" style="width:100%;border-collapse:collapse;background:${COLORS.body};background-color:${COLORS.body};"><tr><td align="center" bgcolor="${COLORS.body}" style="padding:0;background:${COLORS.body};background-color:${COLORS.body};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" class="email-shell" bgcolor="${COLORS.surface}" style="width:100%;max-width:640px;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr><td class="email-surface" bgcolor="${COLORS.surface}" style="padding:28px 36px 0;background:${COLORS.surface};background-color:${COLORS.surface};"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${htmlViewLink}</table></td></tr><tr><td class="email-content-cell" bgcolor="${COLORS.surface}" style="padding:0 36px 10px;background:${COLORS.surface};background-color:${COLORS.surface};">${renderedCollection.html}</td></tr>${finalCta}${htmlLinks}<tr><td class="email-content-cell" bgcolor="${COLORS.surface}" style="padding:26px 36px 30px;text-align:center;background:${COLORS.surface};background-color:${COLORS.surface};border-top:1px solid ${COLORS.border};">${htmlInstitutionalLinks}<p class="email-footer-copy" style="margin:0 0 12px;color:${COLORS.secondary};font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.65;">${secondaryEmailText(escapeHtml(disclosure))}</p>${htmlUnsubscribe}<p class="email-footer-copy" style="margin:19px 0 0;color:${COLORS.ivory};font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:2px;">${ivoryEmailText("CERBERUS FINDS · CURADORIA INDEPENDENTE")}</p></td></tr></table></td></tr></table></td></tr></table></body></html>`, { body: canvasBackgroundUrl, cta: ctaBackgroundUrl }));
   const text = [
     "CERBERUS FINDS",
     collectionKicker.toUpperCase(),
