@@ -1,5 +1,34 @@
 [
   {
+    "id": "prod-1787801194424",
+    "ref": "REF-020",
+    "slug": "abajur-cogumelo-moderno-laranja-vermelho-preto-luminaria-de-mesa-led-portatil-recarregavel-usb-5v",
+    "produto": "Abajur Cogumelo Moderno Laranja Vermelho Preto Luminária De Mesa Led Portátil Recarregável USB 5V",
+    "displayTitle": "Abajur Cogumelo Luminária de Mesa LED",
+    "preco": 39.9,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/br-11134207-81zuh-ml484n55a5mrc0",
+      "https://down-br.img.susercontent.com/file/br-11134207-81zu9-ml484n55bk7717",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztk-ml484n55cyrn2e"
+    ],
+    "link": "https://s.shopee.com.br/9zxGBhtz90",
+    "categoria": "Acessórios",
+    "descricao": "Com design contemporâneo em formato de cogumelo, esta luminária LED traz iluminação versátil para diversos ambientes. Leve e portátil com carregamento USB, destaca-se pelo apelo estético e praticidade no uso diário.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-27T03:26:34.549644+00:00",
+    "ofertaPromocional": {
+      "price": 39.9,
+      "condition": "pix_with_coupon",
+      "benefits": [
+        "Envie"
+      ],
+      "source": "admin_confirmed",
+      "confirmedAt": 1787801182404
+    },
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1787414659793",
     "ref": "REF-019",
     "slug": "nordic-bauhaus-vidro-luminaria-de-mesa-moderno-quarto-luminaria-de-leitura-estudo-abajur-de-cabeceira",
