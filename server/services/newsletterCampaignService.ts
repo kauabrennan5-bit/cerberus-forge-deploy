@@ -321,6 +321,31 @@ export async function processCampaignDryRun(
 }
 
 export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: Product | null, collectionProducts: Product[] = []): string {
+  if (campaign.status === "test_sent") {
+    return [
+      "🧪 <b>TESTE CONTROLADO ENVIADO</b>",
+      `Status: <code>${escapeTelegram(campaign.status)}</code>`,
+      `Assunto: <b>${escapeTelegram(campaign.subject)}</b>`,
+      campaign.testSentAt ? `Executado em: <code>${escapeTelegram(campaign.testSentAt)}</code>` : "Teste controlado já executado.",
+      "Este teste já foi processado. Nenhuma aprovação, edição, reteste ou ação de envio está disponível neste cartão.",
+    ].join("\n");
+  }
+  if (campaign.status === "sent") {
+    return [
+      "✅ <b>CAMPANHA CONCLUÍDA</b>",
+      `Status: <code>${escapeTelegram(campaign.status)}</code>`,
+      `Assunto: <b>${escapeTelegram(campaign.subject)}</b>`,
+      "Nenhuma ação operacional está disponível neste cartão.",
+    ].join("\n");
+  }
+  if (campaign.status === "cancelled") {
+    return [
+      "❌ <b>CAMPANHA CANCELADA</b>",
+      `Status: <code>${escapeTelegram(campaign.status)}</code>`,
+      `Assunto: <b>${escapeTelegram(campaign.subject)}</b>`,
+      "Nenhuma ação operacional está disponível neste cartão.",
+    ].join("\n");
+  }
   if (campaign.campaignType === "collection") {
     return [
       "📧 <b>PRÉVIA DE CAMPANHA</b>",

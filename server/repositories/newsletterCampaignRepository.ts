@@ -27,12 +27,21 @@ export type CampaignSubscriberEligibility = {
   marketing_consent: boolean;
 };
 
+export type CampaignTelegramCard = {
+  campaignId: string;
+  chatId: string;
+  messageId: number;
+  updatedAt: string;
+};
+
 export interface NewsletterCampaignStore {
   createCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
   createCampaignProducts(campaignId: string, products: CampaignProductLink[]): Promise<void>;
   listCampaignProducts(campaignId: string): Promise<CampaignProductLink[]>;
   getCampaign(campaignId: string): Promise<EmailCampaign | null>;
   listRecentCampaigns(limit: number): Promise<EmailCampaign[]>;
+  getCampaignTelegramCard(campaignId: string): Promise<CampaignTelegramCard | null>;
+  saveCampaignTelegramCard(campaignId: string, chatId: number | string, messageId: number): Promise<void>;
   updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
   createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number>;
   claimRecipient(campaignId: string, leaseToken: string, leaseMs: number): Promise<{ recipient: EmailCampaignRecipient; leaseToken: string } | null>;
@@ -103,6 +112,39 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .maybeSingle();
     if (error) throw error;
     return data ? this.hydrateCampaign(fromCampaignRow(data)) : null;
+  }
+
+  async getCampaignTelegramCard(campaignId: string): Promise<CampaignTelegramCard | null> {
+    const { data, error } = await this.client
+      .from("email_campaign_telegram_cards")
+      .select("campaign_id, chat_id, message_id, updated_at")
+      .eq("campaign_id", campaignId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      campaignId: String(data.campaign_id),
+      chatId: String(data.chat_id),
+      messageId: Number(data.message_id),
+      updatedAt: String(data.updated_at),
+    };
+  }
+
+  async saveCampaignTelegramCard(campaignId: string, chatId: number | string, messageId: number): Promise<void> {
+    const normalizedChatId = String(chatId).trim();
+    const normalizedMessageId = Math.trunc(Number(messageId));
+    if (!normalizedChatId || !Number.isSafeInteger(normalizedMessageId) || normalizedMessageId <= 0) {
+      throw new Error("CAMPAIGN_TELEGRAM_CARD_REFERENCE_INVALID");
+    }
+    const { error } = await this.client
+      .from("email_campaign_telegram_cards")
+      .upsert({
+        campaign_id: campaignId,
+        chat_id: normalizedChatId,
+        message_id: normalizedMessageId,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "campaign_id" });
+    if (error) throw error;
   }
 
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> {

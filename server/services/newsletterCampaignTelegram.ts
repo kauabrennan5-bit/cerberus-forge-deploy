@@ -18,6 +18,7 @@ import type { EmailCampaign } from "./newsletterCampaignState";
 import type { NewsletterCampaignProvider } from "./newsletterProvider";
 import {
   createSupabaseNewsletterCampaignStore,
+  type CampaignTelegramCard,
   type NewsletterCampaignStore,
 } from "../repositories/newsletterCampaignRepository";
 
@@ -26,6 +27,7 @@ const campaignCallbackLocks = new Map<string, Promise<void>>();
 export type CampaignTelegramDeps = {
   answerCallbackQuery: (callbackId: string, text?: string, showAlert?: boolean) => Promise<unknown>;
   editTelegramMessageText: (chatId: number | string, messageId: number, text: string, replyMarkup?: unknown) => Promise<unknown>;
+  editTelegramMessageReplyMarkup?: (chatId: number | string, messageId: number, replyMarkup?: unknown) => Promise<unknown>;
   sendTelegramMessage: (chatId: number | string, text: string, replyMarkup?: unknown) => Promise<unknown>;
   store?: NewsletterCampaignStore;
   env?: NodeJS.ProcessEnv;
@@ -130,58 +132,65 @@ async function handleNewsletterCampaignCallbackOnce(
 
     if (data.startsWith("campaign_view:")) {
       await deps.answerCallbackQuery(callbackId);
-      return renderCampaignWithFallback(deps, chatId, messageId, campaign, campaignKeyboard(campaign));
+      await syncCampaignTelegramState(campaign.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_submit:")) {
       if (campaign.status !== "draft") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia enviada para aprovação.");
-      return renderCampaignWithFallback(deps, chatId, messageId, pending, campaignKeyboard(pending));
+      await syncCampaignTelegramState(pending.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_approve:")) {
       if (campaign.status !== "pending_approval") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const approved = await approveCampaign(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia aprovada. Agora envie o teste controlado.");
-      return renderCampaignWithFallback(deps, chatId, messageId, approved, campaignKeyboard(approved));
+      await syncCampaignTelegramState(approved.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_test:")) {
       if (campaign.status !== "approved") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const result = await sendCampaignTest(campaign, senderId, { store, env, provider: deps.provider });
       await deps.answerCallbackQuery(callbackId, result.providerResult.status === "duplicate" ? "Teste já processado." : "Teste processado.");
-      const rendered = await renderCampaignWithFallback(deps, chatId, messageId, result.campaign, campaignKeyboard(result.campaign));
+      await syncCampaignTelegramState(result.campaign.id, deps, messageReference(chatId, messageId));
       if (chatId) await deps.sendTelegramMessage(chatId, renderCampaignTestConfirmation(result.campaign, env.NEWSLETTER_TEST_EMAIL, env));
-      return rendered;
+      return true;
     }
 
     if (data.startsWith("campaign_confirm_general:")) {
       if (campaign.status !== "test_sent") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const confirmed = await confirmGeneralSend(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Confirmação registrada. Revise antes de iniciar o envio geral.");
-      return renderCampaignWithFallback(deps, chatId, messageId, confirmed, campaignKeyboard(confirmed));
+      await syncCampaignTelegramState(confirmed.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_start:")) {
       if (campaign.status !== "test_sent" && campaign.status !== "failed") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const sending = await startGeneralSend(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Envio geral enfileirado.");
-      return renderCampaignWithFallback(deps, chatId, messageId, sending, campaignKeyboard(sending));
+      await syncCampaignTelegramState(sending.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_retry:")) {
       if (campaign.status !== "failed") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const retrying = await retryFailedCampaign(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Retry enfileirado para falhas.");
-      return renderCampaignWithFallback(deps, chatId, messageId, retrying, campaignKeyboard(retrying));
+      await syncCampaignTelegramState(retrying.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_cancel:")) {
       if (campaign.status === "sent" || campaign.status === "cancelled") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const cancelled = await cancelCampaign(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Campanha cancelada.");
-      return renderCampaignWithFallback(deps, chatId, messageId, cancelled, campaignKeyboard(cancelled));
+      await syncCampaignTelegramState(cancelled.id, deps, messageReference(chatId, messageId));
+      return true;
     }
 
     if (data.startsWith("campaign_subject_edit:")) {
@@ -401,18 +410,8 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
         [{ text: "🧪 Enviar teste controlado", callback_data: `campaign_test:${campaign.id}` }],
         [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
-    case "test_sent": {
-      const generalSendConfirmed = Boolean(campaign.generalSendConfirmedAt && campaign.generalSendConfirmedByTelegramId);
-      return [
-        [{
-          text: generalSendConfirmed ? "🚀 Iniciar envio geral" : "✅ Confirmar envio geral",
-          callback_data: generalSendConfirmed
-            ? `campaign_start:${campaign.id}`
-            : `campaign_confirm_general:${campaign.id}`,
-        }],
-        [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
-      ];
-    }
+    case "test_sent":
+      return [];
     case "sending":
       return [[{ text: "🔄 Atualizar status", callback_data: `campaign_view:${campaign.id}` }]];
     case "failed":
@@ -421,10 +420,116 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
         [{ text: "🔄 Atualizar status", callback_data: `campaign_view:${campaign.id}` }],
       ];
     case "sent":
-      return [[{ text: "✅ Campanha concluída", callback_data: `campaign_view:${campaign.id}` }]];
+      return [];
     case "cancelled":
-      return [[{ text: "↩️ Ver campanha", callback_data: `campaign_view:${campaign.id}` }]];
+      return [];
   }
+}
+
+export type CampaignTelegramSyncDeps = Pick<CampaignTelegramDeps, "editTelegramMessageText" | "editTelegramMessageReplyMarkup" | "sendTelegramMessage" | "store" | "productLoader">;
+
+export type CampaignTelegramSyncResult = {
+  campaign: EmailCampaign;
+  card: CampaignTelegramCard | null;
+  outcome: "updated" | "reconciliation_sent" | "missing_reference" | "unavailable";
+  providerCalled: false;
+};
+
+export async function syncCampaignTelegramState(
+  campaignId: string,
+  deps: CampaignTelegramSyncDeps,
+  messageRef?: Pick<CampaignTelegramCard, "chatId" | "messageId">,
+): Promise<CampaignTelegramSyncResult> {
+  const store = deps.store || createSupabaseNewsletterCampaignStore();
+  const campaign = await store.getCampaign(campaignId);
+  if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
+  const savedCard = await store.getCampaignTelegramCard(campaignId);
+  const explicitCard = messageRef && isValidCardReference(messageRef)
+    ? { campaignId, chatId: String(messageRef.chatId), messageId: messageRef.messageId, updatedAt: new Date().toISOString() }
+    : null;
+  const card = explicitCard || savedCard;
+  if (!card) return { campaign, card: null, outcome: "missing_reference", providerCalled: false };
+
+  const presentation = await buildCampaignPresentation(campaign, deps);
+  try {
+    const result = await deps.editTelegramMessageText(card.chatId, card.messageId, presentation.text, { inline_keyboard: presentation.keyboard });
+    if (telegramOperationSucceeded(result)) {
+      const shouldPersist = !savedCard || savedCard.chatId !== card.chatId || savedCard.messageId !== card.messageId;
+      if (shouldPersist) await store.saveCampaignTelegramCard(campaignId, card.chatId, card.messageId);
+      return { campaign, card: shouldPersist ? await store.getCampaignTelegramCard(campaignId) : savedCard, outcome: "updated", providerCalled: false };
+    }
+  } catch {
+    // A reconciliação tenta primeiro desativar os botões antigos e depois envia um cartão informativo.
+  }
+
+  if (deps.editTelegramMessageReplyMarkup) {
+    try {
+      await deps.editTelegramMessageReplyMarkup(card.chatId, card.messageId, { inline_keyboard: [] });
+    } catch {
+      // O cartão original pode estar inacessível; a mensagem de reconciliação abaixo continua sendo tentada.
+    }
+  }
+
+  const reconciliationText = [
+    presentation.text,
+    "",
+    "⚠️ <b>CARTÃO ANTERIOR DESATUALIZADO</b>",
+    "Nenhuma ação operacional está disponível nesta reconciliação.",
+  ].join("\n");
+  try {
+    const sent = await deps.sendTelegramMessage(card.chatId, reconciliationText, { inline_keyboard: [] });
+    const newMessageId = extractTelegramMessageId(sent);
+    if (telegramOperationSucceeded(sent) && newMessageId) {
+      await store.saveCampaignTelegramCard(campaignId, card.chatId, newMessageId);
+      return {
+        campaign,
+        card: await store.getCampaignTelegramCard(campaignId),
+        outcome: "reconciliation_sent",
+        providerCalled: false,
+      };
+    }
+  } catch {
+    // Nenhum provider é chamado quando Telegram falha.
+  }
+  return { campaign, card: savedCard || card, outcome: "unavailable", providerCalled: false };
+}
+
+async function buildCampaignPresentation(campaign: EmailCampaign, deps: CampaignTelegramSyncDeps): Promise<{ text: string; keyboard: any[][] }> {
+  const collectionProducts = campaign.campaignType === "collection"
+    ? await getCampaignProducts(campaign, deps.productLoader)
+    : [];
+  const product = campaign.campaignType === "welcome" || campaign.campaignType === "collection"
+    ? null
+    : await getCampaignProduct(campaign.productId, deps.productLoader);
+  return {
+    text: renderCampaignTelegramPreview(campaign, product, collectionProducts),
+    keyboard: campaignKeyboard(campaign),
+  };
+}
+
+function isValidCardReference(reference: Pick<CampaignTelegramCard, "chatId" | "messageId">): boolean {
+  return Boolean(String(reference.chatId).trim()) && Number.isSafeInteger(reference.messageId) && reference.messageId > 0;
+}
+
+function messageReference(chatId: number | string | undefined, messageId: number | undefined): Pick<CampaignTelegramCard, "chatId" | "messageId"> | undefined {
+  if (chatId === undefined || messageId === undefined) return undefined;
+  const reference = { chatId: String(chatId), messageId };
+  return isValidCardReference(reference) ? reference : undefined;
+}
+
+function telegramOperationSucceeded(result: unknown): boolean {
+  if (result === undefined || result === null) return true;
+  if (typeof result !== "object") return true;
+  if (!Object.prototype.hasOwnProperty.call(result, "ok")) return true;
+  return (result as { ok?: unknown }).ok === true;
+}
+
+function extractTelegramMessageId(result: unknown): number | null {
+  if (!result || typeof result !== "object") return null;
+  const outer = result as { result?: unknown };
+  if (!outer.result || typeof outer.result !== "object") return null;
+  const messageId = Number((outer.result as { message_id?: unknown }).message_id);
+  return Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null;
 }
 
 async function handleIncompatibleCampaignCallback(
@@ -450,13 +555,19 @@ async function renderCampaignWithFallback(
     return await renderCampaign(deps, chatId, messageId, campaign, keyboard);
   } catch {
     if (!chatId) return true;
+    try {
+      const synced = await syncCampaignTelegramState(campaign.id, deps, messageReference(chatId, messageId));
+      if (synced.outcome !== "missing_reference") return true;
+    } catch {
+      // O fallback textual abaixo não executa nenhuma ação operacional de campanha.
+    }
     const staleCardMessage = [
       "⚠️ <b>CARTÃO DE CAMPANHA DESATUALIZADO</b>",
       `Estado autoritativo: <code>${escapeTelegram(campaign.status)}</code>`,
       "O cartão anterior não pôde ser redesenhado automaticamente.",
       "Nenhuma ação adicional foi executada. Use a listagem de campanhas para reabrir o estado atual.",
     ].join("\n");
-    await deps.sendTelegramMessage(chatId, staleCardMessage);
+    await deps.sendTelegramMessage(chatId, staleCardMessage, { inline_keyboard: [] });
     return true;
   }
 }
@@ -469,15 +580,19 @@ async function renderCampaign(
   keyboard: any[][],
 ): Promise<boolean> {
   if (!chatId) return true;
-  const collectionProducts = campaign.campaignType === "collection"
-    ? await getCampaignProducts(campaign, deps.productLoader)
-    : [];
-  const product = campaign.campaignType === "welcome" || campaign.campaignType === "collection"
-    ? null
-    : await getCampaignProduct(campaign.productId, deps.productLoader);
-  const text = renderCampaignTelegramPreview(campaign, product, collectionProducts);
-  if (messageId) await deps.editTelegramMessageText(chatId, messageId, text, { inline_keyboard: keyboard });
-  else await deps.sendTelegramMessage(chatId, text, { inline_keyboard: keyboard });
+  const store = deps.store || createSupabaseNewsletterCampaignStore();
+  const presentation = await buildCampaignPresentation(campaign, deps);
+  const finalPresentation = { ...presentation, keyboard };
+  if (messageId) {
+    const result = await deps.editTelegramMessageText(chatId, messageId, finalPresentation.text, { inline_keyboard: finalPresentation.keyboard });
+    if (!telegramOperationSucceeded(result)) throw new Error("TELEGRAM_CARD_EDIT_FAILED");
+    await store.saveCampaignTelegramCard(campaign.id, chatId, messageId);
+  } else {
+    const result = await deps.sendTelegramMessage(chatId, finalPresentation.text, { inline_keyboard: finalPresentation.keyboard });
+    if (!telegramOperationSucceeded(result)) throw new Error("TELEGRAM_CARD_SEND_FAILED");
+    const sentMessageId = extractTelegramMessageId(result);
+    if (sentMessageId) await store.saveCampaignTelegramCard(campaign.id, chatId, sentMessageId);
+  }
   return true;
 }
 
@@ -518,6 +633,9 @@ function campaignErrorMessage(error: unknown): string {
     "GENERAL_SEND_GATE_REQUIRED",
     "GENERAL_SEND_CONFIRMATION_REQUIRED",
     "CAMPAIGN_NOT_SENDING",
+    "CAMPAIGN_TELEGRAM_CARD_REFERENCE_INVALID",
+    "TELEGRAM_CARD_EDIT_FAILED",
+    "TELEGRAM_CARD_SEND_FAILED",
     "NEWSLETTER_TEST_EMAIL_MISSING",
     "NEWSLETTER_TEST_EMAIL_NOT_ELIGIBLE",
     "CAMPAIGN_PUBLIC_BASE_URL_MISSING",

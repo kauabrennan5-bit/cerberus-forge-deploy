@@ -24,8 +24,8 @@ import * as telegramPanel from "./telegramPanel";
 import { inspectShopeePromotionFields, inspectShopeePromotionOffer, runShopeeCommand } from "./shopeeCommand";
 import type { ShopeePromotionEvidence } from "./scraper";
 import {
-  handleNewsletterCampaignCallback,
-  handleNewsletterCampaignText,
+    handleNewsletterCampaignCallback,
+    handleNewsletterCampaignText,
   handleCollectionCampaignCommand,
   handleWelcomeCampaignCommand,
   renderRecentCampaignsForTelegram,
@@ -182,7 +182,7 @@ export async function sendTelegramPhoto(chatId: number | string, photoUrl: strin
 }
 
 export async function editTelegramMessageText(chatId: number | string, messageId: number, text: string, replyMarkup?: any): Promise<any> {
-  if (!getTelegramBotToken()) return;
+  if (!getTelegramBotToken()) return { ok: false, failureReason: "telegram_token_missing" };
   try {
     const payload: any = {
       chat_id: chatId,
@@ -204,8 +204,34 @@ export async function editTelegramMessageText(chatId: number | string, messageId
     });
     return result;
   } catch (err) {
-    logTelegramEvent("response", { chat_id: chatId, response_method: "editMessageText", response_success: false, error: sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) });
+    const failureReason = sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) ?? "telegram_transport_error";
+    logTelegramEvent("response", { chat_id: chatId, response_method: "editMessageText", response_success: false, error: failureReason });
     console.error("Erro ao editar texto Telegram:", err);
+    return { ok: false, failureReason };
+  }
+}
+
+export async function editTelegramMessageReplyMarkup(chatId: number | string, messageId: number, replyMarkup: any = { inline_keyboard: [] }): Promise<any> {
+  if (!getTelegramBotToken()) return { ok: false, failureReason: "telegram_token_missing" };
+  try {
+    const res = await telegramApiFetch("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup,
+    });
+    const result = await res.json();
+    logTelegramEvent("response", {
+      chat_id: chatId,
+      response_method: "editMessageReplyMarkup",
+      response_success: Boolean(result?.ok),
+      error: result?.ok ? undefined : sanitizeTelegramApiError(result?.description),
+    });
+    return result;
+  } catch (err) {
+    const failureReason = sanitizeTelegramApiError(err instanceof Error ? err.message : String(err)) ?? "telegram_transport_error";
+    logTelegramEvent("response", { chat_id: chatId, response_method: "editMessageReplyMarkup", response_success: false, error: failureReason });
+    console.error("Erro ao editar botões Telegram:", err);
+    return { ok: false, failureReason };
   }
 }
 
@@ -610,6 +636,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     const campaignHandled = await handleNewsletterCampaignCallback(data, callbackId, String(senderId), chatId, messageId, {
       answerCallbackQuery,
       editTelegramMessageText,
+      editTelegramMessageReplyMarkup,
       sendTelegramMessage,
     });
     if (campaignHandled) return;

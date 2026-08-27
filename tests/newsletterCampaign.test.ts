@@ -30,6 +30,7 @@ import {
   resolveCanonicalProductImage,
 } from "../src/lib/productCanonical.ts";
 import type {
+  CampaignTelegramCard,
   EmailCampaignRecipient,
   NewsletterCampaignStore,
 } from "../server/repositories/newsletterCampaignRepository.ts";
@@ -43,6 +44,7 @@ import {
   sendCampaignTest,
   startGeneralSend,
   createWeeklyCollectionCampaign,
+  renderCampaignTelegramPreview,
 } from "../server/services/newsletterCampaignService.ts";
 import {
   campaignCompletionKeyboard,
@@ -51,6 +53,7 @@ import {
   handleWelcomeCampaignCommand,
   renderCampaignCompletionReport,
   renderRecentCampaignsForTelegram,
+  syncCampaignTelegramState,
 } from "../server/services/newsletterCampaignTelegram.ts";
 import { TELEGRAM_PANEL_COMMANDS, renderReadPanelMenu } from "../server/services/telegramPanel.ts";
 import { getStartOfCurrentIsoWeek, selectNewestNewsletterProducts } from "../server/services/newsletterCampaignCollection.ts";
@@ -75,6 +78,7 @@ const product: Product = {
 class FakeCampaignStore implements NewsletterCampaignStore {
   campaigns = new Map<string, EmailCampaign>();
   campaignProducts = new Map<string, CampaignProductLink[]>();
+  campaignTelegramCards = new Map<string, CampaignTelegramCard>();
   recipients: EmailCampaignRecipient[] = [];
   subscribers = new Map<string, { status: "subscribed" | "unsubscribed" | "suppressed"; marketing_consent: boolean }>();
   providerToken = "opaque-token-for-test-only";
@@ -86,6 +90,10 @@ class FakeCampaignStore implements NewsletterCampaignStore {
   async getCampaign(campaignId: string): Promise<EmailCampaign | null> { const value = this.campaigns.get(campaignId); return value ? { ...structuredClone(value), collectionProducts: structuredClone(this.campaignProducts.get(campaignId) || value.collectionProducts) } : null; }
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
   async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> { return [...this.campaigns.values()].slice(-Math.max(1, limit)).reverse().map(row => structuredClone(row)); }
+  async getCampaignTelegramCard(campaignId: string): Promise<CampaignTelegramCard | null> { return structuredClone(this.campaignTelegramCards.get(campaignId) || null); }
+  async saveCampaignTelegramCard(campaignId: string, chatId: number | string, messageId: number): Promise<void> {
+    this.campaignTelegramCards.set(campaignId, { campaignId, chatId: String(chatId), messageId, updatedAt: new Date().toISOString() });
+  }
   async createEligibleRecipients(campaignId: string, excludedEmail?: string): Promise<number> {
     const normalizedExcludedEmail = (excludedEmail || "").trim().toLowerCase();
     const eligible = [...this.subscribers.entries()]
@@ -191,19 +199,123 @@ test("campaign list renders recovery buttons for existing statuses without touch
   assert.equal(rendered.keyboard[1][0].callback_data, `campaign_view:${pending.id}`);
 });
 
-test("test_sent keyboard shows confirmation before confirmation and start only after both confirmation fields exist", () => {
+test("test_sent keyboard is informational and exposes no operational actions", () => {
   const unconfirmed = { ...draft("campaign-keyboard-unconfirmed"), status: "test_sent" as const };
-  assert.equal(campaignKeyboard(unconfirmed)[0][0].text, "✅ Confirmar envio geral");
-  assert.equal(campaignKeyboard(unconfirmed)[0][0].callback_data, `campaign_confirm_general:${unconfirmed.id}`);
+  assert.deepEqual(campaignKeyboard(unconfirmed), []);
 
   const confirmed = {
     ...unconfirmed,
     generalSendConfirmedAt: "2026-08-26T05:55:00.000Z",
     generalSendConfirmedByTelegramId: "admin-1",
   };
-  assert.equal(campaignKeyboard(confirmed)[0][0].text, "🚀 Iniciar envio geral");
-  assert.equal(campaignKeyboard(confirmed)[0][0].callback_data, `campaign_start:${confirmed.id}`);
+  assert.deepEqual(campaignKeyboard(confirmed), []);
   assert.equal(unconfirmed.status, "test_sent");
+});
+
+test("campaign cards expose only actions valid for each campaign state", () => {
+  const pending = { ...draft("campaign-card-pending"), status: "pending_approval" as const };
+  const pendingCallbacks = campaignKeyboard(pending).flat().map(button => button.callback_data);
+  assert.ok(pendingCallbacks.includes(`campaign_approve:${pending.id}`));
+  assert.ok(pendingCallbacks.includes(`campaign_subject_edit:${pending.id}`));
+  assert.ok(pendingCallbacks.includes(`campaign_cancel:${pending.id}`));
+
+  const tested = {
+    ...draft("campaign-card-tested"),
+    status: "test_sent" as const,
+    testSentAt: "2026-08-27T05:22:16.000Z",
+    testSentByTelegramId: "admin-1",
+    testProviderMessageId: "provider-ref",
+  };
+  assert.match(renderCampaignTelegramPreview(tested, null), /TESTE CONTROLADO ENVIADO/);
+  assert.match(renderCampaignTelegramPreview(tested, null), /test_sent/);
+  assert.deepEqual(campaignKeyboard(tested), []);
+  assert.equal(campaignKeyboard(tested).flat().some(button => /approve|subject|cancel|test|start|confirm/i.test(String(button.callback_data))), false);
+
+  const sent = { ...draft("campaign-card-sent"), status: "sent" as const };
+  assert.match(renderCampaignTelegramPreview(sent, null), /CAMPANHA CONCLUÍDA/);
+  assert.deepEqual(campaignKeyboard(sent), []);
+
+  const cancelled = { ...draft("campaign-card-cancelled"), status: "cancelled" as const };
+  assert.match(renderCampaignTelegramPreview(cancelled, null), /CAMPANHA CANCELADA/);
+  assert.deepEqual(campaignKeyboard(cancelled), []);
+});
+
+test("syncCampaignTelegramState is idempotent and never calls a provider", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = {
+    ...draft("campaign-sync-idempotent"),
+    status: "test_sent" as const,
+    testSentAt: "2026-08-27T05:22:16.000Z",
+    testSentByTelegramId: "admin-1",
+    testProviderMessageId: "provider-ref-sync",
+  };
+  store.campaigns.set(campaign.id, campaign);
+  await store.saveCampaignTelegramCard(campaign.id, "8819631444", 5760);
+  let editCalls = 0;
+  let sendCalls = 0;
+  let providerCalls = 0;
+  const texts: string[] = [];
+  const deps = {
+    store,
+    productLoader: async () => product,
+    editTelegramMessageText: async (_chat: number | string, _message: number, text: string) => { editCalls += 1; texts.push(text); return { ok: true }; },
+    editTelegramMessageReplyMarkup: async () => ({ ok: true }),
+    sendTelegramMessage: async () => { sendCalls += 1; return { ok: true }; },
+  };
+  const first = await syncCampaignTelegramState(campaign.id, deps);
+  const second = await syncCampaignTelegramState(campaign.id, deps);
+  assert.equal(first.outcome, "updated");
+  assert.equal(second.outcome, "updated");
+  assert.equal(editCalls, 2);
+  assert.equal(sendCalls, 0);
+  assert.equal(providerCalls, 0);
+  assert.equal(texts.every(text => /TESTE CONTROLADO ENVIADO/.test(text)), true);
+  assert.deepEqual(await store.getCampaignTelegramCard(campaign.id), await store.getCampaignTelegramCard(campaign.id));
+});
+
+test("syncCampaignTelegramState never calls provider when message edit fails", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = {
+    ...draft("campaign-sync-edit-fails"),
+    status: "test_sent" as const,
+    testSentAt: "2026-08-27T05:22:16.000Z",
+    testSentByTelegramId: "admin-1",
+    testProviderMessageId: "provider-ref-failure",
+  };
+  store.campaigns.set(campaign.id, campaign);
+  await store.saveCampaignTelegramCard(campaign.id, "8819631444", 5760);
+  let providerCalls = 0;
+  let editCalls = 0;
+  let clearMarkupCalls = 0;
+  let reconciliationCalls = 0;
+  const result = await syncCampaignTelegramState(campaign.id, {
+    store,
+    productLoader: async () => product,
+    editTelegramMessageText: async () => { editCalls += 1; return { ok: false, failureReason: "telegram_edit_failed" }; },
+    editTelegramMessageReplyMarkup: async () => { clearMarkupCalls += 1; return { ok: true }; },
+    sendTelegramMessage: async () => { reconciliationCalls += 1; return { ok: false, failureReason: "telegram_send_failed" }; },
+  });
+  assert.equal(result.outcome, "unavailable");
+  assert.equal(editCalls, 1);
+  assert.equal(clearMarkupCalls, 1);
+  assert.equal(reconciliationCalls, 1);
+  assert.equal(providerCalls, 0);
+  assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
+});
+
+test("syncCampaignTelegramState refuses to infer a card reference and does not mutate without one", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = { ...draft("campaign-sync-missing-ref"), status: "test_sent" as const, testProviderMessageId: "provider-ref-missing" };
+  store.campaigns.set(campaign.id, campaign);
+  let transportCalls = 0;
+  const result = await syncCampaignTelegramState(campaign.id, {
+    store,
+    editTelegramMessageText: async () => { transportCalls += 1; return { ok: true }; },
+    sendTelegramMessage: async () => { transportCalls += 1; return { ok: true }; },
+  });
+  assert.equal(result.outcome, "missing_reference");
+  assert.equal(transportCalls, 0);
+  assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
 });
 
 test("renderer uses canonical bridge, escapes content, renders offer, disclosure and unsubscribe placeholder", () => {
@@ -834,8 +946,8 @@ test("stale approval card reloads test_sent state and blocks without a provider 
   assert.equal(providerCalls, 0);
   assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
   assert.match(answers[0], /test_sent/);
-  assert.match(edited[0].text, /Status: <code>test_sent<\/code>/);
-  assert.equal(edited[0].markup.inline_keyboard[0][0].callback_data, `campaign_confirm_general:${campaign.id}`);
+  assert.match(edited[0].text, /TESTE CONTROLADO ENVIADO/);
+  assert.deepEqual(edited[0].markup.inline_keyboard, []);
 });
 
 test("stale approval card reloads sent state and blocks without overwriting it", async () => {
@@ -929,7 +1041,7 @@ test("two concurrent test callbacks produce one provider call and one persisted 
   assert.equal(answers.filter(answer => /test_sent/.test(answer)).length, 1);
 });
 
-test("Telegram confirmation callback re-renders the confirmed start button without creating recipients", async () => {
+test("Telegram confirmation callback preserves test_sent without creating recipients", async () => {
   const store = new FakeCampaignStore();
   const campaign = { ...draft("campaign-confirm-rerender"), status: "test_sent" as const };
   store.campaigns.set(campaign.id, campaign);
@@ -950,8 +1062,7 @@ test("Telegram confirmation callback re-renders the confirmed start button witho
   assert.equal(saved?.generalSendConfirmedByTelegramId, "admin-1");
   assert.equal(store.recipients.length, 0);
   assert.match(answers[0], /Confirmação registrada/);
-  assert.equal(markups[0]["inline_keyboard"][0][0].text, "🚀 Iniciar envio geral");
-  assert.equal(markups[0]["inline_keyboard"][0][0].callback_data, `campaign_start:${campaign.id}`);
+  assert.deepEqual(markups[0]["inline_keyboard"], []);
 });
 
 test("Telegram completion report includes counts and retry only for failed campaigns", () => {
