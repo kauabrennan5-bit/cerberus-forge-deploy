@@ -29,8 +29,10 @@ export type CampaignTelegramDeps = {
   productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>;
   productsLoader?: () => Promise<import("../../src/types").Product[]>;
   now?: Date;
-  collectionSince?: Date;
-  collectionUntil?: Date;
+  collectionSince?: Date | null;
+  collectionUntil?: Date | null;
+  collectionSize?: number;
+  minimumCollectionProducts?: number;
   verifyImageAccessibility?: boolean;
 };
 
@@ -53,9 +55,12 @@ export async function handleNewsletterCampaignCallback(
         env,
         productsLoader: deps.productsLoader,
         now: deps.now,
-        collectionSince: deps.collectionSince,
-        collectionUntil: deps.collectionUntil,
-        verifyImageAccessibility: deps.verifyImageAccessibility,
+            collectionSince: deps.collectionSince,
+    collectionUntil: deps.collectionUntil,
+    collectionSize: deps.collectionSize,
+    minimumCollectionProducts: deps.minimumCollectionProducts,
+    verifyImageAccessibility: deps.verifyImageAccessibility,
+
       });
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Campanha 2 criada para aprovação.");
@@ -256,6 +261,8 @@ export async function handleCollectionCampaignCommand(
       now: deps.now,
       collectionSince: deps.collectionSince,
       collectionUntil: deps.collectionUntil,
+      collectionSize: deps.collectionSize,
+      minimumCollectionProducts: deps.minimumCollectionProducts,
       verifyImageAccessibility: deps.verifyImageAccessibility,
     });
     const pending = await submitCampaignForApproval(campaign, senderId, { store, env });

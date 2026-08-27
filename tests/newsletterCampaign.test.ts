@@ -1086,8 +1086,10 @@ test("collection campaign creation persists ordered associations without creatin
   const campaign = await createWeeklyCollectionCampaign("admin-collection", {
     store,
     productsLoader: async () => products,
-    collectionSince: new Date("2026-08-24T00:00:00.000Z"),
-    collectionUntil: new Date("2026-09-01T00:00:00.000Z"),
+    collectionSince: null,
+    collectionUntil: null,
+    collectionSize: 5,
+    minimumCollectionProducts: 5,
     now: new Date("2026-08-27T15:00:00.000Z"),
     verifyImageAccessibility: false,
     env: {
@@ -1100,11 +1102,11 @@ test("collection campaign creation persists ordered associations without creatin
   assert.equal(campaign.campaignType, "collection");
   assert.equal(campaign.status, "draft");
   assert.equal(campaign.productId, null);
-  assert.equal(campaign.collectionProducts.length, 6);
-  assert.deepEqual(campaign.collectionProducts.map(link => link.position), [1, 2, 3, 4, 5, 6]);
-  assert.deepEqual(campaign.collectionProducts.map(link => link.layout), ["feature", "grid", "grid", "grid", "grid", "grid"]);
+  assert.equal(campaign.collectionProducts.length, 5);
+  assert.deepEqual(campaign.collectionProducts.map(link => link.position), [1, 2, 3, 4, 5]);
+  assert.deepEqual(campaign.collectionProducts.map(link => link.layout), ["feature", "grid", "grid", "grid", "grid"]);
   assert.equal(store.recipients.length, 0);
-  assert.equal(store.campaignProducts.get(campaign.id)?.length, 6);
+  assert.equal(store.campaignProducts.get(campaign.id)?.length, 5);
 });
 
 test("campaign 1 state remains single-product and cannot accept collection associations", () => {

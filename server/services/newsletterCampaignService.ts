@@ -44,8 +44,10 @@ export type CampaignServiceOptions = {
   now?: Date;
   productLoader?: (productId: string) => Promise<Product | null>;
   productsLoader?: () => Promise<Product[]>;
-  collectionSince?: Date;
-  collectionUntil?: Date;
+  collectionSince?: Date | null;
+  collectionUntil?: Date | null;
+  collectionSize?: number;
+  minimumCollectionProducts?: number;
   provider?: NewsletterCampaignProvider;
   /** Probe injetável para validar acessibilidade da imagem principal sem duplicar lógica. */
   imageProbe?: ProductImageProbe;
@@ -94,10 +96,10 @@ export async function createWeeklyCollectionCampaign(
   const campaignId = crypto.randomUUID();
   const products = await (options.productsLoader || productsRepository.getProducts)();
   const selection = await selectNewestNewsletterProducts(products, {
-    collectionSize: Number(env.NEWSLETTER_COLLECTION_SIZE || 10),
-    minimumProducts: Number(env.NEWSLETTER_COLLECTION_MINIMUM_PRODUCTS || 5),
-    since: options.collectionSince || getStartOfCurrentIsoWeek(now),
-    until: options.collectionUntil,
+    collectionSize: options.collectionSize ?? Number(env.NEWSLETTER_COLLECTION_SIZE || 10),
+    minimumProducts: options.minimumCollectionProducts ?? Number(env.NEWSLETTER_COLLECTION_MINIMUM_PRODUCTS || 5),
+    since: options.collectionSince === undefined ? getStartOfCurrentIsoWeek(now) : options.collectionSince,
+    until: options.collectionUntil === undefined ? null : options.collectionUntil,
     verifyImageAccessibility: options.verifyImageAccessibility !== false,
     imageProbe: options.imageProbe,
   });

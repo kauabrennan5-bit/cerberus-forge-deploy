@@ -1842,12 +1842,17 @@ async function renderCycleState(input: string): Promise<string> {
     }
 
     if (text === "/campanha2" || text.startsWith("/campanha2 ") || text === "/colecao" || text.startsWith("/colecao ")) {
+      const exceptionalPreview = text.trim() === "/campanha2 atual" || text.trim() === "/colecao atual";
       if (chatId) {
-        logTelegramEvent("handler", { chat_id: chatId, handler: "collection_campaign_create", response_method: "sendMessage" });
+        logTelegramEvent("handler", { chat_id: chatId, handler: exceptionalPreview ? "collection_campaign_exceptional_preview" : "collection_campaign_create", response_method: "sendMessage" });
         await handleCollectionCampaignCommand(String(senderId), chatId, {
           answerCallbackQuery,
           editTelegramMessageText,
           sendTelegramMessage,
+          collectionSince: exceptionalPreview ? null : undefined,
+          collectionUntil: exceptionalPreview ? null : undefined,
+          collectionSize: exceptionalPreview ? 5 : undefined,
+          minimumCollectionProducts: exceptionalPreview ? 5 : undefined,
         });
       }
       return;
