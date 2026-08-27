@@ -476,6 +476,8 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
   assert.doesNotMatch(rendered.html, /<td align="right"/);
   assert.match(rendered.html, /Curadoria independente/);
+  assert.match(rendered.html, /class="email-welcome-logo"[^>]+width="132" height="88"/);
+  assert.match(rendered.html, /class="email-welcome-brand-mark" width="144" height="98"/);
   assert.doesNotMatch(rendered.html, /data-ogsc=|data-ogsb=|\[data-ogsc\]|\[data-ogsb\]/);
   assert.match(rendered.html, /color="#E8E1D3"/);
   assert.match(rendered.html, /bgcolor="#0B0908"/);
@@ -1469,7 +1471,8 @@ test("MASTHEAD is the first editorial block and Variant A is universal", () => {
   assert.equal(rendered.mastheadImageUrl, null);
   assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
   assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-official.png");
-  assert.match(rendered.html, /class="email-masthead-logo"/);
+  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="132" height="88"/);
+  assert.match(rendered.html, /class="email-masthead-brand-mark" width="144" height="98"/);
   assert.match(rendered.html, /alt="Logo Cerberus Finds"/);
   assert.match(rendered.html, /CERBERUS FINDS/);
   assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
