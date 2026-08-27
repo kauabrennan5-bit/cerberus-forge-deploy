@@ -39,6 +39,8 @@ export type EmailCampaign = {
   generalSendConfirmedAt: string | null;
   generalSendConfirmedByTelegramId: string | null;
   sentAt: string | null;
+  archivedAt?: string | null;
+  archiveReason?: string | null;
   counts: CampaignCounts;
 };
 
@@ -96,6 +98,8 @@ export function createCampaignDraft(
     generalSendConfirmedAt: null,
     generalSendConfirmedByTelegramId: null,
     sentAt: null,
+    archivedAt: null,
+    archiveReason: null,
     counts: { total: 0, success: 0, failed: 0, skipped: 0 },
   };
 }

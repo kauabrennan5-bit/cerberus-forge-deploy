@@ -297,6 +297,8 @@ function toCampaignRow(campaign: EmailCampaign): Record<string, unknown> {
     general_send_confirmed_at: campaign.generalSendConfirmedAt,
     general_send_confirmed_by_telegram_id: campaign.generalSendConfirmedByTelegramId,
     sent_at: campaign.sentAt,
+    archived_at: campaign.archivedAt,
+    archive_reason: campaign.archiveReason,
     recipients_total: campaign.counts.total,
     recipients_success: campaign.counts.success,
     recipients_failed: campaign.counts.failed,
@@ -324,6 +326,8 @@ function fromCampaignRow(row: Record<string, unknown>): EmailCampaign {
     generalSendConfirmedAt: nullableString(row.general_send_confirmed_at),
     generalSendConfirmedByTelegramId: nullableString(row.general_send_confirmed_by_telegram_id),
     sentAt: nullableString(row.sent_at),
+    archivedAt: nullableString(row.archived_at),
+    archiveReason: nullableString(row.archive_reason),
     counts: {
       total: numberValue(row.recipients_total),
       success: numberValue(row.recipients_success),

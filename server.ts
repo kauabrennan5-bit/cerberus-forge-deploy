@@ -15,6 +15,7 @@ import { createProductionProductPipeline } from "./server/services/productPipeli
 import { InMemoryRateLimiter } from "./server/services/operationalGuards";
 import { startNewsletterOutboxWorker } from "./server/services/newsletterOutboxScheduler";
 import { startNewsletterCampaignWorker } from "./server/services/newsletterCampaignScheduler";
+import { startNewsletterCampaignRetentionScheduler } from "./server/services/newsletterCampaignRetention";
 import {
   buildUnsubscribeUpdate,
   hashUnsubscribeToken,
@@ -1430,6 +1431,12 @@ NUNCA modifique ou invente preços ou imagens.`,
       startNewsletterCampaignWorker();
     } catch {
       console.error("[NEWSLETTER-CAMPAIGN] worker.failed_to_start");
+    }
+
+    try {
+      startNewsletterCampaignRetentionScheduler();
+    } catch {
+      console.error("[NEWSLETTER-RETENTION] scheduler.failed_to_start");
     }
   });
 }
