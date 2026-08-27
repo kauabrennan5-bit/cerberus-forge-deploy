@@ -7,8 +7,6 @@ import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
 import { getProducts, getPublicSocialLinks, subscribeNewsletter, type PublicSocialLink } from './services/api';
 import { orderCatalogProducts } from './lib/catalogOrder';
 import { getRelatedProducts } from './lib/relatedProducts';
-import { CATALOG_SCROLL_STORAGE_KEY, parseCatalogScroll, serializeCatalogScroll } from './lib/catalogScroll';
-
 import { Header } from './components/Header';
 import { ProductGrid } from './components/ProductGrid';
 import { ProductDetail } from './components/ProductDetail';
@@ -19,6 +17,31 @@ import { INSTITUTIONAL_PATHS } from './config/institutional';
 
 const CONFIG_STORAGE_KEY = 'cerberus_finds_config_v2';
 const FAVORITES_STORAGE_KEY = 'cerberus_finds_favorites_v1';
+const CATALOG_SCROLL_STORAGE_KEY = 'cerberus_catalog_scroll_v1';
+
+type CatalogScrollSnapshot = { path: string; y: number };
+
+function normalizeCatalogScrollY(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.round(value));
+}
+
+function serializeCatalogScroll(y: unknown, path = '/'): string {
+  const snapshot: CatalogScrollSnapshot = { path: path || '/', y: normalizeCatalogScrollY(y) };
+  return JSON.stringify(snapshot);
+}
+
+function parseCatalogScroll(value: string | null | undefined, expectedPath = '/'): number | null {
+  if (!value) return null;
+  try {
+    const snapshot = JSON.parse(value) as Partial<CatalogScrollSnapshot>;
+    if (snapshot.path && snapshot.path !== (expectedPath || '/')) return null;
+    if (typeof snapshot.y !== 'number' || !Number.isFinite(snapshot.y)) return null;
+    return normalizeCatalogScrollY(snapshot.y);
+  } catch {
+    return null;
+  }
+}
 
 const DEFAULT_CONFIG: AppConfig = {
   csvUrl: '',
