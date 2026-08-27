@@ -605,7 +605,7 @@ async function renderMainMenu(chatId: number | string, messageId?: number, isEdi
     `⏸ Pausados: <b>${statsSummary.totalProducts - statsSummary.activeProducts}</b>\n\n` +
     `👆 Cliques hoje: <b>${statsSummary.todayClicks}</b>\n` +
     `📈 Cliques 7 dias: <b>${statsSummary.clicks7d}</b>\n\n` +
-    `🏆 Mais acessado:\n<i>${statsSummary.topProductName}</i>\n` +
+    `🏆 Mais acessado:\n<i>${escapeTelegramHtml(statsSummary.topProductName)}</i>\n` +
     "━━━━━━━━━━━━━━━━━━";
 
   const keyboard = {
