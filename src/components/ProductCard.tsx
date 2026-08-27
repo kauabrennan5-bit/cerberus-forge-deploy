@@ -8,6 +8,7 @@ import {
   getProductMarketplaceLabel,
 } from '../lib/productPresentation';
 import { trackClickAndGetUrl, trackSelectItem } from '../lib/analytics';
+import { resolveCanonicalProductImage } from '../lib/productCanonical';
 import { ExternalLink, ImageOff, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 
 interface ProductCardProps {
@@ -37,9 +38,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const touchStartX = useRef<number | null>(null);
   const touchEndX = useRef<number | null>(null);
 
-  const images = product.imagens && product.imagens.length > 0
-    ? product.imagens
-    : ['https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=600&q=80'];
+  const images = resolveCanonicalProductImage(product).publicHttpsImageUrls;
 
   const hasMultipleImages = images.length > 1;
 
@@ -169,7 +168,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        {!imageError[currentImageIndex] ? (
+        {images.length > 0 && !imageError[currentImageIndex] ? (
           <img
             src={images[currentImageIndex]}
             alt={displayTitle}

@@ -1,5 +1,10 @@
 import type { Product } from "../../src/types";
 import { appendUTMsToUrl } from "../../src/lib/utm";
+import {
+  isValidProductDestinationUrl,
+  resolveCanonicalProductImage,
+  toCanonicalProduct,
+} from "../../src/lib/productCanonical";
 import { buildNewsletterAssetUrl } from "./newsletterInstitutional";
 
 export const UNSUBSCRIBE_URL_PLACEHOLDER = "{{UNSUBSCRIBE_URL}}";
@@ -33,6 +38,16 @@ export type RenderedNewsletterCampaign = {
   html: string;
   text: string;
   offerUrl: string;
+};
+
+export type NewsletterProductCollectionRenderOptions = {
+  trackingCampaignId?: string;
+};
+
+export type RenderedNewsletterProductCollection = {
+  html: string;
+  text: string;
+  offerUrls: string[];
 };
 
 const COLORS = {
@@ -143,6 +158,47 @@ export function renderNewsletterCampaign(
   ].filter(Boolean).join("\n");
 
   return { subject, html, text, offerUrl };
+}
+
+export function renderNewsletterProductCollection(
+  products: readonly Product[],
+  options: NewsletterProductCollectionRenderOptions = {},
+): RenderedNewsletterProductCollection {
+  if (products.length === 0) throw new Error("NEWSLETTER_COLLECTION_EMPTY");
+
+  const cards = products.map((product, index) => {
+    const canonical = toCanonicalProduct(product);
+    const image = resolveCanonicalProductImage(product);
+    if (!canonical.id.trim() || canonical.title.length < 3 || !Number.isFinite(canonical.price) || canonical.price <= 0) {
+      throw new Error(`NEWSLETTER_COLLECTION_PRODUCT_NOT_READY:${product.id || index}`);
+    }
+    if (image.status !== "ready" || !image.primaryImageUrl) {
+      throw new Error(`NEWSLETTER_COLLECTION_PRODUCT_IMAGE_MISSING:${product.id || index}`);
+    }
+    if (!isValidProductDestinationUrl(canonical.destinationUrl)) {
+      throw new Error(`NEWSLETTER_COLLECTION_PRODUCT_DESTINATION_INVALID:${product.id || index}`);
+    }
+
+    const offerUrl = options.trackingCampaignId?.trim()
+      ? appendUTMsToUrl(canonical.destinationUrl, {
+          utm_source: "email",
+          utm_medium: "newsletter",
+          utm_campaign: options.trackingCampaignId.trim(),
+          utm_content: canonical.id,
+        })
+      : canonical.destinationUrl;
+    return {
+      offerUrl,
+      text: `${canonical.title} — R$ ${canonical.price.toFixed(2).replace(".", ",")} — ${offerUrl}`,
+      html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};margin:0 0 18px;"><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 16px;background:${COLORS.surface};background-color:${COLORS.surface};"><img class="email-collection-image" src="${escapeHtml(image.primaryImageUrl)}" alt="${escapeHtml(canonical.title)}" width="592" style="display:block;width:100%;max-width:592px;height:auto;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" /></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 10px;background:${COLORS.surface};background-color:${COLORS.surface};"><h2 style="margin:0;color:${COLORS.white};font-family:Georgia,'Times New Roman',serif;font-size:25px;line-height:1.08;font-weight:700;">${primaryEmailText(escapeHtml(canonical.title))}</h2><p style="margin:9px 0 0;color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.4;font-weight:700;">${primaryEmailText(`R$ ${canonical.price.toFixed(2).replace(".", ",")}`)}</p></td></tr><tr><td bgcolor="${COLORS.surface}" style="padding:0 0 18px;background:${COLORS.surface};background-color:${COLORS.surface};"><a href="${escapeHtml(offerUrl)}" target="_blank" rel="noopener" style="display:inline-block;padding:13px 18px;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;font-weight:700;letter-spacing:1.7px;text-decoration:none;text-transform:uppercase;">${ctaEmailText("Ver oferta")}</a></td></tr></table>`,
+    };
+  });
+
+  return {
+    html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};">${cards.map(card => card.html).join("")}</table>`,
+    text: cards.map(card => card.text).join("\\n"),
+    offerUrls: cards.map(card => card.offerUrl),
+  };
 }
 
 export function renderNewsletterWelcomeCampaign(

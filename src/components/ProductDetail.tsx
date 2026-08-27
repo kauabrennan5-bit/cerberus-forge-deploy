@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 // Mobile refinement: keep the approved product-detail composition while constraining gallery, metadata, actions, and lightbox content to the viewport.
 import { Product } from '../types';
 import { getProductDisplayTitle } from '../lib/productPresentation';
+import { resolveCanonicalProductImage } from '../lib/productCanonical';
 import { trackClickAndGetUrl } from '../lib/analytics';
 import { ArrowLeft, ExternalLink, Heart, Share2, Check, ChevronLeft, ChevronRight, ImageOff, ShieldCheck, Maximize2, X } from 'lucide-react';
 import { ProductCard } from './ProductCard';
@@ -78,9 +79,8 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     });
   };
 
-  const images = product.imagens && product.imagens.length > 0
-    ? product.imagens.filter((_, idx) => !imageError[idx])
-    : [];
+  const images = resolveCanonicalProductImage(product).publicHttpsImageUrls
+    .filter((_, idx) => !imageError[idx]);
 
   const hasMultipleImages = images.length > 1;
 

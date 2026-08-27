@@ -24,9 +24,12 @@ import {
   UNSUBSCRIBE_URL_PLACEHOLDER,
 } from "./newsletterCampaignTemplate";
 import {
-  getNewsletterHeroImageUrl,
   getNewsletterInstitutionalOptions,
 } from "./newsletterInstitutional";
+import {
+  assessProductReadiness,
+  type ProductImageProbe,
+} from "../../src/lib/productCanonical";
 
 export type CampaignServiceOptions = {
   store?: NewsletterCampaignStore;
@@ -34,6 +37,9 @@ export type CampaignServiceOptions = {
   now?: Date;
   productLoader?: (productId: string) => Promise<Product | null>;
   provider?: NewsletterCampaignProvider;
+  /** Probe injetável para validar acessibilidade da imagem principal sem duplicar lógica. */
+  imageProbe?: ProductImageProbe;
+  verifyImageAccessibility?: boolean;
 };
 
 export async function createCampaignForProduct(
@@ -45,9 +51,17 @@ export async function createCampaignForProduct(
   const approvedStatus = !product?.status || product.status === "approved" || product.status === "published";
   if (!product || product.ativo !== true || !approvedStatus) throw new Error("CAMPAIGN_PRODUCT_NOT_ELIGIBLE");
   const env = options.env || process.env;
+  const readiness = await assessProductReadiness(product, {
+    channel: "campaign",
+    verifyImageAccessibility: options.verifyImageAccessibility !== false,
+    imageProbe: options.imageProbe,
+  });
+  if (!readiness.ready) {
+    throw new Error(`CAMPAIGN_PRODUCT_NOT_READY:${readiness.errors.join(",")}`);
+  }
   const campaignId = crypto.randomUUID();
   const institutional = getNewsletterInstitutionalOptions(env);
-  const heroImageUrl = getNewsletterHeroImageUrl(product.id, env);
+  const heroImageUrl = readiness.product.primaryImageUrl;
   const rendered = renderNewsletterCampaign(product, {
     subject: env.NEWSLETTER_CAMPAIGN_SUBJECT || undefined,
     trackingCampaignId: campaignId,
@@ -55,7 +69,7 @@ export async function createCampaignForProduct(
     termsUrl: institutional.termsUrl,
     socialLinks: institutional.socialLinks,
     heroImageUrl,
-    heroImageStatus: heroImageUrl ? "clean" : "unavailable",
+    heroImageStatus: "clean",
   });
   const draft = createCampaignDraft(product.id, actorTelegramId, rendered, options.now || new Date(), campaignId);
   return (options.store || createSupabaseNewsletterCampaignStore()).createCampaign(draft);

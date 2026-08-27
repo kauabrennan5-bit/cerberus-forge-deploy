@@ -4,6 +4,8 @@ import {
   SOCIAL_LINKS,
   type SocialNetwork,
 } from "../../src/config/institutional";
+import type { Product } from "../../src/types";
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import type { NewsletterSocialLink } from "./newsletterCampaignTemplate";
 
 export function resolvePublicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -47,13 +49,16 @@ const NEWSLETTER_SOCIAL_ICON_PATHS: Record<SocialNetwork, string> = {
   pinterest: "assets/newsletter/social/pinterest.png",
 };
 
-const NEWSLETTER_CLEAN_HERO_PATHS: Record<string, string> = {
-  "prod-1787414659793": "assets/newsletter/products/luminaria-bauhaus-clean-email.jpg",
-};
-
-export function getNewsletterHeroImageUrl(productId: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const path = NEWSLETTER_CLEAN_HERO_PATHS[productId];
-  return path ? buildNewsletterAssetUrl(path, env) : undefined;
+/**
+ * Resolve o hero diretamente do registro canônico do produto. A ordem de
+ * `products.imagens` é a convenção de prioridade; não existe cadastro manual
+ * por product ID nem dependência de asset editorial para um produto aparecer.
+ */
+export function getNewsletterHeroImageUrl(
+  product: Pick<Product, "imagens">,
+  _env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveCanonicalProductImage(product).primaryImageUrl;
 }
 
 export function getNewsletterInstitutionalOptions(env: NodeJS.ProcessEnv = process.env): {

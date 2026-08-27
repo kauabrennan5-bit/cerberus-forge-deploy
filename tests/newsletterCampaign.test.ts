@@ -9,6 +9,7 @@ import {
 } from "../server/services/newsletterCampaignState.ts";
 import {
   renderNewsletterCampaign,
+  renderNewsletterProductCollection,
   renderNewsletterWelcomeCampaign,
   resolveCampaignOfferUrl,
 } from "../server/services/newsletterCampaignTemplate.ts";
@@ -22,6 +23,10 @@ import {
   getNewsletterHeroImageUrl,
   resolveNewsletterAssetBaseUrl,
 } from "../server/services/newsletterInstitutional.ts";
+import {
+  assessProductReadiness,
+  resolveCanonicalProductImage,
+} from "../src/lib/productCanonical.ts";
 import type {
   EmailCampaignRecipient,
   NewsletterCampaignStore,
@@ -306,31 +311,29 @@ test("campaign creation includes real institutional paths and placeholder social
     store,
     productLoader: async () => ({ ...product, status: "published" }),
     env: { DRY_RUN: "true", PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+    imageProbe: async () => true,
   });
   assert.match(created.bodyHtml, /https:\/\/cerberusfinds\.com\/politica-de-privacidade/);
   assert.match(created.bodyHtml, /https:\/\/cerberusfinds\.com\/termos-e-condicoes/);
   assert.match(created.bodyHtml, /Instagram ainda não configurado/);
   assert.match(created.bodyHtml, /assets\/newsletter\/social\/instagram\.png/);
-  assert.doesNotMatch(created.bodyHtml, /<img[^>]+src="https:\/\/cdn\.example\.test\/kitchen\.jpg"/);
+  assert.match(created.bodyHtml, /<img[^>]+src="https:\/\/cdn\.example\.test\/kitchen\.jpg"/);
   assert.match(created.bodyHtml, /TikTok ainda não configurado/);
   assert.match(created.bodyHtml, /Facebook ainda não configurado/);
   assert.equal(created.bodyHtml.includes("example.com"), false);
 });
 
-test("institutional assets resolve to the configured public base and only known clean hero is allowed", () => {
+test("institutional assets resolve the first HTTPS image from the canonical product", () => {
   assert.equal(
-    getNewsletterHeroImageUrl("prod-1787414659793", { PUBLIC_SITE_URL: "https://cerberusfinds.com" }),
-    `${DEFAULT_NEWSLETTER_ASSET_BASE_URL}/assets/newsletter/products/luminaria-bauhaus-clean-email.jpg`,
+    getNewsletterHeroImageUrl({ imagens: ["https://cdn.example.test/first.jpg", "https://cdn.example.test/second.jpg"] }),
+    "https://cdn.example.test/first.jpg",
   );
   assert.equal(
-    getNewsletterHeroImageUrl("prod-1787414659793", {
-      PUBLIC_SITE_URL: "https://cerberusfinds.com",
-      NEWSLETTER_PUBLIC_ASSET_BASE_URL: "https://assets.example.test/newsletter",
-    }),
-    "https://assets.example.test/newsletter/assets/newsletter/products/luminaria-bauhaus-clean-email.jpg",
+    getNewsletterHeroImageUrl({ imagens: ["http://cdn.example.test/insecure.jpg", "https://cdn.example.test/secure.jpg"] }),
+    "https://cdn.example.test/secure.jpg",
   );
   assert.equal(resolveNewsletterAssetBaseUrl({ NEWSLETTER_PUBLIC_ASSET_BASE_URL: "not-a-url" }), DEFAULT_NEWSLETTER_ASSET_BASE_URL);
-  assert.equal(getNewsletterHeroImageUrl("prod-campaign-1", { PUBLIC_SITE_URL: "https://cerberusfinds.com" }), undefined);
+  assert.equal(getNewsletterHeroImageUrl({ imagens: [] }), undefined);
 });
 
 test("welcome campaign renders institutional copy and keeps product reference null", async () => {
@@ -492,6 +495,7 @@ test("campaign creation stores a draft from an approved active product and rejec
     productLoader: async () => ({ ...product, curatorNote: undefined, ofertaPromocional: undefined, status: "approved" }),
     env: { DRY_RUN: "true", NEWSLETTER_CAMPAIGN_SUBJECT: "Assunto controlado" },
     now: new Date("2026-08-26T00:00:00.000Z"),
+    imageProbe: async () => true,
   });
   assert.equal(created.status, "draft");
   assert.equal(created.subject, "Assunto controlado");
@@ -791,4 +795,117 @@ test("DRY_RUN provider itself is never called by the campaign worker", async () 
   });
   assert.equal(result.providerCalled, false);
   assert.equal(called, false);
+});
+
+
+test("canonical product image resolution preserves deterministic HTTPS order and deduplicates", () => {
+  const resolved = resolveCanonicalProductImage({
+    imagens: [
+      "http://cdn.example.test/insecure.jpg",
+      "https://cdn.example.test/second.jpg",
+      "https://cdn.example.test/second.jpg",
+      "https://cdn.example.test/third.jpg",
+    ],
+  });
+  assert.equal(resolved.status, "ready");
+  assert.equal(resolved.primaryImageUrl, "https://cdn.example.test/second.jpg");
+  assert.deepEqual(resolved.publicHttpsImageUrls, [
+    "https://cdn.example.test/second.jpg",
+    "https://cdn.example.test/third.jpg",
+  ]);
+});
+
+test("product readiness returns an explicit incomplete state without an image", async () => {
+  const readiness = await assessProductReadiness({
+    ...product,
+    id: "prod-without-image",
+    imagens: [],
+  }, { channel: "campaign" });
+  assert.equal(readiness.ready, false);
+  assert.equal(readiness.image.status, "incomplete");
+  assert.match(readiness.errors.join("|"), /PRODUCT_IMAGE_MISSING/);
+});
+
+test("product readiness rejects an inaccessible HTTPS image and campaign creation does not proceed", async () => {
+  const store = new FakeCampaignStore();
+  const inaccessible = { ...product, id: "prod-inaccessible", imagens: ["https://cdn.example.test/unavailable.jpg"] };
+  const readiness = await assessProductReadiness(inaccessible, {
+    channel: "campaign",
+    verifyImageAccessibility: true,
+    imageProbe: async () => false,
+  });
+  assert.equal(readiness.ready, false);
+  assert.match(readiness.errors.join("|"), /PRODUCT_IMAGE_INACCESSIBLE/);
+  await assert.rejects(
+    () => createCampaignForProduct("prod-inaccessible", "admin-1", {
+      store,
+      productLoader: async () => inaccessible,
+      imageProbe: async () => false,
+      env: { DRY_RUN: "true", PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+    }),
+    /CAMPAIGN_PRODUCT_NOT_READY:.*PRODUCT_IMAGE_INACCESSIBLE/,
+  );
+  assert.equal(store.campaigns.size, 0);
+});
+
+test("REF-016 resolves its database image without a manual product-id mapping and includes it in the individual campaign", async () => {
+  const ref016 = {
+    ...product,
+    id: "prod-1787351832260",
+    ref: "REF-016",
+    produto: "Luminária Pendente de Vidro Estilo Bauhaus",
+    displayTitle: "Luminária Pendente de Vidro Estilo Bauhaus",
+    imagens: ["https://img.example.test/ref016-primary.jpg", "https://img.example.test/ref016-secondary.jpg"],
+  };
+  assert.equal(getNewsletterHeroImageUrl(ref016), "https://img.example.test/ref016-primary.jpg");
+  const store = new FakeCampaignStore();
+  const campaign = await createCampaignForProduct(ref016.id, "admin-1", {
+    store,
+    productLoader: async () => ref016,
+    imageProbe: async () => true,
+    env: { DRY_RUN: "true", PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+  });
+  assert.match(campaign.bodyHtml, /<img[^>]+class="email-hero"[^>]+src="https:\/\/img\.example\.test\/ref016-primary\.jpg"/);
+});
+
+test("a future product absent from every manual map resolves normally through products.imagens", () => {
+  const futureProduct = {
+    ...product,
+    id: "prod-future-without-map",
+    ref: "REF-FUTURE",
+    imagens: ["https://img.example.test/future-primary.webp"],
+  };
+  const readiness = resolveCanonicalProductImage(futureProduct);
+  assert.equal(readiness.status, "ready");
+  assert.equal(readiness.primaryImageUrl, "https://img.example.test/future-primary.webp");
+  assert.match(renderNewsletterCampaign(futureProduct, {
+    heroImageUrl: readiness.primaryImageUrl,
+    heroImageStatus: "clean",
+  }).html, /<img[^>]+src="https:\/\/img\.example\.test\/future-primary\.webp"/);
+});
+
+test("multi-product newsletter renderer resolves one primary image per product with the same canonical mechanism", () => {
+  const first = { ...product, id: "prod-multi-a", imagens: ["https://img.example.test/a-primary.jpg", "https://img.example.test/a-secondary.jpg"] };
+  const second = { ...product, id: "prod-multi-b", imagens: ["https://img.example.test/b-primary.jpg"] };
+  const rendered = renderNewsletterProductCollection([first, second], { trackingCampaignId: "campaign-multi" });
+  assert.equal((rendered.html.match(/class="email-collection-image"/g) || []).length, 2);
+  assert.match(rendered.html, /a-primary\.jpg/);
+  assert.match(rendered.html, /b-primary\.jpg/);
+  assert.equal(rendered.offerUrls.length, 2);
+  assert.match(rendered.offerUrls[0], /utm_content=prod-multi-a/);
+  assert.match(rendered.offerUrls[1], /utm_content=prod-multi-b/);
+});
+
+test("multi-product renderer fails closed for a product without a valid image or destination", () => {
+  const incomplete = { ...product, id: "prod-multi-incomplete", imagens: [] };
+  assert.throws(
+    () => renderNewsletterProductCollection([incomplete]),
+    /NEWSLETTER_COLLECTION_PRODUCT_IMAGE_MISSING/,
+  );
+});
+
+test("canonical product and campaign renderers do not expose secrets or credentials", () => {
+  const futureProduct = { ...product, id: "prod-secret-scan", imagens: ["https://img.example.test/safe.jpg"] };
+  const html = renderNewsletterProductCollection([futureProduct], { trackingCampaignId: "campaign-safe" }).html;
+  assert.doesNotMatch(html, /BREVO_API_KEY|SUPABASE_SERVICE_ROLE_KEY|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
 });
