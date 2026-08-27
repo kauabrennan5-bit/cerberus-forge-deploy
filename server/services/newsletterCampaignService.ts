@@ -26,7 +26,7 @@ import {
   UNSUBSCRIBE_URL_PLACEHOLDER,
 } from "./newsletterCampaignTemplate";
 import {
-  getStartOfCurrentIsoWeek,
+  getStartOfNewsletterCollectionWindow,
   selectNewestNewsletterProducts,
 } from "./newsletterCampaignCollection";
 import {
@@ -100,7 +100,7 @@ export async function createWeeklyCollectionCampaign(
   const selection = await selectNewestNewsletterProducts(products, {
     collectionSize: options.collectionSize ?? Number(env.NEWSLETTER_COLLECTION_SIZE || 10),
     minimumProducts: options.minimumCollectionProducts ?? Number(env.NEWSLETTER_COLLECTION_MINIMUM_PRODUCTS || 5),
-    since: options.collectionSince === undefined ? getStartOfCurrentIsoWeek(now) : options.collectionSince,
+    since: options.collectionSince === undefined ? getStartOfNewsletterCollectionWindow(now) : options.collectionSince,
     until: options.collectionUntil === undefined ? null : options.collectionUntil,
     verifyImageAccessibility: options.verifyImageAccessibility !== false,
     imageProbe: options.imageProbe,

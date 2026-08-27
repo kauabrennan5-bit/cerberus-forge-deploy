@@ -1347,6 +1347,29 @@ test("weekly collection selector respects the current-week date window and fails
   );
 });
 
+test("weekly collection campaign defaults to a temporary fourteen-day lookback", async () => {
+  const now = new Date("2026-08-27T15:00:00.000Z");
+  const older = makeCollectionProduct(99, { createdAt: "2026-08-12T14:59:59.000Z" });
+  const recent = Array.from({ length: 5 }, (_, index) => makeCollectionProduct(index, {
+    createdAt: new Date(now.getTime() - index * 24 * 60 * 60 * 1000).toISOString(),
+  }));
+  const store = new FakeCampaignStore();
+  const campaign = await createWeeklyCollectionCampaign("admin-14-day-window", {
+    store,
+    productsLoader: async () => [older, ...recent],
+    collectionSize: 5,
+    minimumCollectionProducts: 5,
+    now,
+    verifyImageAccessibility: false,
+    env: {
+      DRY_RUN: "true",
+      PUBLIC_SITE_URL: "https://cerberusfinds.com",
+    },
+  });
+  assert.deepEqual(campaign.collectionProducts.map(link => link.productId), recent.map(product => product.id));
+  assert.equal(store.recipients.length, 0);
+});
+
 test("collection renderer supports ten products, variable sizes, canonical images and individual UTMs", () => {
   const products = Array.from({ length: 10 }, (_, index) => makeCollectionProduct(index));
   const rendered = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-collection" });

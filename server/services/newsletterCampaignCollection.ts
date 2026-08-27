@@ -5,6 +5,7 @@ export const DEFAULT_NEWSLETTER_COLLECTION_SIZE = 10;
 export const MIN_NEWSLETTER_COLLECTION_SIZE = 1;
 export const MAX_NEWSLETTER_COLLECTION_SIZE = 15;
 export const MIN_WEEKLY_COLLECTION_PRODUCTS = 5;
+export const NEWSLETTER_COLLECTION_LOOKBACK_DAYS = 14;
 
 export type NewsletterCollectionSelectionOptions = {
   collectionSize?: number;
@@ -104,6 +105,10 @@ export async function selectNewestNewsletterProducts(
   }
 
   return { products: selected, requestedSize, since, until, skipped };
+}
+
+export function getStartOfNewsletterCollectionWindow(now = new Date()): Date {
+  return new Date(now.getTime() - NEWSLETTER_COLLECTION_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
 }
 
 export function getStartOfCurrentIsoWeek(now = new Date()): Date {
