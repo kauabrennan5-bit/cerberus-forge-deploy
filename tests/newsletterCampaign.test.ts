@@ -208,8 +208,8 @@ test("telegram menu exposes primary campaign recovery and keeps advanced command
   assert.match(renderReadPanelMenu(), /\/campanhas/);
   assert.match(renderReadPanelMenu(), /\/redes/);
   assert.doesNotMatch(renderReadPanelMenu(), /\/campanha2/);
-  const { renderAdvancedHelp } = await import("../server/services/telegramPanel");
-  assert.match(renderAdvancedHelp(), /\/campanha2/);
+  const { renderAdvancedPanel } = await import("../server/services/telegramPanel");
+  assert.match(renderAdvancedPanel(), /\/campanha2/);
 });
 
 test("campaign list renders recovery buttons for existing statuses without touching recipients", () => {

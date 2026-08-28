@@ -2,7 +2,6 @@ import path from "path";
 import fs from "fs";
 import { extractProductForReview as extractProductForReviewShared } from "./productAutomation";
 import * as productsRepository from "../repositories/productsRepository";
-import * as categoriesRepository from "../repositories/categoriesRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
 import * as googleAnalytics from "./googleAnalytics";
 import * as cerberusOperator from "./cerberusOperator";
@@ -21,9 +20,13 @@ import { runDiscoverCommand } from "./discoveryCommands";
 import { runDiscoverBatchCommand } from "../commercial/facilitator/discoverBatchCommand";
 // FASE 25B (Commit 1) — painel de leitura Telegram (comandos read-only).
 import * as telegramPanel from "./telegramPanel";
+import { getTelegramBotToken, telegramApiFetch } from "./telegramApiClient";
+import { canonicalTelegramCommand, isKnownTelegramCommand, parseTelegramCommand, resolveReadOnlyShortcut, suggestTelegramCommand } from "./telegramCommands";
+import type { PendingReview } from "./telegramTypes";
+export type { PendingReview } from "./telegramTypes";
+export { getTelegramBotToken, telegramApiFetch } from "./telegramApiClient";
 // FASE 25C (Commit 2) — orquestrador /shopee N (discovery → Affiliate → scraper → cards).
 import { inspectShopeePromotionFields, inspectShopeePromotionOffer, runShopeeCommand } from "./shopeeCommand";
-import type { ShopeePromotionEvidence } from "./scraper";
 import {
     handleNewsletterCampaignCallback,
     handleNewsletterCampaignText,
@@ -42,33 +45,6 @@ import {
   upsertCanonicalSocialLink,
 } from "./socialLinks";
 import { SOCIAL_LABELS, type SocialNetwork } from "../../src/config/institutional";
-
-const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
-
-// FASE 25B (Commit 1): exportado para o painel de leitura (telegramPanel) reutilizar
-// a chamada oficial da API Telegram sem duplicar o acesso ao token.
-export function getTelegramBotToken(): string {
-  return process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
-}
-
-function getTelegramApiBase(): string {
-  return `https://api.telegram.org/bot${getTelegramBotToken()}`;
-}
-
-export async function telegramApiFetch(method: string, payload: Record<string, unknown>): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(`${getTelegramApiBase()}/${method}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 function escapeTelegramHtml(value: unknown): string {
   return String(value ?? "")
@@ -98,8 +74,9 @@ function logTelegramEvent(event: string, details: Record<string, string | number
 }
 
 export function isUserAllowed(userId: string | number): boolean {
-  const allowedEnv = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "1976526372";
+  const allowedEnv = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "";
   const allowedIds = allowedEnv.split(",").map(id => id.trim()).filter(Boolean);
+  if (allowedIds.length === 0) return false;
   return allowedIds.includes(String(userId));
 }
 
@@ -303,51 +280,6 @@ function parseAndNormalizePrice(input: string): number | null {
   }
   const val = parseFloat(clean);
   return isNaN(val) ? null : val;
-}
-
-export interface PendingReview {
-  id: string;
-  chatId: number;
-  senderId: number | string;
-  firstName: string;
-  username: string;
-  createdAt: number;
-  expiresAt?: number;
-  produto: string;
-  rawTitle?: string;
-  displayTitle?: string;
-  curatorNote?: string;
-  categoria: string;
-  preco: number;
-  /** Imagens comerciais ordenadas: principal canônica seguida da galeria revisada. */
-  imagens: string[];
-  /** URLs observadas na fonte, preservadas para auditoria da revisão. */
-  imagensOriginais?: string[];
-  imagemPrincipal?: string;
-  imagensGaleria?: string[];
-  imageEditorialStatus?: "clean" | "review_required" | "overlay_suspected";
-  normalizedUrl: string;
-  descricao?: string;
-  status?: "pending" | "publishing" | "published" | "cancelled" | "expired" | "rejected" | "error";
-  cardMessageId?: number;
-  existingProduct?: any;
-  lifecycle?: LifecycleRecord;
-  /** Metadado observacional do preview; nunca substitui preco no produto canônico. */
-  promotionEvidence?: ShopeePromotionEvidence | null;
-  /** Ajuste humano de oferta, auditável e separado do preço-base canônico. */
-  promotionReview?: {
-    price: number;
-    condition: "pix" | "pix_with_coupon" | "coupon" | "other";
-    benefits: string[];
-    source: "admin_confirmed";
-    confirmedAt: number;
-  } | null;
-  /** Rascunho temporário da oferta humana, removido ao confirmar ou cancelar. */
-  promotionDraft?: {
-    price: number;
-    condition: "pix" | "pix_with_coupon" | "coupon" | "other" | null;
-    benefits: string[];
-  } | null;
 }
 
 export function resolveTelegramReviewCategory(
@@ -592,51 +524,42 @@ async function renderProductList(pageInput: number): Promise<ProductListView> {
   return buildProductListView(products, pageInput);
 }
 
-/**
- * Renderizador do Menu Principal /start e /admin
- */
+/** Menu principal: compacto, sem duplicar a mesma ação com nomes diferentes. */
 async function renderMainMenu(chatId: number | string, messageId?: number, isEdit: boolean = false): Promise<void> {
-  let statsSummary = { totalProducts: 0, activeProducts: 0, todayClicks: 0, clicks7d: 0, topProductName: "Nenhum" };
+  let summary: any = null;
   try {
-    const summary = await productsRepository.getAnalyticsSummary();
-    const ranking = await productsRepository.getProductAnalyticsRanking("7d");
-    statsSummary.totalProducts = summary.totalProducts;
-    statsSummary.activeProducts = summary.activeProducts;
-    statsSummary.todayClicks = summary.todayClicks;
-    statsSummary.clicks7d = summary.clicks7d;
-    if (ranking.length > 0 && ranking[0].count > 0) {
-      statsSummary.topProductName = ranking[0].product.produto;
-    }
-  } catch {}
+    summary = await productsRepository.getAnalyticsSummary();
+  } catch {
+    summary = null;
+  }
 
-  const text = 
+  const totalProducts = summary?.totalProducts ?? "?";
+  const activeProducts = summary?.activeProducts ?? "?";
+  const todayClicks = summary?.todayClicks ?? "?";
+  const topProduct = Array.isArray(summary?.topProducts) && summary.topProducts[0]?.name
+    ? String(summary.topProducts[0].name)
+    : "Sem dados ainda";
+
+  const text =
     "🏴 <b>CERBERUS FINDS</b>\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "🛠 <b>PAINEL ADMINISTRATIVO</b>\n\n" +
-    `📦 Produtos: <b>${statsSummary.totalProducts}</b>\n` +
-    `🟢 Ativos: <b>${statsSummary.activeProducts}</b>\n` +
-    `⏸ Pausados: <b>${statsSummary.totalProducts - statsSummary.activeProducts}</b>\n\n` +
-    `👆 Cliques hoje: <b>${statsSummary.todayClicks}</b>\n` +
-    `📈 Cliques 7 dias: <b>${statsSummary.clicks7d}</b>\n\n` +
-    `🏆 Mais acessado:\n<i>${escapeTelegramHtml(statsSummary.topProductName)}</i>\n` +
-    "━━━━━━━━━━━━━━━━━━";
+    `📦 <b>${activeProducts}/${totalProducts}</b> produtos ativos\n` +
+    `👆 <b>${todayClicks}</b> cliques hoje\n` +
+    `🏆 <i>${escapeTelegramHtml(topProduct)}</i>\n\n` +
+    "Escolha o que precisa fazer agora.";
 
   const keyboard = {
     inline_keyboard: [
+      [{ text: "⚡ Hoje", callback_data: "admin_today" }, { text: "⏳ Pendentes", callback_data: "product_approvals:0" }],
       [{ text: "📦 Produtos", callback_data: "products_list:0" }, { text: "🔎 Descobrir", callback_data: "admin_add" }],
-      [{ text: "🧠 Curadoria", callback_data: "product_approvals:0" }, { text: "⏳ Aprovações", callback_data: "product_approvals:0" }],
-      [{ text: "🚀 Publicações", callback_data: "products_list:0" }, { text: "📊 Analytics", callback_data: "analytics_overview" }],
-      [{ text: "🗂️ Campanha 2 semanal", callback_data: "campaign_collection" }],
-      [{ text: "🔗 Redes sociais", callback_data: "social_links" }],
-      [{ text: "🧠 Operator", callback_data: "operator_home" }, { text: "⚙️ Configurações", callback_data: "admin_system" }]
-    ]
+      [{ text: "📊 Analytics", callback_data: "analytics_overview" }, { text: "🏷️ Categorias", callback_data: "admin_categories" }],
+      [{ text: "📧 Campanhas", callback_data: "campaign_collection" }, { text: "🔗 Redes", callback_data: "social_links" }],
+      [{ text: "🧠 Operator", callback_data: "operator_home" }, { text: "🩺 Sistema", callback_data: "admin_system" }],
+    ],
   };
 
-  if (isEdit && messageId) {
-    await editTelegramMessageText(chatId, messageId, text, keyboard);
-  } else {
-    await sendTelegramMessage(chatId, text, keyboard);
-  }
+  if (isEdit && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
+  else await sendTelegramMessage(chatId, text, keyboard);
 }
 
 function renderSocialLinksSettings(config: Record<SocialNetwork, string>): { text: string; keyboard: { inline_keyboard: any[][] } } {
@@ -661,11 +584,35 @@ async function getSocialLinksSettings(): Promise<{ text: string; keyboard: { inl
   return renderSocialLinksSettings(await readCanonicalSocialLinks());
 }
 
+const TELEGRAM_UPDATE_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const TELEGRAM_UPDATE_DEDUPE_MAX = 500;
+const processedTelegramUpdateIds = new Map<number, number>();
+
+/** Evita reprocessar a mesma entrega do webhook na mesma instância. */
+export function shouldProcessTelegramUpdate(updateId: unknown, now = Date.now()): boolean {
+  if (typeof updateId !== "number" || !Number.isInteger(updateId)) return true;
+  for (const [id, timestamp] of processedTelegramUpdateIds) {
+    if (now - timestamp > TELEGRAM_UPDATE_DEDUPE_TTL_MS) processedTelegramUpdateIds.delete(id);
+  }
+  if (processedTelegramUpdateIds.has(updateId)) return false;
+  processedTelegramUpdateIds.set(updateId, now);
+  while (processedTelegramUpdateIds.size > TELEGRAM_UPDATE_DEDUPE_MAX) {
+    const oldest = processedTelegramUpdateIds.keys().next().value;
+    if (oldest === undefined) break;
+    processedTelegramUpdateIds.delete(oldest);
+  }
+  return true;
+}
+
 /**
  * Processador Principal de Updates do Webhook (Texto + Callback Queries)
  */
 export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
   if (!update) return;
+  if (!shouldProcessTelegramUpdate(update.update_id)) {
+    logTelegramEvent("duplicate_update_ignored", { update_id: update.update_id });
+    return;
+  }
   logTelegramEvent("update_received", {
     update_type: update.callback_query ? "callback_query" : update.message?.text ? "message" : "other"
   });
@@ -699,6 +646,14 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     if (data === "admin_menu" || data === "admin_back") {
       await answerCallbackQuery(callbackId);
       if (chatId && messageId) await renderMainMenu(chatId, messageId, true);
+      return;
+    }
+
+    if (data === "admin_today") {
+      await answerCallbackQuery(callbackId);
+      const text = await telegramPanel.renderToday();
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Menu", callback_data: "admin_menu" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 
@@ -1046,16 +1001,9 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
     if (data === "admin_categories") {
       await answerCallbackQuery(callbackId);
-      const cats = await categoriesRepository.getCategories();
-      let text = "🏷️ <b>GERENCIAR CATEGORIAS</b>\n\n";
-      const buttons = [];
-      for (const c of cats) {
-        text += `• ${c.name}\n`;
-        buttons.push([{ text: `✏️ Renomear ${c.name}`, callback_data: `rename_cat_init:${c.name}` }]);
-      }
-      buttons.push([{ text: "➕ Adicionar Categoria", callback_data: "add_cat_init" }]);
-      buttons.push([{ text: "⬅️ Voltar", callback_data: "admin_menu" }]);
-      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, { inline_keyboard: buttons });
+      const text = await telegramPanel.renderCategories();
+      const keyboard = { inline_keyboard: [[{ text: "⬅️ Menu", callback_data: "admin_menu" }]] };
+      if (chatId && messageId) await editTelegramMessageText(chatId, messageId, text, keyboard);
       return;
     }
 
@@ -1402,18 +1350,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     }
 
     // --- NAMESPACE: CATEGORIES / REVIEWS ---
-    if (data === "add_cat_init") {
-      await answerCallbackQuery(callbackId);
-      await telegramRepo.setUserState(senderId, { action: "add_cat_name" });
-      if (chatId) await sendTelegramMessage(chatId, "📁 <b>ADICIONAR CATEGORIA</b>\n\nDigite o nome da nova categoria:");
-      return;
-    }
-
-    if (data.startsWith("rename_cat_init:")) {
-      const oldName = data.split(":")[1];
-      await answerCallbackQuery(callbackId);
-      await telegramRepo.setUserState(senderId, { action: `rename_cat_name:${oldName}` });
-      if (chatId) await sendTelegramMessage(chatId, `✏️ <b>RENOMEAR CATEGORIA: ${oldName}</b>\n\nDigite o novo nome:`);
+    if (data === "add_cat_init" || data.startsWith("rename_cat_init:")) {
+      await telegramRepo.deleteUserState(senderId);
+      await answerCallbackQuery(callbackId, "A taxonomia pública é fixa.");
+      const text = await telegramPanel.renderCategories();
+      if (chatId) await sendTelegramMessage(chatId, text);
       return;
     }
 
@@ -1732,26 +1673,135 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     }
 
     logTelegramEvent("admin_authorized", { chat_id: chatId, authorized: true });
-    if (text.startsWith("/")) logTelegramEvent("command", { chat_id: chatId, command: text.split(/\s+/, 1)[0].toLowerCase() });
 
-    // --- FASE 25B (Commit 1) — PAINEL DE LEITURA (READ-ONLY) ---
-    // /menu /status /pendentes /aprovados. ZERO escrita, ZERO publication/acquisition.
-    if (text.startsWith("/menu")) {
+    const parsedCommand = parseTelegramCommand(text);
+    const userState = await telegramRepo.getUserState(senderId);
+    const shortcutCommand = !parsedCommand && !userState ? resolveReadOnlyShortcut(text) : null;
+    const commandName = parsedCommand ? canonicalTelegramCommand(parsedCommand.name) : shortcutCommand;
+
+    // V2: um estado explícito iniciado por botão sempre vence interpretação livre.
+    if (!parsedCommand && userState?.action === "awaiting_promotion_price") {
+      const price = parseAndNormalizePrice(text);
+      if (price === null || price <= 0) {
+        if (chatId) await sendTelegramMessage(chatId, "❌ Valor promocional inválido. Envie um valor como <code>264,44</code> ou use <code>/cancelar</code>.");
+        return;
+      }
+      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (!targetReview) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ A revisão não está mais disponível para receber a promoção.");
+        return;
+      }
+      targetReview.promotionDraft = { price, condition: null, benefits: [] };
+      await telegramRepo.savePendingReview(targetReview);
+      await telegramRepo.setUserState(senderId, { action: "awaiting_promotion_condition", reviewId: userState.reviewId });
+      if (chatId) await sendTelegramMessage(chatId, "🏷️ <b>QUAL CONDIÇÃO ACOMPANHA ESSE VALOR?</b>", {
+        inline_keyboard: [
+          [{ text: "Pix", callback_data: "promo_condition:pix" }, { text: "Pix com cupom", callback_data: "promo_condition:pix_with_coupon" }],
+          [{ text: "Cupom", callback_data: "promo_condition:coupon" }, { text: "Outra condição", callback_data: "promo_condition:other" }],
+          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],
+        ],
+      });
+      return;
+    }
+
+    if (!parsedCommand && userState?.action === "awaiting_promotion_benefits") {
+      const benefits = text.trim() === "-"
+        ? []
+        : text.split(/\n|;/)
+          .map((value) => value.replace(/\s+/g, " ").trim())
+          .filter((value) => value.length >= 3 && value.length <= 180)
+          .slice(0, 5);
+      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (!targetReview?.promotionDraft?.condition) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ O rascunho promocional não está mais disponível. Inicie o ajuste novamente.");
+        return;
+      }
+      targetReview.promotionDraft.benefits = benefits;
+      await telegramRepo.savePendingReview(targetReview);
+      await telegramRepo.setUserState(senderId, { action: "confirm_promotion", reviewId: userState.reviewId });
+      const price = `R$ ${targetReview.promotionDraft.price.toFixed(2).replace(".", ",")}`;
+      if (chatId) await sendTelegramMessage(chatId, `🔎 <b>CONFIRMAR OFERTA PROMOCIONAL</b>\n\nPreço promocional: <b>${price}</b> ${formatPromotionCondition(targetReview.promotionDraft.condition)}\nBenefícios: ${benefits.length > 0 ? benefits.map((benefit) => `\n• ${benefit}`).join("") : "não informado"}\n\n<i>O preço-base canônico não será alterado.</i>`, {
+        inline_keyboard: [
+          [{ text: "✅ Confirmar oferta", callback_data: `promo_confirm:${userState.reviewId}` }],
+          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],
+        ],
+      });
+      return;
+    }
+
+    if (parsedCommand && !isKnownTelegramCommand(parsedCommand.name)) {
+      const suggestion = suggestTelegramCommand(parsedCommand.name);
+      if (chatId) {
+        await sendTelegramMessage(
+          chatId,
+          suggestion
+            ? `⚠️ Comando não reconhecido. Você quis dizer <code>/${suggestion}</code>?`
+            : "⚠️ Comando não reconhecido. Use <code>/ajuda</code> para ver os atalhos disponíveis.",
+        );
+      }
+      return;
+    }
+
+    if (commandName) logTelegramEvent("command", { chat_id: chatId, command: commandName });
+
+    if (commandName === "menu") {
       if (chatId) await sendTelegramMessage(chatId, telegramPanel.renderReadPanelMenu());
       return;
     }
-    if (text.startsWith("/status")) {
+    if (commandName === "hoje") {
+      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderToday());
+      return;
+    }
+    if (commandName === "status") {
       if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderStatus());
       return;
     }
-    if (text.startsWith("/pendentes")) {
+    if (commandName === "pendentes") {
       if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderPendingReviews());
       return;
     }
-    if (text.startsWith("/aprovados")) {
+    if (commandName === "aprovados") {
       if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderApproved());
       return;
     }
+    if (commandName === "categorias") {
+      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderCategories());
+      return;
+    }
+    if (commandName === "produtos" && (!parsedCommand || parsedCommand.name === "produtos" || parsedCommand.name === "listar")) {
+      if (chatId) {
+        const listView = await renderProductList(0);
+        await sendTelegramMessage(chatId, listView.text, listView.keyboard);
+      }
+      return;
+    }
+    if (commandName === "ajuda") {
+      if (chatId) await sendTelegramMessage(chatId, telegramPanel.renderReadPanelMenu());
+      return;
+    }
+    if (commandName === "avancado") {
+      if (chatId) await sendTelegramMessage(chatId, telegramPanel.renderAdvancedPanel());
+      return;
+    }
+    if (commandName === "cancelar") {
+      if (!userState) {
+        if (chatId) await sendTelegramMessage(chatId, "✅ Não há fluxo ativo para cancelar.");
+        return;
+      }
+      if (userState.reviewId) {
+        const review = await telegramRepo.getPendingReview(userState.reviewId);
+        if (review?.promotionDraft) {
+          review.promotionDraft = null;
+          await telegramRepo.savePendingReview(review);
+        }
+      }
+      await telegramRepo.deleteUserState(senderId);
+      if (chatId) await sendTelegramMessage(chatId, "❌ Fluxo atual cancelado. Nenhuma publicação foi executada.");
+      return;
+    }
+
     // /shopee-schema — inspeção autenticada e somente-leitura do schema oficial.
     // O comando é alcançável somente depois da whitelist administradora acima.
     if (text === "/shopee-schema") {
@@ -2057,24 +2107,6 @@ async function renderCycleState(input: string): Promise<string> {
       return;
     }
 
-    if (text.startsWith("/categorias")) {
-      const cats = await categoriesRepository.getCategories();
-      let catTxt = "🏷️ <b>CATEGORIAS DO CATÁLOGO</b>\n\n";
-      const buttons = [];
-      for (const c of cats) {
-        catTxt += `• ${c.name}\n`;
-        buttons.push([{ text: `✏️ ${c.name}`, callback_data: `rename_cat_init:${c.name}` }]);
-      }
-      buttons.push([{ text: "➕ Adicionar", callback_data: "add_cat_init" }]);
-      buttons.push([{ text: "⬅️ Menu", callback_data: "admin_menu" }]);
-      if (chatId) await sendTelegramMessage(chatId, catTxt, { inline_keyboard: buttons });
-      return;
-    }
-
-    if (text.startsWith("/help")) {
-      if (chatId) await renderMainMenu(chatId);
-      return;
-    }
 
     // --- BLOCO 17 — COMANDOS DO COCKPIT COMERCIAL (RENDER-ONLY) ---
     // COCKPIT = INFORMAÇÃO, NÃO AUTORIDADE. Nenhum comando abaixo executa
@@ -2164,8 +2196,6 @@ async function renderCycleState(input: string): Promise<string> {
       }
       return;
     }
-    const userState = await telegramRepo.getUserState(senderId);
-
     if (userState?.action.startsWith("social_link:")) {
       const network = userState.action.slice("social_link:".length);
       if (!isSocialNetwork(network)) {
@@ -2351,28 +2381,12 @@ async function renderCycleState(input: string): Promise<string> {
       return;
     }
 
-    if (userState && userState.action === "add_cat_name") {
-      try {
-        await categoriesRepository.addCategory(text);
-        await telegramRepo.deleteUserState(senderId);
-        if (chatId) await sendTelegramMessage(chatId, `✅ Categoria <b>${text}</b> adicionada com sucesso!`);
-      } catch (err: any) {
-        if (chatId) await sendTelegramMessage(chatId, `❌ Erro: ${err.message}`);
-      }
+    if (userState && (userState.action === "add_cat_name" || userState.action.startsWith("rename_cat_name:"))) {
+      await telegramRepo.deleteUserState(senderId);
+      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderCategories());
       return;
     }
 
-    if (userState && userState.action.startsWith("rename_cat_name:")) {
-      const oldName = userState.action.split(":")[1];
-      try {
-        await categoriesRepository.renameCategory(oldName, text);
-        await telegramRepo.deleteUserState(senderId);
-        if (chatId) await sendTelegramMessage(chatId, `✅ Categoria renomeada de ${oldName} para ${text}!`);
-      } catch (err: any) {
-        if (chatId) await sendTelegramMessage(chatId, `❌ Erro: ${err.message}`);
-      }
-      return;
-    }
 
     if (userState && userState.action === "awaiting_category") {
       const targetReview = await telegramRepo.getPendingReview(userState.reviewId);
@@ -2399,7 +2413,7 @@ async function renderCycleState(input: string): Promise<string> {
       const updatedCardText = buildReviewCardText(targetReview);
       const keyboard = buildMainReviewKeyboard(targetReview.id);
       if (chatId) {
-        await sendTelegramMessage(chatId, `✅ Categoria atualizada para <b>${category}</b>.`);
+        await sendTelegramMessage(chatId, `✅ Categoria atualizada para <b>${publicCategory}</b>.`);
         const primaryImageUrl = resolveCanonicalProductImage(targetReview).primaryImageUrl;
         if (targetReview.cardMessageId) await editTelegramMessageCaption(chatId, targetReview.cardMessageId, updatedCardText, keyboard);
         else if (primaryImageUrl) await sendTelegramPhoto(chatId, primaryImageUrl, updatedCardText, keyboard);
@@ -2459,37 +2473,27 @@ async function renderCycleState(input: string): Promise<string> {
       return;
     }
 
-    // Fallback de preço para revisão pendente
-    let targetReview: PendingReview | null = null;
-    if (userState && userState.action === "awaiting_price") {
-      targetReview = await telegramRepo.getPendingReview(userState.reviewId);
-    }
-    if (!targetReview) {
-      targetReview = await telegramRepo.getLatestPendingReviewForUser(senderId, chatId);
-    }
-
-    const normPrice = parseAndNormalizePrice(text);
-    if (!targetReview) {
-      if (chatId) {
-        await sendTelegramMessage(
-          chatId,
-          "⚠️ <b>Comando ou mensagem não reconhecida.</b>\n\nEnvie o link de um produto para cadastrar ou digite /start para abrir o painel administrativo."
-        );
+    if (userState?.action === "awaiting_price") {
+      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;
+      if (!targetReview) {
+        await telegramRepo.deleteUserState(senderId);
+        if (chatId) await sendTelegramMessage(chatId, "⚠️ A revisão não está mais disponível. Abra a review novamente antes de alterar o preço.");
+        return;
       }
-      return;
-    }
+      const normPrice = parseAndNormalizePrice(text);
+      if (normPrice === null || normPrice <= 0) {
+        if (chatId) await sendTelegramMessage(chatId, "❌ Valor inválido. Envie um preço como <code>89,90</code> ou use <code>/cancelar</code>.");
+        return;
+      }
 
-    if (normPrice !== null && normPrice > 0) {
       targetReview.preco = normPrice;
       await refreshReviewLifecycle(targetReview);
       await telegramRepo.savePendingReview(targetReview);
       await telegramRepo.deleteUserState(senderId);
-
       const updatedCardText = buildReviewCardText(targetReview);
       const keyboard = buildMainReviewKeyboard(targetReview.id);
-
       if (chatId) {
-        await sendTelegramMessage(chatId, `✅ Preço atualizado para R$ ${normPrice.toFixed(2).replace(".", ",")}:`);
+        await sendTelegramMessage(chatId, `✅ Preço atualizado para R$ ${normPrice.toFixed(2).replace(".", ",")}.`);
         if (targetReview.cardMessageId) {
           await editTelegramMessageCaption(chatId, targetReview.cardMessageId, updatedCardText, keyboard);
         } else {
@@ -2498,11 +2502,16 @@ async function renderCycleState(input: string): Promise<string> {
           else await sendTelegramMessage(chatId, updatedCardText, keyboard);
         }
       }
-    } else {
-      if (chatId) {
-        await sendTelegramMessage(chatId, "❌ Valor de preço inválido. Envie um número válido (ex: 89,90).");
-      }
+      return;
     }
+
+    if (chatId) {
+      await sendTelegramMessage(
+        chatId,
+        "ℹ️ Não reconheci essa mensagem. Envie um link de produto, use <code>/menu</code> ou <code>/ajuda</code>. Mutações só acontecem em fluxos explícitos.",
+      );
+    }
+    return;
   }
 }
 

@@ -85,7 +85,7 @@ describe("social links", () => {
     assert.match(bot, /upsertCanonicalSocialLink/);
     assert.match(bot, /normalizeSocialLinkUrl/);
     assert.match(bot, /resolvePublicSiteUrl\(\)/);
-    assert.match(commands, /name: "redes"/);
+    assert.match(commands, /command: "redes"/);
     assert.doesNotMatch(bot, /https:\/\/cerberusfinds\.com\/produto/);
   });
 

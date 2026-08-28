@@ -5,6 +5,7 @@ import {
   deleteUserState,
   setTestGetPendingReview,
   setTestSavePendingReview,
+  setTestUserStateHandlers,
 } from "../server/repositories/telegramRepository";
 
 // Usa um administrador exclusivo deste arquivo para não disputar o mesmo
@@ -60,6 +61,12 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
   setTestSavePendingReview(async (saved) => {
     Object.assign(review, saved);
   });
+  let localState: { action: string; reviewId?: string; productId?: string } | null = null;
+  setTestUserStateHandlers({
+    set: async (_senderId, state) => { localState = { ...state }; },
+    get: async () => localState,
+    delete: async () => { localState = null; },
+  });
   await deleteUserState(adminId);
 
   try {
@@ -85,6 +92,7 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
     setTestTelegramSenders(null, null);
     setTestGetPendingReview(null);
     setTestSavePendingReview(null);
+    setTestUserStateHandlers(null);
     if (originalAllowedUsers === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
     else process.env.TELEGRAM_ALLOWED_USER_IDS = originalAllowedUsers;
     if (originalToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;

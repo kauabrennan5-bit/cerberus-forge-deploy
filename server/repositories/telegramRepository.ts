@@ -74,6 +74,9 @@ function writeUserStatesToFile(states: Record<string, UserState>): void {
 let testOverrideSavePendingReview: ((review: PendingReview) => Promise<void>) | null = null;
 let testOverrideGetPendingReview: ((reviewId: string) => Promise<PendingReview | null>) | null = null;
 let testOverrideListReviewsByStatus: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null = null;
+let testOverrideSetUserState: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null = null;
+let testOverrideGetUserState: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null = null;
+let testOverrideDeleteUserState: ((senderId: string | number) => Promise<void>) | null = null;
 
 export function setTestSavePendingReview(
   override: ((review: PendingReview) => Promise<void>) | null,
@@ -91,6 +94,17 @@ export function setTestListReviewsByStatus(
   override: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null,
 ): void {
   testOverrideListReviewsByStatus = override;
+}
+
+/** Isola a máquina de estados em testes sem tocar no arquivo/Supabase. */
+export function setTestUserStateHandlers(handlers: {
+  set?: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null;
+  get?: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null;
+  delete?: ((senderId: string | number) => Promise<void>) | null;
+} | null): void {
+  testOverrideSetUserState = handlers?.set ?? null;
+  testOverrideGetUserState = handlers?.get ?? null;
+  testOverrideDeleteUserState = handlers?.delete ?? null;
 }
 
 function reviewExpiresAt(review: PendingReview): number {
@@ -315,6 +329,10 @@ export async function setUserState(
   senderId: string | number,
   state: { action: string; reviewId?: string; productId?: string },
 ): Promise<void> {
+  if (testOverrideSetUserState) {
+    await testOverrideSetUserState(senderId, state);
+    return;
+  }
   const sId = String(senderId);
   const userStateObj: UserState = {
     senderId: sId,
@@ -346,6 +364,7 @@ export async function setUserState(
 export async function getUserState(
   senderId: string | number,
 ): Promise<{ action: string; reviewId?: string; productId?: string } | null> {
+  if (testOverrideGetUserState) return testOverrideGetUserState(senderId);
   const sId = String(senderId);
   let stateObj: UserState | null = null;
 
@@ -387,6 +406,10 @@ export async function getUserState(
 }
 
 export async function deleteUserState(senderId: string | number): Promise<void> {
+  if (testOverrideDeleteUserState) {
+    await testOverrideDeleteUserState(senderId);
+    return;
+  }
   const sId = String(senderId);
 
   const states = readUserStatesFromFile();
