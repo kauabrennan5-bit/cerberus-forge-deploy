@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { AppConfig, Product } from '../types';
 import { extractProduct, createProduct, deleteProduct, verifyAdminPassword } from '../services/api';
 import { Sparkles, Lock, Trash2, Pencil, Check, AlertTriangle, Link as LinkIcon, Loader2, Upload, Image as ImageIcon, ShieldCheck } from 'lucide-react';
@@ -23,7 +23,6 @@ interface AttachedImage {
 }
 
 export const AdminForm: React.FC<AdminFormProps> = ({
-  config,
   products,
   existingCategories,
   onProductAdded,
@@ -59,6 +58,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [submitSuccess, setSubmitSuccess] = useState<boolean>(false);
+  const [submitPending, setSubmitPending] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -69,35 +69,11 @@ export const AdminForm: React.FC<AdminFormProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Verify saved password on mount
-  useEffect(() => {
-    const storedPass = typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') : null;
-    const passToCheck = storedPass || config.adminPassword;
-
-    if (passToCheck) {
-      verifyAdminPassword(passToCheck).then((res) => {
-        if (res.success) {
-          setPasswordInput(passToCheck);
-          setIsAuthenticated(true);
-        } else {
-          if (typeof window !== 'undefined') {
-            localStorage.removeItem('cerberus_admin_password');
-          }
-          setIsAuthenticated(false);
-          setPasswordInput('');
-        }
-      });
-    }
-  }, [config.adminPassword]);
-
   // Handle logout
   const handleLogout = () => {
     setIsAuthenticated(false);
     setPasswordInput('');
     setAuthError(null);
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('cerberus_admin_password');
-    }
   };
 
   // Handle password submission
@@ -113,14 +89,8 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     if (res.success) {
       setIsAuthenticated(true);
       setAuthError(null);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('cerberus_admin_password', typedPass);
-      }
     } else {
       setIsAuthenticated(false);
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('cerberus_admin_password');
-      }
       setAuthError(res.error || 'Senha incorreta. Verifique a variável ADMIN_PASSWORD no servidor.');
     }
   };
@@ -191,7 +161,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     setIsExtracting(true);
 
     try {
-      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword;
+      const adminPass = passwordInput;
       const resData = await extractProduct(targetUrl, targetRawText, adminPass);
 
       if (resData.success && resData.data) {
@@ -240,6 +210,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     e.preventDefault();
     setValidationError(null);
     setSubmitError(null);
+    setSubmitPending(null);
     setSubmitSuccess(false);
 
     // Validation
@@ -275,10 +246,9 @@ export const AdminForm: React.FC<AdminFormProps> = ({
 
     try {
       const base64List = attachedImages.map(img => img.base64);
-      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword;
+      const adminPass = passwordInput;
 
       const payload = {
-        senha: adminPass,
         produto: produto.trim(),
         categoria: finalCategory,
         preco: priceNum,
@@ -297,7 +267,10 @@ export const AdminForm: React.FC<AdminFormProps> = ({
       setUploadProgress(85);
       setUploadProgress(100);
 
-      if (resJson.success) {
+      if (resJson.pending) {
+        setSubmitError(null);
+        setSubmitPending(resJson.message || resJson.error || 'Produto enviado para revisão e aguardando aprovação humana no Telegram.');
+      } else if (resJson.success) {
         setSubmitSuccess(true);
         // Reset form
         setLink('');
@@ -334,7 +307,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
     setValidationError(null);
 
     try {
-      const adminPass = passwordInput || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '') || config.adminPassword;
+      const adminPass = passwordInput;
       const resJson = await deleteProduct(id, adminPass);
 
       if (resJson.success) {
@@ -504,6 +477,17 @@ export const AdminForm: React.FC<AdminFormProps> = ({
           <div className="bg-[#8A1F1F]/20 border border-[#8A1F1F] rounded-none p-3 text-xs text-[#E8E1D3] font-medium flex items-center space-x-2">
             <AlertTriangle className="w-4 h-4 text-[#8A1F1F] shrink-0" />
             <span>{validationError}</span>
+          </div>
+        )}
+
+        {/* Pending approval is an expected workflow state, not a backend error. */}
+        {submitPending && (
+          <div role="status" className="bg-[#181512] border border-[#8A1F1F] rounded-none p-4 text-xs text-[#E8E1D3] flex items-start space-x-2">
+            <ShieldCheck className="w-4 h-4 text-[#8A1F1F] shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold uppercase tracking-wider">Aguardando aprovação humana</p>
+              <p className="leading-relaxed mt-1">{submitPending}</p>
+            </div>
           </div>
         )}
 
@@ -750,7 +734,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
           {isSubmitting && (
             <div className="space-y-1.5 pt-2">
               <div className="flex justify-between text-[10px] font-display uppercase tracking-widest text-[#8A1F1F]">
-                <span>Salvando no banco de dados...</span>
+                <span>Enviando para revisão...</span>
                 <span>{uploadProgress}%</span>
               </div>
               <div className="w-full h-1.5 bg-[#0B0908] overflow-hidden border border-[#3A342E]">
@@ -778,7 +762,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
               ) : (
                 <>
                   <ShieldCheck className="w-4 h-4 text-[#E8E1D3]" />
-                  <span>Publicar no Banco do Acervo</span>
+                  <span>Enviar para Revisão</span>
                 </>
               )}
             </button>
@@ -867,7 +851,7 @@ export const AdminForm: React.FC<AdminFormProps> = ({
         isOpen={Boolean(editingProduct)}
         product={editingProduct}
         existingCategories={existingCategories}
-        adminPassword={config.adminPassword}
+        adminPassword={passwordInput}
         onClose={() => setEditingProduct(null)}
         onSaveSuccess={(updatedProduct) => {
           setEditingProduct(null);
