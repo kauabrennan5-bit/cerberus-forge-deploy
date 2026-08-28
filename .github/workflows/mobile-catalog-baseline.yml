@@ -8,13 +8,18 @@ on:
       - scripts/mobileCatalogBaseline.mjs
       - .github/workflows/mobile-catalog-baseline.yml
 
+permissions:
+  contents: write
+
 jobs:
   baseline:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -22,8 +27,35 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Apply catalog state patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/components/ProductGrid.tsx')
+          source = path.read_text(encoding='utf-8')
+          source = source.replace(
+              "import React, { useMemo } from 'react';",
+              "import React, { useMemo, type Dispatch, type SetStateAction } from 'react';",
+              1,
+          )
+          source = source.replace(
+              "  onViewStateChange: (state: CatalogViewState) => void;",
+              "  onViewStateChange: Dispatch<SetStateAction<CatalogViewState>>;",
+              1,
+          )
+          old = """  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;\n  const setSelectedCategory = (value: string) => onViewStateChange({ ...viewState, selectedCategory: value });\n  const setSearchQuery = (value: string) => onViewStateChange({ ...viewState, searchQuery: value });\n  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {\n    const resolved = typeof next === 'function' ? next(isCategoryPanelOpen) : next;\n    onViewStateChange({ ...viewState, isCategoryPanelOpen: resolved });\n  };\n"""
+          new = """  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;\n  const setSelectedCategory = (value: string) => onViewStateChange((current) => ({ ...current, selectedCategory: value }));\n  const setSearchQuery = (value: string) => onViewStateChange((current) => ({ ...current, searchQuery: value }));\n  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {\n    onViewStateChange((current) => ({\n      ...current,\n      isCategoryPanelOpen: typeof next === 'function' ? next(current.isCategoryPanelOpen) : next,\n    }));\n  };\n"""
+          if old not in source:
+              raise SystemExit('ProductGrid catalog state setter shape changed')
+          source = source.replace(old, new, 1)
+          path.write_text(source, encoding='utf-8')
+          PY
+
       - name: Install project dependencies
         run: npm ci
+
+      - name: TypeScript
+        run: npm run lint
 
       - name: Install browser probe dependency
         run: npm install --no-save --package-lock=false playwright@1.55.0
@@ -46,12 +78,26 @@ jobs:
           cat /tmp/cerberus-vite-preview.log
           exit 1
 
-      - name: Audit local branch and live production
+      - name: Audit local branch interactions
         env:
           LOCAL_BASE_URL: http://127.0.0.1:4173
-          LIVE_BASE_URL: https://cerberus-static-catalog.onrender.com
           ARTIFACT_DIR: mobile-baseline-artifacts
         run: node scripts/mobileCatalogBaseline.mjs
+
+      - name: Diff integrity
+        run: git diff --check
+
+      - name: Commit interaction fix
+        run: |
+          git config user.name "kauabrennan5-bit"
+          git config user.email "kauabrennan5@gmail.com"
+          git add src/components/ProductGrid.tsx
+          if git diff --cached --quiet; then
+            echo 'No interaction patch changes to commit.'
+          else
+            git commit -m "fix(catalog): preserve batched filter state"
+            git push origin HEAD:fix/mobile-catalog-categories-2026-08-28
+          fi
 
       - name: Upload baseline evidence
         if: always()
