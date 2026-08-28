@@ -5,7 +5,7 @@ import { detectMarketplace, isIntermediateMarketplaceUrl, resolveShortUrlIfNeede
 import { ProductPipeline } from "../server/services/productPipeline";
 import { sanitizeCuratorOutput } from "../server/services/productAutomation";
 import { containsRawPayloadMarkers, normalizeCandidate, validateCandidate } from "../server/services/productLifecycle";
-import { buildProductListView } from "../server/services/telegramBot";
+import { buildProductListView, resolveTelegramReviewCategory } from "../server/services/telegramBot";
 
 test("detectMarketplace reconhece Shopee diretamente", () => {
   assert.equal(detectMarketplace("https://shopee.com.br/produto-i.123.456"), "Shopee");
@@ -160,6 +160,27 @@ test("revisão do Telegram usa a extração editorial compartilhada e não publi
   assert.match(source, /await refreshReviewLifecycle\(targetReview\)/);
 });
 
+test("Telegram resolve edição de categoria somente para a taxonomia pública", () => {
+  const review = {
+    categoria: "affiliate_preview",
+    produto: "Abajur LED Cogumelo",
+    rawTitle: "Abajur LED Cogumelo",
+    displayTitle: "Abajur LED Cogumelo",
+    descricao: "Luminária retrô para mesa",
+  };
+  assert.equal(resolveTelegramReviewCategory(review as any), "Iluminação");
+  assert.equal(resolveTelegramReviewCategory({ ...review, produto: "Produto sem sinais", rawTitle: "Produto sem sinais", displayTitle: "Produto sem sinais", descricao: "" } as any, "AFILIADO"), "");
+  assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Iluminação");
+});
+
+test("Telegram não aceita mais categoria livre no caminho de review/publicação", () => {
+  const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  assert.match(source, /PUBLIC_PRODUCT_CATEGORIES/);
+  assert.match(source, /resolveTelegramReviewCategory\(targetReview, category\)/);
+  assert.match(source, /PUBLIC_CATEGORY_REVIEW_REQUIRED/);
+  assert.doesNotMatch(source, /targetReview\.categoria = category;/);
+});
+
 test("rawContent técnico em descricao é detectado e limpo na normalização", () => {
   const rawDescription = "[URL Final]: https://meli.la/demo\\n[Título Identificado]: Produto\\n[Preço Identificado]: R$ 10,00";
   assert.equal(containsRawPayloadMarkers(rawDescription), true);
@@ -210,7 +231,7 @@ test("publicação é bloqueada se descricao contaminada atravessar a revisão",
     normalizedUrl: "https://shopee.com.br/produto-i.123.456",
     marketplace: "Shopee",
     produto: "Produto editorial",
-    categoria: "Acessórios",
+    categoria: "Iluminação",
     preco: 10,
     imagens: ["https://cdn.example.com/product.jpg"],
     imageEditorialStatus: "clean",
@@ -373,7 +394,7 @@ test("conteúdo externo com prompt injection não altera configuração nem cria
 
   assert.equal(curated.title, "Produto factual");
   assert.equal(curated.description, "");
-  assert.equal(curated.category, "Calçados & Acessórios");
+  assert.equal(curated.category, "", "categoria sem evidência pública permanece em revisão");
   assert.equal(process.env.TELEGRAM_WEBHOOK_SECRET, before);
 });
 

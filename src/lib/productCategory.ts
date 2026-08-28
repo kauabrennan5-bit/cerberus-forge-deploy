@@ -33,6 +33,7 @@ const CATEGORY_ALIASES: Record<string, PublicProductCategory> = {
   lustres: "Iluminação",
   decoracao: "Decoração",
   casa: "Decoração",
+  "casa e decoracao": "Decoração",
   design: "Decoração",
   moveis: "Móveis",
   movel: "Móveis",
@@ -50,8 +51,6 @@ const CATEGORY_ALIASES: Record<string, PublicProductCategory> = {
   jaquetas: "Vestuário",
   calcados: "Calçados & Acessórios",
   calcado: "Calçados & Acessórios",
-  acessorios: "Calçados & Acessórios",
-  acessorio: "Calçados & Acessórios",
   tecnologia: "Tecnologia",
   eletronicos: "Tecnologia",
   eletronico: "Tecnologia",
@@ -129,6 +128,12 @@ export function inferPublicProductCategory(input: {
   return "";
 }
 
+export function isPublicProductCategory(category: string | null | undefined): category is PublicProductCategory {
+  if (typeof category !== "string" || !category.trim()) return false;
+  const normalized = normalizeCategoryToken(category);
+  return PUBLIC_PRODUCT_CATEGORIES.some((item) => normalizeCategoryToken(item) === normalized);
+}
+
 export function isInternalProductCategory(category: string | null | undefined): boolean {
   const normalized = normalizeCategoryToken(category || "");
   return INTERNAL_CATEGORY_TOKENS.has(normalized) || normalized.includes("affiliate");
@@ -142,7 +147,7 @@ export function isInternalProductCategory(category: string | null | undefined): 
 export function resolvePublicProductCategory(
   category: string | null | undefined,
   context: { title?: string | null; description?: string | null } = {},
-): string {
+): PublicProductCategory | "" {
   const raw = typeof category === "string" ? category.trim() : "";
   if (!raw || isInternalProductCategory(raw)) {
     return inferPublicProductCategory({ category: raw, ...context });

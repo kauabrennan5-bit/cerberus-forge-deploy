@@ -27,6 +27,7 @@ import {
 } from "./contract";
 import type { PolicyDecision, PolicyDecisionValue, PolicyRequest } from "../../policyEngine/types";
 import type { ApprovalDecisionState } from "../../agentRuntime/types";
+import { resolvePublicProductCategory } from "../../../src/lib/productCategory";
 import {
   resolveAffiliateLink,
   type AffiliateRegistrySnapshot,
@@ -258,6 +259,22 @@ export async function preflightPublication(
   if (!candidate.category || !candidate.category.trim()) {
     return { ok: false, candidate, assessment, failureCode: "MISSING_CATEGORY", reason: "categoria ausente" };
   }
+  const publicCategory = resolvePublicProductCategory(candidate.category, {
+    title: candidate.title,
+    description: candidate.description,
+  });
+  if (!publicCategory) {
+    return {
+      ok: false,
+      candidate,
+      assessment,
+      failureCode: "PUBLIC_CATEGORY_REVIEW_REQUIRED",
+      reason: "categoria não pertence à taxonomia pública e não pôde ser resolvida com confiança",
+    };
+  }
+  const canonicalCandidate: CandidateForPublication = publicCategory === candidate.category.trim()
+    ? candidate
+    : Object.freeze({ ...candidate, category: publicCategory });
   if (candidate.observedPrice === null || candidate.observedPrice === undefined) {
     return { ok: false, candidate, assessment, failureCode: "PRICE_UNKNOWN", reason: "preço UNKNOWN — preço não pode ser inventado" };
   }
@@ -313,7 +330,7 @@ export async function preflightPublication(
       reason: `produto existente colide (${duplicate.reason}): ${duplicate.productId}`,
     };
   }
-  return { ok: true, candidate, assessment };
+  return { ok: true, candidate: canonicalCandidate, assessment };
 }
 
 // ---------------------------------------------------------------------------
@@ -418,6 +435,8 @@ export async function executePublication(params: {
           ? "INVALID_URL"
         : preflight.failureCode === "PRICE_UNKNOWN" || preflight.failureCode === "MISSING_TITLE" || preflight.failureCode === "MISSING_CATEGORY"
           ? "MISSING_DATA"
+        : preflight.failureCode === "PUBLIC_CATEGORY_REVIEW_REQUIRED"
+          ? "VALIDATION_FAILED"
         : "VALIDATION_FAILED",
       contract: null,
       productId: null,

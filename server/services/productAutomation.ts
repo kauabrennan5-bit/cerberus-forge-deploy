@@ -554,7 +554,10 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
           curatedTitle = safeCuratorOutput.title;
         }
         curatedDescription = safeCuratorOutput.description;
-        curatedCategory = safeCuratorOutput.category;
+        curatedCategory = resolvePublicProductCategory(safeCuratorOutput.category, {
+          title: curatedTitle,
+          description: safeCuratorOutput.description,
+        });
       } catch (geminiErr: any) {
         console.warn("[Product Review Extraction Warning] Gemini falhou, mantendo dados brutos do scraper:", geminiErr?.message);
       }
@@ -564,7 +567,7 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
       curatedTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "Produto sem Título";
     }
 
-    if (!curatedCategory) return { success: false, error: "CATEGORY_REVIEW_REQUIRED" };
+    if (!curatedCategory) return { success: false, error: "PUBLIC_CATEGORY_REVIEW_REQUIRED" };
 
     const mktId = extractMarketplaceId(normalizedUrl);
     const generatedSlug = generateSlug(rawTitle || curatedTitle);

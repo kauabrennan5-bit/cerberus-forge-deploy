@@ -261,6 +261,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               </span>
             </div>
 
+            <p className="mt-1 h-[2rem] overflow-hidden text-[8px] leading-4 text-[#E8E1D3]/45 line-clamp-2 sm:text-[9px]">
+              Condições finais de pagamento e frete são confirmadas na loja oficial.
+            </p>
+
             <button
               type="button"
               onClick={handleBuyClick}

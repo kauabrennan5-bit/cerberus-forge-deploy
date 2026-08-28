@@ -14,6 +14,7 @@ import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
 import { normalizePromotionOffer } from "./promotionOffer";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
+import { PUBLIC_PRODUCT_CATEGORIES, resolvePublicProductCategory } from "../../src/lib/productCategory";
 import * as commercialCockpit from "./commercialCockpit";
 import { runDiscoverCommand } from "./discoveryCommands";
 // Bloco N11 — porta controlada de batch /discover-batch (somente URLs).
@@ -349,6 +350,16 @@ export interface PendingReview {
   } | null;
 }
 
+export function resolveTelegramReviewCategory(
+  review: Pick<PendingReview, "categoria" | "produto" | "rawTitle" | "displayTitle" | "descricao">,
+  requestedCategory: string | null | undefined = review.categoria,
+): string {
+  return resolvePublicProductCategory(requestedCategory, {
+    title: review.displayTitle || review.rawTitle || review.produto,
+    description: review.descricao,
+  });
+}
+
 function formatPromotionCondition(condition: NonNullable<PendingReview["promotionReview"]>["condition"]): string {
   if (condition === "pix") return "no Pix";
   if (condition === "pix_with_coupon") return "no Pix com cupom";
@@ -453,6 +464,8 @@ function getPublicationCompletenessErrors(review: PendingReview): string[] {
   const rawTitle = review.rawTitle?.trim() || review.produto?.trim() || "";
   const displayTitle = review.displayTitle?.trim() || "";
   const description = stripRawAffiliateProvenance(review.descricao || "").trim();
+  const publicCategory = resolveTelegramReviewCategory(review);
+  if (!publicCategory) errors.push("PUBLIC_CATEGORY_REVIEW_REQUIRED");
 
   if (!rawTitle) errors.push("título de origem ausente");
   // O título público deve resultar da curadoria, não de um fallback silencioso
@@ -1680,7 +1693,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       }
       await telegramRepo.setUserState(senderId, { action: "awaiting_category", reviewId });
       await answerCallbackQuery(callbackId, "Digite a nova categoria:");
-      if (chatId) await sendTelegramMessage(chatId, "📁 <b>DIGITE A NOVA CATEGORIA:</b>\nExemplos: <code>Camisetas</code>, <code>Calças</code>, <code>Acessórios</code>, <code>Calçados</code>, <code>Jaquetas</code> ou <code>Moletons</code>.");
+      if (chatId) await sendTelegramMessage(chatId, `📁 <b>DIGITE A CATEGORIA PÚBLICA:</b>\nCategorias válidas: <code>${PUBLIC_PRODUCT_CATEGORIES.join("</code>, <code>")}</code>.`);
       return;
     }
 
@@ -2280,6 +2293,17 @@ async function renderCycleState(input: string): Promise<string> {
           return;
         }
         update[field] = p;
+      } else if (field === "categoria") {
+        const product = await productsRepository.getProductByIdOrSlug(prodId);
+        const publicCategory = resolvePublicProductCategory(text, {
+          title: product?.displayTitle || product?.rawTitle || product?.produto,
+          description: product?.descricao,
+        });
+        if (!publicCategory) {
+          if (chatId) await sendTelegramMessage(chatId, `❌ PUBLIC_CATEGORY_REVIEW_REQUIRED. Use uma categoria pública válida: <code>${PUBLIC_PRODUCT_CATEGORIES.join("</code>, <code>")}</code>.`);
+          return;
+        }
+        update.categoria = publicCategory;
       } else {
         update[field] = text;
       }
@@ -2362,8 +2386,13 @@ async function renderCycleState(input: string): Promise<string> {
         if (chatId) await sendTelegramMessage(chatId, "❌ Categoria inválida. Digite um nome entre 2 e 60 caracteres.");
         return;
       }
+      const publicCategory = resolveTelegramReviewCategory(targetReview, category);
+      if (!publicCategory) {
+        if (chatId) await sendTelegramMessage(chatId, `❌ PUBLIC_CATEGORY_REVIEW_REQUIRED. Use uma categoria pública válida: <code>${PUBLIC_PRODUCT_CATEGORIES.join("</code>, <code>")}</code>.`);
+        return;
+      }
 
-      targetReview.categoria = category;
+      targetReview.categoria = publicCategory;
       await refreshReviewLifecycle(targetReview);
       await telegramRepo.savePendingReview(targetReview);
       await telegramRepo.deleteUserState(senderId);

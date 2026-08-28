@@ -88,9 +88,8 @@ test("acervo usa criação canônica crescente e mantém o número arquival fora
 
   assert.deepEqual(ordered.map(product => product.id), ["prod-1787369001000", "prod-1787369003000", "legacy"]);
   assert.deepEqual(ordered.map(product => product.rawRowIndex), [0, 1, 2]);
-  assert.match(gridSource, /const BASE_CATEGORIES = \[/);
-  assert.match(gridSource, /'Iluminação'/);
-  assert.match(gridSource, /'Infantil'/);
+  assert.match(gridSource, /PUBLIC_PRODUCT_CATEGORIES/);
+  assert.match(gridSource, /categories = useMemo/);
   assert.match(gridSource, /index=\{product\.rawRowIndex \?\? idx\}/);
   assert.match(gridSource, /aria-expanded=\{isCategoryPanelOpen\}/);
   assert.match(gridSource, /data-testid="category-panel"/);
