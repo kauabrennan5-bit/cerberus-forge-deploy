@@ -1,0 +1,48 @@
+name: Weekly newsletter materialize
+
+on:
+  push:
+    branches:
+      - feat/weekly-newsletter-curation-2026-08-28
+    paths:
+      - .github/scripts/materialize_weekly_newsletter.py
+      - .github/workflows/weekly-newsletter-materialize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: python .github/scripts/materialize_weekly_newsletter.py
+      - name: Remove temporary materializer
+        run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
+      - run: npm ci
+      - name: Weekly focused tests
+        run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts
+      - name: Full suite
+        run: npm test
+      - name: TypeScript
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Diff check
+        run: git diff --check
+      - name: Commit validated feature
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add curated weekly newsletter approval flow"
+          git push origin HEAD:feat/weekly-newsletter-curation-2026-08-28
