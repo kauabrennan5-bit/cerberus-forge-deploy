@@ -1,0 +1,8 @@
+-- Cerberus Finds development seed.
+--
+-- Intentionally empty until the canonical schema baseline can be replayed from
+-- zero. Never copy production subscribers, emails, IP addresses, click IDs,
+-- Telegram identities, tokens, credentials, or other personal/operational data
+-- into this file.
+--
+-- Future seed rows must be synthetic, deterministic and safe for local/test use.
