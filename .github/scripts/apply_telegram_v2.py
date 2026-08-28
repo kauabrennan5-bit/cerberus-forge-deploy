@@ -14,7 +14,7 @@ def exact(old: str, new: str, label: str) -> None:
 
 def sub(pattern: str, replacement: str, label: str) -> None:
     global src
-    src2, count = re.subn(pattern, replacement, src, count=1, flags=re.S)
+    src2, count = re.subn(pattern, lambda _match: replacement, src, count=1, flags=re.S)
     if count != 1:
         raise SystemExit(f"MISSING_OR_DUPLICATE_PATTERN:{label}:{count}")
     src = src2

@@ -120,10 +120,9 @@ test("products_list em página posterior preserva edição e navegação com mes
 
 test("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", () => {
   const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
-  const directStart = source.indexOf('if (text.startsWith("/listar") || text.startsWith("/produtos"))');
-  const directEnd = source.indexOf('if (text.startsWith("/categorias"))', directStart);
+  const directStart = source.indexOf('if (commandName === "produtos" &&');
+  const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
   const directHandler = source.slice(directStart, directEnd);
-
   assert.ok(directStart >= 0 && directEnd > directStart);
   assert.match(directHandler, /renderProductList\(0\)/);
   assert.match(directHandler, /sendTelegramMessage\(chatId, listView\.text, listView\.keyboard\)/);

@@ -18,7 +18,7 @@ test("diagnóstico do Telegram compara webhook canônico sem expor token", async
   process.env.TELEGRAM_BOT_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyz";
   process.env.PUBLIC_BACKEND_URL = "https://backend.example.test";
   delete process.env.TELEGRAM_WEBHOOK_URL;
-  process.env.TELEGRAM_ALLOWED_USER_IDS = "1976526372";
+  process.env.TELEGRAM_ALLOWED_USER_IDS = "888111222";
   process.env.TELEGRAM_WEBHOOK_SECRET = "secret-value";
   markTelegramBackendReady();
 
