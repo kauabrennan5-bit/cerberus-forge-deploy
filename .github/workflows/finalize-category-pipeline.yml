@@ -6,6 +6,7 @@ on:
       - fix/mobile-catalog-categories-2026-08-28
     paths:
       - scripts/finalizeCategoryPatch.py
+      - scripts/runFinalizeCategoryPatch.py
       - .github/workflows/finalize-category-pipeline.yml
 
 permissions:
@@ -29,7 +30,7 @@ jobs:
           cache: npm
 
       - name: Apply category patch
-        run: python scripts/finalizeCategoryPatch.py
+        run: python scripts/runFinalizeCategoryPatch.py
 
       - name: Install dependencies
         run: npm ci
@@ -56,6 +57,7 @@ jobs:
       - name: Commit category closure and remove temporary runner
         run: |
           git rm scripts/finalizeCategoryPatch.py
+          git rm scripts/runFinalizeCategoryPatch.py
           git rm .github/workflows/finalize-category-pipeline.yml
           git config user.name "kauabrennan5-bit"
           git config user.email "kauabrennan5@gmail.com"
