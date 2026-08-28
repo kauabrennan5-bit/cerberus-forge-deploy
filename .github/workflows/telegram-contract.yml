@@ -1,56 +1,191 @@
-name: Telegram Contract Gate
+name: Telegram V2 Gate
 
 on:
+  pull_request:
+    paths:
+      - "server/services/telegram*.ts"
+      - "server/repositories/telegramRepository.ts"
+      - "server/repositories/productsRepository.ts"
+      - "tests/telegram*.test.ts"
+      - "tests/publishCommand.test.ts"
+      - "tests/promotionReview.test.ts"
+      - "tests/previewTelegramRoutes.test.ts"
+      - "tests/shopeeCommand.test.ts"
+      - "tests/socialLinks.test.ts"
+      - "tests/newsletterCampaign.test.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/telegram-contract.yml"
   push:
     branches:
-      - "refactor/telegram-bot-v2-final-validation-sol-20260828"
+      - main
+      - "refactor/telegram-bot-v2-*"
     paths:
+      - "server/services/telegram*.ts"
+      - "server/repositories/telegramRepository.ts"
+      - "server/repositories/productsRepository.ts"
+      - "tests/telegram*.test.ts"
+      - "tests/publishCommand.test.ts"
+      - "tests/promotionReview.test.ts"
+      - "tests/previewTelegramRoutes.test.ts"
+      - "tests/shopeeCommand.test.ts"
+      - "tests/socialLinks.test.ts"
+      - "tests/newsletterCampaign.test.ts"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/telegram-contract.yml"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: telegram-v2-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  materialize:
+  telegram-v2-gate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 40
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Materialize already-diagnosed candidate
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify focused suite structure
         shell: bash
         run: |
           set -euo pipefail
-          python3 .github/scripts/validate_telegram_v2_fix.py
-          git diff --check
-          cat > /tmp/expected-files <<'EOF'
-          server/services/telegramPanel.ts
-          tests/publishCommand.test.ts
-          tests/telegramReadPanel.test.ts
-          tests/telegramUiContract.test.ts
-          EOF
-          sort -o /tmp/expected-files /tmp/expected-files
-          git diff --name-only | sort > /tmp/actual-files
-          diff -u /tmp/expected-files /tmp/actual-files
-          if git diff | grep -E '^\+.*\b(test\.(skip|todo|only)|describe\.(skip|only)|it\.(skip|todo|only))\b'; then
-            echo "Forbidden test weakening detected"
+          files=(
+            tests/publishCommand.test.ts
+            tests/telegramReadPanel.test.ts
+            tests/telegramAndMarketplace.test.ts
+            tests/telegramDiagnostics.test.ts
+            tests/telegramUiContract.test.ts
+            tests/promotionReview.test.ts
+            tests/previewTelegramRoutes.test.ts
+            tests/shopeeCommand.test.ts
+            tests/socialLinks.test.ts
+            tests/newsletterCampaign.test.ts
+          )
+          for file in "${files[@]}"; do
+            test -f "$file" || { echo "Focused suite file missing: $file"; exit 1; }
+          done
+          if grep -R -n -E '\b(test|describe|it)\.(skip|todo|only)\b' tests --include='*.test.ts'; then
+            echo "Forbidden skip/todo/only detected"
             exit 1
           fi
 
-      - name: Commit candidate on temporary branch only
+      - name: publishCommand isolated
+        run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts
+
+      - name: telegramReadPanel isolated
+        run: node --import tsx/esm --test --test-concurrency=1 tests/telegramReadPanel.test.ts
+
+      - name: Focused Telegram V2 suite
+        shell: bash
+        run: |
+          set -uo pipefail
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/publishCommand.test.ts \
+            tests/telegramReadPanel.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramUiContract.test.ts \
+            tests/promotionReview.test.ts \
+            tests/previewTelegramRoutes.test.ts \
+            tests/shopeeCommand.test.ts \
+            tests/socialLinks.test.ts \
+            tests/newsletterCampaign.test.ts 2>&1 | tee bot-v2-focused.log
+          status=${PIPESTATUS[0]}
+          tests=$(awk '$1=="#" && $2=="tests" {v=$3} END{print v+0}' bot-v2-focused.log)
+          pass=$(awk '$1=="#" && $2=="pass" {v=$3} END{print v+0}' bot-v2-focused.log)
+          fail=$(awk '$1=="#" && $2=="fail" {v=$3} END{print v+0}' bot-v2-focused.log)
+          skipped=$(awk '$1=="#" && $2=="skipped" {v=$3} END{print v+0}' bot-v2-focused.log)
+          cancelled=$(awk '$1=="#" && $2=="cancelled" {v=$3} END{print v+0}' bot-v2-focused.log)
+          printf 'FOCUSED_TOTAL=%s\nFOCUSED_PASS=%s\nFOCUSED_FAIL=%s\nFOCUSED_SKIPPED=%s\nFOCUSED_CANCELLED=%s\n' "$tests" "$pass" "$fail" "$skipped" "$cancelled"
+          test "$status" -eq 0
+          test "$tests" -gt 0
+          test "$pass" -eq "$tests"
+          test "$fail" -eq 0
+          test "$skipped" -eq 0
+          test "$cancelled" -eq 0
+
+      - name: Bot V2 structural invariants
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            server/services/telegramPanel.ts \
-            tests/publishCommand.test.ts \
-            tests/telegramReadPanel.test.ts \
-            tests/telegramUiContract.test.ts
-          git diff --cached --check
-          git commit -m "validation: materialize final telegram v2 candidate"
-          git push origin HEAD:${GITHUB_REF_NAME}
+          ! grep -q 'categoriesRepository' server/services/telegramBot.ts
+          ! grep -q 'getLatestPendingReviewForUser(senderId, chatId)' server/services/telegramBot.ts
+          ! grep -q 'addCategory(' server/services/telegramBot.ts
+          ! grep -q 'renameCategory(' server/services/telegramBot.ts
+          grep -q 'parseTelegramCommand(text)' server/services/telegramBot.ts
+          grep -q 'shouldProcessTelegramUpdate' server/services/telegramBot.ts
+          grep -q 'listReviewsByStatus' server/repositories/telegramRepository.ts
+          grep -q 'setTestUserStateHandlers' server/repositories/telegramRepository.ts
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Full global test suite
+        shell: bash
+        run: |
+          set -uo pipefail
+          npm test 2>&1 | tee telegram-v2-global.log
+          status=${PIPESTATUS[0]}
+          summary() {
+            awk -v key="$1" '($1=="#" || $1=="ℹ") && $2==key {v=$3} END{print v+0}' telegram-v2-global.log
+          }
+          tests=$(summary tests)
+          pass=$(summary pass)
+          fail=$(summary fail)
+          skipped=$(summary skipped)
+          cancelled=$(summary cancelled)
+          printf 'GLOBAL_TOTAL=%s\nGLOBAL_PASS=%s\nGLOBAL_FAILURES=%s\nGLOBAL_SKIPPED=%s\nGLOBAL_CANCELLED=%s\n' "$tests" "$pass" "$fail" "$skipped" "$cancelled"
+          test "$status" -eq 0
+          test "$tests" -gt 0
+          test "$pass" -eq "$tests"
+          test "$fail" -eq 0
+          test "$skipped" -eq 0
+          test "$cancelled" -eq 0
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Diff check
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          else
+            git diff --check
+          fi
+
+      - name: Secret scan changed content
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --no-ext-diff HEAD^ HEAD > /tmp/gitleaks-scan/telegram-v2.patch
+          else
+            git show --format= --no-ext-diff HEAD > /tmp/gitleaks-scan/telegram-v2.patch
+          fi
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
