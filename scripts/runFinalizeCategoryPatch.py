@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 source_path = Path('scripts/finalizeCategoryPatch.py')
 source = source_path.read_text(encoding='utf-8')
@@ -10,9 +11,6 @@ source = source.replace(old, new, 1)
 code = compile(source, str(source_path), 'exec')
 exec(code, {'__name__': '__main__'})
 
-# "Acessórios" isolado não pertence à taxonomia pública. O contexto factual
-# deve resolver para uma categoria canônica (ex.: luminária -> Iluminação,
-# bolsa -> Calçados & Acessórios), em vez de promover o rótulo genérico.
 category_path = Path('src/lib/productCategory.ts')
 category_source = category_path.read_text(encoding='utf-8')
 for legacy_alias in (
@@ -24,9 +22,6 @@ for legacy_alias in (
     category_source = category_source.replace(legacy_alias, '', 1)
 category_path.write_text(category_source, encoding='utf-8')
 
-# A review pode chegar com metadado técnico (affiliate_preview), desde que a
-# categoria pública seja resolvida deterministicamente antes do pipeline. O
-# readiness bloqueia apenas quando a resolução falha.
 telegram_path = Path('server/services/telegramBot.ts')
 telegram_source = telegram_path.read_text(encoding='utf-8')
 old_completeness = '''  const publicCategory = resolveTelegramReviewCategory(review);
@@ -40,7 +35,6 @@ if old_completeness not in telegram_source:
 telegram_source = telegram_source.replace(old_completeness, new_completeness, 1)
 telegram_path.write_text(telegram_source, encoding='utf-8')
 
-# A ressalva comercial permanece em um slot de altura previsível.
 card_path = Path('src/components/ProductCard.tsx')
 card_source = card_path.read_text(encoding='utf-8')
 button_marker = '''            <button
@@ -58,7 +52,6 @@ if 'Condições finais de pagamento e frete são confirmadas na loja oficial.' n
     card_source = card_source.replace(button_marker, disclaimer + button_marker, 1)
 card_path.write_text(card_source, encoding='utf-8')
 
-# O grid agora depende da taxonomia pública compartilhada, não de uma cópia local.
 promotion_test_path = Path('tests/promotionOffer.test.ts')
 promotion_test = promotion_test_path.read_text(encoding='utf-8')
 old_assertions = '''  assert.match(gridSource, /const BASE_CATEGORIES = \\[/);
@@ -73,23 +66,22 @@ if old_assertions not in promotion_test:
 promotion_test = promotion_test.replace(old_assertions, new_assertions, 1)
 promotion_test_path.write_text(promotion_test, encoding='utf-8')
 
-# Fixtures N7 exercitam resolução de afiliado, não classificação de categoria.
-# Elas recebem uma categoria pública válida para alcançar o gate que pretendem testar.
+# N7 tests affiliate behavior. Normalize only the buildRepo fixture region so
+# category readiness does not short-circuit the affiliate-specific assertions.
 affiliate_test_path = Path('tests/affiliateResolverN7.test.ts')
 affiliate_test = affiliate_test_path.read_text(encoding='utf-8')
-old_candidate_category = '            category: "Acessórios",\n'
-old_product_category = '          categoria: "Acessórios",\n'
-if affiliate_test.count(old_candidate_category) != 1:
-    raise SystemExit('N7 candidate category fixture shape changed')
-if affiliate_test.count(old_product_category) != 1:
-    raise SystemExit('N7 product category fixture shape changed')
-affiliate_test = affiliate_test.replace(old_candidate_category, '            category: "Iluminação",\n', 1)
-affiliate_test = affiliate_test.replace(old_product_category, '          categoria: "Iluminação",\n', 1)
+start = affiliate_test.find('function buildRepo(')
+end = affiliate_test.find('function buildApprovalLookup', start)
+if start < 0 or end < 0:
+    raise SystemExit('N7 buildRepo fixture boundaries changed')
+repo_fixture = affiliate_test[start:end]
+repo_fixture, candidate_count = re.subn(r'(\bcategory\s*:\s*)"Acessórios"', r'\1"Iluminação"', repo_fixture)
+repo_fixture, product_count = re.subn(r'(\bcategoria\s*:\s*)"Acessórios"', r'\1"Iluminação"', repo_fixture)
+if candidate_count < 1 or product_count < 1:
+    raise SystemExit(f'N7 category fixture not found candidate={candidate_count} product={product_count}')
+affiliate_test = affiliate_test[:start] + repo_fixture + affiliate_test[end:]
 affiliate_test_path.write_text(affiliate_test, encoding='utf-8')
 
-# Os testes de segurança precisam isolar a variável sob teste. A descrição
-# contaminada usa categoria pública válida; prompt-injection sem sinais
-# classificatórios deve permanecer fail-closed, nunca virar categoria genérica.
 telegram_test_path = Path('tests/telegramAndMarketplace.test.ts')
 telegram_test = telegram_test_path.read_text(encoding='utf-8')
 contaminated_fixture = '''    produto: "Produto editorial",
@@ -121,7 +113,6 @@ telegram_test = telegram_test.replace(
 )
 telegram_test_path.write_text(telegram_test, encoding='utf-8')
 
-# Sanidades obrigatórias da taxonomia.
 if '"talher"' not in category_source or category_source.index('"talher"') > category_source.index('"organizador"'):
     raise SystemExit('kitchen-specific category precedence regressed')
 if 'acessorios: "Calçados & Acessórios"' in category_source:
