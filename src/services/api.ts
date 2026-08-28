@@ -1,4 +1,5 @@
 import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
+import { clearAdminSessionPassword, getAdminSessionPassword, setAdminSessionPassword } from "../lib/adminSession";
 
 export interface CreateProductInput {
   senha?: string;
@@ -35,7 +36,6 @@ function getApiUrl(path: string): string {
   try {
     if (typeof window !== 'undefined' && window.location) {
       const hostname = window.location.hostname;
-      // Se estivermos no domínio estático de produção, usa o Web Service do Render
       if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-static-catalog')) {
         return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
       }
@@ -51,18 +51,11 @@ function getApiUrl(path: string): string {
 
 function adminHeaders(password?: string): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const normalized = String(password || '').trim();
+  const normalized = String(password || getAdminSessionPassword() || '').trim();
   if (normalized) headers['x-admin-password'] = normalized;
   return headers;
 }
 
-/**
- * Carrega a projeção pública do catálogo.
- *
- * public/data/products.json é derivado de public.products durante a sincronização
- * e é a única fonte usada pela vitrine para renderizar produtos. Operações
- * administrativas continuam usando os endpoints do backend abaixo.
- */
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   try {
     const res = await fetch(getApiUrl('/api/institutional/social-links'), { cache: 'no-store' });
@@ -114,22 +107,28 @@ export async function getProducts(): Promise<any[]> {
 
 export async function verifyAdminPassword(password: string): Promise<{ success: boolean; error?: string }> {
   try {
+    const normalizedPassword = String(password || '').trim();
     const res = await fetch(getApiUrl('/api/admin/verify'), {
       method: 'POST',
-      headers: adminHeaders(password),
+      headers: adminHeaders(normalizedPassword),
       body: JSON.stringify({})
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { success: false, error: data?.error || 'Senha incorreta.' };
-    return { success: Boolean(data.success), error: data.error };
+    if (!res.ok || data?.success !== true) {
+      clearAdminSessionPassword();
+      return { success: false, error: data?.error || 'Senha incorreta.' };
+    }
+    setAdminSessionPassword(normalizedPassword);
+    return { success: true };
   } catch {
+    clearAdminSessionPassword();
     return { success: false, error: 'Erro ao conectar ao servidor.' };
   }
 }
 
 export async function createProduct(payload: any, password?: string): Promise<ApiResponse<any>> {
   try {
-    const activePassword = password || payload?.senha;
+    const activePassword = password || payload?.senha || getAdminSessionPassword();
     const { senha: _ignoredSenha, ...safePayload } = payload || {};
     const res = await fetch(getApiUrl('/api/products'), {
       method: 'POST',
@@ -138,9 +137,6 @@ export async function createProduct(payload: any, password?: string): Promise<Ap
     });
     const data = await res.json().catch(() => ({}));
 
-    // O backend usa 202 para indicar que o produto ainda NÃO foi publicado:
-    // ele está aguardando aprovação humana no Telegram. Não podemos apresentar
-    // esse estado como "produto criado" no frontend.
     if (res.status === 202 && data?.success === true) {
       return {
         ...data,
@@ -159,7 +155,7 @@ export async function createProduct(payload: any, password?: string): Promise<Ap
 
 export async function updateProduct(id: string, payload: any, password?: string): Promise<ApiResponse<any>> {
   try {
-    const activePassword = password || payload?.senha;
+    const activePassword = password || payload?.senha || getAdminSessionPassword();
     const { senha: _ignoredSenha, ...safePayload } = payload || {};
     const res = await fetch(getApiUrl(`/api/products/${id}`), {
       method: 'PUT',
@@ -277,6 +273,6 @@ export async function verifyPasswordApi(password: string): Promise<boolean> {
   return res.success;
 }
 
-export async function fetchProxyCsv(url: string): Promise<string> {
+export async function fetchProxyCsv(_url: string): Promise<string> {
   return '';
 }
