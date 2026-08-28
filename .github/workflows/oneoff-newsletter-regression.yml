@@ -1,0 +1,23 @@
+name: One-off newsletter regression
+
+on:
+  push:
+    branches: [fix/security-p0-2026-08-28]
+    paths:
+      - RUN_NEWSLETTER_REGRESSION
+
+permissions:
+  contents: read
+
+jobs:
+  newsletter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --import tsx/esm --test --test-concurrency=1 --test-reporter=spec tests/newsletterCampaign.test.ts
