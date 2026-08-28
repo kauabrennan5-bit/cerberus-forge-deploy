@@ -1,0 +1,70 @@
+name: Capture Telegram V2 validated diff
+
+on:
+  push:
+    branches:
+      - diag/telegram-v2-global-failures-2026-08-28
+    paths:
+      - .github/workflows/diag-telegram-v2-diff.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact ephemeral V2 preparation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          workflow = Path('.github/workflows/finalize-telegram-v2.yml').read_text(encoding='utf-8').splitlines()
+          targets = [
+              'Apply deterministic V2 base patch',
+              'Prioritize explicit promotion states',
+              'Add isolated user-state test hooks',
+              'Isolate promotion test state and legacy product routing assertion',
+              'Align advanced-panel test contract',
+          ]
+          def extract_run(name: str) -> str:
+              start = workflow.index(f'      - name: {name}')
+              i = start + 1
+              while workflow[i].strip() == '': i += 1
+              if workflow[i] != '        run: |': raise SystemExit(f'missing run block: {name}')
+              out=[]; i+=1
+              while i < len(workflow):
+                  line=workflow[i]
+                  if line.startswith('      - name: ') or line.startswith('      - uses: '): break
+                  if line.startswith('          '): out.append(line[10:])
+                  elif line.strip() == '': out.append('')
+                  else: raise SystemExit(f'unexpected indentation: {line!r}')
+                  i+=1
+              return '\n'.join(out)+'\n'
+          for target in targets:
+              subprocess.run(['bash','-euo','pipefail','-c',extract_run(target)],check=True)
+          p=Path('tests/socialLinks.test.ts')
+          s=p.read_text(encoding='utf-8')
+          old='assert.match(commands, /name: "redes"/);'
+          new='assert.match(commands, /command: "redes"/);'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one stale assertion, found {s.count(old)}')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+      - name: Diff check and capture
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --name-status HEAD | tee diff-files.txt
+          git diff --name-only HEAD | sort > diff-names.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telegram-v2-diff-files
+          path: |
+            diff-files.txt
+            diff-names.txt
+          retention-days: 1
