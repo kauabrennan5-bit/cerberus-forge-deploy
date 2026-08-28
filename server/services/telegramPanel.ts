@@ -2,6 +2,7 @@ import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
 import { telegramApiFetch, getTelegramBotToken } from "./telegramApiClient";
 import {
   PRIMARY_TELEGRAM_COMMANDS,
+  SECONDARY_TELEGRAM_COMMANDS,
   renderAdvancedCommandHelp,
   renderPrimaryCommandHelp,
 } from "./telegramCommands";
@@ -12,15 +13,21 @@ import {
   resolvePublicProductCategory,
 } from "../../src/lib/productCategory";
 
-/** Menu nativo: só comandos que realmente precisam estar à mão. */
-export const TELEGRAM_PANEL_COMMANDS = PRIMARY_TELEGRAM_COMMANDS.map(item => ({ ...item }));
+/**
+ * Contrato completo do painel. Inclui comandos secundários por compatibilidade,
+ * enquanto o menu nativo registrado no Telegram permanece enxuto.
+ */
+export const TELEGRAM_PANEL_COMMANDS = [
+  ...PRIMARY_TELEGRAM_COMMANDS,
+  ...SECONDARY_TELEGRAM_COMMANDS,
+].map(item => ({ ...item }));
 
 export async function registerTelegramCommands(): Promise<{ ok: boolean; reason?: string }> {
   if (!getTelegramBotToken()) {
     return { ok: false, reason: "TELEGRAM_BOT_TOKEN ausente; menu não registrado" };
   }
   try {
-    const commands = TELEGRAM_PANEL_COMMANDS.map(({ command, description }) => ({ command, description }));
+    const commands = PRIMARY_TELEGRAM_COMMANDS.map(({ command, description }) => ({ command, description }));
     const res = await telegramApiFetch("setMyCommands", { commands });
     const result = await res.json();
     if (result?.ok === true) return { ok: true };
@@ -34,7 +41,11 @@ export async function registerTelegramCommands(): Promise<{ ok: boolean; reason?
 }
 
 export function renderReadPanelMenu(): string {
-  return "🧭 <b>MENU PRINCIPAL</b>\n\n" + renderPrimaryCommandHelp();
+  return (
+    "🧭 <b>MENU PRINCIPAL</b>\n\n" +
+    renderPrimaryCommandHelp() +
+    "\n\n🛡️ <b>REGRA OPERACIONAL</b>\nDECISION ≠ ACTION · PREVIEW ≠ PUBLICATION. Ações sensíveis exigem confirmação humana."
+  );
 }
 
 export function renderAdvancedPanel(): string {
@@ -123,109 +134,77 @@ export async function renderStatus(): Promise<string> {
   }
 
   return (
-    "🩺 <b>CERBERUS — STATUS</b>\n" +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    `📦 Produtos: <b>${productsCount}</b> (${activeCount} ativos)\n` +
-    `⏳ Pendentes: <b>${pendingCount}</b>\n` +
-    `🤖 Telegram: ${telegramDiag}\n` +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    "Read-only · nenhum estado foi alterado."
+    "🩺 <b>STATUS READ-ONLY</b>\n" +
+    `Produtos: <b>${productsCount}</b> · ativos: <b>${activeCount}</b>\n` +
+    `Pendentes: <b>${pendingCount}</b>\n` +
+    `Telegram: ${telegramDiag}\n\n` +
+    "Nenhuma alteração foi executada."
   );
 }
 
 export async function renderPendingReviews(): Promise<string> {
   try {
-    const pending = await telegramRepo.listPendingReviews(20);
-    if (!Array.isArray(pending) || pending.length === 0) {
-      return "✅ <b>FILA LIMPA</b>\n\nNenhuma proposta pendente no momento.";
-    }
-    const lines = pending.map((review, index) => {
-      const name = typeof review.produto === "string" && review.produto.trim()
-        ? review.produto.slice(0, 44)
-        : "(sem nome)";
-      const price = Number.isFinite(review.preco) && review.preco > 0
-        ? `R$ ${review.preco.toFixed(2).replace(".", ",")}`
-        : "preço pendente";
-      return `${index + 1}. <b>${name}</b>\n   <code>${review.id}</code> · ${price}`;
-    });
+    const reviews = await telegramRepo.listPendingReviews(25);
+    if (!reviews.length) return "⏳ <b>PENDENTES</b>\n\nNenhuma revisão pendente no momento.";
     return (
-      `⏳ <b>PENDENTES — ${pending.length}</b>\n\n` +
-      lines.join("\n\n") +
-      "\n\nUse o card da review ou <code>/publicar &lt;ID&gt;</code>. A publicação continua exigindo confirmação humana."
+      `⏳ <b>PENDENTES — ${reviews.length}</b>\n\n` +
+      reviews.map(review => `• <code>${review.id}</code> · ${review.produto || review.rawTitle || "Produto sem título"}`).join("\n") +
+      "\n\nUse /publicar &lt;review_id&gt; para encaminhar uma decisão ao card de confirmação."
     );
   } catch {
-    return "⚠️ <b>FILA INDISPONÍVEL</b>\n\nA leitura falhou; nenhum dado foi alterado.";
+    return "⏳ <b>PENDENTES</b>\n\nFila indisponível para leitura agora; nenhuma alteração foi executada.";
   }
 }
 
 export async function renderApproved(): Promise<string> {
-  let published: any[] | null = null;
-  let activeProducts: any[] | null = null;
-
   try {
-    published = await telegramRepo.listReviewsByStatus(["published"], 10);
+    const [reviews, products] = await Promise.all([
+      telegramRepo.listReviewsByStatus(["published"], 25),
+      productsRepository.getProducts(),
+    ]);
+    const activeProducts = products.filter(product => product.ativo !== false);
+    return (
+      "✅ <b>APROVADOS / PUBLICADOS</b>\n\n" +
+      `Decisões registradas: <b>${reviews.length}</b>\n` +
+      `Produtos ativos no catálogo: <b>${activeProducts.length}</b>\n\n` +
+      (activeProducts.length
+        ? activeProducts.slice(0, 15).map(product => `• <code>${product.ref}</code> · ${product.produto}`).join("\n")
+        : "Nenhum produto ativo no catálogo.")
+    );
   } catch {
-    published = null;
+    return "✅ <b>APROVADOS / PUBLICADOS</b>\n\nDados indisponíveis para leitura agora.";
   }
+}
 
+export async function renderProducts(): Promise<string> {
   try {
     const products = await productsRepository.getProducts();
-    activeProducts = Array.isArray(products) ? products.filter(p => p.ativo !== false) : [];
+    if (!products.length) return "📦 <b>PRODUTOS</b>\n\nNenhum produto cadastrado.";
+    const active = products.filter(product => product.ativo !== false).length;
+    const paused = products.length - active;
+    return (
+      `📦 <b>PRODUTOS — ${products.length}</b>\n` +
+      `🟢 Ativos: <b>${active}</b> · ⏸️ Pausados: <b>${paused}</b>\n\n` +
+      products.slice(0, 30).map(product => `${product.ativo !== false ? "🟢" : "⏸️"} <code>${product.ref}</code> · ${product.produto}`).join("\n")
+    );
   } catch {
-    activeProducts = null;
+    return "📦 <b>PRODUTOS</b>\n\nCatálogo indisponível para leitura agora.";
   }
-
-  const reviewText = published === null
-    ? "não disponível"
-    : published.length === 0
-      ? "nenhuma decisão publicada recente"
-      : published.map((review, index) => `${index + 1}. ${String(review.produto || "(sem nome)").slice(0, 44)}`).join("\n");
-
-  const catalogText = activeProducts === null
-    ? "não disponível"
-    : activeProducts.length === 0
-      ? "catálogo vazio"
-      : activeProducts.slice(0, 10).map(product => `• ${String(product.produto).slice(0, 44)}`).join("\n") +
-        (activeProducts.length > 10 ? `\n… +${activeProducts.length - 10}` : "");
-
-  return (
-    "✅ <b>APROVADOS / PUBLICADOS</b>\n" +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    `<b>Decisões recentes</b>\n${reviewText}\n\n` +
-    `<b>Catálogo ativo</b>\n${catalogText}\n` +
-    "━━━━━━━━━━━━━━━━━━\n" +
-    "Read-only · nenhum estado foi alterado."
-  );
 }
 
 export async function renderCategories(): Promise<string> {
-  const counts = new Map(PUBLIC_PRODUCT_CATEGORIES.map(category => [category, 0]));
-  let invalidCount = 0;
-  let catalogAvailable = true;
-
   try {
     const products = await productsRepository.getProducts();
+    const counts = new Map<string, number>();
     for (const product of products) {
-      if (product.ativo === false) continue;
-      const category = resolvePublicProductCategory(product.categoria, {
-        title: product.displayTitle || product.rawTitle || product.produto,
-        description: product.descricao,
-      });
-      if (category && counts.has(category)) counts.set(category, (counts.get(category) || 0) + 1);
-      else invalidCount += 1;
+      const category = resolvePublicProductCategory(product.categoria) || "Sem categoria pública";
+      counts.set(category, (counts.get(category) || 0) + 1);
     }
+    return (
+      "📁 <b>CATEGORIAS</b>\n\n" +
+      PUBLIC_PRODUCT_CATEGORIES.map(category => `• ${category}: <b>${counts.get(category) || 0}</b>`).join("\n")
+    );
   } catch {
-    catalogAvailable = false;
+    return "📁 <b>CATEGORIAS</b>\n\nTaxonomia indisponível para leitura agora.";
   }
-
-  const rows = PUBLIC_PRODUCT_CATEGORIES.map(category =>
-    `• <b>${category}</b> — ${catalogAvailable ? counts.get(category) || 0 : "?"}`,
-  );
-  return (
-    "🏷️ <b>TAXONOMIA PÚBLICA</b>\n\n" +
-    rows.join("\n") +
-    (!catalogAvailable ? "\n\n⚠️ Contagens indisponíveis; a taxonomia oficial continua válida." : "") +
-    (catalogAvailable && invalidCount > 0 ? `\n\n⚠️ Produtos ativos fora da taxonomia: <b>${invalidCount}</b>` : "") +
-    "\n\nCategorias são canônicas: o bot não cria nem renomeia categorias livremente."
-  );
 }
