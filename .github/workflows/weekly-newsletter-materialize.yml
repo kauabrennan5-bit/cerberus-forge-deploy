@@ -9,7 +9,7 @@ on:
       - .github/workflows/weekly-newsletter-materialize.yml
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   materialize:
@@ -27,6 +27,32 @@ jobs:
       - name: Remove temporary materializer
         run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
       - run: npm ci
+      - name: Reproduce isolated authorization cause
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          env -u TELEGRAM_ALLOWED_USER_IDS -u TELEGRAM_ALLOWED_USERS \
+            node --import tsx/esm --test --test-concurrency=1 --test-name-pattern='publicar sem id' tests/publishCommand.test.ts \
+            > /tmp/publish-isolated-no-allowlist.log 2>&1
+          no_allowlist_status=$?
+          TELEGRAM_ALLOWED_USER_IDS=1976526372 \
+            node --import tsx/esm --test --test-concurrency=1 --test-name-pattern='publicar sem id' tests/publishCommand.test.ts \
+            > /tmp/publish-isolated-with-allowlist.log 2>&1
+          with_allowlist_status=$?
+          set -e
+          echo "ISOLATED_WITHOUT_ALLOWLIST_EXIT=${no_allowlist_status}"
+          echo "ISOLATED_WITH_ALLOWLIST_EXIT=${with_allowlist_status}"
+          test "$no_allowlist_status" -ne 0
+          test "$with_allowlist_status" -eq 0
+      - name: Reproduce publish file with synthetic allowlist
+        env:
+          TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+        run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts
+      - name: Reproduce publish functional group with synthetic allowlist
+        env:
+          TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+        run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts tests/telegramBotV2Contract.test.ts
       - name: Weekly focused tests
         run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts
       - name: Full suite with observability
@@ -59,11 +85,11 @@ jobs:
 
           text = Path("weekly-global-test.log").read_text(encoding="utf-8", errors="replace")
           keys = {
-              "GLOBAL_TOTAL": r"(?m)^# tests\s+(\d+)\s*$",
-              "GLOBAL_PASS": r"(?m)^# pass\s+(\d+)\s*$",
-              "GLOBAL_FAILURES": r"(?m)^# fail\s+(\d+)\s*$",
-              "GLOBAL_SKIPPED": r"(?m)^# skipped\s+(\d+)\s*$",
-              "GLOBAL_CANCELLED": r"(?m)^# cancelled\s+(\d+)\s*$",
+              "GLOBAL_TOTAL": r"(?m)^[#ℹ]\s+tests\s+(\d+)\s*$",
+              "GLOBAL_PASS": r"(?m)^[#ℹ]\s+pass\s+(\d+)\s*$",
+              "GLOBAL_FAILURES": r"(?m)^[#ℹ]\s+fail\s+(\d+)\s*$",
+              "GLOBAL_SKIPPED": r"(?m)^[#ℹ]\s+skipped\s+(\d+)\s*$",
+              "GLOBAL_CANCELLED": r"(?m)^[#ℹ]\s+cancelled\s+(\d+)\s*$",
           }
           values = {}
           missing = []
@@ -77,19 +103,12 @@ jobs:
           summary = [f"{key}={values.get(key, 'UNPARSEABLE')}" for key in keys]
           Path("weekly-global-summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
 
-          lines = text.splitlines()
-          blocks = []
-          i = 0
-          while i < len(lines):
-              if re.match(r"^not ok \d+ - ", lines[i]):
-                  start = i
-                  i += 1
-                  while i < len(lines) and not re.match(r"^(?:ok|not ok) \d+ - ", lines[i]) and not lines[i].startswith("1.."):
-                      i += 1
-                  blocks.append("\n".join(lines[start:i]).strip())
-                  continue
-              i += 1
-          Path("weekly-global-failures.txt").write_text(("\n\n---\n\n".join(blocks) or "NO_NOT_OK_BLOCKS_CAPTURED") + "\n", encoding="utf-8")
+          marker = "✖ failing tests:"
+          if marker in text:
+              failures = marker + text.split(marker, 1)[1]
+          else:
+              failures = "NO_FAILING_TESTS_SECTION_CAPTURED"
+          Path("weekly-global-failures.txt").write_text(failures.rstrip() + "\n", encoding="utf-8")
 
           print(Path("weekly-global-summary.txt").read_text(encoding="utf-8"), end="")
           print("--- FAILURES ---")
@@ -120,12 +139,3 @@ jobs:
         run: npm run build
       - name: Diff check
         run: git diff --check
-      - name: Commit validated feature
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "feat: add curated weekly newsletter approval flow"
-          git push origin HEAD:feat/weekly-newsletter-curation-2026-08-28
