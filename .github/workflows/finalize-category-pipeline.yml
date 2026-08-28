@@ -1,0 +1,77 @@
+name: Finalize category pipeline
+
+on:
+  push:
+    branches:
+      - fix/mobile-catalog-categories-2026-08-28
+    paths:
+      - scripts/finalizeCategoryPatch.py
+      - .github/workflows/finalize-category-pipeline.yml
+
+permissions:
+  contents: write
+
+jobs:
+  category-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-catalog-categories-2026-08-28
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply category patch
+        run: python scripts/finalizeCategoryPatch.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Full tests
+        run: npm test
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Diff integrity
+        run: |
+          git diff --check
+          git diff --name-only origin/main...HEAD | sort > /tmp/committed-before.txt
+          git diff --name-only | sort > /tmp/uncommitted.txt
+          echo 'Committed branch changes:'
+          cat /tmp/committed-before.txt
+          echo 'Working-tree category patch:'
+          cat /tmp/uncommitted.txt
+
+      - name: Commit category closure and remove temporary runner
+        run: |
+          git rm scripts/finalizeCategoryPatch.py
+          git rm .github/workflows/finalize-category-pipeline.yml
+          git config user.name "kauabrennan5-bit"
+          git config user.email "kauabrennan5@gmail.com"
+          git add \
+            package.json \
+            scripts/generate-static-catalog.js \
+            server/commercial/publication/contract.ts \
+            server/commercial/publication/publicationExecutor.ts \
+            server/repositories/productsRepository.ts \
+            server/services/productAutomation.ts \
+            server/services/telegramBot.ts \
+            src/lib/productCategory.ts \
+            src/services/api.ts \
+            tests/catalogNavigation.test.ts \
+            tests/publicCategoryPipeline.test.ts \
+            tests/telegramAndMarketplace.test.ts
+          git diff --cached --check
+          git commit -m "fix(catalog): enforce public category readiness"
+          git push origin HEAD:fix/mobile-catalog-categories-2026-08-28
