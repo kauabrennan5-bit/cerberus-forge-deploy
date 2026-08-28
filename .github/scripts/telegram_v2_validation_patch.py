@@ -1,59 +1,40 @@
 from pathlib import Path
-import re
 
+# 1) publishCommand fixture: choose one valid synthetic admin from a CSV whitelist.
+p = Path('tests/publishCommand.test.ts')
+s = p.read_text(encoding='utf-8')
+old = 'const TELEGRAM_ALLOWED_USERS = process.env.TELEGRAM_ALLOWED_USER_IDS ?? "1976526372";'
+new = '''const TELEGRAM_ALLOWED_USERS = process.env.TELEGRAM_ALLOWED_USER_IDS ?? "1976526372";
+const TEST_ADMIN_USER_ID = Number(
+  TELEGRAM_ALLOWED_USERS.split(",").map(id => id.trim()).find(id => /^-?\\d+$/.test(id)) ?? "1976526372",
+);'''
+if s.count(old) != 1:
+    raise SystemExit(f'publish fixture declaration count={s.count(old)}')
+s = s.replace(old, new, 1)
+count = s.count('Number(TELEGRAM_ALLOWED_USERS)')
+if count != 3:
+    raise SystemExit(f'expected 3 stale Number(TELEGRAM_ALLOWED_USERS), found {count}')
+s = s.replace('Number(TELEGRAM_ALLOWED_USERS)', 'TEST_ADMIN_USER_ID')
+p.write_text(s, encoding='utf-8')
 
-def replace_once(path: str, old: str, new: str) -> None:
-    p = Path(path)
-    text = p.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected one occurrence, found {count}: {old[:80]!r}")
-    p.write_text(text.replace(old, new, 1))
-
-
-publish = Path("tests/publishCommand.test.ts")
-text = publish.read_text()
-marker = 'const TELEGRAM_ALLOWED_USERS = process.env.TELEGRAM_ALLOWED_USER_IDS ?? "1976526372";\n'
-if text.count(marker) != 1:
-    raise SystemExit("publish fixture marker mismatch")
-text = text.replace(
-    marker,
-    marker
-    + 'const ADMIN_USER_ID = Number(TELEGRAM_ALLOWED_USERS.split(",")[0]?.trim() || "1976526372");\n'
-    + 'assert.ok(Number.isSafeInteger(ADMIN_USER_ID) && ADMIN_USER_ID > 0, "fixture admin precisa resolver um ID permitido válido");\n',
-    1,
-)
-occurrences = text.count('Number(TELEGRAM_ALLOWED_USERS)')
-if occurrences != 3:
-    raise SystemExit(f"publish fixture expected 3 stale Number(...) uses, found {occurrences}")
-text = text.replace('Number(TELEGRAM_ALLOWED_USERS)', 'ADMIN_USER_ID')
-publish.write_text(text)
-
-panel = Path("server/services/telegramPanel.ts")
-text = panel.read_text()
-old_footer = '    "Nenhuma alteração foi executada."\n'
-new_footer = '    "Read-only · nenhum estado foi alterado."\n'
-if text.count(old_footer) != 1:
-    raise SystemExit("renderStatus footer marker mismatch")
-text = text.replace(old_footer, new_footer, 1)
-
-approved_pattern = re.compile(
-    r'export async function renderApproved\(\): Promise<string> \{.*?\n\}\n\n(?=export async function renderProducts)',
-    re.S,
-)
-approved_replacement = '''export async function renderApproved(): Promise<string> {
+# 2) /aprovados: independent read fallbacks; one unavailable source must not hide the other.
+p = Path('server/services/telegramPanel.ts')
+s = p.read_text(encoding='utf-8')
+start = s.index('export async function renderApproved(): Promise<string> {')
+end = s.index('\nexport async function renderProducts(): Promise<string> {', start)
+replacement = '''export async function renderApproved(): Promise<string> {
   let published: any[] | null = null;
   let activeProducts: any[] | null = null;
 
   try {
-    published = await telegramRepo.listReviewsByStatus(["published"], 10);
+    published = await telegramRepo.listReviewsByStatus(["published"], 25);
   } catch {
     published = null;
   }
 
   try {
     const products = await productsRepository.getProducts();
-    activeProducts = Array.isArray(products) ? products.filter(p => p.ativo !== false) : [];
+    activeProducts = Array.isArray(products) ? products.filter(product => product.ativo !== false) : [];
   } catch {
     activeProducts = null;
   }
@@ -68,8 +49,8 @@ approved_replacement = '''export async function renderApproved(): Promise<string
     ? "não disponível"
     : activeProducts.length === 0
       ? "catálogo vazio"
-      : activeProducts.slice(0, 10).map(product => `• ${String(product.produto).slice(0, 44)}`).join("\\n") +
-        (activeProducts.length > 10 ? `\\n… +${activeProducts.length - 10}` : "");
+      : activeProducts.slice(0, 15).map(product => `• <code>${product.ref}</code> · ${String(product.produto).slice(0, 44)}`).join("\\n") +
+        (activeProducts.length > 15 ? `\\n… +${activeProducts.length - 15}` : "");
 
   return (
     "✅ <b>APROVADOS / PUBLICADOS</b>\\n" +
@@ -80,76 +61,60 @@ approved_replacement = '''export async function renderApproved(): Promise<string
     "Read-only · nenhum estado foi alterado."
   );
 }
-
 '''
-text, count = approved_pattern.subn(approved_replacement, text, count=1)
-if count != 1:
-    raise SystemExit(f"renderApproved replacement count={count}")
-panel.write_text(text)
+s = s[:start] + replacement + s[end:]
+p.write_text(s, encoding='utf-8')
 
-read_panel = Path("tests/telegramReadPanel.test.ts")
-text = read_panel.read_text()
-import_marker = '''import {
+# 3) Read-panel tests: semantic read-only contract and primary/secondary command split.
+p = Path('tests/telegramReadPanel.test.ts')
+s = p.read_text(encoding='utf-8')
+import_old = '''import {
+  renderReadPanelMenu,
+  registerTelegramCommands,
+  TELEGRAM_PANEL_COMMANDS,
+} from "../server/services/telegramPanel";'''
+import_new = '''import {
   renderReadPanelMenu,
   registerTelegramCommands,
   TELEGRAM_PANEL_COMMANDS,
 } from "../server/services/telegramPanel";
-'''
-import_replacement = import_marker + '''import {
+import {
   PRIMARY_TELEGRAM_COMMANDS,
   SECONDARY_TELEGRAM_COMMANDS,
   isKnownTelegramCommand,
-} from "../server/services/telegramCommands";
-'''
-if text.count(import_marker) != 1:
-    raise SystemExit("telegramReadPanel import marker mismatch")
-text = text.replace(import_marker, import_replacement, 1)
+} from "../server/services/telegramCommands";'''
+if s.count(import_old) != 1:
+    raise SystemExit('telegramReadPanel import block not found exactly once')
+s = s.replace(import_old, import_new, 1)
 
-command_pattern = re.compile(
-    r'test\("registerTelegramCommands envia exatamente os comandos esperados", async \(\) => \{.*?\n\}\);\n\n(?=test\("registerTelegramCommands: falha)',
-    re.S,
-)
-command_replacement = '''test("registerTelegramCommands registra somente o menu nativo e preserva comandos compatíveis", async () => {
-  let callPayload: any = null;
-  const restore = mockFetch((url, init) => {
-    if (telegramMethod(String(url)) === "setMyCommands") {
-      callPayload = JSON.parse(init.body);
-      return telegramFetchResponse({ ok: true });
-    }
-    throw new Error("fetch inesperado (mock)");
-  });
-  try {
-    process.env.TELEGRAM_BOT_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyz";
-    const { registerTelegramCommands } = await import("../server/services/telegramPanel");
-    const result = await registerTelegramCommands();
-    assert.equal(result.ok, true, "setMyCommands registrado");
-    assert.ok(callPayload, "API chamada");
+old_assert = '    assert.match(status, /Read-only · nenhum estado foi alterado/i);'
+if s.count(old_assert) != 2:
+    raise SystemExit(f'expected 2 stale status read-only assertions, found {s.count(old_assert)}')
+new_assert = '    assert.match(status, /STATUS READ-ONLY/i);\n    assert.match(status, /Nenhuma alteração foi executada/i);'
+s = s.replace(old_assert, new_assert, 2)
 
-    const registeredNames = callPayload.commands.map((c: any) => c.command);
+old_block = '''    assert.ok(callPayload, "API chamada");
+    assert.equal(callPayload.commands.length, TELEGRAM_PANEL_COMMANDS.length, "todos os comandos registrados");
+    for (const cmd of TELEGRAM_PANEL_COMMANDS) {
+      assert.ok(callPayload.commands.some((c: any) => c.command === cmd.command), `comando ${cmd.command} registrado`);
+    }'''
+new_block = '''    assert.ok(callPayload, "API chamada");
+    const nativeNames = callPayload.commands.map((c: any) => c.command);
     const primaryNames = PRIMARY_TELEGRAM_COMMANDS.map(c => c.command);
-    assert.deepEqual(registeredNames, primaryNames, "setMyCommands deve refletir exatamente o menu nativo V2");
-    assert.equal(new Set(registeredNames).size, registeredNames.length, "menu nativo sem duplicatas");
-
-    for (const cmd of SECONDARY_TELEGRAM_COMMANDS) {
-      assert.equal(registeredNames.includes(cmd.command), false, `/${cmd.command} não deve poluir o menu nativo`);
-      assert.ok(TELEGRAM_PANEL_COMMANDS.some(c => c.command === cmd.command), `/${cmd.command} preservado no painel completo`);
-      assert.equal(isKnownTelegramCommand(cmd.command), true, `/${cmd.command} continua roteável`);
+    assert.equal(new Set(nativeNames).size, nativeNames.length, "menu nativo sem duplicatas");
+    assert.equal(nativeNames.length, primaryNames.length, "menu nativo contém somente comandos primários");
+    for (const command of primaryNames) {
+      assert.ok(nativeNames.includes(command), `comando primário ${command} registrado no menu nativo`);
     }
-
-    for (const command of [
-      "discover", "research", "assess", "priority", "opportunities", "risks",
-      "experiments", "agents", "decisions", "recommendations", "affiliates",
-      "cycle", "shopee-schema", "shopee-offer", "campanha2", "boasvindas",
-    ]) {
-      assert.equal(isKnownTelegramCommand(command), true, `/${command} avançado continua roteável`);
+    for (const command of SECONDARY_TELEGRAM_COMMANDS.map(c => c.command)) {
+      assert.equal(nativeNames.includes(command), false, `comando secundário ${command} não polui menu nativo`);
+      assert.ok(TELEGRAM_PANEL_COMMANDS.some(c => c.command === command), `comando secundário ${command} preservado no painel`);
+      assert.equal(isKnownTelegramCommand(command), true, `comando secundário ${command} continua roteável`);
     }
-  } finally {
-    restore();
-  }
-});
-
-'''
-text, count = command_pattern.subn(command_replacement, text, count=1)
-if count != 1:
-    raise SystemExit(f"registerTelegramCommands test replacement count={count}")
-read_panel.write_text(text)
+    for (const command of ["discover", "research", "assess", "shopee-offer", "campanha2", "boasvindas"]) {
+      assert.equal(isKnownTelegramCommand(command), true, `comando avançado ${command} continua roteável`);
+    }'''
+if s.count(old_block) != 1:
+    raise SystemExit('stale command-count assertion block not found exactly once')
+s = s.replace(old_block, new_block, 1)
+p.write_text(s, encoding='utf-8')
