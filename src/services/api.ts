@@ -25,6 +25,8 @@ export interface ApiResponse<T = any> {
   product?: T;
   error?: string;
   message?: string;
+  status?: number;
+  pending?: boolean;
 }
 
 const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
@@ -45,6 +47,13 @@ function getApiUrl(path: string): string {
     // Fallback
   }
   return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+}
+
+function adminHeaders(password?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const normalized = String(password || '').trim();
+  if (normalized) headers['x-admin-password'] = normalized;
+  return headers;
 }
 
 /**
@@ -107,11 +116,11 @@ export async function verifyAdminPassword(password: string): Promise<{ success: 
   try {
     const res = await fetch(getApiUrl('/api/admin/verify'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
+      headers: adminHeaders(password),
+      body: JSON.stringify({})
     });
-    if (!res.ok) return { success: false, error: 'Senha incorreta.' };
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { success: false, error: data?.error || 'Senha incorreta.' };
     return { success: Boolean(data.success), error: data.error };
   } catch {
     return { success: false, error: 'Erro ao conectar ao servidor.' };
@@ -120,13 +129,29 @@ export async function verifyAdminPassword(password: string): Promise<{ success: 
 
 export async function createProduct(payload: any, password?: string): Promise<ApiResponse<any>> {
   try {
+    const activePassword = password || payload?.senha;
+    const { senha: _ignoredSenha, ...safePayload } = payload || {};
     const res = await fetch(getApiUrl('/api/products'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, senha: password || payload.senha })
+      headers: adminHeaders(activePassword),
+      body: JSON.stringify(safePayload)
     });
-    const data = await res.json();
-    return data;
+    const data = await res.json().catch(() => ({}));
+
+    // O backend usa 202 para indicar que o produto ainda NÃO foi publicado:
+    // ele está aguardando aprovação humana no Telegram. Não podemos apresentar
+    // esse estado como "produto criado" no frontend.
+    if (res.status === 202 && data?.success === true) {
+      return {
+        ...data,
+        success: false,
+        pending: true,
+        status: 202,
+        error: data.message || 'Produto enviado para revisão e aguardando aprovação humana no Telegram.'
+      };
+    }
+
+    return { ...data, status: res.status };
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao criar produto.' };
   }
@@ -134,13 +159,15 @@ export async function createProduct(payload: any, password?: string): Promise<Ap
 
 export async function updateProduct(id: string, payload: any, password?: string): Promise<ApiResponse<any>> {
   try {
+    const activePassword = password || payload?.senha;
+    const { senha: _ignoredSenha, ...safePayload } = payload || {};
     const res = await fetch(getApiUrl(`/api/products/${id}`), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, senha: password || payload.senha })
+      headers: adminHeaders(activePassword),
+      body: JSON.stringify(safePayload)
     });
-    const data = await res.json();
-    return data;
+    const data = await res.json().catch(() => ({}));
+    return { ...data, status: res.status };
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao atualizar produto.' };
   }
@@ -150,11 +177,10 @@ export async function deleteProduct(id: string, password?: string): Promise<ApiR
   try {
     const res = await fetch(getApiUrl(`/api/products/${id}`), {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ senha: password })
+      headers: adminHeaders(password)
     });
-    const data = await res.json();
-    return data;
+    const data = await res.json().catch(() => ({}));
+    return { ...data, status: res.status };
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao remover produto.' };
   }
@@ -234,13 +260,13 @@ export async function subscribeNewsletter(email: string, marketingConsent: boole
 
 export async function extractProduct(url: string, rawText?: string, adminPass?: string): Promise<ApiResponse<any>> {
   try {
-    const res = await fetch(getApiUrl('/api/admin/extract'), {
+    const res = await fetch(getApiUrl('/api/extract'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, rawText, senha: adminPass })
+      headers: adminHeaders(adminPass),
+      body: JSON.stringify({ url, rawText })
     });
-    const data = await res.json();
-    return data;
+    const data = await res.json().catch(() => ({}));
+    return { ...data, status: res.status };
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao extrair produto com IA.' };
   }
