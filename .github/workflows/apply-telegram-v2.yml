@@ -32,6 +32,19 @@ jobs:
           python -c "from pathlib import Path; p=Path('.github/scripts/apply_telegram_v2.py'); s=p.read_text(); old='re.subn(pattern, replacement, src, count=1, flags=re.S)'; new='re.subn(pattern, lambda _match: replacement, src, count=1, flags=re.S)'; assert old in s; p.write_text(s.replace(old, new, 1))"
           python .github/scripts/apply_telegram_v2.py
 
+      - name: Prioritize explicit promotion states
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server/services/telegramBot.ts')
+          s = p.read_text(encoding='utf-8')
+          marker = '''    const commandName = parsedCommand ? canonicalTelegramCommand(parsedCommand.name) : shortcutCommand;\n\n'''
+          block = '''    const commandName = parsedCommand ? canonicalTelegramCommand(parsedCommand.name) : shortcutCommand;\n\n    // V2: um estado explícito iniciado por botão sempre vence interpretação livre.\n    // Isso torna conversas mutáveis determinísticas e evita atalhos interferirem no fluxo.\n    if (!parsedCommand && userState?.action === "awaiting_promotion_price") {\n      const price = parseAndNormalizePrice(text);\n      if (price === null || price <= 0) {\n        if (chatId) await sendTelegramMessage(chatId, "❌ Valor promocional inválido. Envie um valor como <code>264,44</code> ou use <code>/cancelar</code>.");\n        return;\n      }\n      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;\n      if (!targetReview) {\n        await telegramRepo.deleteUserState(senderId);\n        if (chatId) await sendTelegramMessage(chatId, "⚠️ A revisão não está mais disponível para receber a promoção.");\n        return;\n      }\n      targetReview.promotionDraft = { price, condition: null, benefits: [] };\n      await telegramRepo.savePendingReview(targetReview);\n      await telegramRepo.setUserState(senderId, { action: "awaiting_promotion_condition", reviewId: userState.reviewId });\n      if (chatId) await sendTelegramMessage(chatId, "🏷️ <b>QUAL CONDIÇÃO ACOMPANHA ESSE VALOR?</b>", {\n        inline_keyboard: [\n          [{ text: "Pix", callback_data: "promo_condition:pix" }, { text: "Pix com cupom", callback_data: "promo_condition:pix_with_coupon" }],\n          [{ text: "Cupom", callback_data: "promo_condition:coupon" }, { text: "Outra condição", callback_data: "promo_condition:other" }],\n          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],\n        ],\n      });\n      return;\n    }\n\n    if (!parsedCommand && userState?.action === "awaiting_promotion_benefits") {\n      const benefits = text.trim() === "-"\n        ? []\n        : text.split(/\\n|;/)\n          .map((value) => value.replace(/\\s+/g, " ").trim())\n          .filter((value) => value.length >= 3 && value.length <= 180)\n          .slice(0, 5);\n      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;\n      if (!targetReview?.promotionDraft?.condition) {\n        await telegramRepo.deleteUserState(senderId);\n        if (chatId) await sendTelegramMessage(chatId, "⚠️ O rascunho promocional não está mais disponível. Inicie o ajuste novamente.");\n        return;\n      }\n      targetReview.promotionDraft.benefits = benefits;\n      await telegramRepo.savePendingReview(targetReview);\n      await telegramRepo.setUserState(senderId, { action: "confirm_promotion", reviewId: userState.reviewId });\n      const price = `R$ ${targetReview.promotionDraft.price.toFixed(2).replace(".", ",")}`;\n      if (chatId) await sendTelegramMessage(chatId, `🔎 <b>CONFIRMAR OFERTA PROMOCIONAL</b>\\n\\nPreço promocional: <b>${price}</b> ${formatPromotionCondition(targetReview.promotionDraft.condition)}\\nBenefícios: ${benefits.length > 0 ? benefits.map((benefit) => `\\n• ${benefit}`).join("") : "não informado"}\\n\\n<i>O preço-base canônico não será alterado.</i>`, {\n        inline_keyboard: [\n          [{ text: "✅ Confirmar oferta", callback_data: `promo_confirm:${userState.reviewId}` }],\n          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],\n        ],\n      });\n      return;\n    }\n\n'''
+          if marker not in s:
+              raise SystemExit('commandName marker not found')
+          p.write_text(s.replace(marker, block, 1), encoding='utf-8')
+          PY
+
       - name: Align legacy static routing assertion
         run: |
           python - <<'PY'
@@ -42,7 +55,7 @@ jobs:
           pattern = r'''test\("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", \(\) => \{[\s\S]*?\n\}\);'''
           replacement = '''test("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", () => {
             const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
-            const directStart = source.indexOf('if (commandName === "produtos")');
+            const directStart = source.indexOf('if (commandName === "produtos" &&');
             const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
             const directHandler = source.slice(directStart, directEnd);
 
