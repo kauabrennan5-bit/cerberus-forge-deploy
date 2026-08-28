@@ -1,0 +1,240 @@
+name: Telegram Bot V2 Final Validation
+
+on:
+  push:
+    branches:
+      - ci/telegram-v2-final-gate-2026-08-28
+    paths:
+      - .github/workflows/telegram-v2-final-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  final-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply deterministic V2 base patch
+        run: |
+          python -c "from pathlib import Path; p=Path('.github/scripts/apply_telegram_v2.py'); s=p.read_text(); old='re.subn(pattern, replacement, src, count=1, flags=re.S)'; new='re.subn(pattern, lambda _match: replacement, src, count=1, flags=re.S)'; assert old in s; p.write_text(s.replace(old, new, 1))"
+          python .github/scripts/apply_telegram_v2.py
+
+      - name: Prioritize explicit promotion states
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('server/services/telegramBot.ts')
+          s = p.read_text(encoding='utf-8')
+          marker = '''    const commandName = parsedCommand ? canonicalTelegramCommand(parsedCommand.name) : shortcutCommand;\n\n'''
+          block = '''    const commandName = parsedCommand ? canonicalTelegramCommand(parsedCommand.name) : shortcutCommand;\n\n    // V2: um estado explícito iniciado por botão sempre vence interpretação livre.\n    if (!parsedCommand && userState?.action === "awaiting_promotion_price") {\n      const price = parseAndNormalizePrice(text);\n      if (price === null || price <= 0) {\n        if (chatId) await sendTelegramMessage(chatId, "❌ Valor promocional inválido. Envie um valor como <code>264,44</code> ou use <code>/cancelar</code>.");\n        return;\n      }\n      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;\n      if (!targetReview) {\n        await telegramRepo.deleteUserState(senderId);\n        if (chatId) await sendTelegramMessage(chatId, "⚠️ A revisão não está mais disponível para receber a promoção.");\n        return;\n      }\n      targetReview.promotionDraft = { price, condition: null, benefits: [] };\n      await telegramRepo.savePendingReview(targetReview);\n      await telegramRepo.setUserState(senderId, { action: "awaiting_promotion_condition", reviewId: userState.reviewId });\n      if (chatId) await sendTelegramMessage(chatId, "🏷️ <b>QUAL CONDIÇÃO ACOMPANHA ESSE VALOR?</b>", {\n        inline_keyboard: [\n          [{ text: "Pix", callback_data: "promo_condition:pix" }, { text: "Pix com cupom", callback_data: "promo_condition:pix_with_coupon" }],\n          [{ text: "Cupom", callback_data: "promo_condition:coupon" }, { text: "Outra condição", callback_data: "promo_condition:other" }],\n          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],\n        ],\n      });\n      return;\n    }\n\n    if (!parsedCommand && userState?.action === "awaiting_promotion_benefits") {\n      const benefits = text.trim() === "-"\n        ? []\n        : text.split(/\\n|;/)\n          .map((value) => value.replace(/\\s+/g, " ").trim())\n          .filter((value) => value.length >= 3 && value.length <= 180)\n          .slice(0, 5);\n      const targetReview = userState.reviewId ? await telegramRepo.getPendingReview(userState.reviewId) : null;\n      if (!targetReview?.promotionDraft?.condition) {\n        await telegramRepo.deleteUserState(senderId);\n        if (chatId) await sendTelegramMessage(chatId, "⚠️ O rascunho promocional não está mais disponível. Inicie o ajuste novamente.");\n        return;\n      }\n      targetReview.promotionDraft.benefits = benefits;\n      await telegramRepo.savePendingReview(targetReview);\n      await telegramRepo.setUserState(senderId, { action: "confirm_promotion", reviewId: userState.reviewId });\n      const price = `R$ ${targetReview.promotionDraft.price.toFixed(2).replace(".", ",")}`;\n      if (chatId) await sendTelegramMessage(chatId, `🔎 <b>CONFIRMAR OFERTA PROMOCIONAL</b>\\n\\nPreço promocional: <b>${price}</b> ${formatPromotionCondition(targetReview.promotionDraft.condition)}\\nBenefícios: ${benefits.length > 0 ? benefits.map((benefit) => `\\n• ${benefit}`).join("") : "não informado"}\\n\\n<i>O preço-base canônico não será alterado.</i>`, {\n        inline_keyboard: [\n          [{ text: "✅ Confirmar oferta", callback_data: `promo_confirm:${userState.reviewId}` }],\n          [{ text: "❌ Cancelar", callback_data: `promo_cancel:${userState.reviewId}` }],\n        ],\n      });\n      return;\n    }\n\n'''
+          if marker not in s:
+              raise SystemExit('commandName marker not found')
+          p.write_text(s.replace(marker, block, 1), encoding='utf-8')
+          PY
+
+      - name: Add isolated user-state test hooks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('server/repositories/telegramRepository.ts')
+          s = p.read_text(encoding='utf-8')
+          marker = 'let testOverrideListReviewsByStatus: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null = null;\n'
+          addition = marker + '''let testOverrideSetUserState: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null = null;\nlet testOverrideGetUserState: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null = null;\nlet testOverrideDeleteUserState: ((senderId: string | number) => Promise<void>) | null = null;\n'''
+          if marker not in s: raise SystemExit('test override marker not found')
+          s = s.replace(marker, addition, 1)
+
+          marker = '''export function setTestListReviewsByStatus(\n  override: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null,\n): void {\n  testOverrideListReviewsByStatus = override;\n}\n'''
+          addition = marker + '''\n/** Isola a máquina de estados em testes sem tocar no arquivo/Supabase. */\nexport function setTestUserStateHandlers(handlers: {\n  set?: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null;\n  get?: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null;\n  delete?: ((senderId: string | number) => Promise<void>) | null;\n} | null): void {\n  testOverrideSetUserState = handlers?.set ?? null;\n  testOverrideGetUserState = handlers?.get ?? null;\n  testOverrideDeleteUserState = handlers?.delete ?? null;\n}\n'''
+          if marker not in s: raise SystemExit('list status hook marker not found')
+          s = s.replace(marker, addition, 1)
+
+          pattern = r'''export async function setUserState\(\n  senderId: string \| number,\n  state: \{ action: string; reviewId\?: string; productId\?: string \},\n\): Promise<void> \{\n'''
+          replacement = '''export async function setUserState(\n  senderId: string | number,\n  state: { action: string; reviewId?: string; productId?: string },\n): Promise<void> {\n  if (testOverrideSetUserState) {\n    await testOverrideSetUserState(senderId, state);\n    return;\n  }\n'''
+          s, count = re.subn(pattern, lambda _: replacement, s, count=1)
+          if count != 1: raise SystemExit(f'setUserState count={count}')
+
+          pattern = r'''export async function getUserState\(\n  senderId: string \| number,\n\): Promise<\{ action: string; reviewId\?: string; productId\?: string \} \| null> \{\n'''
+          replacement = '''export async function getUserState(\n  senderId: string | number,\n): Promise<{ action: string; reviewId?: string; productId?: string } | null> {\n  if (testOverrideGetUserState) return testOverrideGetUserState(senderId);\n'''
+          s, count = re.subn(pattern, lambda _: replacement, s, count=1)
+          if count != 1: raise SystemExit(f'getUserState count={count}')
+
+          marker = 'export async function deleteUserState(senderId: string | number): Promise<void> {\n'
+          replacement = marker + '''  if (testOverrideDeleteUserState) {\n    await testOverrideDeleteUserState(senderId);\n    return;\n  }\n'''
+          if marker not in s: raise SystemExit('deleteUserState marker not found')
+          s = s.replace(marker, replacement, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Isolate promotion state and align product routing test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('tests/promotionReview.test.ts')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+            '''  setTestSavePendingReview,\n} from "../server/repositories/telegramRepository";''',
+            '''  setTestSavePendingReview,\n  setTestUserStateHandlers,\n} from "../server/repositories/telegramRepository";''', 1)
+          marker = '''  setTestSavePendingReview(async (saved) => {\n    Object.assign(review, saved);\n  });\n  await deleteUserState(adminId);\n'''
+          replacement = '''  setTestSavePendingReview(async (saved) => {\n    Object.assign(review, saved);\n  });\n  let localState: { action: string; reviewId?: string; productId?: string } | null = null;\n  setTestUserStateHandlers({\n    set: async (_senderId, state) => { localState = { ...state }; },\n    get: async () => localState,\n    delete: async () => { localState = null; },\n  });\n  await deleteUserState(adminId);\n'''
+          if marker not in s: raise SystemExit('promotion setup marker not found')
+          s = s.replace(marker, replacement, 1)
+          marker = '''    setTestGetPendingReview(null);\n    setTestSavePendingReview(null);\n'''
+          replacement = '''    setTestGetPendingReview(null);\n    setTestSavePendingReview(null);\n    setTestUserStateHandlers(null);\n'''
+          if marker not in s: raise SystemExit('promotion cleanup marker not found')
+          p.write_text(s.replace(marker, replacement, 1), encoding='utf-8')
+
+          p = Path('tests/telegramAndMarketplace.test.ts')
+          s = p.read_text(encoding='utf-8')
+          pattern = r'''test\("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", \(\) => \{[\s\S]*?\n\}\);'''
+          replacement = '''test("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", () => {
+            const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+            const directStart = source.indexOf('if (commandName === "produtos" &&');
+            const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
+            const directHandler = source.slice(directStart, directEnd);
+            assert.ok(directStart >= 0 && directEnd > directStart);
+            assert.match(directHandler, /renderProductList\\(0\\)/);
+            assert.match(directHandler, /sendTelegramMessage\\(chatId, listView\\.text, listView\\.keyboard\\)/);
+            assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
+            assert.match(source, /if \\(data\\.startsWith\\("products_list:"\\)\\)[\\s\\S]{0,700}editTelegramMessageText/);
+          });'''
+          s, count = re.subn(pattern, lambda _: replacement, s, count=1)
+          if count != 1: raise SystemExit(f'legacy list assertion count={count}')
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Align advanced-panel and social-links contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/newsletterCampaign.test.ts')
+          s = p.read_text(encoding='utf-8')
+          old = '''  const { renderAdvancedHelp } = await import("../server/services/telegramPanel");\n  assert.match(renderAdvancedHelp(), /\\/campanha2/);'''
+          new = '''  const { renderAdvancedPanel } = await import("../server/services/telegramPanel");\n  assert.match(renderAdvancedPanel(), /\\/campanha2/);'''
+          if old not in s: raise SystemExit('advanced panel test marker not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('tests/socialLinks.test.ts')
+          s = p.read_text(encoding='utf-8')
+          old = '    assert.match(commands, /name: "redes"/);'
+          new = '    assert.match(commands, /command: "redes"/);'
+          if s.count(old) != 1: raise SystemExit('social-links contract marker not found exactly once')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Confirm exact 9-file patch
+        run: |
+          set -euo pipefail
+          cat > /tmp/expected.txt <<'EOF'
+          .github/scripts/apply_telegram_v2.py
+          server/repositories/telegramRepository.ts
+          server/services/telegramBot.ts
+          tests/newsletterCampaign.test.ts
+          tests/promotionReview.test.ts
+          tests/socialLinks.test.ts
+          tests/telegramAndMarketplace.test.ts
+          tests/telegramDiagnostics.test.ts
+          tests/telegramReadPanel.test.ts
+          EOF
+          sort -o /tmp/expected.txt /tmp/expected.txt
+          git diff --name-only | sort > /tmp/actual.txt
+          diff -u /tmp/expected.txt /tmp/actual.txt
+          test "$(wc -l < /tmp/actual.txt)" -eq 9
+
+      - name: Confirm social-links migration is exact
+        run: |
+          set -euo pipefail
+          git diff -U0 -- tests/socialLinks.test.ts > /tmp/social.diff
+          grep -q '^-.*assert.match(commands, /name: "redes"/);' /tmp/social.diff
+          grep -q '^+.*assert.match(commands, /command: "redes"/);' /tmp/social.diff
+          test "$(grep -E '^[+-][^+-]' /tmp/social.diff | wc -l)" -eq 2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused Telegram V2 suite
+        run: |
+          node --import tsx/esm --test \
+            tests/telegramCommandsV2.test.ts \
+            tests/telegramBotV2Contract.test.ts \
+            tests/telegramPanelV2.test.ts \
+            tests/telegramReadPanel.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/publishCommand.test.ts \
+            tests/promotionReview.test.ts \
+            tests/previewTelegramRoutes.test.ts \
+            tests/shopeeCommand.test.ts
+
+      - name: Structural invariants
+        run: |
+          set -euo pipefail
+          ! grep -q 'categoriesRepository' server/services/telegramBot.ts
+          ! grep -q 'getLatestPendingReviewForUser(senderId, chatId)' server/services/telegramBot.ts
+          ! grep -q 'addCategory(' server/services/telegramBot.ts
+          ! grep -q 'renameCategory(' server/services/telegramBot.ts
+          grep -q 'parseTelegramCommand(text)' server/services/telegramBot.ts
+          grep -q 'shouldProcessTelegramUpdate' server/services/telegramBot.ts
+          grep -q 'listReviewsByStatus' server/repositories/telegramRepository.ts
+          grep -q 'setTestUserStateHandlers' server/repositories/telegramRepository.ts
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Full test suite
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Diff integrity
+        run: git diff --check
+
+      - name: No weakened tests or debug logs
+        run: |
+          set -euo pipefail
+          if git diff -U0 -- tests | grep '^+' | grep -E '(test|describe|it)\.(skip|todo|only)|\.(skip|todo|only)\('; then
+            echo 'Forbidden test weakening marker added'
+            exit 1
+          fi
+          if git diff -U0 -- '*.ts' '*.tsx' | grep '^+' | grep -E 'console\.(log|debug)\('; then
+            echo 'Debug log added in patch'
+            exit 1
+          fi
+
+      - name: Secret scan with Gitleaks v8.30.1
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/patch-scan /tmp/gitleaks
+          mkdir -p /tmp/patch-scan /tmp/gitleaks
+          while IFS= read -r file; do
+            mkdir -p "/tmp/patch-scan/$(dirname "$file")"
+            cp "$file" "/tmp/patch-scan/$file"
+          done < <(git diff --name-only)
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" | tar -xz -C /tmp/gitleaks gitleaks
+          /tmp/gitleaks/gitleaks dir /tmp/patch-scan --redact --exit-code 1 --no-banner
+
+      - name: Final patch review
+        run: |
+          set -euo pipefail
+          git diff --stat
+          git diff --check
+          git status --short
+          diff -u /tmp/expected.txt <(git diff --name-only | sort)
+          test "$(git diff --name-only | wc -l)" -eq 9
