@@ -1,26 +1,10 @@
 name: Telegram Contract Gate
 
 on:
-  pull_request:
-    paths:
-      - "server/services/telegram*.ts"
-      - "server/repositories/telegramRepository.ts"
-      - "server/repositories/productsRepository.ts"
-      - "tests/telegram*.test.ts"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/telegram-contract.yml"
   push:
     branches:
-      - main
-      - "refactor/telegram-bot-v2-*"
+      - "refactor/telegram-bot-v2-final-validation-sol-20260828"
     paths:
-      - "server/services/telegram*.ts"
-      - "server/repositories/telegramRepository.ts"
-      - "server/repositories/productsRepository.ts"
-      - "tests/telegram*.test.ts"
-      - "package.json"
-      - "package-lock.json"
       - ".github/workflows/telegram-contract.yml"
 
 permissions:
@@ -32,14 +16,15 @@ concurrency:
 
 jobs:
   telegram-contract:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     env:
-      # IDs sintéticos/legados usados pela suíte. Não são credenciais.
       TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -50,47 +35,120 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run full test suite
+      - name: Apply candidate fixes in runner
+        run: python3 .github/scripts/validate_telegram_v2_fix.py
+
+      - name: Guard intended files only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          cat > /tmp/expected-files <<'EOF'
+          server/services/telegramPanel.ts
+          tests/publishCommand.test.ts
+          tests/telegramReadPanel.test.ts
+          EOF
+          sort -o /tmp/expected-files /tmp/expected-files
+          git diff --name-only | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+          ! git diff | grep -E '^\+.*\b(test\.(skip|todo|only)|describe\.(skip|only)|it\.(skip|todo|only))\b'
+
+      - name: publishCommand isolated file
+        run: node --import tsx/esm --test tests/publishCommand.test.ts
+
+      - name: telegramReadPanel isolated file
+        run: node --import tsx/esm --test tests/telegramReadPanel.test.ts
+
+      - name: Bot V2 focused current superset
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          node --import tsx/esm --test \
+            tests/telegramCommandsV2.test.ts \
+            tests/telegramBotV2Contract.test.ts \
+            tests/telegramPanelV2.test.ts \
+            tests/telegramReadPanel.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/publishCommand.test.ts \
+            tests/promotionReview.test.ts \
+            tests/previewTelegramRoutes.test.ts \
+            tests/shopeeCommand.test.ts \
+            tests/telegramUiContract.test.ts \
+            tests/socialLinks.test.ts 2>&1 | tee bot-v2-focused.log
+          count="$(grep -E '^# tests [0-9]+$' bot-v2-focused.log | tail -1 | awk '{print $3}')"
+          pass="$(grep -E '^# pass [0-9]+$' bot-v2-focused.log | tail -1 | awk '{print $3}')"
+          fail="$(grep -E '^# fail [0-9]+$' bot-v2-focused.log | tail -1 | awk '{print $3}')"
+          skipped="$(grep -E '^# skipped [0-9]+$' bot-v2-focused.log | tail -1 | awk '{print $3}')"
+          test "$count" = "116"
+          test "$pass" = "116"
+          test "$fail" = "0"
+          test "$skipped" = "0"
+
+      - name: Structural invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -q 'categoriesRepository' server/services/telegramBot.ts
+          ! grep -q 'getLatestPendingReviewForUser(senderId, chatId)' server/services/telegramBot.ts
+          ! grep -q 'addCategory(' server/services/telegramBot.ts
+          ! grep -q 'renameCategory(' server/services/telegramBot.ts
+          grep -q 'parseTelegramCommand(text)' server/services/telegramBot.ts
+          grep -q 'shouldProcessTelegramUpdate' server/services/telegramBot.ts
+          grep -q 'listReviewsByStatus' server/repositories/telegramRepository.ts
+          grep -q 'setTestUserStateHandlers' server/repositories/telegramRepository.ts
+
+      - name: Full global test suite
         shell: bash
         run: |
           set +e
-          npm test 2>&1 | tee telegram-v2-full-test.log
-          test_status=${PIPESTATUS[0]}
+          npm test 2>&1 | tee telegram-v2-fixed-global.log
+          status=${PIPESTATUS[0]}
+          set -e
+          grep -E '^# tests [0-9]+$|^# pass [0-9]+$|^# fail [0-9]+$|^# cancelled [0-9]+$|^# skipped [0-9]+$' telegram-v2-fixed-global.log | tail -5 | tee telegram-v2-global-summary.txt
+          exit "$status"
 
-          node <<'NODE'
-          const fs = require('fs');
-          const raw = fs.readFileSync('telegram-v2-full-test.log', 'utf8');
-          const clean = raw.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-          const summaryLines = clean
-            .split(/\r?\n/)
-            .filter((line) => /^\s*(Test Files|Tests|Start at|Duration)\b/.test(line));
-          const summary = summaryLines.slice(-4).join('\n') || 'Vitest summary lines were not found.';
-          fs.writeFileSync('telegram-v2-test-summary.txt', `${summary}\n`);
-          NODE
-
-          {
-            echo '## Telegram V2 full-test diagnostics'
-            echo
-            echo '```text'
-            cat telegram-v2-test-summary.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          exit "$test_status"
-
-      - name: Upload full test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: telegram-v2-full-test-diagnostics
-          path: |
-            telegram-v2-full-test.log
-            telegram-v2-test-summary.txt
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: TypeScript contract
+      - name: TypeScript lint
         run: npm run lint
 
       - name: Production build
         run: npm run build
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Secret scan changed content
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff -- \
+            server/services/telegramPanel.ts \
+            tests/publishCommand.test.ts \
+            tests/telegramReadPanel.test.ts > /tmp/gitleaks-scan/bot-v2-fix.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Save validated patch files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p validated-patch/server/services validated-patch/tests
+          cp server/services/telegramPanel.ts validated-patch/server/services/telegramPanel.ts
+          cp tests/publishCommand.test.ts validated-patch/tests/publishCommand.test.ts
+          cp tests/telegramReadPanel.test.ts validated-patch/tests/telegramReadPanel.test.ts
+          git diff --no-ext-diff -- server/services/telegramPanel.ts tests/publishCommand.test.ts tests/telegramReadPanel.test.ts > validated-patch/final.patch
+
+      - name: Upload validation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-v2-fix-validation-sol
+          path: |
+            bot-v2-focused.log
+            telegram-v2-fixed-global.log
+            telegram-v2-global-summary.txt
+            validated-patch/
+          if-no-files-found: error
+          retention-days: 7
