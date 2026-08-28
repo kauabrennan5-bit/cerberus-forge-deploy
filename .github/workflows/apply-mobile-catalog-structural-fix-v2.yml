@@ -25,7 +25,6 @@ jobs:
         run: |
           python <<'BOOT'
           from pathlib import Path
-          import re
           import textwrap
 
           workflow = Path('.github/workflows/apply-mobile-catalog-structural-fix.yml').read_text(encoding='utf-8')
@@ -34,12 +33,18 @@ jobs:
           end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
           script = textwrap.dedent('\n'.join(lines[start:end])) + '\n'
 
-          pattern = re.compile(
-              r"          old_restore = \"\"\".*?          text = replace_once\(\n              text,\n              old_restore,.*?              'App restoration queue',\n          \)\n",
-              re.S,
-          )
-          replacement = r'''          restore_pattern = re.compile(
-              r"  const restoreCatalogScroll = useCallback\(\(\) => \{.*?\n  \}, \[\]\);\n\n",
+          start_marker = 'old_restore = """'
+          end_marker = "    'App restoration queue',\n)\n"
+          start_at = script.find(start_marker)
+          if start_at < 0:
+              raise SystemExit('Bootstrap could not find old_restore start marker')
+          end_at = script.find(end_marker, start_at)
+          if end_at < 0:
+              raise SystemExit('Bootstrap could not find App restoration queue end marker')
+          end_at += len(end_marker)
+
+          replacement = '''restore_pattern = re.compile(
+              r"  const restoreCatalogScroll = useCallback\\(\\(\\) => \\{.*?\\n  \\}, \\[\\]\\);\\n\\n",
               re.S,
           )
           restore_replacement = """  const queueScrollRestore = useCallback((path: string, y: number) => {
@@ -51,10 +56,7 @@ jobs:
           if count != 1:
               raise SystemExit(f'App restoration queue: expected 1 occurrence, found {count}')
           '''
-          script, count = pattern.subn(replacement, script, count=1)
-          if count != 1:
-              raise SystemExit(f'Bootstrap could not replace fragile restore matcher: {count}')
-
+          script = script[:start_at] + replacement + script[end_at:]
           Path('/tmp/mobile_catalog_patch.py').write_text(script, encoding='utf-8')
           BOOT
           python /tmp/mobile_catalog_patch.py
