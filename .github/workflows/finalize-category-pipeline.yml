@@ -84,6 +84,7 @@ jobs:
             src/components/ProductCard.tsx \
             src/lib/productCategory.ts \
             src/services/api.ts \
+            tests/affiliateResolverN7.test.ts \
             tests/catalogNavigation.test.ts \
             tests/promotionOffer.test.ts \
             tests/publicCategoryPipeline.test.ts \
