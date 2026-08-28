@@ -34,6 +34,10 @@ jobs:
   telegram-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # ID sintético/legado usado pela suíte; não é credencial e não concede acesso fora do runner.
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+      TELEGRAM_BOT_TOKEN: "test-only-bot-token"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
