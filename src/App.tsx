@@ -59,7 +59,7 @@ export default function App() {
   const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(() =>
     initialHistoryEntry?.view === 'catalog' ? initialHistoryEntry.showOnlyFavorites : false,
   );
-  const pendingScrollRestoreRef = useRef<{ path: string; y: number } | null>(null);
+  const pendingScrollRestoreRef = useRef<{ path: string; y: number; relatedScrollX?: number } | null>(null);
 
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -103,8 +103,14 @@ export default function App() {
     const restore = () => {
       if (cancelled) return;
       const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      if (maxY >= pending.y || attempts >= 12) {
+      const relatedRail = pending.relatedScrollX && pending.relatedScrollX > 0
+        ? document.querySelector<HTMLElement>('[data-testid="related-products-rail"]')
+        : null;
+      const pageReady = maxY >= pending.y || attempts >= 12;
+      const railReady = !pending.relatedScrollX || relatedRail !== null || attempts >= 12;
+      if (pageReady && railReady) {
         window.scrollTo({ top: Math.min(pending.y, maxY), behavior: 'auto' });
+        if (relatedRail && pending.relatedScrollX) relatedRail.scrollLeft = pending.relatedScrollX;
         pendingScrollRestoreRef.current = null;
         return;
       }
@@ -131,8 +137,12 @@ export default function App() {
     );
   }, [catalogViewState, showOnlyFavorites, currentView]);
 
-  const queueScrollRestore = useCallback((path: string, y: number) => {
-  pendingScrollRestoreRef.current = { path, y: Math.max(0, Math.round(y || 0)) };
+  const queueScrollRestore = useCallback((path: string, y: number, relatedScrollX = 0) => {
+  pendingScrollRestoreRef.current = {
+    path,
+    y: Math.max(0, Math.round(y || 0)),
+    relatedScrollX: Math.max(0, Math.round(relatedScrollX || 0)),
+  };
 }, []);
 
   useEffect(() => {
@@ -270,12 +280,15 @@ export default function App() {
         );
       } else if (currentView === 'product-detail' && selectedProduct) {
         const currentEntry = readCerberusHistoryEntry(window.history.state);
+        const relatedScrollX = document.querySelector<HTMLElement>('[data-testid="related-products-rail"]')?.scrollLeft
+          ?? (currentEntry?.view === 'product-detail' ? currentEntry.relatedScrollX : 0);
         window.history.replaceState(
           mergeCerberusHistoryState(
             window.history.state,
             createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {
               canGoBack: currentEntry?.view === 'product-detail' ? currentEntry.canGoBack : false,
               fromView: currentEntry?.view === 'product-detail' ? currentEntry.fromView : 'other',
+              relatedScrollX,
             }),
           ),
           '',
@@ -396,7 +409,11 @@ export default function App() {
         if (found) {
           setSelectedProduct(found);
           setCurrentView('product-detail');
-          queueScrollRestore(path, historyEntry?.view === 'product-detail' ? historyEntry.scrollY : 0);
+          queueScrollRestore(
+            path,
+            historyEntry?.view === 'product-detail' ? historyEntry.scrollY : 0,
+            historyEntry?.view === 'product-detail' ? historyEntry.relatedScrollX : 0,
+          );
         }
         return;
       }
@@ -431,6 +448,31 @@ export default function App() {
     new Set(products.map((p) => p.categoria).filter(Boolean))
   );
   const relatedProducts = selectedProduct ? getRelatedProducts(selectedProduct, products) : [];
+  const activeProductHistoryEntry = typeof window !== 'undefined' ? readCerberusHistoryEntry(window.history.state) : null;
+  const initialRelatedScrollX = activeProductHistoryEntry?.view === 'product-detail'
+    && selectedProduct
+    && activeProductHistoryEntry.productKey === (selectedProduct.slug || selectedProduct.id)
+      ? activeProductHistoryEntry.relatedScrollX
+      : 0;
+
+  const handleRelatedScrollPositionChange = (scrollLeft: number) => {
+    if (typeof window === 'undefined' || !selectedProduct) return;
+    const currentEntry = readCerberusHistoryEntry(window.history.state);
+    if (currentEntry?.view !== 'product-detail') return;
+    if (currentEntry.productKey !== (selectedProduct.slug || selectedProduct.id)) return;
+    window.history.replaceState(
+      mergeCerberusHistoryState(
+        window.history.state,
+        createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {
+          canGoBack: currentEntry.canGoBack,
+          fromView: currentEntry.fromView,
+          relatedScrollX: scrollLeft,
+        }),
+      ),
+      '',
+      window.location.href,
+    );
+  };
 
   return (
     <div className="min-h-screen min-w-0 bg-noise bg-[#0B0908] text-[#E8E1D3] flex flex-col font-sans selection:bg-[#8A1F1F] selection:text-[#E8E1D3] w-full max-w-full">
@@ -479,6 +521,8 @@ export default function App() {
             onSelectProduct={handleSelectProduct}
             metaPixelId={config.metaPixelId}
             metaAccessToken={config.metaAccessToken}
+            initialRelatedScrollX={initialRelatedScrollX}
+            onRelatedScrollPositionChange={handleRelatedScrollPositionChange}
           />
         )}
 

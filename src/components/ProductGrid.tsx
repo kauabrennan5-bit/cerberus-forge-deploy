@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, type Dispatch, type SetStateAction } from 'react';
 // Mobile refinement: preserve the existing archival grid while making filters, headings, and controls wrap within the viewport.
 import { Product } from '../types';
 import { getProductDisplayCategory, getProductDisplayTitle } from '../lib/productPresentation';
@@ -22,7 +22,7 @@ interface ProductGridProps {
   metaPixelId?: string;
   metaAccessToken?: string;
   viewState: CatalogViewState;
-  onViewStateChange: (state: CatalogViewState) => void;
+  onViewStateChange: Dispatch<SetStateAction<CatalogViewState>>;
 }
 
 export const ProductGrid: React.FC<ProductGridProps> = ({
@@ -42,11 +42,13 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
   onViewStateChange,
 }) => {
   const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;
-  const setSelectedCategory = (value: string) => onViewStateChange({ ...viewState, selectedCategory: value });
-  const setSearchQuery = (value: string) => onViewStateChange({ ...viewState, searchQuery: value });
+  const setSelectedCategory = (value: string) => onViewStateChange((current) => ({ ...current, selectedCategory: value }));
+  const setSearchQuery = (value: string) => onViewStateChange((current) => ({ ...current, searchQuery: value }));
   const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {
-    const resolved = typeof next === 'function' ? next(isCategoryPanelOpen) : next;
-    onViewStateChange({ ...viewState, isCategoryPanelOpen: resolved });
+    onViewStateChange((current) => ({
+      ...current,
+      isCategoryPanelOpen: typeof next === 'function' ? next(current.isCategoryPanelOpen) : next,
+    }));
   };
 
   // A navegação apresenta a taxonomia editorial que será aplicada às próximas

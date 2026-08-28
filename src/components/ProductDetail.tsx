@@ -18,6 +18,8 @@ interface ProductDetailProps {
   onSelectProduct: (product: Product) => void;
   metaPixelId?: string;
   metaAccessToken?: string;
+  initialRelatedScrollX?: number;
+  onRelatedScrollPositionChange?: (scrollLeft: number) => void;
 }
 
 export const ProductDetail: React.FC<ProductDetailProps> = ({
@@ -30,7 +32,9 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   relatedProducts,
   onSelectProduct,
   metaPixelId,
-  metaAccessToken
+  metaAccessToken,
+  initialRelatedScrollX = 0,
+  onRelatedScrollPositionChange,
 }) => {
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [imageError, setImageError] = useState<Record<number, boolean>>({});
@@ -82,6 +86,14 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     setImageError({});
     setIsZoomOpen(false);
   }, [product.id]);
+
+  useEffect(() => {
+    if (!initialRelatedScrollX || !relatedRailRef.current) return;
+    const frameId = window.requestAnimationFrame(() => {
+      if (relatedRailRef.current) relatedRailRef.current.scrollLeft = initialRelatedScrollX;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [product.id, initialRelatedScrollX, relatedProducts.length]);
 
   const handleNextImage = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -413,6 +425,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
             </button>
             <div
               ref={relatedRailRef}
+              onScroll={(event) => onRelatedScrollPositionChange?.(event.currentTarget.scrollLeft)}
               role="region"
               aria-labelledby="related-products-title"
               aria-label="Produtos recomendados; deslize horizontalmente para navegar"

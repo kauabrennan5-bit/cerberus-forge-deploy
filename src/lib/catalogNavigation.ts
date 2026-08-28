@@ -21,6 +21,7 @@ export interface ProductHistoryEntry {
   view: 'product-detail';
   productKey: string;
   scrollY: number;
+  relatedScrollX: number;
   canGoBack: boolean;
   fromView: 'catalog' | 'product-detail' | 'other';
 }
@@ -66,13 +67,14 @@ export function createCatalogHistoryState(
 export function createProductHistoryState(
   productKey: string,
   scrollY: unknown,
-  options: { canGoBack: boolean; fromView: ProductHistoryEntry['fromView'] },
+  options: { canGoBack: boolean; fromView: ProductHistoryEntry['fromView']; relatedScrollX?: unknown },
 ): CerberusHistoryState {
   return {
     cerberus: {
       view: 'product-detail',
       productKey: String(productKey || '').trim(),
       scrollY: normalizeScrollY(scrollY),
+      relatedScrollX: normalizeScrollY(options.relatedScrollX),
       canGoBack: options.canGoBack === true,
       fromView: options.fromView,
     },
@@ -100,6 +102,7 @@ export function readCerberusHistoryEntry(value: unknown): CerberusHistoryEntry |
       view: 'product-detail',
       productKey: entry.productKey.trim(),
       scrollY: normalizeScrollY(entry.scrollY),
+      relatedScrollX: normalizeScrollY(entry.relatedScrollX),
       canGoBack: entry.canGoBack === true,
       fromView,
     };

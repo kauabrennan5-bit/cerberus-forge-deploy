@@ -20,11 +20,12 @@ test("scroll e filtros pertencem à entrada determinística do catálogo", () =>
 
 test("posição de detalhe não vaza para outra página", () => {
   const catalog = mergeCerberusHistoryState({ unrelated: "preserved" }, createCatalogHistoryState(DEFAULT_CATALOG_VIEW_STATE, false, 900));
-  const detail = mergeCerberusHistoryState({}, createProductHistoryState("produto-a", 321, { canGoBack: true, fromView: "catalog" }));
+  const detail = mergeCerberusHistoryState({}, createProductHistoryState("produto-a", 321, { canGoBack: true, fromView: "catalog", relatedScrollX: 165.4 }));
   const catalogEntry = readCerberusHistoryEntry(catalog);
   const detailEntry = readCerberusHistoryEntry(detail);
   assert.equal((catalogEntry as any).scrollY, 900);
   assert.equal((detailEntry as any).scrollY, 321);
+  assert.equal((detailEntry as any).relatedScrollX, 165);
   assert.equal((detailEntry as any).productKey, "produto-a");
   assert.equal((catalog as any).unrelated, "preserved");
 });
