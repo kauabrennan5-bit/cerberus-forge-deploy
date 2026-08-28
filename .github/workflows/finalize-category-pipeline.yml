@@ -36,7 +36,19 @@ jobs:
         run: npm ci
 
       - name: Full tests
-        run: npm test
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/npm-test.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo '=== FAILURE SUMMARY ==='
+            grep -E -B 5 -A 15 'not ok|FAIL|AssertionError|ERR_ASSERTION|Expected|expected|actual|tests? failed|failure' /tmp/npm-test.log | tail -n 500 || true
+            echo '=== LOG TAIL ==='
+            tail -n 250 /tmp/npm-test.log
+            exit "$code"
+          fi
+          tail -n 80 /tmp/npm-test.log
 
       - name: TypeScript
         run: npm run lint
