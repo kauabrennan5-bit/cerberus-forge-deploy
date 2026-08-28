@@ -1,0 +1,86 @@
+name: Reproduce Telegram V2 failure isolated
+
+on:
+  push:
+    branches:
+      - diag/telegram-v2-global-failures-2026-08-28
+    paths:
+      - .github/workflows/diag-telegram-v2-isolated.yml
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply exact ephemeral V2 preparation from finalizer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          workflow = Path('.github/workflows/finalize-telegram-v2.yml').read_text(encoding='utf-8').splitlines()
+          targets = [
+              'Apply deterministic V2 base patch',
+              'Prioritize explicit promotion states',
+              'Add isolated user-state test hooks',
+              'Isolate promotion test state and legacy product routing assertion',
+              'Align advanced-panel test contract',
+          ]
+          def extract_run(name: str) -> str:
+              start = workflow.index(f'      - name: {name}')
+              i = start + 1
+              while workflow[i].strip() == '': i += 1
+              if workflow[i] != '        run: |': raise SystemExit(f'missing run block: {name}')
+              out=[]; i+=1
+              while i < len(workflow):
+                  line=workflow[i]
+                  if line.startswith('      - name: ') or line.startswith('      - uses: '): break
+                  if line.startswith('          '): out.append(line[10:])
+                  elif line.strip() == '': out.append('')
+                  else: raise SystemExit(f'unexpected indentation: {line!r}')
+                  i+=1
+              return '\n'.join(out)+'\n'
+          for target in targets:
+              subprocess.run(['bash','-euo','pipefail','-c',extract_run(target)],check=True)
+          PY
+      - run: npm ci
+      - name: Isolated failing test
+        id: isolated
+        shell: bash
+        run: |
+          set +e
+          node --import tsx/esm --test --test-name-pattern='Telegram exposes the social-links editor without hardcoded destinations' tests/socialLinks.test.ts > isolated.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat isolated.log
+          exit 0
+      - name: Whole socialLinks suite
+        id: file
+        shell: bash
+        run: |
+          set +e
+          node --import tsx/esm --test tests/socialLinks.test.ts > file-suite.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat file-suite.log
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telegram-v2-isolated-repro
+          path: |
+            isolated.log
+            file-suite.log
+          retention-days: 1
+      - name: Assert reproduction
+        run: |
+          test '${{ steps.isolated.outputs.status }}' != '0'
+          test '${{ steps.file.outputs.status }}' != '0'
