@@ -1,6 +1,7 @@
 import { Product } from '../types';
 import { sendMetaCapiEvent, trackProductClickApi } from '../services/api';
 import { getStoredUTMs, appendUTMsToUrl, UTMParams } from './utm';
+import { hasAnalyticsConsent } from './privacyConsent';
 
 declare global {
   interface Window {
@@ -16,9 +17,10 @@ declare global {
 }
 
 /**
- * Inicializa a tag do Google Analytics 4 (GA4) se o ID de medição for fornecido
+ * Inicializa GA4 somente depois de consentimento analítico explícito.
  */
 export function initGA4(measurementId?: string): void {
+  if (!hasAnalyticsConsent()) return;
   const gaId = measurementId || (typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_GA4_MEASUREMENT_ID : undefined);
   if (!gaId || typeof window === 'undefined') return;
 
@@ -29,8 +31,7 @@ export function initGA4(measurementId?: string): void {
     };
   }
 
-  // Verifica se o script do gtag já foi injetado
-  const existingScript = document.querySelector(`script[src*="googletagmanager.com/gtag/js"]`);
+  const existingScript = document.querySelector('script[src*="googletagmanager.com/gtag/js"]');
   if (!existingScript) {
     const script = document.createElement('script');
     script.async = true;
@@ -39,19 +40,15 @@ export function initGA4(measurementId?: string): void {
 
     window.gtag('js', new Date());
     window.gtag('config', gaId, {
-      send_page_view: false // Controlado manualmente via trackPageView
+      send_page_view: false
     });
-    console.log(`⚡ GA4 inicializado com ID: ${gaId}`);
   }
 }
 
-/**
- * Dispara evento de Visualização de Página (Page View) para GA4 e Pixels
- */
+/** Dispara Page View apenas com consentimento explícito. */
 export function trackPageView(pagePath: string, pageTitle?: string): void {
-  if (typeof window === 'undefined') return;
+  if (!hasAnalyticsConsent() || typeof window === 'undefined') return;
 
-  // GA4 Page View
   if (window.gtag) {
     try {
       window.gtag('event', 'page_view', {
@@ -63,7 +60,6 @@ export function trackPageView(pagePath: string, pageTitle?: string): void {
     }
   }
 
-  // TikTok Pixel Page
   if (window.ttq && typeof window.ttq.page === 'function') {
     try {
       window.ttq.page();
@@ -73,11 +69,9 @@ export function trackPageView(pagePath: string, pageTitle?: string): void {
   }
 }
 
-/**
- * Dispara evento ViewContent / view_item quando o usuário abre os detalhes de um produto
- */
+/** Dispara ViewContent / view_item apenas com consentimento explícito. */
 export function trackViewItem(product: Product): void {
-  if (typeof window === 'undefined' || !product) return;
+  if (!hasAnalyticsConsent() || typeof window === 'undefined' || !product) return;
 
   const itemPayload = {
     item_id: product.id,
@@ -87,7 +81,6 @@ export function trackViewItem(product: Product): void {
     quantity: 1
   };
 
-  // 1. GA4 view_item
   if (window.gtag) {
     try {
       window.gtag('event', 'view_item', {
@@ -100,7 +93,6 @@ export function trackViewItem(product: Product): void {
     }
   }
 
-  // 2. DataLayer push para GTM
   if (window.dataLayer) {
     try {
       window.dataLayer.push({
@@ -116,7 +108,6 @@ export function trackViewItem(product: Product): void {
     }
   }
 
-  // 3. Meta Pixel ViewContent
   if (window.fbq) {
     try {
       window.fbq('track', 'ViewContent', {
@@ -132,7 +123,6 @@ export function trackViewItem(product: Product): void {
     }
   }
 
-  // 4. TikTok Pixel ViewContent
   if (window.ttq && typeof window.ttq.track === 'function') {
     try {
       window.ttq.track('ViewContent', {
@@ -149,11 +139,9 @@ export function trackViewItem(product: Product): void {
   }
 }
 
-/**
- * Dispara evento select_item no GA4 quando o usuário clica em um card no catálogo
- */
+/** Dispara select_item apenas com consentimento explícito. */
 export function trackSelectItem(product: Product): void {
-  if (typeof window === 'undefined' || !product) return;
+  if (!hasAnalyticsConsent() || typeof window === 'undefined' || !product) return;
 
   if (window.gtag) {
     try {
@@ -175,14 +163,19 @@ export function trackSelectItem(product: Product): void {
 }
 
 /**
- * Registra o clique no produto no backend e dispara todos os eventos de checkout (InitiateCheckout / begin_checkout)
- * Retorna a URL final com UTMs incorporadas para o redirecionamento.
+ * Registra analytics do clique somente após consentimento. O redirecionamento
+ * nunca depende do tracking e continua funcional quando o usuário não consentiu.
+ * Credenciais da Meta não são aceitas do cliente; o backend deve usar somente
+ * META_PIXEL_ID e META_ACCESS_TOKEN do ambiente do servidor.
  */
 export async function trackClickAndGetUrl(
   product: Product,
-  metaPixelId?: string,
-  metaAccessToken?: string
+  _metaPixelId?: string,
+  _metaAccessToken?: string
 ): Promise<string> {
+  const targetUrl = product.paginaPonteUrl || product.link;
+  if (!hasAnalyticsConsent()) return targetUrl;
+
   const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const utms: UTMParams = getStoredUTMs();
 
@@ -195,7 +188,6 @@ export async function trackClickAndGetUrl(
     currency: 'BRL'
   };
 
-  // 1. Client-Side Meta Pixel (InitiateCheckout com eventID para deduplicação CAPI)
   if (typeof window !== 'undefined' && window.fbq) {
     try {
       window.fbq('track', 'InitiateCheckout', payload, { eventID: eventId });
@@ -204,18 +196,20 @@ export async function trackClickAndGetUrl(
     }
   }
 
-  // 2. Server-Side Meta Conversions API (CAPI)
+  // Never transmit Meta access tokens or Pixel IDs from browser state.
   sendMetaCapiEvent({
     event_name: 'InitiateCheckout',
     event_id: eventId,
-    product,
-    metaPixelId,
-    metaAccessToken
+    product: {
+      id: product.id,
+      produto: product.produto,
+      categoria: product.categoria,
+      preco: product.preco
+    }
   }).catch((err) => {
     console.warn('Meta CAPI error:', err);
   });
 
-  // 3. TikTok Pixel
   if (typeof window !== 'undefined' && window.ttq && typeof window.ttq.track === 'function') {
     try {
       window.ttq.track('InitiateCheckout', payload);
@@ -224,7 +218,6 @@ export async function trackClickAndGetUrl(
     }
   }
 
-  // 4. GA4 begin_checkout
   if (typeof window !== 'undefined' && window.gtag) {
     try {
       window.gtag('event', 'begin_checkout', {
@@ -245,7 +238,6 @@ export async function trackClickAndGetUrl(
     }
   }
 
-  // 5. Registro Assíncrono de Clique no Backend (Supabase product_clicks)
   trackProductClickApi({
     productId: product.id,
     productSlug: product.slug || product.id,
@@ -265,7 +257,5 @@ export async function trackClickAndGetUrl(
     console.warn('Registro de clique no backend falhou (não bloqueante):', err);
   });
 
-  // 6. Constrói URL final com UTMs anexadas
-  const targetUrl = product.paginaPonteUrl || product.link;
   return appendUTMsToUrl(targetUrl, utms);
 }
