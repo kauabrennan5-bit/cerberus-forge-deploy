@@ -8,15 +8,12 @@ new = """    if count != 1:\n        if label == 'telegram review category confi
 if old not in source:
     raise SystemExit('replace_once helper shape changed')
 source = source.replace(old, new, 1)
-code = compile(source, str(source_path), 'exec')
-exec(code, {'__name__': '__main__'})
+compile(source, str(source_path), 'exec')
+exec(compile(source, str(source_path), 'exec'), {'__name__': '__main__'})
 
 category_path = Path('src/lib/productCategory.ts')
 category_source = category_path.read_text(encoding='utf-8')
-for legacy_alias in (
-    '  acessorios: "Calçados & Acessórios",\n',
-    '  acessorio: "Calçados & Acessórios",\n',
-):
+for legacy_alias in ('  acessorios: "Calçados & Acessórios",\n', '  acessorio: "Calçados & Acessórios",\n'):
     if legacy_alias not in category_source:
         raise SystemExit(f'generic accessory alias shape changed: {legacy_alias!r}')
     category_source = category_source.replace(legacy_alias, '', 1)
@@ -32,8 +29,7 @@ new_completeness = '''  const publicCategory = resolveTelegramReviewCategory(rev
 '''
 if old_completeness not in telegram_source:
     raise SystemExit('telegram completeness category gate shape changed')
-telegram_source = telegram_source.replace(old_completeness, new_completeness, 1)
-telegram_path.write_text(telegram_source, encoding='utf-8')
+telegram_path.write_text(telegram_source.replace(old_completeness, new_completeness, 1), encoding='utf-8')
 
 card_path = Path('src/components/ProductCard.tsx')
 card_source = card_path.read_text(encoding='utf-8')
@@ -47,7 +43,7 @@ disclaimer = '''            <p className="mt-1 h-[2rem] overflow-hidden text-[8p
 
 '''
 if 'Condições finais de pagamento e frete são confirmadas na loja oficial.' not in card_source:
-    if card_source.count(button_marker) != 1:
+    if button_marker not in card_source:
         raise SystemExit('ProductCard acquire button marker changed')
     card_source = card_source.replace(button_marker, disclaimer + button_marker, 1)
 card_path.write_text(card_source, encoding='utf-8')
@@ -63,11 +59,9 @@ new_assertions = '''  assert.match(gridSource, /PUBLIC_PRODUCT_CATEGORIES/);
 '''
 if old_assertions not in promotion_test:
     raise SystemExit('promotionOffer legacy category assertions changed')
-promotion_test = promotion_test.replace(old_assertions, new_assertions, 1)
-promotion_test_path.write_text(promotion_test, encoding='utf-8')
+promotion_test_path.write_text(promotion_test.replace(old_assertions, new_assertions, 1), encoding='utf-8')
 
-# N7 tests affiliate behavior. Normalize only the buildRepo fixture region so
-# category readiness does not short-circuit the affiliate-specific assertions.
+# Affiliate tests: update only buildRepo, whose concern is affiliate behavior.
 affiliate_test_path = Path('tests/affiliateResolverN7.test.ts')
 affiliate_test = affiliate_test_path.read_text(encoding='utf-8')
 start = affiliate_test.find('function buildRepo(')
@@ -79,38 +73,44 @@ repo_fixture, candidate_count = re.subn(r'(\bcategory\s*:\s*)"Acessórios"', r'\
 repo_fixture, product_count = re.subn(r'(\bcategoria\s*:\s*)"Acessórios"', r'\1"Iluminação"', repo_fixture)
 if candidate_count < 1 or product_count < 1:
     raise SystemExit(f'N7 category fixture not found candidate={candidate_count} product={product_count}')
-affiliate_test = affiliate_test[:start] + repo_fixture + affiliate_test[end:]
-affiliate_test_path.write_text(affiliate_test, encoding='utf-8')
+affiliate_test_path.write_text(affiliate_test[:start] + repo_fixture + affiliate_test[end:], encoding='utf-8')
 
 telegram_test_path = Path('tests/telegramAndMarketplace.test.ts')
 telegram_test = telegram_test_path.read_text(encoding='utf-8')
-contaminated_fixture = '''    produto: "Produto editorial",
-    categoria: "Acessórios",
-    preco: 10,
-'''
-if telegram_test.count(contaminated_fixture) != 1:
-    raise SystemExit('contaminated-description fixture shape changed')
-telegram_test = telegram_test.replace(
-    contaminated_fixture,
-    '''    produto: "Produto editorial",
-    categoria: "Iluminação",
-    preco: 10,
-''',
-    1,
-)
+
+# Target the contaminated-description test only, regardless of test insertions.
+cont_start = telegram_test.find('test("publicação é bloqueada se descricao contaminada atravessar a revisão"')
+cont_end = telegram_test.find('\ntest(', cont_start + 10)
+if cont_start < 0 or cont_end < 0:
+    raise SystemExit('contaminated-description test boundaries changed')
+cont_block = telegram_test[cont_start:cont_end]
+cont_block, cont_count = re.subn(r'(\bcategoria\s*:\s*)"Acessórios"', r'\1"Iluminação"', cont_block, count=1)
+if cont_count != 1:
+    raise SystemExit(f'contaminated-description category not found count={cont_count}')
+telegram_test = telegram_test[:cont_start] + cont_block + telegram_test[cont_end:]
+
+# Generated Telegram resolver test must use factual context, not generic label.
 telegram_test = telegram_test.replace(
     'assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Calçados & Acessórios");',
     'assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Iluminação");',
     1,
 )
-old_prompt_expectation = '  assert.equal(curated.category, "Calçados & Acessórios");\n'
-if telegram_test.count(old_prompt_expectation) != 1:
-    raise SystemExit('prompt-injection category expectation shape changed')
-telegram_test = telegram_test.replace(
-    old_prompt_expectation,
-    '  assert.equal(curated.category, "", "categoria sem evidência pública permanece em revisão");\n',
-    1,
+
+# Prompt injection with no factual category signal must fail closed.
+prompt_start = telegram_test.find('test("conteúdo externo com prompt injection não altera configuração nem cria persistência"')
+prompt_end = telegram_test.find('\ntest(', prompt_start + 10)
+if prompt_start < 0 or prompt_end < 0:
+    raise SystemExit('prompt-injection test boundaries changed')
+prompt_block = telegram_test[prompt_start:prompt_end]
+prompt_block, prompt_count = re.subn(
+    r'assert\.equal\(curated\.category,\s*"Calçados & Acessórios"\);',
+    'assert.equal(curated.category, "", "categoria sem evidência pública permanece em revisão");',
+    prompt_block,
+    count=1,
 )
+if prompt_count != 1:
+    raise SystemExit(f'prompt-injection expectation not found count={prompt_count}')
+telegram_test = telegram_test[:prompt_start] + prompt_block + telegram_test[prompt_end:]
 telegram_test_path.write_text(telegram_test, encoding='utf-8')
 
 if '"talher"' not in category_source or category_source.index('"talher"') > category_source.index('"organizador"'):
