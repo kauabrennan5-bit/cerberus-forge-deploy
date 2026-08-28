@@ -147,14 +147,39 @@ async function startServer() {
     }
   });
 
-  // Enable CORS headers for external forms or integrations
+  // CORS: fail-closed for browser origins. Requests without Origin (server-to-server,
+  // health checks, Telegram) continue to work normally.
+  const normalizeOrigin = (value: unknown): string => String(value || "").trim().replace(/\/+$/, "");
+  const configuredCorsOrigins = new Set(
+    [
+      "https://cerberusfinds.com",
+      process.env.PUBLIC_SITE_URL,
+      process.env.STATIC_CATALOG_URL,
+      process.env.APP_URL,
+      ...(process.env.CORS_ALLOWED_ORIGINS || "").split(","),
+    ]
+      .map(normalizeOrigin)
+      .filter(Boolean),
+  );
+  const isAllowedCorsOrigin = (origin: string): boolean => {
+    const normalized = normalizeOrigin(origin);
+    if (configuredCorsOrigins.has(normalized)) return true;
+    return process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalized);
+  };
+
   app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-admin-password");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
+    const origin = typeof req.headers.origin === "string" ? normalizeOrigin(req.headers.origin) : "";
+    if (origin) {
+      if (!isAllowedCorsOrigin(origin)) {
+        if (req.method === "OPTIONS") return res.sendStatus(403);
+      } else {
+        res.header("Access-Control-Allow-Origin", origin);
+        res.header("Vary", "Origin");
+      }
     }
+    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-admin-password, x-diagnostics-token");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
   });
 
@@ -165,14 +190,12 @@ async function startServer() {
     try {
       const parsed = new URL(rawUrl);
 
-      // Exige protocolo HTTPS estritamente
       if (parsed.protocol !== "https:") {
         return false;
       }
 
       const hostname = parsed.hostname.toLowerCase();
 
-      // Bloqueio explícito de localhost, loopback, IPs de link-local e metadata
       const forbiddenHostnames = [
         "localhost",
         "127.0.0.1",
@@ -186,7 +209,6 @@ async function startServer() {
         return false;
       }
 
-      // Bloqueio de faixas de IP privadas e reservadas (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, etc)
       if (
         /^127\./.test(hostname) ||
         /^10\./.test(hostname) ||
@@ -198,7 +220,6 @@ async function startServer() {
         return false;
       }
 
-      // Domínios autorizados para exportação de planilhas do Google Sheets
       const allowedDomains = [
         "docs.google.com",
         "drive.google.com",
@@ -223,7 +244,6 @@ async function startServer() {
     if (!enforceRateLimit(adminRateLimiter, req, res)) return;
     const rawAdminPassEnv = (process.env.ADMIN_PASSWORD || "").trim();
 
-    // Se ADMIN_PASSWORD não estiver configurada no ambiente, recusa todo acesso (Fail-Closed)
     if (!rawAdminPassEnv) {
       return res.status(401).json({
         success: false,
@@ -234,10 +254,7 @@ async function startServer() {
     const authHeader = (req.headers["x-admin-password"] as string) || "";
     const bearerHeader = (req.headers["authorization"] as string) || "";
     const bearerPass = bearerHeader.startsWith("Bearer ") ? bearerHeader.slice(7).trim() : "";
-    const bodyPass = (req.body && req.body.senha) ? String(req.body.senha) : "";
-    const queryPass = (req.query && req.query.senha) ? String(req.query.senha) : "";
-
-    const providedPass = (authHeader || bearerPass || bodyPass || queryPass).trim();
+    const providedPass = (authHeader || bearerPass).trim();
 
     if (!providedPass) {
       return res.status(401).json({
@@ -246,7 +263,6 @@ async function startServer() {
       });
     }
 
-    // Verifica se a variável de ambiente já é um hash do bcrypt
     const isEnvHashed = rawAdminPassEnv.startsWith("$2a$") || rawAdminPassEnv.startsWith("$2b$") || rawAdminPassEnv.startsWith("$2y$");
     const targetHash = isEnvHashed ? rawAdminPassEnv : bcrypt.hashSync(rawAdminPassEnv, 10);
 
@@ -262,13 +278,10 @@ async function startServer() {
     next();
   };
 
-  // POST /api/admin/verify - Endpoint para verificar senha de administrador
-  app.post("/api/admin/verify", requireAdminAuth, (req, res) => {
+  app.post("/api/admin/verify", requireAdminAuth, (_req, res) => {
     return res.json({ success: true, message: "Senha de administrador verificada com sucesso!" });
   });
 
-  // Não existe rota pública de leitura: visitantes só podem registrar uma
-  // inscrição explicitamente autorizada, normalizada e sujeita a limitação de taxa.
   app.post("/api/newsletter", async (req, res) => {
     if (!enforceRateLimit(newsletterRateLimiter, req, res)) return;
     const email = normalizeNewsletterEmail(req.body?.email);
@@ -327,9 +340,6 @@ async function startServer() {
     }
   });
 
-  // Descadastro local idempotente. O token em texto puro nunca é persistido; apenas
-  // seu hash é comparado com o registro existente. GET serve ao link do e-mail e
-  // POST permanece disponível para clientes que preferem enviar JSON.
   const applyUnsubscribe = async (token: string): Promise<void> => {
     if (token.length < 32 || token.length > 256) throw new Error("INVALID_UNSUBSCRIBE_TOKEN");
     const client = productsRepository.requireSupabase();
@@ -384,8 +394,7 @@ async function startServer() {
     }
   });
 
-  // POST /api/admin/rebuild-static-catalog - Endpoint para reconstrução manual do catálogo estático
-  app.post("/api/admin/rebuild-static-catalog", requireAdminAuth, async (req, res) => {
+  app.post("/api/admin/rebuild-static-catalog", requireAdminAuth, async (_req, res) => {
     try {
       const { syncCatalogAndDeploy } = await import("./server/services/catalogSync");
       const result = await syncCatalogAndDeploy("Rebuild Administrativo Manual");
@@ -400,11 +409,6 @@ async function startServer() {
     }
   });
 
-  // ==========================================
-  // 1. PRODUCTS REST API (DATABASE ENDPOINTS)
-  // ==========================================
-
-  // GET /api/products - Get all active products
   app.get("/api/products", async (req, res) => {
     if (!enforceRateLimit(catalogRateLimiter, req, res)) return;
     try {
@@ -423,7 +427,6 @@ async function startServer() {
     }
   });
 
-  // GET /api/products/:idOrSlug - Get single product details
   app.get("/api/products/:idOrSlug", async (req, res) => {
     try {
       const { idOrSlug } = req.params;
@@ -441,7 +444,6 @@ async function startServer() {
     }
   });
 
-  // POST /api/products - Create new product with requireAdminAuth middleware
   app.post("/api/products", requireAdminAuth, async (req, res) => {
     try {
       const { produto, categoria, preco, imagens, link, destaque, descricao, paginaPonteUrl } = req.body;
@@ -472,7 +474,6 @@ async function startServer() {
     }
   });
 
-  // Handler comum para exclusão de produto
   const handleDeleteRequest = async (req: express.Request, res: express.Response) => {
     try {
       const id = req.params.id || req.body?.id;
@@ -496,12 +497,10 @@ async function startServer() {
     }
   };
 
-  // DELETE e POST /api/products/:id/delete - Suporte a DELETE nativo e POST fallback para desvios de proxy Nginx (405)
   app.delete("/api/products/:id", requireAdminAuth, handleDeleteRequest);
   app.post("/api/products/:id/delete", requireAdminAuth, handleDeleteRequest);
   app.post("/api/products/delete", requireAdminAuth, handleDeleteRequest);
 
-  // Handler para edição/atualização de produto
   const handleUpdateRequest = async (req: express.Request, res: express.Response) => {
     try {
       const id = req.params.id || req.body?.id;
@@ -558,78 +557,87 @@ async function startServer() {
     }
   };
 
-  // PUT e POST para atualização de produto
   app.put("/api/products/:id", requireAdminAuth, handleUpdateRequest);
   app.post("/api/products/:id/edit", requireAdminAuth, handleUpdateRequest);
   app.post("/api/products/:id/update", requireAdminAuth, handleUpdateRequest);
 
-  // ==========================================
-  // 2. META CONVERSIONS API (CAPI) & FEED
-  // ==========================================
-
-  // POST /api/meta-capi - Server-Side Conversions API for Deduplication
+  // Meta CAPI uses server-owned credentials only and validates event/product.
   app.post("/api/meta-capi", async (req, res) => {
     if (!enforceRateLimit(analyticsRateLimiter, req, res)) return;
     try {
-      const { event_name, event_id, product, metaPixelId, metaAccessToken } = req.body;
+      const eventName = String(req.body?.event_name || "").trim();
+      const eventId = String(req.body?.event_id || "").trim();
+      const productId = String(req.body?.product?.id || "").trim();
+      const allowedEvents = new Set(["InitiateCheckout"]);
 
-      const pixelId = metaPixelId || process.env.META_PIXEL_ID;
-      const accessToken = metaAccessToken || process.env.META_ACCESS_TOKEN;
-
-      const clientIp = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "").split(",")[0].trim();
-      const userAgent = req.headers["user-agent"] || "";
-
-      console.log(`📡 [CAPI Server Event] Event: ${event_name} | EventID: ${event_id} | Product: ${product?.produto}`);
-
-      if (pixelId && accessToken) {
-        const payload = {
-          data: [
-            {
-              event_name: event_name || "InitiateCheckout",
-              event_time: Math.floor(Date.now() / 1000),
-              event_id: event_id,
-              event_source_url: req.headers.referer || "",
-              action_source: "website",
-              user_data: {
-                client_ip_address: clientIp,
-                client_user_agent: userAgent
-              },
-              custom_data: {
-                content_name: product?.produto || "Produto Cerberus",
-                content_ids: [product?.id || "prod-001"],
-                content_type: "product",
-                value: product?.preco || 0,
-                currency: "BRL"
-              }
-            }
-          ]
-        };
-
-        const capiRes = await fetchWithTimeout(`https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-
-        const capiJson = await capiRes.json();
-        console.log("Response Meta Graph API CAPI:", capiJson);
-        return res.json({ success: true, metaResponse: capiJson, event_id, deduplicated: true });
+      if (!allowedEvents.has(eventName)) {
+        return res.status(400).json({ success: false, code: "INVALID_CAPI_EVENT", error: "Evento CAPI não permitido." });
+      }
+      if (!/^[A-Za-z0-9._:-]{8,128}$/.test(eventId)) {
+        return res.status(400).json({ success: false, code: "INVALID_EVENT_ID", error: "event_id inválido." });
+      }
+      if (!productId) {
+        return res.status(400).json({ success: false, code: "PRODUCT_ID_REQUIRED", error: "product.id é obrigatório." });
       }
 
-      // If token is missing, return success logged acknowledgement for deduplication architecture
-      return res.json({
-        success: true,
-        message: "Evento CAPI registrado e formatado para deduplicação (Aguardando Meta Access Token nas Configurações)",
-        event_id,
-        deduplicated: true
+      const realProduct = await productsRepository.getProductByIdOrSlug(productId);
+      if (!realProduct || realProduct.ativo === false) {
+        return res.status(404).json({ success: false, code: "PRODUCT_NOT_FOUND", error: "Produto não localizado na fonte canônica." });
+      }
+
+      const pixelId = String(process.env.META_PIXEL_ID || "").trim();
+      const accessToken = String(process.env.META_ACCESS_TOKEN || "").trim();
+      if (!pixelId || !accessToken) {
+        return res.status(503).json({
+          success: false,
+          code: "META_CAPI_NOT_CONFIGURED",
+          error: "Meta CAPI não está configurada no ambiente do servidor."
+        });
+      }
+
+      const clientIp = ((req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "").split(",")[0].trim();
+      const userAgent = req.headers["user-agent"] || "";
+      const payload = {
+        data: [
+          {
+            event_name: eventName,
+            event_time: Math.floor(Date.now() / 1000),
+            event_id: eventId,
+            event_source_url: req.headers.referer || "",
+            action_source: "website",
+            user_data: {
+              client_ip_address: clientIp,
+              client_user_agent: userAgent
+            },
+            custom_data: {
+              content_name: realProduct.produto,
+              content_ids: [realProduct.id],
+              content_type: "product",
+              value: Number(realProduct.preco) || 0,
+              currency: "BRL"
+            }
+          }
+        ]
+      };
+
+      const capiRes = await fetchWithTimeout(`https://graph.facebook.com/v19.0/${encodeURIComponent(pixelId)}/events?access_token=${encodeURIComponent(accessToken)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
       });
+      const capiJson = await capiRes.json().catch(() => ({}));
+      if (!capiRes.ok) {
+        console.error("[Meta CAPI] Graph API rejected event:", capiRes.status);
+        return res.status(502).json({ success: false, code: "META_CAPI_UPSTREAM_ERROR", error: "Meta CAPI rejeitou o evento." });
+      }
+
+      return res.json({ success: true, event_id: eventId, deduplicated: true, events_received: capiJson?.events_received });
     } catch (err: any) {
-      console.error("Erro no /api/meta-capi:", err);
-      return res.status(500).json({ success: false, error: err.message });
+      console.error("Erro no /api/meta-capi:", err?.message || err);
+      return res.status(500).json({ success: false, error: "Erro interno ao registrar evento CAPI." });
     }
   });
 
-  // POST /api/track-click - Outbound Affiliate Click Analytics Tracker
   app.post("/api/track-click", async (req, res) => {
     if (!enforceRateLimit(analyticsRateLimiter, req, res)) return;
     try {
@@ -654,7 +662,6 @@ async function startServer() {
         return res.status(400).json({ success: false, error: "productId é obrigatório" });
       }
 
-      // Valida o produto no repositório oficial antes de registrar
       const realProduct = await productsRepository.getProductByIdOrSlug(productId);
       if (!realProduct) {
         return res.status(404).json({
@@ -667,7 +674,7 @@ async function startServer() {
       const verifiedPrice = realProduct?.preco ?? Number(productPrice) ?? 0;
       const verifiedSlug = realProduct?.slug || productSlug || productId;
 
-      const clientIp = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "").split(",")[0].trim();
+      const clientIp = ((req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "").split(",")[0].trim();
       const userAgent = req.headers["user-agent"] || "";
 
       await productsRepository.recordProductClick({
@@ -708,8 +715,6 @@ async function startServer() {
     }
   });
 
-
-  // GET /api/meta-feed.csv - Meta Commerce Manager CSV Feed
   app.get(["/api/meta-feed.csv", "/feed.csv"], async (req, res) => {
     try {
       const allProducts = await productsRepository.getProducts();
@@ -751,7 +756,6 @@ async function startServer() {
     }
   });
 
-  // GET /api/meta-feed.xml - Meta Commerce Manager RSS XML Feed
   app.get(["/api/meta-feed.xml", "/feed.xml"], async (req, res) => {
     try {
       const allProducts = await productsRepository.getProducts();
@@ -797,82 +801,30 @@ async function startServer() {
     }
   });
 
-  // Legacy Proxy Submit to Google Apps Script
-  app.post("/api/submit-product", requireAdminAuth, async (req, res) => {
-    try {
-      const { appsScriptUrl, senha, produto, categoria, preco, imagens, link, destaque } = req.body;
-
-      if (!appsScriptUrl) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "A URL do Google Apps Script não foi informada." 
-        });
-      }
-
-      if (!produto || !link) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "Nome do produto e Link são obrigatórios." 
-        });
-      }
-
-      const payload = {
-        senha,
-        produto,
-        categoria: categoria || "Geral",
-        preco: Number(preco) || 0,
-        imagens: Array.isArray(imagens) ? imagens.join(" | ") : (imagens || ""),
-        link,
-        destaque: Boolean(destaque)
-      };
-
-      const googleRes = await fetchWithTimeout(appsScriptUrl, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(payload)
-      });
-
-      const responseText = await googleRes.text();
-      let responseJson: any = {};
-      try {
-        responseJson = JSON.parse(responseText);
-      } catch {
-        responseJson = { result: "sucesso" };
-      }
-
-      if (responseJson.result === "sucesso" || responseJson.status === "ok" || googleRes.ok) {
-        return res.json({ success: true, message: "Produto enviado para a planilha com sucesso!" });
-      } else {
-        return res.status(400).json({ 
-          success: false, 
-          error: responseJson.message || "Erro ao gravar na planilha do Google." 
-        });
-      }
-    } catch (err: any) {
-      console.error("Erro no proxy /api/submit-product:", err);
-      return res.status(500).json({ 
-        success: false, 
-        error: "Erro de servidor ao enviar produto: " + (err?.message || String(err))
-      });
-    }
+  // Legacy arbitrary Apps Script proxy is intentionally retired. It accepted a
+  // caller-controlled URL and therefore cannot safely remain as a generic fetch proxy.
+  app.post("/api/submit-product", requireAdminAuth, (_req, res) => {
+    return res.status(410).json({
+      success: false,
+      code: "LEGACY_APPS_SCRIPT_DISABLED",
+      error: "Fluxo legado de Apps Script desativado. Use /api/products."
+    });
   });
 
-  // AI Extraction endpoint (Nível 1 - Content Automation)
   app.post("/api/extract", requireAdminAuth, async (req, res) => {
     if (!enforceRateLimit(expensiveOperationRateLimiter, req, res)) return;
     try {
       const { url, rawText } = req.body;
       if (!url && !rawText) {
-        return res.status(400).json({ 
-          success: false, 
-          error: "É necessário fornecer a URL do produto ou o texto copiado." 
+        return res.status(400).json({
+          success: false,
+          error: "É necessário fornecer a URL do produto ou o texto copiado."
         });
       }
 
       const products = await productsRepository.getProducts();
       const nextRef = `REF-${(products.length + 1).toString().padStart(3, "0")}`;
 
-      // 1. Obter dados reais da URL e/ou texto bruto via Scraper no Backend
       const targetUrl = url ? url.trim() : "";
       console.log(`[Extraction] Executando scraper confiável para URL="${targetUrl}"`);
 
@@ -882,17 +834,14 @@ async function startServer() {
       const scrapedImages = scraped.images;
       const scrapedContent = scraped.rawContent;
 
-      // Validação 1: Registrar aviso em log se preço não for encontrado, sem cancelar a extração
       if (scrapedPrice === null || scrapedPrice <= 0) {
         console.warn(`[Extraction Notice] Preço não identificado automaticamente no anúncio: ${targetUrl}. Extração de título e imagens prossegue normalmente.`);
       }
 
-      // Validação 2: Se existirem menos de duas imagens, registrar em log
       if (scrapedImages.length < 2) {
         console.warn(`[Extraction Warning] Anúncio possui menos de duas imagens (${scrapedImages.length} obtida(s)).`);
       }
 
-      // Validação 3: Somente retornar erro 422 quando TODAS as estratégias falharem
       const hasAnyContent = Boolean(
         scrapedTitle ||
         scrapedImages.length > 0 ||
@@ -905,11 +854,10 @@ async function startServer() {
         return res.status(422).json({
           success: false,
           error: "Erro de extração: Não foi possível obter informações da URL fornecida.",
-          details: "Cole o texto da página do produto no campo abaixo para continuar."
+          details: "Cole o texto da página manualmente para continuar."
         });
       }
 
-      // 3. Prompt para o Gemini responsável APENAS por limpar o título, gerar descrição e sugerir categoria
       const prompt = `DADOS EXTRAÍDOS DO SCRAPER:
 - Título Bruto: "${scrapedTitle || 'Extrair do texto abaixo'}"
 - Preço Real Detectado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : 'NÃO ENCONTRADO (Manter null, NUNCA inventar preço)'}
@@ -968,8 +916,8 @@ NUNCA modifique ou invente preços ou imagens.`,
         success: true,
         data: {
           produto: finalTitle,
-          preco: scrapedPrice, // Preço strictly extraído do Scraper
-          imagens: scrapedImages, // Imagens strictly extraídas do Scraper
+          preco: scrapedPrice,
+          imagens: scrapedImages,
           descricao: data.descricao || "",
           categoria: data.categoria || "Acessórios",
           ref: nextRef,
@@ -986,7 +934,6 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
-  // Automation process endpoint (Direct REST trigger for product automation)
   app.post(["/api/automation/process", "/api/process-url"], requireAdminAuth, async (req, res) => {
     if (!enforceRateLimit(expensiveOperationRateLimiter, req, res)) return;
     try {
@@ -1001,12 +948,8 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
-  // ==========================================
-  // 3. TELEGRAM BOT INTEGRATION (FASE 2)
-  // ==========================================
-
-  // GET /api/telegram-status - Diagnóstico seguro do bot, webhook e Operator.
-  app.get(["/api/telegram-status", "/api/telegram/status"], async (_req, res) => {
+  // Operational Telegram diagnostics are admin-only.
+  app.get(["/api/telegram-status", "/api/telegram/status"], requireAdminAuth, async (_req, res) => {
     try {
       const telegram = await getTelegramWebhookDiagnostics();
       const operatorState = cerberusOperator.getOperatorPersistenceState();
@@ -1032,26 +975,26 @@ NUNCA modifique ou invente preços ou imagens.`,
         backendSha,
       });
     } catch (error: any) {
-      return res.status(200).json({
-        configured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
-        tokenConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN),
-        webhookConfigured: false,
-        webhookMatchesExpectedUrl: null,
-        apiHealthy: false,
-        backendReady: false,
-        operatorState: cerberusOperator.getOperatorPersistenceState().status,
-        webhookLastError: "Falha ao consultar diagnóstico do Telegram: " + (error?.message || "erro desconhecido"),
-        lastWebhookCheck: new Date().toISOString(),
-        backendSha: process.env.RENDER_GIT_COMMIT || process.env.RENDER_GIT_COMMIT_SHA || undefined,
+      return res.status(503).json({
+        success: false,
+        error: "Falha ao consultar diagnóstico do Telegram: " + (error?.message || "erro desconhecido"),
       });
     }
   });
 
-  // POST /api/telegram-set-webhook - Configuração automática do Webhook via API oficial
   app.post(["/api/telegram-set-webhook", "/api/telegram/set-webhook"], requireAdminAuth, async (req, res) => {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) {
       return res.status(400).json({ success: false, error: "TELEGRAM_BOT_TOKEN é necessário para configurar o Webhook." });
+    }
+
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+    if (!webhookSecret) {
+      return res.status(503).json({
+        success: false,
+        code: "TELEGRAM_WEBHOOK_SECRET_REQUIRED",
+        error: "TELEGRAM_WEBHOOK_SECRET deve estar configurado antes de registrar o webhook."
+      });
     }
 
     const webhookUrl = getExpectedTelegramWebhookUrl();
@@ -1059,7 +1002,6 @@ NUNCA modifique ou invente preços ou imagens.`,
     if (requestedUrl && requestedUrl !== webhookUrl) {
       return res.status(400).json({ success: false, error: "A URL enviada diverge da URL canônica do backend; nenhuma alteração foi feita.", expectedWebhookUrl: webhookUrl });
     }
-    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
 
     try {
       const controller = new AbortController();
@@ -1067,7 +1009,7 @@ NUNCA modifique ou invente preços ou imagens.`,
       const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: webhookUrl, ...(webhookSecret ? { secret_token: webhookSecret } : {}) }),
+        body: JSON.stringify({ url: webhookUrl, secret_token: webhookSecret }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -1084,22 +1026,20 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
-  // POST /api/telegram/webhook e /api/telegram-webhook - Webhook Assíncrono com Resposta 200 Imediata
   app.post(["/api/telegram/webhook", "/api/telegram-webhook"], (req, res) => {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) {
-      console.warn("⚠️ [Telegram Webhook Warning] Requisição recebida, mas TELEGRAM_BOT_TOKEN não está definido nas variáveis de ambiente.");
+    const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET?.trim();
+    if (!token || !webhookSecret) {
+      return res.status(503).json({ ok: false, error: "Webhook Telegram não configurado de forma segura." });
     }
 
-    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-    if (webhookSecret && req.headers["x-telegram-bot-api-secret-token"] !== webhookSecret) {
+    const providedSecret = String(req.headers["x-telegram-bot-api-secret-token"] || "").trim();
+    if (providedSecret !== webhookSecret) {
       return res.status(403).json({ ok: false, error: "Webhook Telegram não autorizado." });
     }
 
-    // 1. Resposta HTTP 200 imediata ao Telegram para evitar timeout de 5 segundos
     res.status(200).json({ ok: true, status: "Update recebido e enfileirado assincronamente" });
 
-    // 2. Processamento assíncrono em background
     setImmediate(() => {
       handleTelegramWebhookUpdate(req.body).catch((err) => {
         console.error("❌ [Telegram Async Error] Erro ao processar update assíncrono:", err);
@@ -1107,7 +1047,6 @@ NUNCA modifique ou invente preços ou imagens.`,
     });
   });
 
-  // API Route: Proxy Google Sheets CSV (Protegido contra SSRF e Acesso Não Autorizado)
   app.get("/api/proxy-csv", requireAdminAuth, async (req, res) => {
     try {
       const csvUrl = req.query.url as string;
@@ -1121,7 +1060,6 @@ NUNCA modifique ou invente preços ou imagens.`,
         });
       }
 
-      // Requisita com redirect: "manual" para inspecionar redirecionamentos e evitar SSRF via 301/302
       let fetchRes = await fetchWithTimeout(csvUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
@@ -1155,113 +1093,57 @@ NUNCA modifique ou invente preços ou imagens.`,
     }
   });
 
-  // Fonte única do cliente Supabase para o Cérebro Comercial (MEMORY, não autoridade). O repositório segue o padrão injetável do Bloco 13; em produção o cliente real vem de productsRepository (mesma credencial administrativa do catálogo). Testes continuam injetando cliente falso via setCommercialBrainClientForTests.
   if (productsRepository.supabase) {
     setCommercialBrainClient(productsRepository.supabase as any);
     setPolicyJournalClient(productsRepository.supabase as any);
   }
   registerCommercialBrainRoutes({ app, requireAdminAuth });
-  // Fase 23 — PREVIEW != PUBLICATION · DECISION != ACTION: a rota registra
-  // a decisão manual sem executar pipeline de publicação.
   setupPreviewTelegramRoutes({ app, requireAdminAuth });
-  // Bloco 15 — Fase D: superfície read-only de avaliação de política.
-  // POLICY != EXECUTION — nenhuma rota write de execução é criada aqui.
   registerPolicyEngineRoutes({ app, requireAdminAuth });
 
-  // Bloco 16 — Fase D: execução governada do Agent Runtime (admin-only).
-  // POLICY != EXECUTION · ALLOW != EXECUTION — a rota executa apenas no loop
-  // de prova explícito (executeProof=true), sempre após re-avaliação da
-  // política. Executores reais permanecem EXECUTOR_NOT_CONNECTED.
   if (productsRepository.supabase) {
     setAgentExecutionClient(productsRepository.supabase as any);
   }
   registerAgentRuntimeRoutes({ app, requireAdminAuth });
 
-  // Bloco 17 — Fase C: Experiment Registry (cockpit comercial, read-only +
-  // registro formal). EXPERIMENT != EXECUTION · DECISION != ACTION — as
-  // rotas NUNCA executam variante, produto, Telegram ou executor.
   if (productsRepository.supabase) {
     setExperimentClient(productsRepository.supabase as any);
   }
-    registerExperimentRoutes({ app, requireAdminAuth });
-  // Bloco N1 — Contratos de Descoberta: candidatos (projeção, nunca fato).
-  // CANDIDATE != FACT CANÔNICO · OBSERVATION != FACT CANÔNICO — as rotas
-  // NUNCA criam produto canônico, executam scraping ou alteram catálogo,
-  // Telegram, lifecycle, job queue ou Operator.
+  registerExperimentRoutes({ app, requireAdminAuth });
+
   if (productsRepository.supabase) {
     setCandidatesClient(productsRepository.supabase as any);
   }
   registerCandidateRoutes({ app, requireAdminAuth });
-  // Bloco N2 — descoberta controlada (READ-ONLY, limites de servidor)
   setupDiscoveryRoutes({ app, requireAdminAuth });
-  // Bloco N12 — pesquisa automatizada em lote sobre candidatos N1 (admin-only,
-  // coordenação read-only sobre N1 + N3). RESEARCH != PUBLICATION ·
-  // RESEARCH != PROMOTION — nenhuma criação/alteração de produto, evidence
-  // criada somente no funil candidate_evidence via N3 (field_hash preservado).
   registerResearchBatchRoutes({ app, requireAdminAuth });
-  // Bloco N10 — integrar runtime do Source Connector: registrar os connectors
-  // N2 no registry único do N10 (idempotente). Sem este registro o discovery
-  // por URL falha fechado (connector_ausente). NÃO altera produtos, agents,
-  // scheduler, job queue, Telegram, lifecycle ou qualquer outra autoridade.
+
   const n2SourceConnectorsRegistered = registerN2SourceConnectors();
   if (!n2SourceConnectorsRegistered) {
     console.error("[N10] Falha ao registrar Source Connectors N2 — discovery por URL permanecerá indisponível.");
   }
-  // Bloco N3 — pipeline de pesquisa + evidência. EVIDENCE != FACT CANÔNICO ·
-  // RESEARCH != PUBLICATION · RESEARCH != PROMOTION — as rotas NUNCA criam
-  // produto canônico, alteram candidates ou executam ações externas.
+
   if (productsRepository.supabase) {
     setCandidateEvidenceClient(productsRepository.supabase as any);
   }
   registerResearchRoutes({ app, requireAdminAuth });
-  // Bloco N4 — filtro e priorização Cerberus. CANDIDATE != FACT CANÔNICO ·
-  // RECOMMENDATION != ACTION — as rotas NUNCA publicam, promovem candidatos a
-  // products, alteram o catálogo canônico ou executam ações externas; a
-  // avaliação é persistida com histórico e prioridade nunca exibida sem eixos.
+
   if (productsRepository.supabase) {
     setCandidateAssessmentClient(productsRepository.supabase as any);
   }
   registerAssessmentRoutes(app, requireAdminAuth);
-  // Bloco N5 — Governed Publication (Cockpit + executor governado, admin-only).
-  // DECISION != ACTION · CANDIDATE != FACT CANÔNICO · ASSESSMENT != ACTION —
-  // a rota de execução NUNCA contorna Policy Engine, ApprovalStore ou Agent
-  // Runtime: exige DECISION + política ALLOW + aprovação explícita; preview,
-  // status e listagem são READ-ONLY e nunca criam produto ou vínculo.
   registerPublicationRoutes(app, requireAdminAuth);
-  // Bloco N6 — Affiliate Economics + Link Resolution (governado, admin-only).
-  // AFFILIATE LINK != AUTHORITY · REGISTER != VALIDATE != APPROVE != EXECUTE —
-  // as rotas NUNCA publicam, promovem candidatos a products, alteram o
-  // catálogo canônico, criam jobs, habilitam agentes ou executam ações
-  // externas; registro/validação são apenas dados governados consumíveis
-  // pelo N5 quando houver DECISION + Policy Engine + ApprovalStore.
-  // Bloco N6 — injeção do client (mesmo padrão N1–N4: client do
-  // productsRepository). Somente persistência governada: não altera
-  // executor do N5 (REGISTER != VALIDATE != APPROVE != EXECUTE).
+
   if (productsRepository.supabase) {
     setAffiliateClient(productsRepository.supabase as any);
   }
-  // Bloco N8 — bootstrap fail-closed da API oficial de Afiliados Shopee BR.
-  // Sem SHOPEE_AFFILIATE_APP_ID + SHOPEE_AFFILIATE_APP_SECRET, o caminho API
-  // permanece AUTH_REQUIRED (nenhum endpoint é presumido). Com as envs
-  // presentes, a fonte oficial é construída automaticamente.
-  // SHOPEE_AFFILIATE_API_BASE_URL é opcional (default oficial BR).
-  // PENDENTE: credenciais oficiais aguardam a resposta da Shopee.
-  // Credenciais oficiais da conta de afiliado Shopee BR (variáveis de
-  // ambiente — nunca armazenadas no código). Suporta os nomes em uso no
-  // Render (SHOPEE_APP_ID/SECRET) e os nomes históricos N8
-  // (SHOPEE_AFFILIATE_APP_ID/SECRET) como fallback de compatibilidade.
-  // O bootstrap NUNCA imprime valores sensíveis — apenas presença/ausência.
+
   const shopeeAppId = (process.env.SHOPEE_APP_ID?.trim() || process.env.SHOPEE_AFFILIATE_APP_ID?.trim()) ?? "";
   const shopeeSecret = (process.env.SHOPEE_APP_SECRET?.trim() || process.env.SHOPEE_AFFILIATE_APP_SECRET?.trim()) ?? "";
   if (shopeeAppId && shopeeSecret) {
     try {
       setAffiliateApiSource(
         createShopeeAffiliateProvider({
-          // providerId canônico do marketplace Shopee. O serviço de aquisição
-          // rejeita qualquer requisição com provider_id diferente do providerId
-          // da fonte injetada (RESOLUTION_FAILED / api_source_provider_mismatch).
-          // Usa o padrão DB affprv-<provider_code> (affprv-shopee) para casar
-          // com o registro canônico do provider na tabela (idempotência N6).
           providerId: "affprv-shopee",
           appId: shopeeAppId,
           secret: shopeeSecret,
@@ -1273,11 +1155,9 @@ NUNCA modifique ou invente preços ou imagens.`,
           (process.env.SHOPEE_AFFILIATE_API_BASE_URL || "default BR") + ")",
       );
     } catch (err) {
-      // Falha fechada: envs inválidas jamais habilitam fonte defeituosa —
-      // o caminho API permanece AUTH_REQUIRED.
       console.warn(
         "[N8] fonte oficial Shopee afiliados NÃO inicializada (falha fechada): " +
-          (err as Error)?.message || String(err),
+          ((err as Error)?.message || String(err)),
       );
       setAffiliateApiSource(null);
     }
@@ -1285,11 +1165,7 @@ NUNCA modifique ou invente preços ou imagens.`,
     setAffiliateApiSource(null);
   }
   registerAffiliateRoutes(app, requireAdminAuth);
-  // Bloco N17 — Aquisição de Afiliados (governada, admin-only).
-  // N15 authorization → N17 acquireN17 → N8 acquireAffiliateLink →
-  // provider oficial → N6 persistN17Acquisition.
-  // ACQUISITION != PUBLICATION — N17 não aciona N16, N18+, Telegram,
-  // scheduler ou job_queue. A factory somente injeta dependências.
+
   if (productsRepository.supabase) {
     setN17RuntimeDeps(
       createN17RuntimeDeps(
@@ -1300,25 +1176,13 @@ NUNCA modifique ou invente preços ou imagens.`,
   } else {
     setN17RuntimeDeps(null);
   }
-  // A rota somente adapta HTTP ao runtime governado; não contém autoridade
-  // N15, transporte N8, lógica de provider ou persistência N6.
   registerN17Routes(app, requireAdminAuth);
-  // Bloco N13 — Filtro / Curadoria Cerberus (Fase 1): curadoria estrutural
-  // PASS/FAIL/BLOCKED. READ-ONLY: não cria produto, link, job ou publicação.
   registerCurationRoutes(app, requireAdminAuth);
   registerCommercialBrainCandidatesRoutes(app, requireAdminAuth);
-  // Bloco N15 — Governança (Fase 1): camada de aprovação governada
-  // fail-closed para ações comerciais (publish/acquire/distribute/
-  // advertise). READ-ONLY: não executa nada; apenas registra decisão
-  // de autorização. Gates obrigatórios: N13 PASS + N14 score válido.
   registerGovernanceRoutes(app, requireAdminAuth);
-  // Bloco N16 — Publicação Automática Governada: consome exclusivamente N15 APPROVED/PUBLISH.
-  // N16 não cria autorização, não usa products, não aciona N17–N20, Telegram, scheduler ou job_queue.
-  // O ledger reutiliza o cliente já configurado pela fonte oficial de assessments;
-  // N16 não importa nem referencia productsRepository.
+
   const n16AssessmentClient = getCandidateAssessmentClient();
   if (n16AssessmentClient) setPublicationExecutionsClient(n16AssessmentClient as any);
-  // Fase 4 é a nomenclatura canônica; a chave da Fase 2 permanece apenas como compatibilidade legada controlada.
   const n16FakeMode = process.env.N16_PHASE4_FAKE_PROVIDER_MODE || process.env.N16_PHASE2_FAKE_PROVIDER_MODE;
   if (n16FakeMode === "success" || n16FakeMode === "failure" || n16FakeMode === "ambiguous") {
     setN16PublicationProvider(new FakePublicationProvider(n16FakeMode as FakePublicationProviderMode));
@@ -1326,24 +1190,15 @@ NUNCA modifique ou invente preços ou imagens.`,
     setN16PublicationProvider(null);
   }
   registerPublicationN16Routes(app, requireAdminAuth);
-  // Bloco N9 — Ciclo Comercial Real: orquestração governada S1→S8 +
-  // Commercial Decision Gate v1. CICLO != PUBLICAÇÃO · DECISION != ACTION ·
-  // RECOMMENDATION != ACTION — o gate v1 nunca produz DECISION_ALLOWED por
-  // fallback; a única rota que pode encadear execução delega ao executor N5
-  // (que por sua vez exige Policy Engine + ApprovalStore + idempotencyKey).
-  // As rotas de estado (state/list) são READ-ONLY (render-only);
-  // /cleanup é exclusivo de prova controlada (proof=commercial_proof).
+
   if (productsRepository.supabase) {
     setCycleClient(productsRepository.supabase as any);
   }
   registerCycleRoutes(app, requireAdminAuth, productsRepository.supabase);
 
-  // Rotas de Diagnóstico da Fase 26
   app.use("/api", diagRoutes);
 
-  // Vite Middleware for development
   if (process.env.NODE_ENV !== "production") {
-    // In dev, serve public first
     app.use(express.static(path.join(process.cwd(), "public")));
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1353,8 +1208,6 @@ NUNCA modifique ou invente preços ou imagens.`,
   } else {
     const distPath = path.join(process.cwd(), "dist");
 
-    // A SPA permanece a resposta para visitantes. Apenas robôs sociais recebem
-    // HTML mínimo, suficiente para a prévia do link sem introduzir SSR completo.
     app.get("/produto/:slug", async (req, res, next) => {
       if (!isSocialCrawler(req.headers["user-agent"])) return next();
       try {
@@ -1372,8 +1225,7 @@ NUNCA modifique ou invente preços ou imagens.`,
         next();
       }
     });
-    
-    // 1. Explicit route for static data (Highest Priority)
+
     app.get("/data/*", (req, res) => {
       const dataRoot = path.resolve(distPath, "data");
       const filePath = path.resolve(distPath, `.${req.path}`);
@@ -1383,14 +1235,10 @@ NUNCA modifique ou invente preços ou imagens.`,
       return res.sendFile(filePath);
     });
 
-    // 2. Serve static assets
     app.use(express.static(distPath, { index: false }));
-    
-    // 3. Fallback to public folder
     app.use(express.static(path.join(process.cwd(), "public")));
 
-    // 4. SPA Fallback
-    app.get("*", (req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
@@ -1398,14 +1246,10 @@ NUNCA modifique ou invente preços ou imagens.`,
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server Cerberus Finds rodando na porta ${PORT}`);
 
-    // O Telegram é um caminho crítico de entrada e não pode depender do Operator, Supabase ou scheduler.
     void startTelegramPolling().catch((error) => {
       console.error("[Telegram] Falha não tratada na inicialização independente:", error?.message || error);
     });
 
-    // FASE 25B (Commit 1) — Registro dos comandos no Telegram (setMyCommands).
-    // Fail-safe: falha da API Telegram não derruba o processo principal e o bot
-    // continua operante (webhook) mesmo sem o menu registrado no cliente.
     void registerTelegramCommands()
       .then((result) => {
         if (result.ok) {
@@ -1418,7 +1262,6 @@ NUNCA modifique ou invente preços ou imagens.`,
         console.warn("[Telegram] setMyCommands falhou na inicialização (processo mantido operacional):", error?.message || error);
       });
 
-    // A recuperação do Operator é isolada: falhas entram em SAFE_MODE e não derrubam HTTP/Telegram.
     void cerberusOperator.initializeOperatorState()
       .then((boot) => {
         console.log(`[OPERATOR] Boot recovery: ${boot.ready ? "READY" : "SAFE_MODE"} — ${boot.reason}`);
@@ -1427,11 +1270,15 @@ NUNCA modifique ou invente preços ou imagens.`,
         console.error("[OPERATOR] Falha não tratada no boot recovery; processo mantido operacional em SAFE_MODE:", error?.message || error);
       });
 
-    // O scheduler é secundário e inicia independentemente da recuperação persistida.
-    try {
-      cerberusOperator.startOperatorScheduler();
-    } catch (error: any) {
-      console.error("[OPERATOR SCHEDULER] Falha ao iniciar scheduler; HTTP e Telegram continuam disponíveis:", error?.message || error);
+    // Scheduler is opt-in until Supabase persistence is demonstrably healthy.
+    if (process.env.OPERATOR_SCHEDULER_ENABLED === "true") {
+      try {
+        cerberusOperator.startOperatorScheduler();
+      } catch (error: any) {
+        console.error("[OPERATOR SCHEDULER] Falha ao iniciar scheduler; HTTP e Telegram continuam disponíveis:", error?.message || error);
+      }
+    } else {
+      console.log("[OPERATOR SCHEDULER] disabled (set OPERATOR_SCHEDULER_ENABLED=true only after persistence validation)");
     }
 
     try {
