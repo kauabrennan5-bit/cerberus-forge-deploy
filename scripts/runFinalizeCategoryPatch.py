@@ -8,7 +8,6 @@ new = """    if count != 1:\n        if label == 'telegram review category confi
 if old not in source:
     raise SystemExit('replace_once helper shape changed')
 source = source.replace(old, new, 1)
-compile(source, str(source_path), 'exec')
 exec(compile(source, str(source_path), 'exec'), {'__name__': '__main__'})
 
 category_path = Path('src/lib/productCategory.ts')
@@ -18,6 +17,20 @@ for legacy_alias in ('  acessorios: "Calçados & Acessórios",\n', '  acessorio:
         raise SystemExit(f'generic accessory alias shape changed: {legacy_alias!r}')
     category_source = category_source.replace(legacy_alias, '', 1)
 category_path.write_text(category_source, encoding='utf-8')
+
+# Gemini output is untrusted string data. Canonicalize it before it reaches the
+# narrowed public-category state, preserving both TypeScript safety and fail-closed behavior.
+automation_path = Path('server/services/productAutomation.ts')
+automation_source = automation_path.read_text(encoding='utf-8')
+raw_assignment = '        curatedCategory = safeCuratorOutput.category;\n'
+canonical_assignment = '''        curatedCategory = resolvePublicProductCategory(safeCuratorOutput.category, {
+          title: curatedTitle,
+          description: safeCuratorOutput.description,
+        });
+'''
+if automation_source.count(raw_assignment) != 1:
+    raise SystemExit('Gemini category assignment shape changed')
+automation_path.write_text(automation_source.replace(raw_assignment, canonical_assignment, 1), encoding='utf-8')
 
 telegram_path = Path('server/services/telegramBot.ts')
 telegram_source = telegram_path.read_text(encoding='utf-8')
@@ -61,7 +74,6 @@ if old_assertions not in promotion_test:
     raise SystemExit('promotionOffer legacy category assertions changed')
 promotion_test_path.write_text(promotion_test.replace(old_assertions, new_assertions, 1), encoding='utf-8')
 
-# Affiliate tests: update only buildRepo, whose concern is affiliate behavior.
 affiliate_test_path = Path('tests/affiliateResolverN7.test.ts')
 affiliate_test = affiliate_test_path.read_text(encoding='utf-8')
 start = affiliate_test.find('function buildRepo(')
@@ -77,8 +89,6 @@ affiliate_test_path.write_text(affiliate_test[:start] + repo_fixture + affiliate
 
 telegram_test_path = Path('tests/telegramAndMarketplace.test.ts')
 telegram_test = telegram_test_path.read_text(encoding='utf-8')
-
-# Target the contaminated-description test only, regardless of test insertions.
 cont_start = telegram_test.find('test("publicação é bloqueada se descricao contaminada atravessar a revisão"')
 cont_end = telegram_test.find('\ntest(', cont_start + 10)
 if cont_start < 0 or cont_end < 0:
@@ -88,15 +98,11 @@ cont_block, cont_count = re.subn(r'(\bcategoria\s*:\s*)"Acessórios"', r'\1"Ilum
 if cont_count != 1:
     raise SystemExit(f'contaminated-description category not found count={cont_count}')
 telegram_test = telegram_test[:cont_start] + cont_block + telegram_test[cont_end:]
-
-# Generated Telegram resolver test must use factual context, not generic label.
 telegram_test = telegram_test.replace(
     'assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Calçados & Acessórios");',
     'assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Iluminação");',
     1,
 )
-
-# Prompt injection with no factual category signal must fail closed.
 prompt_start = telegram_test.find('test("conteúdo externo com prompt injection não altera configuração nem cria persistência"')
 prompt_end = telegram_test.find('\ntest(', prompt_start + 10)
 if prompt_start < 0 or prompt_end < 0:
@@ -110,8 +116,7 @@ prompt_block, prompt_count = re.subn(
 )
 if prompt_count != 1:
     raise SystemExit(f'prompt-injection expectation not found count={prompt_count}')
-telegram_test = telegram_test[:prompt_start] + prompt_block + telegram_test[prompt_end:]
-telegram_test_path.write_text(telegram_test, encoding='utf-8')
+telegram_test_path.write_text(telegram_test[:prompt_start] + prompt_block + telegram_test[prompt_end:], encoding='utf-8')
 
 if '"talher"' not in category_source or category_source.index('"talher"') > category_source.index('"organizador"'):
     raise SystemExit('kitchen-specific category precedence regressed')
