@@ -1,0 +1,57 @@
+name: Telegram Contract Gate
+
+on:
+  pull_request:
+    paths:
+      - "server/services/telegram*.ts"
+      - "server/repositories/telegramRepository.ts"
+      - "server/repositories/productsRepository.ts"
+      - "tests/telegram*.test.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/telegram-contract.yml"
+  push:
+    branches:
+      - main
+      - "refactor/telegram-bot-v2-*"
+    paths:
+      - "server/services/telegram*.ts"
+      - "server/repositories/telegramRepository.ts"
+      - "server/repositories/productsRepository.ts"
+      - "tests/telegram*.test.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/telegram-contract.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  telegram-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: TypeScript contract
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
