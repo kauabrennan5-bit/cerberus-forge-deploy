@@ -1,0 +1,79 @@
+name: Apply mobile catalog structural fix v2
+
+on:
+  push:
+    branches:
+      - fix/mobile-catalog-categories-2026-08-28
+    paths:
+      - .github/workflows/apply-mobile-catalog-structural-fix-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/mobile-catalog-categories-2026-08-28
+          fetch-depth: 0
+
+      - name: Reuse audited patch with robust App block matching
+        run: |
+          python <<'BOOT'
+          from pathlib import Path
+          import re
+          import textwrap
+
+          workflow = Path('.github/workflows/apply-mobile-catalog-structural-fix.yml').read_text(encoding='utf-8')
+          lines = workflow.splitlines()
+          start = next(i for i, line in enumerate(lines) if line.strip() == "python <<'PY'") + 1
+          end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
+          script = textwrap.dedent('\n'.join(lines[start:end])) + '\n'
+
+          pattern = re.compile(
+              r"          old_restore = \"\"\".*?          text = replace_once\(\n              text,\n              old_restore,.*?              'App restoration queue',\n          \)\n",
+              re.S,
+          )
+          replacement = r'''          restore_pattern = re.compile(
+              r"  const restoreCatalogScroll = useCallback\(\(\) => \{.*?\n  \}, \[\]\);\n\n",
+              re.S,
+          )
+          restore_replacement = """  const queueScrollRestore = useCallback((path: string, y: number) => {
+            pendingScrollRestoreRef.current = { path, y: Math.max(0, Math.round(y || 0)) };
+          }, []);
+
+          """
+          text, count = restore_pattern.subn(restore_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'App restoration queue: expected 1 occurrence, found {count}')
+'''
+          script, count = pattern.subn(replacement, script, count=1)
+          if count != 1:
+              raise SystemExit(f'Bootstrap could not replace fragile restore matcher: {count}')
+
+          Path('/tmp/mobile_catalog_patch.py').write_text(script, encoding='utf-8')
+          BOOT
+          python /tmp/mobile_catalog_patch.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate TypeScript and related contract
+        run: |
+          npm run lint
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=spec tests/relatedProductsCarousel.test.ts
+
+      - name: Commit structural changes and remove patch workflows
+        run: |
+          git rm .github/workflows/apply-mobile-catalog-structural-fix.yml
+          git rm .github/workflows/apply-mobile-catalog-structural-fix-v2.yml
+          git config user.name "kauabrennan5-bit"
+          git config user.email "kauabrennan5@gmail.com"
+          git add src/App.tsx src/components/ProductGrid.tsx src/components/ProductDetail.tsx tests/relatedProductsCarousel.test.ts
+          git diff --cached --check
+          git commit -m "fix(mobile): restore catalog context and native related scrolling"
+          git push origin HEAD:fix/mobile-catalog-categories-2026-08-28
