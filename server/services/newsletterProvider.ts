@@ -72,11 +72,13 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 
 export function getNewsletterProviderConfigStatus(env: NodeJS.ProcessEnv = process.env): NewsletterProviderConfigStatus {
   const apiKeyPresent = Boolean(env.BREVO_API_KEY?.trim());
-  const senderEmailPresent = Boolean(env.NEWSLETTER_SENDER_EMAIL?.trim());
+  const normalizedSenderEmail = normalizeNewsletterEmail(env.NEWSLETTER_SENDER_EMAIL);
+  const senderEmailPresent = Boolean(normalizedSenderEmail);
+  const publicSenderConfigured = isValidNewsletterEmail(normalizedSenderEmail) && !isTechnicalBrevoRelayEmail(normalizedSenderEmail);
   const senderNamePresent = Boolean((env.NEWSLETTER_SENDER_NAME || DEFAULT_SENDER_NAME).trim());
   return {
     provider: "brevo",
-    configured: apiKeyPresent && senderEmailPresent,
+    configured: apiKeyPresent && publicSenderConfigured,
     apiKeyPresent,
     senderEmailPresent,
     senderNamePresent,
@@ -91,6 +93,13 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
       "permanent_4xx",
       "PROVIDER_CONFIG_MISSING",
       "Provider Brevo não configurado com API key e remetente válidos.",
+    );
+  }
+  if (isTechnicalBrevoRelayEmail(senderEmail)) {
+    throw new NewsletterProviderError(
+      "permanent_4xx",
+      "PROVIDER_PUBLIC_SENDER_REQUIRED",
+      "O remetente público deve usar um domínio de marca verificado; o relay técnico do provider não é permitido.",
     );
   }
 
@@ -223,7 +232,12 @@ function toProviderUuid(idempotencyKey: string): string {
 }
 
 
-function parseJson(value: string): Record<string, unknown> {
+function isTechnicalBrevoRelayEmail(email: string): boolean {
+  const domain = email.split("@").pop()?.toLowerCase() || "";
+  return domain === "brevosend.com" || domain.endsWith(".brevosend.com");
+}
+
+function parseJson(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};

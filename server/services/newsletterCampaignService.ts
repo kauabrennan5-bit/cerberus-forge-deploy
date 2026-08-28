@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Product } from "../../src/types";
 import * as productsRepository from "../repositories/productsRepository";
 import {
@@ -97,17 +98,23 @@ export async function createWeeklyCollectionCampaign(
   const now = options.now || new Date();
   const campaignId = crypto.randomUUID();
   const products = await (options.productsLoader || productsRepository.getProducts)();
+  const collectionSince = options.collectionSince === undefined ? getStartOfNewsletterCollectionWindow(now) : options.collectionSince;
   const selection = await selectNewestNewsletterProducts(products, {
     collectionSize: options.collectionSize ?? Number(env.NEWSLETTER_COLLECTION_SIZE || 10),
     minimumProducts: options.minimumCollectionProducts ?? Number(env.NEWSLETTER_COLLECTION_MINIMUM_PRODUCTS || 5),
-    since: options.collectionSince === undefined ? getStartOfNewsletterCollectionWindow(now) : options.collectionSince,
+    since: collectionSince,
     until: options.collectionUntil === undefined ? null : options.collectionUntil,
     verifyImageAccessibility: options.verifyImageAccessibility !== false,
     imageProbe: options.imageProbe,
   });
+  const editionWindowStart = collectionSince || getStartOfNewsletterCollectionWindow(now);
+  const editionKey = buildNewsletterCollectionEditionKey(selection.products, editionWindowStart);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const existing = await store.findOperationalCollectionByEditionKey(editionKey);
+  if (existing) throw new Error("CAMPAIGN_COLLECTION_ALREADY_EXISTS");
   const institutional = await getNewsletterInstitutionalOptions(env);
   const rendered = renderNewsletterCollectionCampaign(selection.products, {
-    subject: env.NEWSLETTER_COLLECTION_SUBJECT || undefined,
+    subject: buildNewsletterCollectionSubject(env.NEWSLETTER_COLLECTION_SUBJECT, editionWindowStart, selection.products.length),
     collectionTitle: `${selection.products.length} NOVOS ACHADOS`,
     trackingCampaignId: campaignId,
     privacyUrl: institutional.privacyUrl,
@@ -120,11 +127,37 @@ export async function createWeeklyCollectionCampaign(
     position: index + 1,
     layout: index === 0 ? "feature" : "grid",
   }));
-  const draft = createCampaignDraft(null, actorTelegramId, rendered, now, campaignId, "collection", collectionProducts);
-  const store = options.store || createSupabaseNewsletterCampaignStore();
-  const persisted = await store.createCampaign(draft);
+  const draft = createCampaignDraft(null, actorTelegramId, rendered, now, campaignId, "collection", collectionProducts, editionKey);
+  let persisted: EmailCampaign;
+  try {
+    persisted = await store.createCampaign(draft);
+  } catch (error) {
+    if (isCollectionEditionConflict(error)) throw new Error("CAMPAIGN_COLLECTION_ALREADY_EXISTS");
+    throw error;
+  }
   await store.createCampaignProducts(persisted.id, collectionProducts);
-  return { ...persisted, collectionProducts };
+  return { ...persisted, collectionProducts, editionKey };
+}
+
+export function buildNewsletterCollectionEditionKey(products: readonly Product[], editionWindowStart: Date): string {
+  const productIds = [...new Set(products.map(product => product.id.trim()).filter(Boolean))].sort();
+  if (productIds.length === 0) throw new Error("CAMPAIGN_COLLECTION_PRODUCTS_REQUIRED");
+  const digest = createHash("sha256").update(productIds.join("\n"), "utf8").digest("hex");
+  return `collection:${editionWindowStart.toISOString().slice(0, 10)}:${digest}`;
+}
+
+export function buildNewsletterCollectionSubject(configuredSubject: string | undefined, editionWindowStart: Date, productCount: number): string {
+  const base = configuredSubject?.trim() || "Novidades da semana";
+  const dateKey = editionWindowStart.toISOString().slice(0, 10);
+  return `${base} — Edição ${dateKey} · ${productCount} novos achados`.slice(0, 255);
+}
+
+function isCollectionEditionConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown; details?: unknown };
+  const code = String(candidate.code || "");
+  const details = String(candidate.message || candidate.details || "");
+  return code === "23505" && details.includes("email_campaigns_edition_key_unique");
 }
 
 export async function createWelcomeCampaignForSubscribers(

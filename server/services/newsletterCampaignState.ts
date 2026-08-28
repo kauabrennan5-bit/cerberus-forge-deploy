@@ -33,6 +33,8 @@ export type EmailCampaign = {
   productId: string | null;
   /** Produtos ordenados da coleção; vazio para campanhas individuais e welcome. */
   collectionProducts: CampaignProductLink[];
+  /** Assinatura canônica da edição collection; nula para campanhas individuais/welcome. */
+  editionKey: string | null;
   subject: string;
   bodyHtml: string;
   bodyText: string;
@@ -77,6 +79,7 @@ export function createCampaignDraft(
   id?: string,
   campaignType: EmailCampaignType = "product",
   collectionProducts: CampaignProductLink[] = [],
+  editionKey: string | null = null,
 ): EmailCampaign {
   const actor = normalizeActor(createdByTelegramId);
   const campaignId = id || crypto.randomUUID();
@@ -113,6 +116,7 @@ export function createCampaignDraft(
     campaignType,
     productId: productId?.trim() || null,
     collectionProducts: normalizedCollectionProducts,
+    editionKey: editionKey?.trim() || null,
     subject: rendered.subject,
     bodyHtml: rendered.html,
     bodyText: rendered.text,

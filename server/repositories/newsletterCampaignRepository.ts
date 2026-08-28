@@ -40,6 +40,7 @@ export interface NewsletterCampaignStore {
   listCampaignProducts(campaignId: string): Promise<CampaignProductLink[]>;
   getCampaign(campaignId: string): Promise<EmailCampaign | null>;
   listRecentCampaigns(limit: number): Promise<EmailCampaign[]>;
+  findOperationalCollectionByEditionKey(editionKey: string): Promise<EmailCampaign | null>;
   getCampaignTelegramCard(campaignId: string): Promise<CampaignTelegramCard | null>;
   saveCampaignTelegramCard(campaignId: string, chatId: number | string, messageId: number): Promise<void>;
   updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign>;
@@ -109,6 +110,22 @@ class SupabaseNewsletterCampaignStore implements NewsletterCampaignStore {
       .from("email_campaigns")
       .select("*")
       .eq("id", campaignId)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? this.hydrateCampaign(fromCampaignRow(data)) : null;
+  }
+
+  async findOperationalCollectionByEditionKey(editionKey: string): Promise<EmailCampaign | null> {
+    const normalizedEditionKey = editionKey.trim();
+    if (!normalizedEditionKey) return null;
+    const { data, error } = await this.client
+      .from("email_campaigns")
+      .select("*")
+      .eq("campaign_type", "collection")
+      .eq("edition_key", normalizedEditionKey)
+      .in("status", ["draft", "pending_approval", "approved", "test_sent", "sending", "sent", "failed"])
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
     if (error) throw error;
     return data ? this.hydrateCampaign(fromCampaignRow(data)) : null;
@@ -359,6 +376,7 @@ function toCampaignRow(campaign: EmailCampaign): Record<string, unknown> {
     id: campaign.id,
     campaign_type: campaign.campaignType,
     product_id: campaign.productId,
+    edition_key: campaign.editionKey,
     subject: campaign.subject,
     body_html: campaign.bodyHtml,
     body_text: campaign.bodyText,
@@ -388,6 +406,7 @@ function fromCampaignRow(row: Record<string, unknown>): EmailCampaign {
     id: String(row.id),
     campaignType,
     productId: nullableString(row.product_id),
+    editionKey: nullableString(row.edition_key),
     collectionProducts: Array.isArray(row.collection_products)
       ? row.collection_products as CampaignProductLink[]
       : [],

@@ -35,7 +35,7 @@ import type {
   NewsletterCampaignStore,
 } from "../server/repositories/newsletterCampaignRepository.ts";
 import type { NewsletterCampaignProvider, NewsletterCampaignProviderInput } from "../server/services/newsletterProvider.ts";
-import { NewsletterProviderError } from "../server/services/newsletterProvider.ts";
+import { createBrevoNewsletterProvider, NewsletterProviderError } from "../server/services/newsletterProvider.ts";
 import {
   confirmGeneralSend,
   createCampaignForProduct,
@@ -44,6 +44,8 @@ import {
   sendCampaignTest,
   startGeneralSend,
   createWeeklyCollectionCampaign,
+  buildNewsletterCollectionEditionKey,
+  buildNewsletterCollectionSubject,
   renderCampaignTelegramPreview,
 } from "../server/services/newsletterCampaignService.ts";
 import {
@@ -84,12 +86,32 @@ class FakeCampaignStore implements NewsletterCampaignStore {
   providerToken = "opaque-token-for-test-only";
   prepareCalls = 0;
 
-  async createCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
+  async createCampaign(campaign: EmailCampaign): Promise<EmailCampaign> {
+    const duplicate = [...this.campaigns.values()].some(candidate =>
+      candidate.campaignType === "collection" &&
+      campaign.campaignType === "collection" &&
+      candidate.editionKey &&
+      candidate.editionKey === campaign.editionKey &&
+      candidate.status !== "cancelled",
+    );
+    if (duplicate) {
+      const error = Object.assign(new Error("email_campaigns_edition_key_unique"), { code: "23505" });
+      throw error;
+    }
+    this.campaigns.set(campaign.id, structuredClone(campaign));
+    return structuredClone(campaign);
+  }
   async createCampaignProducts(campaignId: string, products: CampaignProductLink[]): Promise<void> { this.campaignProducts.set(campaignId, structuredClone(products)); }
   async listCampaignProducts(campaignId: string): Promise<CampaignProductLink[]> { return structuredClone(this.campaignProducts.get(campaignId) || []); }
   async getCampaign(campaignId: string): Promise<EmailCampaign | null> { const value = this.campaigns.get(campaignId); return value ? { ...structuredClone(value), collectionProducts: structuredClone(this.campaignProducts.get(campaignId) || value.collectionProducts) } : null; }
   async updateCampaign(campaign: EmailCampaign): Promise<EmailCampaign> { this.campaigns.set(campaign.id, structuredClone(campaign)); return structuredClone(campaign); }
   async listRecentCampaigns(limit: number): Promise<EmailCampaign[]> { return [...this.campaigns.values()].slice(-Math.max(1, limit)).reverse().map(row => structuredClone(row)); }
+  async findOperationalCollectionByEditionKey(editionKey: string): Promise<EmailCampaign | null> {
+    const existing = [...this.campaigns.values()].find(candidate =>
+      candidate.campaignType === "collection" && candidate.editionKey === editionKey && candidate.status !== "cancelled",
+    );
+    return existing ? structuredClone(existing) : null;
+  }
   async getCampaignTelegramCard(campaignId: string): Promise<CampaignTelegramCard | null> { return structuredClone(this.campaignTelegramCards.get(campaignId) || null); }
   async saveCampaignTelegramCard(campaignId: string, chatId: number | string, messageId: number): Promise<void> {
     this.campaignTelegramCards.set(campaignId, { campaignId, chatId: String(chatId), messageId, updatedAt: new Date().toISOString() });
@@ -1645,4 +1667,69 @@ test("campaign 1 state remains single-product and cannot accept collection assoc
   const individual = draft("campaign-still-individual");
   assert.equal(individual.campaignType, "product");
   assert.equal(individual.collectionProducts.length, 0);
+});
+
+test("collection edition key is deterministic and subject identifies the edition", () => {
+  const products = Array.from({ length: 6 }, (_, index) => makeCollectionProduct(index));
+  const windowStart = new Date("2026-08-24T00:00:00.000Z");
+  const key = buildNewsletterCollectionEditionKey(products, windowStart);
+  const reversedKey = buildNewsletterCollectionEditionKey([...products].reverse(), windowStart);
+  assert.equal(key, reversedKey);
+  assert.match(key, /^collection:2026-08-24:[a-f0-9]{64}$/);
+  assert.equal(buildNewsletterCollectionSubject(undefined, windowStart, products.length), "Novidades da semana — Edição 2026-08-24 · 6 novos achados");
+  assert.notEqual(buildNewsletterCollectionSubject(undefined, windowStart, 5), buildNewsletterCollectionSubject(undefined, windowStart, 6));
+});
+
+test("collection campaign refuses a second campaign for the same edition", async () => {
+  const store = new FakeCampaignStore();
+  const products = Array.from({ length: 6 }, (_, index) => makeCollectionProduct(index));
+  const options = {
+    store,
+    productsLoader: async () => products,
+    collectionSince: null,
+    collectionUntil: null,
+    collectionSize: 5,
+    minimumCollectionProducts: 5,
+    now: new Date("2026-08-27T15:00:00.000Z"),
+    verifyImageAccessibility: false,
+    env: { DRY_RUN: "true", PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+  };
+  const first = await createWeeklyCollectionCampaign("admin-collection", options);
+  assert.rejects(
+    () => createWeeklyCollectionCampaign("admin-collection", options),
+    /CAMPAIGN_COLLECTION_ALREADY_EXISTS/,
+  );
+  assert.equal(store.campaigns.size, 1);
+  assert.equal(first.editionKey, [...store.campaigns.values()][0]?.editionKey);
+});
+
+test("collection edition uniqueness protects concurrent creation", async () => {
+  const store = new FakeCampaignStore();
+  const products = Array.from({ length: 6 }, (_, index) => makeCollectionProduct(index));
+  const options = {
+    store,
+    productsLoader: async () => products,
+    collectionSince: null,
+    collectionUntil: null,
+    collectionSize: 5,
+    minimumCollectionProducts: 5,
+    now: new Date("2026-08-27T15:00:00.000Z"),
+    verifyImageAccessibility: false,
+    env: { DRY_RUN: "true", PUBLIC_SITE_URL: "https://cerberusfinds.com" },
+  };
+  const results = await Promise.allSettled([
+    createWeeklyCollectionCampaign("admin-a", options),
+    createWeeklyCollectionCampaign("admin-b", options),
+  ]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter(result => result.status === "rejected" && String(result.reason).includes("CAMPAIGN_COLLECTION_ALREADY_EXISTS")).length, 1);
+  assert.equal(store.campaigns.size, 1);
+});
+
+test("Brevo provider refuses a technical relay domain as public sender", () => {
+  assert.throws(
+    () => createBrevoNewsletterProvider({ apiKey: "opaque-test-key", senderEmail: "relay@subaccount.brevosend.com" }),
+    (error: unknown) => error instanceof NewsletterProviderError && error.code === "PROVIDER_PUBLIC_SENDER_REQUIRED",
+  );
+  assert.doesNotThrow(() => createBrevoNewsletterProvider({ apiKey: "opaque-test-key", senderEmail: "contato@brand.example.test" }));
 });
