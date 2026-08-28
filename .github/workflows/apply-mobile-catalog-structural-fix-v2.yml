@@ -56,13 +56,7 @@ jobs:
           if count != 1:
               raise SystemExit(f'App restoration queue: expected 1 occurrence, found {count}')
           '''
-          script = replace_script_block(
-              script,
-              'old_restore = """',
-              "    'App restoration queue',\n)\n",
-              restore_replacement_script,
-              'restore block',
-          )
+          script = replace_script_block(script, 'old_restore = """', "    'App restoration queue',\n)\n", restore_replacement_script, 'restore block')
 
           direct_detail_replacement_script = '''found_pattern = re.compile(
               r"          if \\(found\\) \\{\\n            setSelectedProduct\\(found\\);\\n            setCurrentView\\('product-detail'\\);\\n          \\}",
@@ -86,13 +80,56 @@ jobs:
           if count != 1:
               raise SystemExit(f'App direct detail history: expected 1 occurrence, found {count}')
           '''
-          script = replace_script_block(
-              script,
-              'old_found = """',
-              "text = replace_once(text, old_found, new_found, 'App direct detail history')\n",
-              direct_detail_replacement_script,
-              'direct-detail block',
+          script = replace_script_block(script, 'old_found = """', "text = replace_once(text, old_found, new_found, 'App direct detail history')\n", direct_detail_replacement_script, 'direct-detail block')
+
+          view_replacement_script = '''view_pattern = re.compile(
+              r"  const handleSelectView = \\(view: ViewMode\\) => \\{.*?\\n  \\};(?=\\n\\n  const handleNewsletterSubmit)",
+              re.S,
           )
+          view_replacement = """  const handleSelectView = (view: ViewMode) => {
+            if (view !== 'product-detail') {
+              setSelectedProduct(null);
+              if (typeof window !== 'undefined') {
+                const path = view === 'admin'
+                  ? '/admin'
+                  : view === 'privacy'
+                    ? INSTITUTIONAL_PATHS.privacy
+                    : view === 'terms'
+                      ? INSTITUTIONAL_PATHS.terms
+                      : '/';
+
+                if (view === 'catalog') {
+                  const nextState = mergeCerberusHistoryState(
+                    {},
+                    createCatalogHistoryState(catalogViewState, showOnlyFavorites, 0),
+                  );
+                  if (currentView === 'catalog' && window.location.pathname === '/') {
+                    window.history.replaceState(nextState, '', path);
+                  } else {
+                    window.history.pushState(nextState, '', path);
+                  }
+                  queueScrollRestore('/', 0);
+                } else {
+                  window.history.pushState({}, '', path);
+                  window.scrollTo({ top: 0, behavior: 'auto' });
+                }
+              }
+            }
+            setCurrentView(view);
+          };"""
+          text, count = view_pattern.subn(view_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'App view navigation: expected 1 occurrence, found {count}')
+          '''
+          script = replace_script_block(script, 'old_select_view = """', "text = replace_once(text, old_select_view, new_select_view, 'App view navigation')\n", view_replacement_script, 'view-navigation block')
+
+          props_replacement_script = '''product_grid_props_needle = "            metaAccessToken={config.metaAccessToken}\\n          />"
+          product_grid_props_replacement = "            metaAccessToken={config.metaAccessToken}\\n            viewState={catalogViewState}\\n            onViewStateChange={setCatalogViewState}\\n          />"
+          if product_grid_props_needle not in text:
+              raise SystemExit('App ProductGrid controlled props: target not found')
+          text = text.replace(product_grid_props_needle, product_grid_props_replacement, 1)
+          '''
+          script = replace_script_block(script, 'text = replace_once(\n    text,\n    "            metaAccessToken={config.metaAccessToken}\\n          />",', "    'App ProductGrid controlled props',\n)\n", props_replacement_script, 'ProductGrid-props block')
 
           Path('/tmp/mobile_catalog_patch.py').write_text(script, encoding='utf-8')
           BOOT
