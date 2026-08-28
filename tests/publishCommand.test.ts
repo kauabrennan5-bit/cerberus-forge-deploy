@@ -33,6 +33,9 @@ import { handleTelegramWebhookUpdate } from "../server/services/telegramBot";
 // 1. Fake do transporte Telegram (sendMessage) e persistência do repositório.
 // ============================================================================
 const TELEGRAM_ALLOWED_USERS = process.env.TELEGRAM_ALLOWED_USER_IDS ?? "1976526372";
+const TEST_ADMIN_USER_ID = Number(
+  TELEGRAM_ALLOWED_USERS.split(",").map(id => id.trim()).find(id => /^-?\d+$/.test(id)) ?? "1976526372",
+);
 // TELEGRAM_BOT_TOKEN precisa existir para sendTelegramMessage sair do early
 // return (getTelegramBotToken() === "" → sem envio). O fake do fetch só é
 // atingido quando o token está presente.
@@ -128,8 +131,8 @@ function restoreAll(): void {
 function buildPendingReview(partial: Partial<FakeReview>): FakeReview {
   return {
     id: "affprev-test-01",
-    chatId: Number(TELEGRAM_ALLOWED_USERS),
-    senderId: Number(TELEGRAM_ALLOWED_USERS),
+    chatId: TEST_ADMIN_USER_ID,
+    senderId: TEST_ADMIN_USER_ID,
     firstName: "admin",
     username: "admin",
     createdAt: Date.now(),
@@ -148,7 +151,7 @@ function buildPendingReview(partial: Partial<FakeReview>): FakeReview {
   } as FakeReview;
 }
 
-const adminUserId = Number(TELEGRAM_ALLOWED_USERS);
+const adminUserId = TEST_ADMIN_USER_ID;
 
 test.before(async () => {
   // Pré-carregar o módulo antes dos testes (uma única vez, sem require).
