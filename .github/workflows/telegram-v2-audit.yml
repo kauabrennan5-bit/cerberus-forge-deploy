@@ -1,0 +1,69 @@
+name: Telegram V2 audit
+
+on:
+  push:
+    branches:
+      - refactor/telegram-bot-v2-2026-08-28
+    paths:
+      - .github/workflows/telegram-v2-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Static Telegram inventory
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          src = Path('server/services/telegramBot.ts').read_text(encoding='utf-8')
+          panel = Path('server/services/telegramPanel.ts').read_text(encoding='utf-8')
+          commands = sorted(set(re.findall(r'text\.(?:startsWith|===)\(\"(/[^\" ]+)', src)))
+          callbacks = sorted(set(re.findall(r'callback_data:\s*`?\"?([A-Za-z0-9_-]+)', src)))
+          states = sorted(set(re.findall(r'action(?:\.startsWith\()?\s*(?:===\s*)?[\"`]([^\"`]+)', src)))
+          print(f'TELEGRAM_BOT_LINES={len(src.splitlines())}')
+          print(f'TELEGRAM_PANEL_LINES={len(panel.splitlines())}')
+          print(f'COMMAND_PATTERNS={len(commands)}')
+          print('COMMANDS=' + ','.join(commands))
+          print(f'CALLBACK_NAMESPACES={len(callbacks)}')
+          print('CALLBACKS=' + ','.join(callbacks))
+          print(f'USER_STATE_PATTERNS={len(states)}')
+          print('STATES=' + ','.join(states))
+          PY
+      - name: Safe production Telegram configuration snapshot
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -o /tmp/tg.json -w '%{http_code}' --max-time 20 https://cerberus-forge-deploy-backend.onrender.com/api/telegram-status || true)
+          echo "HTTP=$code"
+          python - <<'PY'
+          import json
+          try:
+              d=json.load(open('/tmp/tg.json'))
+          except Exception:
+              print('STATUS_JSON=unavailable')
+              raise SystemExit(0)
+          for k in ['configured','tokenConfigured','whitelistConfigured','effectiveWhitelistConfigured','webhookConfigured','webhookMatchesExpectedUrl','apiHealthy','backendReady','secretConfigured']:
+              print(f'{k}={d.get(k, "missing")}')
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Telegram-focused tests
+        run: |
+          node --import tsx/esm --test \
+            tests/telegramReadPanel.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/publishCommand.test.ts \
+            tests/promotionReview.test.ts \
+            tests/previewTelegramRoutes.test.ts
+      - name: TypeScript baseline
+        run: npm run lint
