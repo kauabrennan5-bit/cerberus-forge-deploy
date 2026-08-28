@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/apply-telegram-v2.yml
       - .github/scripts/apply_telegram_v2.py
+      - tests/telegramAndMarketplace.test.ts
 
 permissions:
   contents: write
@@ -15,6 +16,8 @@ jobs:
   apply-and-validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,6 +58,7 @@ jobs:
           ! grep -q 'renameCategory(' server/services/telegramBot.ts
           grep -q 'parseTelegramCommand(text)' server/services/telegramBot.ts
           grep -q 'shouldProcessTelegramUpdate' server/services/telegramBot.ts
+          grep -q 'listReviewsByStatus' server/repositories/telegramRepository.ts
 
       - name: TypeScript
         run: npm run lint
@@ -78,6 +82,11 @@ jobs:
             server/services/telegramBot.ts \
             server/services/telegramCommands.ts \
             server/services/telegramPanel.ts \
+            server/services/telegramDiagnostics.ts \
+            server/services/telegramApiClient.ts \
+            server/services/telegramTypes.ts \
+            server/repositories/telegramRepository.ts \
+            tests/telegramAndMarketplace.test.ts \
             tests/telegramReadPanel.test.ts \
             tests/telegramDiagnostics.test.ts \
             tests/telegramCommandsV2.test.ts \
