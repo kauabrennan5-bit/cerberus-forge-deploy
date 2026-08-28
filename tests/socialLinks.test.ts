@@ -78,14 +78,14 @@ describe("social links", () => {
 
   test("Telegram exposes the social-links editor without hardcoded destinations", () => {
     const bot = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
-    const panel = readFileSync(new URL("../server/services/telegramPanel.ts", import.meta.url), "utf8");
+    const commands = readFileSync(new URL("../server/services/telegramCommands.ts", import.meta.url), "utf8");
     assert.match(bot, /callback_data: "social_links"/);
     assert.match(bot, /social_edit:/);
     assert.match(bot, /social_clear:/);
     assert.match(bot, /upsertCanonicalSocialLink/);
     assert.match(bot, /normalizeSocialLinkUrl/);
     assert.match(bot, /resolvePublicSiteUrl\(\)/);
-    assert.match(panel, /command: "redes"/);
+    assert.match(commands, /name: "redes"/);
     assert.doesNotMatch(bot, /https:\/\/cerberusfinds\.com\/produto/);
   });
 

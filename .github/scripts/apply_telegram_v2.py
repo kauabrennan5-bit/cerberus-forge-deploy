@@ -513,3 +513,4 @@ test("/categorias expõe taxonomia pública sem controles de criação", async (
   assert.doesNotMatch(text, /Adicionar Categoria|Renomear Categoria/i);
 });
 ''', encoding='utf-8')
+# validation trigger: global V2 contracts migrated
