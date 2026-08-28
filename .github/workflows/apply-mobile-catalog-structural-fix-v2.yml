@@ -50,7 +50,7 @@ jobs:
           text, count = restore_pattern.subn(restore_replacement, text, count=1)
           if count != 1:
               raise SystemExit(f'App restoration queue: expected 1 occurrence, found {count}')
-'''
+          '''
           script, count = pattern.subn(replacement, script, count=1)
           if count != 1:
               raise SystemExit(f'Bootstrap could not replace fragile restore matcher: {count}')
