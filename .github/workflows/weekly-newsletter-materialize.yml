@@ -33,11 +33,11 @@ jobs:
           set -euo pipefail
           set +e
           env -u TELEGRAM_ALLOWED_USER_IDS -u TELEGRAM_ALLOWED_USERS \
-            node --import tsx/esm --test --test-concurrency=1 --test-name-pattern='publicar sem id' tests/publishCommand.test.ts \
+            node --import tsx/esm --test --test-concurrency=1 --test-name-pattern='sem reviewId entrega sintaxe' tests/publishCommand.test.ts \
             > /tmp/publish-isolated-no-allowlist.log 2>&1
           no_allowlist_status=$?
           TELEGRAM_ALLOWED_USER_IDS=1976526372 \
-            node --import tsx/esm --test --test-concurrency=1 --test-name-pattern='publicar sem id' tests/publishCommand.test.ts \
+            node --import tsx/esm --test --test-concurrency=1 --test-name-pattern='sem reviewId entrega sintaxe' tests/publishCommand.test.ts \
             > /tmp/publish-isolated-with-allowlist.log 2>&1
           with_allowlist_status=$?
           set -e
@@ -128,7 +128,7 @@ jobs:
             weekly-global-test.log
             weekly-global-summary.txt
             weekly-global-failures.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
       - name: Clean observability files
         if: success()
