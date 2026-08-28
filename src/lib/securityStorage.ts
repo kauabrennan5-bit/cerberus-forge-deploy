@@ -1,3 +1,5 @@
+import { clearAdminSessionPassword, setAdminSessionPassword } from './adminSession';
+
 const ADMIN_PASSWORD_KEY = 'cerberus_admin_password';
 const CONFIG_STORAGE_KEY = 'cerberus_finds_config_v2';
 
@@ -14,9 +16,10 @@ function sanitizeConfigJson(rawValue: string): string {
 }
 
 /**
- * Removes credentials left by legacy builds and prevents future writes of
- * known browser-side secrets. Admin authentication remains in React memory
- * for the current page lifetime; refresh requires a fresh login.
+ * Removes credentials left by legacy builds and prevents future browser-side
+ * persistence. Legacy AdminForm setItem/removeItem calls are translated into
+ * an ephemeral in-memory session so existing UI flows remain functional while
+ * refresh always requires a new login.
  */
 export function installSensitiveStorageGuard(): void {
   if (typeof window === 'undefined') return;
@@ -34,8 +37,8 @@ export function installSensitiveStorageGuard(): void {
 
   const storagePrototype = Object.getPrototypeOf(window.localStorage) as Storage;
   const originalSetItem = storagePrototype.setItem;
+  const originalRemoveItem = storagePrototype.removeItem;
 
-  // Avoid installing the wrapper more than once during HMR/StrictMode reloads.
   const marker = '__cerberusSensitiveStorageGuardInstalled';
   if ((storagePrototype as any)[marker]) return;
   (storagePrototype as any)[marker] = true;
@@ -43,8 +46,8 @@ export function installSensitiveStorageGuard(): void {
   storagePrototype.setItem = function guardedSetItem(key: string, value: string): void {
     if (this === window.localStorage) {
       if (key === ADMIN_PASSWORD_KEY) {
-        originalSetItem.call(this, key, '');
-        this.removeItem(key);
+        setAdminSessionPassword(value);
+        originalRemoveItem.call(this, key);
         return;
       }
       if (key === CONFIG_STORAGE_KEY) {
@@ -53,5 +56,12 @@ export function installSensitiveStorageGuard(): void {
       }
     }
     originalSetItem.call(this, key, value);
+  };
+
+  storagePrototype.removeItem = function guardedRemoveItem(key: string): void {
+    if (this === window.localStorage && key === ADMIN_PASSWORD_KEY) {
+      clearAdminSessionPassword();
+    }
+    originalRemoveItem.call(this, key);
   };
 }
