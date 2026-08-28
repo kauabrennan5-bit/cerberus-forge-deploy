@@ -179,5 +179,27 @@
     "createdAt": "2026-08-21T04:21:28.519831+00:00",
     "ativo": true,
     "status": "published"
+  },
+  {
+    "id": "prod-1787205523000",
+    "ref": "REF-014",
+    "slug": "lampada-de-donut-laranja-de-marca-lheto-cbbltls5j8pn-moderna-do-seculo-medio-abajur-de-cabeceira-nova-arte-decorativ",
+    "produto": "Lâmpada De Donut Laranja De Marca-Lheto cbbltls5j8pn , Moderna Do Século Médio , Abajur De Cabeceira Nova Arte Decorativ",
+    "preco": 220,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-7ra1l-m547v0mqf83u2c",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7ra3s-m547uh5axmxa14",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7ra22-m547u4g1k8pj0a",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7ra30-m547u9hs4u4gfc",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7ra3s-m547u2ne5e9g0c",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7ra1y-m547u3z490d330"
+    ],
+    "link": "https://shopee.com.br/product/423833774/25690571694",
+    "categoria": "Iluminação",
+    "descricao": "",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-20T05:58:43.110742+00:00",
+    "ativo": true,
+    "status": "published"
   }
 ]
