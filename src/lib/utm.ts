@@ -1,3 +1,5 @@
+import { hasAnalyticsConsent } from './privacyConsent';
+
 export interface UTMParams {
   utm_source?: string;
   utm_medium?: string;
@@ -14,12 +16,11 @@ export interface UTMParams {
 const STORAGE_KEY = 'cerberus_utm_attribution_v1';
 
 /**
- * Captura UTMs e Click IDs da URL no momento da entrada ou navegação,
- * armazenando-os de forma persistente na sessão do navegador (sessionStorage)
- * sem sobrescrever uma atribuição prévia caso a nova URL não contenha UTMs.
+ * Captura atribuição somente após consentimento explícito. Sem consentimento,
+ * nenhum UTM, click id, referrer ou landing page é persistido.
  */
 export function captureUTMs(): UTMParams {
-  if (typeof window === 'undefined') return {};
+  if (typeof window === 'undefined' || !hasAnalyticsConsent()) return {};
 
   try {
     const searchParams = new URLSearchParams(window.location.search);
@@ -34,14 +35,8 @@ export function captureUTMs(): UTMParams {
     const currentTtclid = searchParams.get('ttclid');
 
     const hasNewUTM = Boolean(
-      currentSource ||
-      currentMedium ||
-      currentCampaign ||
-      currentContent ||
-      currentTerm ||
-      currentFbclid ||
-      currentGclid ||
-      currentTtclid
+      currentSource || currentMedium || currentCampaign || currentContent || currentTerm ||
+      currentFbclid || currentGclid || currentTtclid
     );
 
     const existing = getStoredUTMs();
@@ -65,12 +60,8 @@ export function captureUTMs(): UTMParams {
       return updated;
     }
 
-    // Se já existem UTMs gravadas na sessão, mantém
-    if (Object.keys(existing).length > 0) {
-      return existing;
-    }
+    if (Object.keys(existing).length > 0) return existing;
 
-    // Grava dados básicos de entrada (referrer + landing_page) mesmo sem UTMs
     const defaultData: UTMParams = {
       referrer: document.referrer || '',
       landingPage: window.location.href
@@ -83,25 +74,17 @@ export function captureUTMs(): UTMParams {
   }
 }
 
-/**
- * Retorna as UTMs armazenadas no sessionStorage
- */
 export function getStoredUTMs(): UTMParams {
-  if (typeof window === 'undefined') return {};
+  if (typeof window === 'undefined' || !hasAnalyticsConsent()) return {};
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      return JSON.parse(raw);
-    }
+    if (raw) return JSON.parse(raw);
   } catch (e) {
     console.warn('Erro ao ler UTMs do sessionStorage:', e);
   }
   return {};
 }
 
-/**
- * Limpa UTMs da sessão
- */
 export function clearUTMs(): void {
   if (typeof window === 'undefined') return;
   try {
@@ -111,18 +94,13 @@ export function clearUTMs(): void {
   }
 }
 
-/**
- * Adiciona as UTMs e Click IDs armazenados na sessão a uma URL de afiliado/parceiro
- * preservando parâmetros já existentes na URL sem os sobrescrever nem corromper a query string.
- */
 export function appendUTMsToUrl(targetUrl: string, customUtms?: UTMParams): string {
   if (!targetUrl) return '';
+  if (!hasAnalyticsConsent()) return targetUrl;
 
   try {
     const utms = customUtms || getStoredUTMs();
-    
-    // Se não há URL absoluta, tenta tratar como relativa ou válida
-    let dummyBase = 'https://cerberusfinds.com';
+    const dummyBase = 'https://cerberusfinds.com';
     let urlObj: URL;
     try {
       urlObj = new URL(targetUrl);
@@ -131,21 +109,13 @@ export function appendUTMsToUrl(targetUrl: string, customUtms?: UTMParams): stri
     }
 
     const keysToAppend: (keyof UTMParams)[] = [
-      'utm_source',
-      'utm_medium',
-      'utm_campaign',
-      'utm_content',
-      'utm_term',
-      'fbclid',
-      'gclid',
-      'ttclid'
+      'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+      'fbclid', 'gclid', 'ttclid'
     ];
 
     keysToAppend.forEach((key) => {
       const val = utms[key];
-      if (val && !urlObj.searchParams.has(key)) {
-        urlObj.searchParams.set(key, val);
-      }
+      if (val && !urlObj.searchParams.has(key)) urlObj.searchParams.set(key, val);
     });
 
     return targetUrl.startsWith('http') ? urlObj.toString() : `${urlObj.pathname}${urlObj.search}${urlObj.hash}`;
