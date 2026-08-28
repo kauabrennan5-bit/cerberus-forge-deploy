@@ -282,11 +282,13 @@ export async function startGeneralSend(
   options: CampaignServiceOptions = {},
 ): Promise<EmailCampaign> {
   const store = options.store || createSupabaseNewsletterCampaignStore();
-  const env = options.env || process.env;
   const now = options.now || new Date();
   const current = await readCurrentCampaign(store, campaign.id);
   const sending = transitionCampaign(current, { type: "begin_sending", actorTelegramId }, now);
-  await store.createEligibleRecipients(current.id, getConfiguredNewsletterTestEmail(env));
+  // A campanha geral deve alcançar todos os assinantes elegíveis; o endereço de teste
+  // não é excluído aqui porque o teste controlado já terminou e a confirmação humana
+  // autoriza o envio real para a lista completa.
+  await store.createEligibleRecipients(current.id);
   const counts = await store.summarizeRecipients(current.id);
   if (counts.total === 0) {
     const completed = transitionCampaign(sending, { type: "finish_sending", actorTelegramId, counts }, now);

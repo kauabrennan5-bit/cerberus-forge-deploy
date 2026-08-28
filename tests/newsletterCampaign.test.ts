@@ -670,7 +670,7 @@ test("campaign service enforces confirmation before persisting general sending",
   assert.equal(sending.counts.total, 1);
 });
 
-test("general eligibility excludes configured test email but keeps normal and plus-alias subscribers", async () => {
+test("general eligibility includes configured test email and keeps normal and plus-alias subscribers", async () => {
   const store = new FakeCampaignStore();
   store.subscribers.set("admin@example.test", { status: "subscribed", marketing_consent: true });
   store.subscribers.set("regular@example.test", { status: "subscribed", marketing_consent: true });
@@ -693,12 +693,12 @@ test("general eligibility excludes configured test email but keeps normal and pl
   });
 
   assert.equal(sending.status, "sending");
-  assert.equal(sending.counts.total, 2);
+  assert.equal(sending.counts.total, 3);
   assert.deepEqual(
     store.recipients.map(row => row.subscriberEmail).sort(),
-    ["regular+tag@gmail.com", "regular@example.test"],
+    ["admin@example.test", "regular+tag@gmail.com", "regular@example.test"],
   );
-  assert.equal(store.recipients.some(row => row.subscriberEmail === "admin@example.test"), false);
+  assert.equal(store.recipients.some(row => row.subscriberEmail === "admin@example.test"), true);
   assert.deepEqual([...store.subscribers.entries()], subscribersBefore);
 });
 
