@@ -8,7 +8,7 @@ on:
       - ".github/workflows/telegram-contract.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: telegram-contract-${{ github.ref }}
@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,27 +35,214 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply candidate fixed workspace
-        run: python3 .github/scripts/validate_telegram_v2_fix.py
-
-      - name: Enumerate Telegram test files and counts
+      - name: Capture historical and current gate evidence
         shell: bash
         run: |
-          set -uo pipefail
-          mapfile -t files < <(find tests -maxdepth 1 -type f -iname '*telegram*.test.ts' | sort)
-          printf 'TELEGRAM_TEST_FILES=%s\n' "${#files[@]}"
-          total=0
-          for file in "${files[@]}"; do
-            log="/tmp/$(basename "$file").log"
-            set +e
-            node --import tsx/esm --test "$file" >"$log" 2>&1
-            status=$?
-            set -e
-            tests=$(grep -E '^# tests [0-9]+$' "$log" | tail -1 | awk '{print $3}')
-            pass=$(grep -E '^# pass [0-9]+$' "$log" | tail -1 | awk '{print $3}')
-            fail=$(grep -E '^# fail [0-9]+$' "$log" | tail -1 | awk '{print $3}')
-            tests=${tests:-0}; pass=${pass:-0}; fail=${fail:-0}
-            total=$((total + tests))
-            printf 'FILE=%s TESTS=%s PASS=%s FAIL=%s EXIT=%s\n' "$file" "$tests" "$pass" "$fail" "$status"
+          set -u
+          REPORT="telegram-v2-final-evidence.txt"
+          : > "$REPORT"
+          note() { printf '%s\n' "$*" | tee -a "$REPORT"; }
+          summary_value() {
+            local file="$1" key="$2"
+            awk -v k="$key" '$1=="#" && $2==k {v=$3} $1=="ℹ" && $2==k {v=$3} END{print v+0}' "$file"
+          }
+          run_tap() {
+            local label="$1"; shift
+            local log="/tmp/${label}.log"
+            "$@" >"$log" 2>&1
+            local status=$?
+            local tests pass fail skipped cancelled
+            tests=$(summary_value "$log" tests)
+            pass=$(summary_value "$log" pass)
+            fail=$(summary_value "$log" fail)
+            skipped=$(summary_value "$log" skipped)
+            cancelled=$(summary_value "$log" cancelled)
+            note "${label}_STATUS=${status}"
+            note "${label}_TESTS=${tests}"
+            note "${label}_PASS=${pass}"
+            note "${label}_FAIL=${fail}"
+            note "${label}_SKIPPED=${skipped}"
+            note "${label}_CANCELLED=${cancelled}"
+            grep -E '^# Subtest:|^not ok |^✖ ' "$log" | sed "s/^/${label}_CASE=/" >> "$REPORT" || true
+            return "$status"
+          }
+
+          note "TARGET_BASE=91a31ac04c053890171929934d1370421bcd7962"
+          note "HISTORICAL_SOURCE=110fb5684c4101641853f89fb3cf1c8bb0c2de0d"
+          note "NODE=$(node --version)"
+
+          # Historical gate: reproduce exactly the runner-generated V2 contract tests.
+          git worktree add --detach /tmp/telegram-v2-historical 110fb5684c4101641853f89fb3cf1c8bb0c2de0d >/dev/null
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/telegram-v2-historical/node_modules
+          (
+            cd /tmp/telegram-v2-historical
+            python3 .github/scripts/apply_telegram_v2.py
+          )
+          historical_files=(
+            tests/telegramCommandsV2.test.ts
+            tests/telegramBotV2Contract.test.ts
+            tests/telegramPanelV2.test.ts
+            tests/telegramReadPanel.test.ts
+            tests/telegramDiagnostics.test.ts
+            tests/telegramAndMarketplace.test.ts
+            tests/publishCommand.test.ts
+            tests/promotionReview.test.ts
+            tests/previewTelegramRoutes.test.ts
+            tests/shopeeCommand.test.ts
+          )
+          note "HISTORICAL_FILE_COUNT=${#historical_files[@]}"
+          for f in "${historical_files[@]}"; do note "HISTORICAL_FILE=${f}"; done
+          set +e
+          (
+            cd /tmp/telegram-v2-historical
+            node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap "${historical_files[@]}"
+          ) > /tmp/historical-focused.log 2>&1
+          hist_status=$?
+          set -e
+          note "HISTORICAL_FOCUSED_STATUS=${hist_status}"
+          for key in tests pass fail skipped cancelled; do
+            note "HISTORICAL_FOCUSED_${key^^}=$(summary_value /tmp/historical-focused.log "$key")"
           done
-          printf 'ALL_TELEGRAM_NAMED_TESTS=%s\n' "$total"
+          for f in tests/telegramCommandsV2.test.ts tests/telegramBotV2Contract.test.ts tests/telegramPanelV2.test.ts; do
+            label="HIST_$(basename "$f" .test.ts | tr '[:lower:]' '[:upper:]')"
+            set +e
+            (
+              cd /tmp/telegram-v2-historical
+              node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap "$f"
+            ) > "/tmp/${label}.log" 2>&1
+            s=$?
+            set -e
+            note "${label}_STATUS=${s}"
+            for key in tests pass fail skipped cancelled; do
+              note "${label}_${key^^}=$(summary_value "/tmp/${label}.log" "$key")"
+            done
+            grep '^# Subtest:' "/tmp/${label}.log" | sed "s/^/${label}_CASE=/" >> "$REPORT" || true
+          done
+
+          # Current target-derived workspace: apply only the already-diagnosed candidate fixes.
+          python3 .github/scripts/validate_telegram_v2_fix.py
+          note "CURRENT_PATCH_FILES_BEGIN"
+          git diff --name-only | sort | tee -a "$REPORT"
+          note "CURRENT_PATCH_FILES_END"
+          git diff --check >/tmp/diff-pre.log 2>&1
+          diff_pre=$?
+          note "DIFF_PRE_STATUS=${diff_pre}"
+          if git diff | grep -E '^\+.*\b(test\.(skip|todo|only)|describe\.(skip|only)|it\.(skip|todo|only))\b' >/tmp/forbidden.log; then
+            note "TEST_WEAKENING_PATTERN=true"
+          else
+            note "TEST_WEAKENING_PATTERN=false"
+          fi
+          if grep -R -n -E '\b(test|describe|it)\.(skip|todo|only)\b' tests --include='*.test.ts' >/tmp/current-skips.log; then
+            note "CURRENT_SKIP_TODO_ONLY=true"
+            cat /tmp/current-skips.log >> "$REPORT"
+          else
+            note "CURRENT_SKIP_TODO_ONLY=false"
+          fi
+
+          current_files=(
+            tests/publishCommand.test.ts
+            tests/telegramReadPanel.test.ts
+            tests/telegramAndMarketplace.test.ts
+            tests/telegramDiagnostics.test.ts
+            tests/telegramUiContract.test.ts
+            tests/promotionReview.test.ts
+            tests/previewTelegramRoutes.test.ts
+            tests/shopeeCommand.test.ts
+            tests/socialLinks.test.ts
+            tests/newsletterCampaign.test.ts
+          )
+          note "CURRENT_FOCUSED_FILE_COUNT=${#current_files[@]}"
+          missing=0
+          for f in "${current_files[@]}"; do
+            if test -f "$f"; then note "CURRENT_FILE=${f}"; else note "CURRENT_FILE_MISSING=${f}"; missing=1; fi
+          done
+
+          overall=0
+          set +e
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap tests/publishCommand.test.ts >/tmp/publish-isolated.log 2>&1
+          publish_status=$?
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap tests/telegramReadPanel.test.ts >/tmp/readpanel-isolated.log 2>&1
+          read_status=$?
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap "${current_files[@]}" >/tmp/current-focused.log 2>&1
+          focused_status=$?
+          set -e
+          for spec in "publish-isolated:PUBLISH_COMMAND" "readpanel-isolated:READ_PANEL" "current-focused:CURRENT_FOCUSED"; do
+            log=${spec%%:*}; label=${spec##*:}
+            note "${label}_STATUS=$(case "$label" in PUBLISH_COMMAND) echo "$publish_status";; READ_PANEL) echo "$read_status";; CURRENT_FOCUSED) echo "$focused_status";; esac)"
+            for key in tests pass fail skipped cancelled; do
+              note "${label}_${key^^}=$(summary_value "/tmp/${log}.log" "$key")"
+            done
+            grep -E '^# Subtest:|^not ok ' "/tmp/${log}.log" | sed "s/^/${label}_CASE=/" >> "$REPORT" || true
+          done
+          test "$publish_status" -eq 0 || overall=1
+          test "$read_status" -eq 0 || overall=1
+          test "$focused_status" -eq 0 || overall=1
+          test "$missing" -eq 0 || overall=1
+
+          # Eight established Bot V2 structural invariants.
+          inv=0
+          ! grep -q 'categoriesRepository' server/services/telegramBot.ts || inv=1
+          ! grep -q 'getLatestPendingReviewForUser(senderId, chatId)' server/services/telegramBot.ts || inv=1
+          ! grep -q 'addCategory(' server/services/telegramBot.ts || inv=1
+          ! grep -q 'renameCategory(' server/services/telegramBot.ts || inv=1
+          grep -q 'parseTelegramCommand(text)' server/services/telegramBot.ts || inv=1
+          grep -q 'shouldProcessTelegramUpdate' server/services/telegramBot.ts || inv=1
+          grep -q 'listReviewsByStatus' server/repositories/telegramRepository.ts || inv=1
+          grep -q 'setTestUserStateHandlers' server/repositories/telegramRepository.ts || inv=1
+          note "INVARIANTS_STATUS=${inv}"
+          test "$inv" -eq 0 || overall=1
+
+          # TypeScript before global, per final-gate order.
+          set +e
+          npm run lint >/tmp/typescript.log 2>&1
+          typescript_status=$?
+          set -e
+          note "TYPESCRIPT_STATUS=${typescript_status}"
+          test "$typescript_status" -eq 0 || overall=1
+
+          # Full suite: always capture the real Node summary and failing case names.
+          set +e
+          npm test >/tmp/global.log 2>&1
+          global_status=$?
+          set -e
+          note "GLOBAL_STATUS=${global_status}"
+          for key in tests pass fail skipped cancelled; do
+            note "GLOBAL_${key^^}=$(summary_value /tmp/global.log "$key")"
+          done
+          grep -E '^✖ |^not ok |^# Subtest:' /tmp/global.log | grep -E '^✖ |^not ok ' | sed 's/^/GLOBAL_FAILURE_CASE=/' >> "$REPORT" || true
+          test "$global_status" -eq 0 || overall=1
+
+          lint_status=99; build_status=99; diff_status=99; secret_status=99
+          if test "$global_status" -eq 0; then
+            set +e
+            npm run lint >/tmp/lint.log 2>&1; lint_status=$?
+            npm run build >/tmp/build.log 2>&1; build_status=$?
+            git diff --check >/tmp/diff.log 2>&1; diff_status=$?
+            set -e
+            mkdir -p /tmp/gitleaks-scan
+            git diff --no-ext-diff -- server/services/telegramPanel.ts tests/publishCommand.test.ts tests/telegramReadPanel.test.ts > /tmp/gitleaks-scan/bot-v2-fix.patch
+            set +e
+            curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz && \
+              tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks && \
+              /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1 >/tmp/gitleaks.log 2>&1
+            secret_status=$?
+            set -e
+            test "$lint_status" -eq 0 || overall=1
+            test "$build_status" -eq 0 || overall=1
+            test "$diff_status" -eq 0 || overall=1
+            test "$secret_status" -eq 0 || overall=1
+          fi
+          note "LINT_STATUS=${lint_status}"
+          note "BUILD_STATUS=${build_status}"
+          note "DIFF_CHECK_STATUS=${diff_status}"
+          note "SECRET_SCAN_STATUS=${secret_status}"
+          note "OVERALL_STATUS=${overall}"
+
+          # Persist evidence on TEMP branch only; report path does not retrigger this workflow.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$REPORT"
+          git commit -m "chore: record telegram v2 final gate evidence"
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+          exit "$overall"
