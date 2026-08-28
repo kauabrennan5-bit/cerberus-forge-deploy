@@ -50,37 +50,35 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
           p = Path('server/repositories/telegramRepository.ts')
           s = p.read_text(encoding='utf-8')
-          marker = '''let testOverrideGetPendingReview: ((reviewId: string) => Promise<PendingReview | null>) | null = null;\n'''
-          addition = '''let testOverrideGetPendingReview: ((reviewId: string) => Promise<PendingReview | null>) | null = null;\nlet testOverrideSetUserState: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null = null;\nlet testOverrideGetUserState: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null = null;\nlet testOverrideDeleteUserState: ((senderId: string | number) => Promise<void>) | null = null;\n'''
+          marker = 'let testOverrideListReviewsByStatus: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null = null;\n'
+          addition = marker + '''let testOverrideSetUserState: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null = null;\nlet testOverrideGetUserState: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null = null;\nlet testOverrideDeleteUserState: ((senderId: string | number) => Promise<void>) | null = null;\n'''
           if marker not in s:
               raise SystemExit('test override marker not found')
           s = s.replace(marker, addition, 1)
 
-          marker = '''export function setTestGetPendingReview(\n  override: ((reviewId: string) => Promise<PendingReview | null>) | null,\n): void {\n  testOverrideGetPendingReview = override;\n}\n'''
+          marker = '''export function setTestListReviewsByStatus(\n  override: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null,\n): void {\n  testOverrideListReviewsByStatus = override;\n}\n'''
           addition = marker + '''\n/** Isola a máquina de estados em testes sem tocar no arquivo/Supabase. */\nexport function setTestUserStateHandlers(handlers: {\n  set?: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null;\n  get?: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null;\n  delete?: ((senderId: string | number) => Promise<void>) | null;\n} | null): void {\n  testOverrideSetUserState = handlers?.set ?? null;\n  testOverrideGetUserState = handlers?.get ?? null;\n  testOverrideDeleteUserState = handlers?.delete ?? null;\n}\n'''
           if marker not in s:
-              raise SystemExit('get pending hook marker not found')
+              raise SystemExit('list status hook marker not found')
           s = s.replace(marker, addition, 1)
 
-          marker = '''export async function setUserState(senderId: string | number, state: { action: string; reviewId?: string; productId?: string }): Promise<void> {\n'''
-          repl = marker + '''  if (testOverrideSetUserState) {\n    await testOverrideSetUserState(senderId, state);\n    return;\n  }\n'''
-          if marker not in s:
-              raise SystemExit('setUserState marker not found')
-          s = s.replace(marker, repl, 1)
+          pattern = r'''export async function setUserState\(\n  senderId: string \| number,\n  state: \{ action: string; reviewId\?: string; productId\?: string \},\n\): Promise<void> \{\n'''
+          replacement = '''export async function setUserState(\n  senderId: string | number,\n  state: { action: string; reviewId?: string; productId?: string },\n): Promise<void> {\n  if (testOverrideSetUserState) {\n    await testOverrideSetUserState(senderId, state);\n    return;\n  }\n'''
+          s, count = re.subn(pattern, lambda _: replacement, s, count=1)
+          if count != 1: raise SystemExit(f'setUserState count={count}')
 
-          marker = '''export async function getUserState(senderId: string | number): Promise<{ action: string; reviewId?: string; productId?: string } | null> {\n'''
-          repl = marker + '''  if (testOverrideGetUserState) return testOverrideGetUserState(senderId);\n'''
-          if marker not in s:
-              raise SystemExit('getUserState marker not found')
-          s = s.replace(marker, repl, 1)
+          pattern = r'''export async function getUserState\(\n  senderId: string \| number,\n\): Promise<\{ action: string; reviewId\?: string; productId\?: string \} \| null> \{\n'''
+          replacement = '''export async function getUserState(\n  senderId: string | number,\n): Promise<{ action: string; reviewId?: string; productId?: string } | null> {\n  if (testOverrideGetUserState) return testOverrideGetUserState(senderId);\n'''
+          s, count = re.subn(pattern, lambda _: replacement, s, count=1)
+          if count != 1: raise SystemExit(f'getUserState count={count}')
 
-          marker = '''export async function deleteUserState(senderId: string | number): Promise<void> {\n'''
-          repl = marker + '''  if (testOverrideDeleteUserState) {\n    await testOverrideDeleteUserState(senderId);\n    return;\n  }\n'''
-          if marker not in s:
-              raise SystemExit('deleteUserState marker not found')
-          s = s.replace(marker, repl, 1)
+          marker = 'export async function deleteUserState(senderId: string | number): Promise<void> {\n'
+          replacement = marker + '''  if (testOverrideDeleteUserState) {\n    await testOverrideDeleteUserState(senderId);\n    return;\n  }\n'''
+          if marker not in s: raise SystemExit('deleteUserState marker not found')
+          s = s.replace(marker, replacement, 1)
           p.write_text(s, encoding='utf-8')
           PY
 
