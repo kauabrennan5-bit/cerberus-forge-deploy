@@ -18,6 +18,8 @@ interface ProductDetailProps {
   onSelectProduct: (product: Product) => void;
   metaPixelId?: string;
   metaAccessToken?: string;
+  initialRelatedScrollX?: number;
+  onRelatedScrollPositionChange?: (scrollLeft: number) => void;
 }
 
 export const ProductDetail: React.FC<ProductDetailProps> = ({
@@ -30,7 +32,9 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   relatedProducts,
   onSelectProduct,
   metaPixelId,
-  metaAccessToken
+  metaAccessToken,
+  initialRelatedScrollX = 0,
+  onRelatedScrollPositionChange,
 }) => {
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [imageError, setImageError] = useState<Record<number, boolean>>({});
@@ -42,36 +46,6 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
   const touchStartX = useRef<number | null>(null);
   const touchEndX = useRef<number | null>(null);
   const relatedRailRef = useRef<HTMLDivElement>(null);
-  const relatedTouchStart = useRef<{ x: number; y: number; scrollLeft: number } | null>(null);
-
-  const handleRelatedTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
-    const touch = event.touches[0];
-    if (!touch || !relatedRailRef.current) return;
-    relatedTouchStart.current = {
-      x: touch.clientX,
-      y: touch.clientY,
-      scrollLeft: relatedRailRef.current.scrollLeft,
-    };
-  };
-
-  const handleRelatedTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
-    const start = relatedTouchStart.current;
-    const touch = event.touches[0];
-    const rail = relatedRailRef.current;
-    if (!start || !touch || !rail) return;
-
-    const deltaX = touch.clientX - start.x;
-    const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < 4) return;
-
-    if (event.cancelable) event.preventDefault();
-    rail.scrollLeft = start.scrollLeft - deltaX;
-  };
-
-  const clearRelatedTouch = () => {
-    relatedTouchStart.current = null;
-  };
-
   const scrollRelatedProducts = (direction: number) => {
     relatedRailRef.current?.scrollBy({
       left: direction * Math.max(240, relatedRailRef.current.clientWidth * 0.82),
@@ -112,6 +86,14 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
     setImageError({});
     setIsZoomOpen(false);
   }, [product.id]);
+
+  useEffect(() => {
+    if (!initialRelatedScrollX || !relatedRailRef.current) return;
+    const frameId = window.requestAnimationFrame(() => {
+      if (relatedRailRef.current) relatedRailRef.current.scrollLeft = initialRelatedScrollX;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [product.id, initialRelatedScrollX, relatedProducts.length]);
 
   const handleNextImage = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -226,7 +208,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
         {/* Left: Interactive Image Gallery - Max ~35vh on mobile */}
         <div className="min-w-0 space-y-2 sm:space-y-4">
           <div
-            className="relative w-full h-[32vh] max-h-[260px] sm:h-auto sm:max-h-none sm:aspect-square bg-[#090807] border border-[#3A342E] rounded-none overflow-hidden flex items-center justify-center p-2 sm:p-4 touch-pan-y tech-frame group cursor-pointer"
+            className="relative w-full aspect-[4/3] max-h-[300px] sm:max-h-none sm:aspect-square bg-[#090807] border border-[#3A342E] rounded-none overflow-hidden flex items-center justify-center p-2 sm:p-4 touch-pan-y tech-frame group cursor-pointer"
             onClick={() => setIsZoomOpen(true)}
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
@@ -443,18 +425,16 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
             </button>
             <div
               ref={relatedRailRef}
+              onScroll={(event) => onRelatedScrollPositionChange?.(event.currentTarget.scrollLeft)}
               role="region"
               aria-labelledby="related-products-title"
               aria-label="Produtos recomendados; deslize horizontalmente para navegar"
               tabIndex={0}
-              onTouchStart={handleRelatedTouchStart}
-              onTouchMove={handleRelatedTouchMove}
-              onTouchEnd={clearRelatedTouch}
-              onTouchCancel={clearRelatedTouch}
-              className="flex min-w-0 touch-pan-x snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain scroll-smooth pb-2 pr-1 outline-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 md:gap-3 md:overflow-visible md:pr-0 lg:grid-cols-4"
+              data-testid="related-products-rail"
+              className="flex min-w-0 touch-auto snap-x snap-proximity gap-2 overflow-x-auto overscroll-x-contain scroll-smooth pb-2 pr-1 outline-none [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:grid md:grid-cols-3 md:gap-3 md:overflow-visible md:pr-0 lg:grid-cols-4"
             >
               {relatedProducts.map((related, relatedIndex) => (
-                <div key={related.id} className="w-[calc(100vw-2.75rem)] max-w-[18rem] shrink-0 snap-start sm:w-[76vw] sm:max-w-[17rem] md:w-auto md:max-w-none md:min-w-0">
+                <div key={related.id} className="h-full w-[calc(100vw-2.75rem)] max-w-[18rem] shrink-0 snap-start sm:w-[76vw] sm:max-w-[17rem] md:w-auto md:max-w-none md:min-w-0">
                   <ProductCard
                     product={related}
                     index={related.rawRowIndex ?? relatedIndex}

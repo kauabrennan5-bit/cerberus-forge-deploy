@@ -1,4 +1,5 @@
 import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
+import { resolvePublicProductCategory } from "../lib/productCategory";
 
 export interface CreateProductInput {
   senha?: string;
@@ -85,7 +86,7 @@ export async function getProducts(): Promise<any[]> {
   }
 
   console.log(`[Catalog] ${list.length} produtos carregados de /data/products.json.`);
-  return list.map((p: any) => ({
+  const normalized = list.map((p: any) => ({
     ...p,
     id: String(p.id || ''),
     produto: p.produto || '',
@@ -96,11 +97,19 @@ export async function getProducts(): Promise<any[]> {
       ? p.imagens
       : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
     link: p.link || p.url || '',
-    categoria: p.categoria || 'Geral',
+    categoria: resolvePublicProductCategory(p.categoria || p.category, {
+      title: p.displayTitle || p.display_title || p.produto || p.title || p.name,
+      description: p.descricao || p.description,
+    }),
     createdAt: typeof (p.createdAt || p.created_at) === 'string' ? (p.createdAt || p.created_at) : undefined,
     ativo: p.ativo !== false,
     status: p.status || 'published'
   }));
+  const publicProducts = normalized.filter((product: any) => Boolean(product.categoria));
+  if (publicProducts.length !== normalized.length) {
+    console.warn(`[Catalog] ${normalized.length - publicProducts.length} produto(s) omitido(s): PUBLIC_CATEGORY_REVIEW_REQUIRED.`);
+  }
+  return publicProducts;
 }
 
 export async function verifyAdminPassword(password: string): Promise<{ success: boolean; error?: string }> {

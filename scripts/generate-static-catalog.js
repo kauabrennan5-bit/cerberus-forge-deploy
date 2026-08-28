@@ -3,6 +3,7 @@ import fs from 'fs';
 import https from 'https';
 import path from 'path';
 import dotenv from 'dotenv';
+import { resolvePublicProductCategory } from '../src/lib/productCategory.ts';
 
 dotenv.config();
 
@@ -158,6 +159,14 @@ async function generateStaticCatalog() {
     const price = Number(p.preco);
     if (Number.isNaN(price) || price <= 0) return false;
     if (p.ativo === false || p.status !== 'published') return false;
+    const publicCategory = resolvePublicProductCategory(p.categoria || p.category, {
+      title: p.displayTitle || p.display_title || p.raw_title || p.produto || p.title || p.name,
+      description: p.descricao || p.description,
+    });
+    if (!publicCategory) {
+      console.warn(`[Build Catalog] Produto ${p.id || p.ref || 'sem-id'} omitido: PUBLIC_CATEGORY_REVIEW_REQUIRED.`);
+      return false;
+    }
     return true;
   }).map((p) => ({
     id: p.id,
@@ -169,7 +178,10 @@ async function generateStaticCatalog() {
     precoAntigo: p.precoAntigo || p.preco_antigo ? Number(p.precoAntigo || p.preco_antigo) : undefined,
     imagens: Array.isArray(p.imagens) ? p.imagens : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : []),
     link: p.link || p.affiliate_url,
-    categoria: p.categoria || 'Geral',
+    categoria: resolvePublicProductCategory(p.categoria || p.category, {
+      title: p.displayTitle || p.display_title || p.raw_title || p.produto || p.title || p.name,
+      description: p.descricao || p.description,
+    }),
     descricao: containsRawPayloadMarkers(p.descricao || p.description || '') ? '' : (p.descricao || p.description || ''),
     curatorNote: typeof (p.curatorNote || p.curator_note) === 'string' ? (p.curatorNote || p.curator_note).trim() : undefined,
     paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',

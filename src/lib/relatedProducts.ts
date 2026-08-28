@@ -1,5 +1,5 @@
 import { Product } from '../types';
-import { getProductDisplayTitle } from './productPresentation';
+import { getProductDisplayCategory, getProductDisplayTitle } from './productPresentation';
 
 const GENERIC_TITLE_WORDS = new Set([
   'para', 'com', 'sem', 'por', 'das', 'dos', 'uma', 'uns', 'umas', 'que',
@@ -21,18 +21,20 @@ function meaningfulWords(product: Product): Set<string> {
 }
 
 /**
- * Mantém uma recomendação editorial simples e estável: categoria primeiro,
- * depois sinais coincidentes em título/descrição e, por fim, a ordem do acervo.
+ * Mantém uma recomendação editorial simples e estável: categoria pública
+ * canônica primeiro, depois sinais coincidentes em título/descrição e, por fim,
+ * a ordem do acervo. Nunca compara categorias técnicas/raw da pipeline.
  */
 export function getRelatedProducts(current: Product, products: Product[], limit = 4): Product[] {
   const currentWords = meaningfulWords(current);
+  const currentCategory = getProductDisplayCategory(current).toLocaleLowerCase('pt-BR');
 
   return products
     .filter((candidate) => candidate.id !== current.id)
     .map((candidate, index) => {
       const candidateWords = meaningfulWords(candidate);
       const sharedWords = [...candidateWords].filter((word) => currentWords.has(word)).length;
-      const sameCategory = candidate.categoria.trim().toLocaleLowerCase('pt-BR') === current.categoria.trim().toLocaleLowerCase('pt-BR');
+      const sameCategory = getProductDisplayCategory(candidate).toLocaleLowerCase('pt-BR') === currentCategory;
 
       return {
         candidate,

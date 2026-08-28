@@ -7,6 +7,14 @@ import { initGA4, trackPageView, trackViewItem } from './lib/analytics';
 import { getProducts, getPublicSocialLinks, subscribeNewsletter, type PublicSocialLink } from './services/api';
 import { orderCatalogProducts } from './lib/catalogOrder';
 import { getRelatedProducts } from './lib/relatedProducts';
+import {
+  DEFAULT_CATALOG_VIEW_STATE,
+  createCatalogHistoryState,
+  createProductHistoryState,
+  mergeCerberusHistoryState,
+  readCerberusHistoryEntry,
+  type CatalogViewState,
+} from './lib/catalogNavigation';
 import { Header } from './components/Header';
 import { ProductGrid } from './components/ProductGrid';
 import { ProductDetail } from './components/ProductDetail';
@@ -17,32 +25,6 @@ import { INSTITUTIONAL_PATHS } from './config/institutional';
 
 const CONFIG_STORAGE_KEY = 'cerberus_finds_config_v2';
 const FAVORITES_STORAGE_KEY = 'cerberus_finds_favorites_v1';
-const CATALOG_SCROLL_STORAGE_KEY = 'cerberus_catalog_scroll_v1';
-
-type CatalogScrollSnapshot = { path: string; y: number };
-
-function normalizeCatalogScrollY(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
-  return Math.max(0, Math.round(value));
-}
-
-function serializeCatalogScroll(y: unknown, path = '/'): string {
-  const snapshot: CatalogScrollSnapshot = { path: path || '/', y: normalizeCatalogScrollY(y) };
-  return JSON.stringify(snapshot);
-}
-
-function parseCatalogScroll(value: string | null | undefined, expectedPath = '/'): number | null {
-  if (!value) return null;
-  try {
-    const snapshot = JSON.parse(value) as Partial<CatalogScrollSnapshot>;
-    if (snapshot.path && snapshot.path !== (expectedPath || '/')) return null;
-    if (typeof snapshot.y !== 'number' || !Number.isFinite(snapshot.y)) return null;
-    return normalizeCatalogScrollY(snapshot.y);
-  } catch {
-    return null;
-  }
-}
-
 const DEFAULT_CONFIG: AppConfig = {
   csvUrl: '',
   appsScriptUrl: '',
@@ -69,9 +51,15 @@ export default function App() {
     return 'catalog';
   });
 
+  const initialHistoryEntry = typeof window !== 'undefined' ? readCerberusHistoryEntry(window.history.state) : null;
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const catalogScrollYRef = useRef<number | null>(null);
-  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(false);
+  const [catalogViewState, setCatalogViewState] = useState<CatalogViewState>(() =>
+    initialHistoryEntry?.view === 'catalog' ? initialHistoryEntry.catalog : { ...DEFAULT_CATALOG_VIEW_STATE },
+  );
+  const [showOnlyFavorites, setShowOnlyFavorites] = useState<boolean>(() =>
+    initialHistoryEntry?.view === 'catalog' ? initialHistoryEntry.showOnlyFavorites : false,
+  );
+  const pendingScrollRestoreRef = useRef<{ path: string; y: number; relatedScrollX?: number } | null>(null);
 
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -102,22 +90,60 @@ export default function App() {
   const [isSubscribing, setIsSubscribing] = useState(false);
   const [socialLinks, setSocialLinks] = useState<PublicSocialLink[]>([]);
 
-  const restoreCatalogScroll = useCallback(() => {
+  // One restoration mechanism only: history.state owns per-entry UI context and scroll.
+  // Restoration waits for the route's layout to exist, avoiding scroll-to-top races after remount.
+  useEffect(() => {
     if (typeof window === 'undefined') return;
-    let target = catalogScrollYRef.current;
-    if (target === null) {
-      try {
-        target = parseCatalogScroll(window.sessionStorage.getItem(CATALOG_SCROLL_STORAGE_KEY), window.location.pathname);
-      } catch {
-        target = null;
+    const pending = pendingScrollRestoreRef.current;
+    if (!pending || window.location.pathname !== pending.path) return;
+
+    let cancelled = false;
+    let frameId = 0;
+    let attempts = 0;
+    const restore = () => {
+      if (cancelled) return;
+      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      const relatedRail = pending.relatedScrollX && pending.relatedScrollX > 0
+        ? document.querySelector<HTMLElement>('[data-testid="related-products-rail"]')
+        : null;
+      const pageReady = maxY >= pending.y || attempts >= 12;
+      const railReady = !pending.relatedScrollX || relatedRail !== null || attempts >= 12;
+      if (pageReady && railReady) {
+        window.scrollTo({ top: Math.min(pending.y, maxY), behavior: 'auto' });
+        if (relatedRail && pending.relatedScrollX) relatedRail.scrollLeft = pending.relatedScrollX;
+        pendingScrollRestoreRef.current = null;
+        return;
       }
-    }
-    if (target === null) return;
-    catalogScrollYRef.current = target;
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => window.scrollTo({ top: target ?? 0, behavior: 'auto' }));
-    });
-  }, []);
+      attempts += 1;
+      frameId = window.requestAnimationFrame(restore);
+    };
+    frameId = window.requestAnimationFrame(restore);
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [currentView, selectedProduct?.id, products.length, catalogViewState.selectedCategory, catalogViewState.searchQuery, showOnlyFavorites]);
+
+  // Catalog filters live outside ProductGrid and are mirrored into the current history entry.
+  // This runs only when UI context changes; there is no per-pixel scroll listener.
+  useEffect(() => {
+    if (typeof window === 'undefined' || currentView !== 'catalog') return;
+    const currentEntry = readCerberusHistoryEntry(window.history.state);
+    const scrollY = currentEntry?.view === 'catalog' ? currentEntry.scrollY : window.scrollY;
+    window.history.replaceState(
+      mergeCerberusHistoryState(window.history.state, createCatalogHistoryState(catalogViewState, showOnlyFavorites, scrollY)),
+      '',
+      window.location.href,
+    );
+  }, [catalogViewState, showOnlyFavorites, currentView]);
+
+  const queueScrollRestore = useCallback((path: string, y: number, relatedScrollX = 0) => {
+  pendingScrollRestoreRef.current = {
+    path,
+    y: Math.max(0, Math.round(y || 0)),
+    relatedScrollX: Math.max(0, Math.round(relatedScrollX || 0)),
+  };
+}, []);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !("scrollRestoration" in window.history)) return;
@@ -189,9 +215,20 @@ export default function App() {
         if (requestedSlugOrId) {
           const found = orderedProducts.find((p: Product) => p.slug === requestedSlugOrId || p.id === requestedSlugOrId);
           if (found) {
-            setSelectedProduct(found);
-            setCurrentView('product-detail');
-          }
+  setSelectedProduct(found);
+  setCurrentView('product-detail');
+  const existingEntry = readCerberusHistoryEntry(window.history.state);
+  if (existingEntry?.view !== 'product-detail') {
+    window.history.replaceState(
+      mergeCerberusHistoryState(
+        window.history.state,
+        createProductHistoryState(found.slug || found.id, 0, { canGoBack: false, fromView: 'other' }),
+      ),
+      '',
+      window.location.href,
+    );
+  }
+}
         }
       }
     } catch (err: any) {
@@ -229,53 +266,102 @@ export default function App() {
     });
   };
 
-  // Navigate to Product Detail View and update URL
+  // Navigate to a product while preserving the current history entry's exact context.
   const handleSelectProduct = (product: Product) => {
-    setSelectedProduct(product);
-    setCurrentView('product-detail');
     if (typeof window !== 'undefined') {
       if (currentView === 'catalog') {
-        const currentScrollY = window.scrollY;
-        catalogScrollYRef.current = currentScrollY;
-        try {
-          window.sessionStorage.setItem(CATALOG_SCROLL_STORAGE_KEY, serializeCatalogScroll(currentScrollY, window.location.pathname));
-        } catch {
-          // A restauração baseada em sessionStorage é uma melhoria; a navegação continua funcional sem ela.
-        }
+        window.history.replaceState(
+          mergeCerberusHistoryState(
+            window.history.state,
+            createCatalogHistoryState(catalogViewState, showOnlyFavorites, window.scrollY),
+          ),
+          '',
+          window.location.href,
+        );
+      } else if (currentView === 'product-detail' && selectedProduct) {
+        const currentEntry = readCerberusHistoryEntry(window.history.state);
+        const relatedScrollX = document.querySelector<HTMLElement>('[data-testid="related-products-rail"]')?.scrollLeft
+          ?? (currentEntry?.view === 'product-detail' ? currentEntry.relatedScrollX : 0);
+        window.history.replaceState(
+          mergeCerberusHistoryState(
+            window.history.state,
+            createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {
+              canGoBack: currentEntry?.view === 'product-detail' ? currentEntry.canGoBack : false,
+              fromView: currentEntry?.view === 'product-detail' ? currentEntry.fromView : 'other',
+              relatedScrollX,
+            }),
+          ),
+          '',
+          window.location.href,
+        );
       }
+
       const slug = product.slug || product.id;
-      window.history.pushState({}, '', `/produto/${slug}`);
+      const fromView = currentView === 'catalog' ? 'catalog' : currentView === 'product-detail' ? 'product-detail' : 'other';
+      window.history.pushState(
+        mergeCerberusHistoryState(
+          {},
+          createProductHistoryState(slug, 0, { canGoBack: true, fromView }),
+        ),
+        '',
+        `/produto/${slug}`,
+      );
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
+    setSelectedProduct(product);
+    setCurrentView('product-detail');
   };
 
-  // Handle Back to Catalog from Detail
+  // Internal Back follows the same history entry as the browser Back button.
   const handleBackToCatalog = () => {
+    if (typeof window !== 'undefined') {
+      const currentEntry = readCerberusHistoryEntry(window.history.state);
+      if (currentEntry?.view === 'product-detail' && currentEntry.canGoBack) {
+        window.history.back();
+        return;
+      }
+      window.history.replaceState(
+        mergeCerberusHistoryState(window.history.state, createCatalogHistoryState(catalogViewState, showOnlyFavorites, 0)),
+        '',
+        '/',
+      );
+      queueScrollRestore('/', 0);
+    }
     setCurrentView('catalog');
     setSelectedProduct(null);
-    if (typeof window !== 'undefined') {
-      window.history.pushState({}, '', '/');
-      restoreCatalogScroll();
-    }
   };
 
   const handleSelectView = (view: ViewMode) => {
-    if (view !== 'product-detail') {
-      setSelectedProduct(null);
-      if (typeof window !== 'undefined') {
-        const path = view === 'admin'
-          ? '/admin'
-          : view === 'privacy'
-            ? INSTITUTIONAL_PATHS.privacy
-            : view === 'terms'
-              ? INSTITUTIONAL_PATHS.terms
-              : '/';
+  if (view !== 'product-detail') {
+    setSelectedProduct(null);
+    if (typeof window !== 'undefined') {
+      const path = view === 'admin'
+        ? '/admin'
+        : view === 'privacy'
+          ? INSTITUTIONAL_PATHS.privacy
+          : view === 'terms'
+            ? INSTITUTIONAL_PATHS.terms
+            : '/';
+
+      if (view === 'catalog') {
+        const nextState = mergeCerberusHistoryState(
+          {},
+          createCatalogHistoryState(catalogViewState, showOnlyFavorites, 0),
+        );
+        if (currentView === 'catalog' && window.location.pathname === '/') {
+          window.history.replaceState(nextState, '', path);
+        } else {
+          window.history.pushState(nextState, '', path);
+        }
+        queueScrollRestore('/', 0);
+      } else {
         window.history.pushState({}, '', path);
+        window.scrollTo({ top: 0, behavior: 'auto' });
       }
     }
-    setCurrentView(view);
-    if (view === 'catalog') restoreCatalogScroll();
-  };
+  }
+  setCurrentView(view);
+};
 
   const handleNewsletterSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -296,48 +382,97 @@ export default function App() {
     setNewsletterStatus(result.error || 'Cadastro indisponível.');
   };
 
-  // Listen to popstate browser navigation (Back/Forward)
+  // Back/Forward restores the exact history entry instead of applying a global catalog scroll snapshot.
   useEffect(() => {
-    const handlePopState = () => {
+    const handlePopState = (event: PopStateEvent) => {
       const path = window.location.pathname;
+      const historyEntry = readCerberusHistoryEntry(event.state);
+
       if (path === INSTITUTIONAL_PATHS.privacy) {
         setCurrentView('privacy');
         setSelectedProduct(null);
-      } else if (path === INSTITUTIONAL_PATHS.terms) {
+        return;
+      }
+      if (path === INSTITUTIONAL_PATHS.terms) {
         setCurrentView('terms');
         setSelectedProduct(null);
-      } else if (path.startsWith('/admin')) {
+        return;
+      }
+      if (path.startsWith('/admin')) {
         setCurrentView('admin');
         setSelectedProduct(null);
-      } else if (path.startsWith('/produto/')) {
+        return;
+      }
+      if (path.startsWith('/produto/')) {
         const requestedSlugOrId = path.replace('/produto/', '').trim();
-        const found = products.find((p) => p.slug === requestedSlugOrId || p.id === requestedSlugOrId);
+        const found = products.find((product) => product.slug === requestedSlugOrId || product.id === requestedSlugOrId);
         if (found) {
           setSelectedProduct(found);
           setCurrentView('product-detail');
+          queueScrollRestore(
+            path,
+            historyEntry?.view === 'product-detail' ? historyEntry.scrollY : 0,
+            historyEntry?.view === 'product-detail' ? historyEntry.relatedScrollX : 0,
+          );
         }
-      } else {
-        const params = new URLSearchParams(window.location.search);
-        const viewParam = params.get('view') || params.get('mode');
-        if (viewParam === 'admin' || viewParam === 'form') {
-          setCurrentView('admin');
-        } else {
-          setCurrentView('catalog');
-          setSelectedProduct(null);
-          restoreCatalogScroll();
-        }
+        return;
       }
+
+      const params = new URLSearchParams(window.location.search);
+      const viewParam = params.get('view') || params.get('mode');
+      if (viewParam === 'admin' || viewParam === 'form') {
+        setCurrentView('admin');
+        setSelectedProduct(null);
+        return;
+      }
+
+      if (historyEntry?.view === 'catalog') {
+        setCatalogViewState(historyEntry.catalog);
+        setShowOnlyFavorites(historyEntry.showOnlyFavorites);
+        queueScrollRestore('/', historyEntry.scrollY);
+      } else {
+        setCatalogViewState({ ...DEFAULT_CATALOG_VIEW_STATE });
+        setShowOnlyFavorites(false);
+        queueScrollRestore('/', 0);
+      }
+      setCurrentView('catalog');
+      setSelectedProduct(null);
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [products]);
+  }, [products, queueScrollRestore]);
 
   // Get active categories
   const existingCategories = Array.from(
     new Set(products.map((p) => p.categoria).filter(Boolean))
   );
   const relatedProducts = selectedProduct ? getRelatedProducts(selectedProduct, products) : [];
+  const activeProductHistoryEntry = typeof window !== 'undefined' ? readCerberusHistoryEntry(window.history.state) : null;
+  const initialRelatedScrollX = activeProductHistoryEntry?.view === 'product-detail'
+    && selectedProduct
+    && activeProductHistoryEntry.productKey === (selectedProduct.slug || selectedProduct.id)
+      ? activeProductHistoryEntry.relatedScrollX
+      : 0;
+
+  const handleRelatedScrollPositionChange = (scrollLeft: number) => {
+    if (typeof window === 'undefined' || !selectedProduct) return;
+    const currentEntry = readCerberusHistoryEntry(window.history.state);
+    if (currentEntry?.view !== 'product-detail') return;
+    if (currentEntry.productKey !== (selectedProduct.slug || selectedProduct.id)) return;
+    window.history.replaceState(
+      mergeCerberusHistoryState(
+        window.history.state,
+        createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {
+          canGoBack: currentEntry.canGoBack,
+          fromView: currentEntry.fromView,
+          relatedScrollX: scrollLeft,
+        }),
+      ),
+      '',
+      window.location.href,
+    );
+  };
 
   return (
     <div className="min-h-screen min-w-0 bg-noise bg-[#0B0908] text-[#E8E1D3] flex flex-col font-sans selection:bg-[#8A1F1F] selection:text-[#E8E1D3] w-full max-w-full">
@@ -369,6 +504,8 @@ export default function App() {
             onOpenSettings={() => setIsSettingsOpen(true)}
             metaPixelId={config.metaPixelId}
             metaAccessToken={config.metaAccessToken}
+            viewState={catalogViewState}
+            onViewStateChange={setCatalogViewState}
           />
         )}
 
@@ -384,6 +521,8 @@ export default function App() {
             onSelectProduct={handleSelectProduct}
             metaPixelId={config.metaPixelId}
             metaAccessToken={config.metaAccessToken}
+            initialRelatedScrollX={initialRelatedScrollX}
+            onRelatedScrollPositionChange={handleRelatedScrollPositionChange}
           />
         )}
 

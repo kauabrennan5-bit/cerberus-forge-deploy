@@ -59,6 +59,21 @@ export function isValidProductLink(link?: string): boolean {
   }
 }
 
+export function resolveProductCategoryForPersistence(input: {
+  categoria?: string | null;
+  produto?: string | null;
+  displayTitle?: string | null;
+  rawTitle?: string | null;
+  descricao?: string | null;
+}): string {
+  const category = resolvePublicProductCategory(input.categoria, {
+    title: input.displayTitle || input.rawTitle || input.produto,
+    description: input.descricao,
+  });
+  if (!category) throw new Error("PUBLIC_CATEGORY_REVIEW_REQUIRED");
+  return category;
+}
+
 /**
  * Salva a lista de produtos diretamente na tabela public.products do Supabase
  */
@@ -66,11 +81,12 @@ async function saveProducts(products: Product[], syncCatalog = true): Promise<vo
   const client = requireSupabase();
 
   const formatted = products.map((p) => {
+    const publicCategory = resolveProductCategoryForPersistence(p);
     const productRow: Record<string, unknown> = {
       id: p.id,
       ref: p.ref,
       produto: p.produto,
-      categoria: p.categoria,
+      categoria: publicCategory,
       preco: Number(p.preco) || 0,
       imagens: p.imagens,
       link: p.link,
@@ -195,6 +211,7 @@ export async function createProduct(input: {
   imageCuration?: Product["imageCuration"];
 }, options: { syncCatalog?: boolean } = {}): Promise<Product> {
   const products = await getProducts();
+  const publicCategory = resolveProductCategoryForPersistence(input);
   const inputLink = input.link.trim();
 
   // Deduplicação: verifica se um produto com o mesmo link já existe
@@ -221,7 +238,7 @@ export async function createProduct(input: {
 
     const updated = await updateProduct(existingProduct.id, {
       produto: input.produto.trim(),
-      categoria: input.categoria.trim(),
+      categoria: publicCategory,
       preco: Number(input.preco) || 0,
       imagens: imagesArray.length > 0 ? imagesArray : existingProduct.imagens,
       link: inputLink,
@@ -253,7 +270,7 @@ export async function createProduct(input: {
     id,
     ref,
     produto: input.produto.trim(),
-    categoria: input.categoria.trim(),
+    categoria: publicCategory,
     preco: Number(input.preco) || 0,
     imagens: imagesArray,
     link: inputLink,
@@ -288,10 +305,14 @@ export async function updateProduct(
   const index = products.findIndex((p) => p.id === id);
   if (index === -1) return null;
 
-  const updatedProduct: Product = {
+  const mergedProduct: Product = {
     ...products[index],
     ...updateData,
     ...(updateData.produto ? { slug: generateSlug(updateData.produto) } : {})
+  };
+  const updatedProduct: Product = {
+    ...mergedProduct,
+    categoria: resolveProductCategoryForPersistence(mergedProduct),
   };
 
   products[index] = updatedProduct;

@@ -7,13 +7,12 @@ const productDetailSource = readFileSync(new URL('../src/components/ProductDetai
 describe('related products carousel navigation', () => {
   it('keeps native horizontal touch scrolling and keyboard focus', () => {
     assert.match(productDetailSource, /relatedRailRef = useRef<HTMLDivElement>\(null\)/);
-    assert.match(productDetailSource, /touch-pan-x/);
+    assert.match(productDetailSource, /touch-auto/);
     assert.match(productDetailSource, /overflow-x-auto/);
     assert.match(productDetailSource, /role="region"/);
     assert.match(productDetailSource, /tabIndex=\{0\}/);
-    assert.match(productDetailSource, /onTouchStart=\{handleRelatedTouchStart\}/);
-    assert.match(productDetailSource, /onTouchMove=\{handleRelatedTouchMove\}/);
-    assert.match(productDetailSource, /rail\.scrollLeft = start\.scrollLeft - deltaX/);
+    assert.doesNotMatch(productDetailSource, /handleRelatedTouchMove/);
+    assert.doesNotMatch(productDetailSource, /preventDefault\(\)/);
   });
 
   it('keeps explicit previous and next controls for narrow viewports', () => {
