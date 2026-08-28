@@ -48,6 +48,7 @@ const ALIASES: Readonly<Record<string, string>> = Object.freeze({
   listar: "produtos",
   campaigns: "campanhas",
   "redes-sociais": "redes",
+  colecao: "campanha2",
   discover_batch: "discover-batch",
 });
 
@@ -161,6 +162,7 @@ export function renderPrimaryCommandHelp(): string {
     "⚡ <b>AGORA</b>\n" +
     "/hoje — resumo + próxima prioridade\n" +
     "/pendentes — fila humana\n" +
+    "/aprovados — decisões e catálogo ativo\n" +
     "/status — saúde do sistema\n\n" +
     "📦 <b>CATÁLOGO</b>\n" +
     "/produtos · /categorias · /analytics\n\n" +
