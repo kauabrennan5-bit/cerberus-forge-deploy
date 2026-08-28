@@ -81,9 +81,11 @@ jobs:
             server/repositories/productsRepository.ts \
             server/services/productAutomation.ts \
             server/services/telegramBot.ts \
+            src/components/ProductCard.tsx \
             src/lib/productCategory.ts \
             src/services/api.ts \
             tests/catalogNavigation.test.ts \
+            tests/promotionOffer.test.ts \
             tests/publicCategoryPipeline.test.ts \
             tests/telegramAndMarketplace.test.ts
           git diff --cached --check
