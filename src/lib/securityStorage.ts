@@ -1,5 +1,3 @@
-import { clearAdminSessionPassword, setAdminSessionPassword } from './adminSession';
-
 const ADMIN_PASSWORD_KEY = 'cerberus_admin_password';
 const CONFIG_STORAGE_KEY = 'cerberus_finds_config_v2';
 
@@ -16,10 +14,12 @@ function sanitizeConfigJson(rawValue: string): string {
 }
 
 /**
- * Removes credentials left by legacy builds and prevents future browser-side
- * persistence. Legacy AdminForm setItem/removeItem calls are translated into
- * an ephemeral in-memory session so existing UI flows remain functional while
- * refresh always requires a new login.
+ * Removes credentials left by legacy browser builds.
+ *
+ * Current Admin and settings flows no longer persist secrets at all, so this
+ * startup cleanup is intentionally one-shot instead of altering the global
+ * Storage prototype. That keeps browser behavior standard while ensuring old
+ * plaintext credentials are deleted on the next load.
  */
 export function installSensitiveStorageGuard(): void {
   if (typeof window === 'undefined') return;
@@ -32,36 +32,6 @@ export function installSensitiveStorageGuard(): void {
       window.localStorage.setItem(CONFIG_STORAGE_KEY, sanitizeConfigJson(existingConfig));
     }
   } catch {
-    // Storage may be unavailable. The app must continue fail-closed.
+    // Storage may be unavailable. The app still starts without persisted secrets.
   }
-
-  const storagePrototype = Object.getPrototypeOf(window.localStorage) as Storage;
-  const originalSetItem = storagePrototype.setItem;
-  const originalRemoveItem = storagePrototype.removeItem;
-
-  const marker = '__cerberusSensitiveStorageGuardInstalled';
-  if ((storagePrototype as any)[marker]) return;
-  (storagePrototype as any)[marker] = true;
-
-  storagePrototype.setItem = function guardedSetItem(key: string, value: string): void {
-    if (this === window.localStorage) {
-      if (key === ADMIN_PASSWORD_KEY) {
-        setAdminSessionPassword(value);
-        originalRemoveItem.call(this, key);
-        return;
-      }
-      if (key === CONFIG_STORAGE_KEY) {
-        originalSetItem.call(this, key, sanitizeConfigJson(value));
-        return;
-      }
-    }
-    originalSetItem.call(this, key, value);
-  };
-
-  storagePrototype.removeItem = function guardedRemoveItem(key: string): void {
-    if (this === window.localStorage && key === ADMIN_PASSWORD_KEY) {
-      clearAdminSessionPassword();
-    }
-    originalRemoveItem.call(this, key);
-  };
 }
