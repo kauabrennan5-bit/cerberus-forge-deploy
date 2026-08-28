@@ -15,6 +15,8 @@ jobs:
   materialize:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +28,23 @@ jobs:
       - run: python .github/scripts/materialize_weekly_newsletter.py
       - name: Remove temporary materializer
         run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
+      - name: Capture generated candidate diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --no-ext-diff --binary > weekly-candidate.patch
+          git diff --name-only > weekly-candidate-files.txt
+          test -s weekly-candidate.patch
+          test -s weekly-candidate-files.txt
+      - name: Upload generated candidate diff
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-candidate-source-${{ github.run_id }}
+          path: |
+            weekly-candidate.patch
+            weekly-candidate-files.txt
+          if-no-files-found: error
+          retention-days: 7
       - run: npm ci
       - name: Reproduce isolated authorization cause
         shell: bash
@@ -46,12 +65,8 @@ jobs:
           test "$no_allowlist_status" -ne 0
           test "$with_allowlist_status" -eq 0
       - name: Reproduce publish file with synthetic allowlist
-        env:
-          TELEGRAM_ALLOWED_USER_IDS: "1976526372"
         run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts
       - name: Reproduce publish functional group with synthetic allowlist
-        env:
-          TELEGRAM_ALLOWED_USER_IDS: "1976526372"
         run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts tests/telegramBotV2Contract.test.ts
       - name: Weekly focused tests
         run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts
@@ -132,7 +147,7 @@ jobs:
           retention-days: 7
       - name: Clean observability files
         if: success()
-        run: rm -f weekly-global-test.log weekly-global-summary.txt weekly-global-failures.txt
+        run: rm -f weekly-global-test.log weekly-global-summary.txt weekly-global-failures.txt weekly-candidate.patch weekly-candidate-files.txt
       - name: TypeScript
         run: npm run lint
       - name: Build
