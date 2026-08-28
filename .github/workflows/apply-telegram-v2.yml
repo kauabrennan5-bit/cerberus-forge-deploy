@@ -36,29 +36,26 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
           p = Path('tests/telegramAndMarketplace.test.ts')
           s = p.read_text(encoding='utf-8')
-          old = '''  const directStart = source.indexOf('if (text.startsWith("/listar") || text.startsWith("/produtos"))');
-          const directEnd = source.indexOf('if (text.startsWith("/categorias"))', directStart);
-          const directHandler = source.slice(directStart, directEnd);
+          pattern = r'''test\("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", \(\) => \{[\s\S]*?\n\}\);'''
+          replacement = '''test("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", () => {
+            const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+            const directStart = source.indexOf('if (commandName === "produtos")');
+            const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
+            const directHandler = source.slice(directStart, directEnd);
 
-          assert.ok(directStart >= 0 && directEnd > directStart);
-          assert.match(directHandler, /renderProductList\\(0\\)/);
-          assert.match(directHandler, /sendTelegramMessage\\(chatId, listView\\.text, listView\\.keyboard\\)/);
-          assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
-          assert.match(source, /if \\(data\\.startsWith\\("products_list:"\\)\\)[\\s\\S]{0,700}editTelegramMessageText/);'''
-          new = '''  const directStart = source.indexOf('if (commandName === "produtos")');
-          const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
-          const directHandler = source.slice(directStart, directEnd);
-
-          assert.ok(directStart >= 0 && directEnd > directStart);
-          assert.match(directHandler, /renderProductList\\(0\\)/);
-          assert.match(directHandler, /sendTelegramMessage\\(chatId, listView\\.text, listView\\.keyboard\\)/);
-          assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
-          assert.match(source, /if \\(data\\.startsWith\\("products_list:"\\)\\)[\\s\\S]{0,700}editTelegramMessageText/);'''
-          if old not in s:
-              raise SystemExit('legacy static routing assertion marker not found')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+            assert.ok(directStart >= 0 && directEnd > directStart);
+            assert.match(directHandler, /renderProductList\\(0\\)/);
+            assert.match(directHandler, /sendTelegramMessage\\(chatId, listView\\.text, listView\\.keyboard\\)/);
+            assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
+            assert.match(source, /if \\(data\\.startsWith\\("products_list:"\\)\\)[\\s\\S]{0,700}editTelegramMessageText/);
+          });'''
+          updated, count = re.subn(pattern, lambda _: replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f'legacy static routing assertion count={count}')
+          p.write_text(updated, encoding='utf-8')
           PY
 
       - name: Install dependencies
