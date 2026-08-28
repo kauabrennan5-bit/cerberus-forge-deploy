@@ -29,8 +29,91 @@ jobs:
       - run: npm ci
       - name: Weekly focused tests
         run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts
-      - name: Full suite
-        run: npm test
+      - name: Full suite with observability
+        id: global_tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npm test 2>&1 | tee weekly-global-test.raw
+          npm_status=${PIPESTATUS[0]}
+          set -e
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          raw = Path("weekly-global-test.raw").read_text(encoding="utf-8", errors="replace")
+          sanitized = raw
+          sanitized = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1[REDACTED]", sanitized)
+          sanitized = re.sub(r"(?i)((?:api[_-]?key|token|secret|password)\s*[=:]\s*)[^\s,;]+", r"\1[REDACTED]", sanitized)
+          sanitized = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[REDACTED_EMAIL]", sanitized)
+          Path("weekly-global-test.log").write_text(sanitized, encoding="utf-8")
+          PY
+          rm -f weekly-global-test.raw
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          text = Path("weekly-global-test.log").read_text(encoding="utf-8", errors="replace")
+          keys = {
+              "GLOBAL_TOTAL": r"(?m)^# tests\s+(\d+)\s*$",
+              "GLOBAL_PASS": r"(?m)^# pass\s+(\d+)\s*$",
+              "GLOBAL_FAILURES": r"(?m)^# fail\s+(\d+)\s*$",
+              "GLOBAL_SKIPPED": r"(?m)^# skipped\s+(\d+)\s*$",
+              "GLOBAL_CANCELLED": r"(?m)^# cancelled\s+(\d+)\s*$",
+          }
+          values = {}
+          missing = []
+          for key, pattern in keys.items():
+              matches = re.findall(pattern, text)
+              if not matches:
+                  missing.append(key)
+              else:
+                  values[key] = matches[-1]
+
+          summary = [f"{key}={values.get(key, 'UNPARSEABLE')}" for key in keys]
+          Path("weekly-global-summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
+
+          lines = text.splitlines()
+          blocks = []
+          i = 0
+          while i < len(lines):
+              if re.match(r"^not ok \d+ - ", lines[i]):
+                  start = i
+                  i += 1
+                  while i < len(lines) and not re.match(r"^(?:ok|not ok) \d+ - ", lines[i]) and not lines[i].startswith("1.."):
+                      i += 1
+                  blocks.append("\n".join(lines[start:i]).strip())
+                  continue
+              i += 1
+          Path("weekly-global-failures.txt").write_text(("\n\n---\n\n".join(blocks) or "NO_NOT_OK_BLOCKS_CAPTURED") + "\n", encoding="utf-8")
+
+          print(Path("weekly-global-summary.txt").read_text(encoding="utf-8"), end="")
+          print("--- FAILURES ---")
+          print(Path("weekly-global-failures.txt").read_text(encoding="utf-8"), end="")
+          if missing:
+              print("SUMMARY_PARSE_ERROR=" + ",".join(missing), file=sys.stderr)
+              sys.exit(97)
+          PY
+
+          exit "$npm_status"
+      - name: Upload sanitized global observability
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-global-observability-${{ github.run_id }}
+          path: |
+            weekly-global-test.log
+            weekly-global-summary.txt
+            weekly-global-failures.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Clean observability files
+        if: success()
+        run: rm -f weekly-global-test.log weekly-global-summary.txt weekly-global-failures.txt
       - name: TypeScript
         run: npm run lint
       - name: Build
