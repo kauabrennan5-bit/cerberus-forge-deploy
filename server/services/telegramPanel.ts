@@ -201,6 +201,7 @@ export async function renderApproved(): Promise<string> {
 export async function renderCategories(): Promise<string> {
   const counts = new Map(PUBLIC_PRODUCT_CATEGORIES.map(category => [category, 0]));
   let invalidCount = 0;
+  let catalogAvailable = true;
 
   try {
     const products = await productsRepository.getProducts();
@@ -214,14 +215,17 @@ export async function renderCategories(): Promise<string> {
       else invalidCount += 1;
     }
   } catch {
-    return "⚠️ <b>CATEGORIAS INDISPONÍVEIS</b>\n\nNão foi possível ler o catálogo. Nenhuma categoria foi alterada.";
+    catalogAvailable = false;
   }
 
-  const rows = PUBLIC_PRODUCT_CATEGORIES.map(category => `• <b>${category}</b> — ${counts.get(category) || 0}`);
+  const rows = PUBLIC_PRODUCT_CATEGORIES.map(category =>
+    `• <b>${category}</b> — ${catalogAvailable ? counts.get(category) || 0 : "?"}`,
+  );
   return (
     "🏷️ <b>TAXONOMIA PÚBLICA</b>\n\n" +
     rows.join("\n") +
-    (invalidCount > 0 ? `\n\n⚠️ Produtos ativos fora da taxonomia: <b>${invalidCount}</b>` : "") +
+    (!catalogAvailable ? "\n\n⚠️ Contagens indisponíveis; a taxonomia oficial continua válida." : "") +
+    (catalogAvailable && invalidCount > 0 ? `\n\n⚠️ Produtos ativos fora da taxonomia: <b>${invalidCount}</b>` : "") +
     "\n\nCategorias são canônicas: o bot não cria nem renomeia categorias livremente."
   );
 }
