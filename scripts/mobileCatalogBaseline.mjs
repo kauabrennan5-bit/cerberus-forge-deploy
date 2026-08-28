@@ -247,8 +247,22 @@ async function auditViewport(browser, viewport) {
       assert(Math.abs(diagAfterY - diagBeforeY) >= 25, `390/related diagonal gesture did not follow dominant vertical direction (${diagBeforeY} -> ${diagAfterY})`);
 
       await rail.scrollIntoViewIfNeeded();
-      const tapLink = rail.locator('[data-testid="product-card-link"]').first();
-      await tapLink.tap();
+      const tapLinks = rail.locator('[data-testid="product-card-link"]');
+      const tapLinkCount = await tapLinks.count();
+      let tapPoint = null;
+      for (let i = 0; i < tapLinkCount; i += 1) {
+        const tapBox = await tapLinks.nth(i).boundingBox();
+        if (!tapBox) continue;
+        const centerX = tapBox.x + Math.min(tapBox.width / 2, 90);
+        const centerY = tapBox.y + Math.min(tapBox.height / 2, 100);
+        if (centerX >= railBox.x + 12 && centerX <= railBox.x + railBox.width - 12) {
+          tapPoint = { x: centerX, y: centerY };
+          break;
+        }
+      }
+      assert(tapPoint, '390/related: no visible related link available for native tap');
+      const railBeforeTap = await rail.evaluate((el) => el.scrollLeft);
+      await page.touchscreen.tap(tapPoint.x, tapPoint.y);
       await page.waitForURL(/\/produto\//, { timeout: 15_000 });
       const relatedDetailPath = new URL(page.url()).pathname;
       assert(relatedDetailPath !== originalDetailPath, '390/related tap did not open another product');
@@ -256,14 +270,14 @@ async function auditViewport(browser, viewport) {
       await page.waitForTimeout(500);
       assert(new URL(page.url()).pathname === originalDetailPath, `390/related back did not restore prior detail (${page.url()})`);
       const restoredRailLeft = await page.locator('[data-testid="related-products-rail"]').evaluate((el) => el.scrollLeft);
-      assert(Math.abs(restoredRailLeft - horizontalAfter) <= 80, `390/related horizontal position not preserved (${horizontalAfter} -> ${restoredRailLeft})`);
+      assert(Math.abs(restoredRailLeft - railBeforeTap) <= 80, `390/related horizontal position not preserved (${railBeforeTap} -> ${restoredRailLeft})`);
       await page.screenshot({ path: `${outDir}/related-after-interactions-390.png`, fullPage: false });
 
       result.relatedTouch = {
         vertical: { before: verticalBefore, after: verticalAfter },
         horizontal: { before: horizontalBefore, after: horizontalAfter },
         diagonal: { before: diagBeforeY, after: diagAfterY },
-        tap: { originalDetailPath, relatedDetailPath, restored: new URL(page.url()).pathname, railBefore: horizontalAfter, railAfter: restoredRailLeft },
+        tap: { originalDetailPath, relatedDetailPath, restored: new URL(page.url()).pathname, railBefore: railBeforeTap, railAfter: restoredRailLeft },
       };
     }
 
