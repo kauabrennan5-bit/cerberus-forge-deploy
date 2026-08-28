@@ -1,0 +1,166 @@
+name: Telegram V2 exact final gate
+
+on:
+  push:
+    branches:
+      - diag/telegram-v2-global-failures-2026-08-28
+    paths:
+      - .github/workflows/diag-telegram-v2-final-gate.yml
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply exact ephemeral V2 preparation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          workflow = Path('.github/workflows/finalize-telegram-v2.yml').read_text(encoding='utf-8').splitlines()
+          targets = [
+              'Apply deterministic V2 base patch',
+              'Prioritize explicit promotion states',
+              'Add isolated user-state test hooks',
+              'Isolate promotion test state and legacy product routing assertion',
+              'Align advanced-panel test contract',
+          ]
+          def extract_run(name: str) -> str:
+              start = workflow.index(f'      - name: {name}')
+              i = start + 1
+              while workflow[i].strip() == '': i += 1
+              if workflow[i] != '        run: |': raise SystemExit(f'missing run block: {name}')
+              out=[]; i+=1
+              while i < len(workflow):
+                  line=workflow[i]
+                  if line.startswith('      - name: ') or line.startswith('      - uses: '): break
+                  if line.startswith('          '): out.append(line[10:])
+                  elif line.strip() == '': out.append('')
+                  else: raise SystemExit(f'unexpected indentation: {line!r}')
+                  i+=1
+              return '\n'.join(out)+'\n'
+          for target in targets:
+              subprocess.run(['bash','-euo','pipefail','-c',extract_run(target)],check=True)
+          p=Path('tests/socialLinks.test.ts')
+          s=p.read_text(encoding='utf-8')
+          old='assert.match(commands, /name: "redes"/);'
+          new='assert.match(commands, /command: "redes"/);'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one stale redes assertion, found {s.count(old)}')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Failure 1 isolated
+        run: node --import tsx/esm --test --test-name-pattern='Telegram exposes the social-links editor without hardcoded destinations' tests/socialLinks.test.ts
+
+      - name: Failure 1 file suite
+        run: node --import tsx/esm --test tests/socialLinks.test.ts
+
+      - name: Bot V2 focused 114 tests
+        run: |
+          node --import tsx/esm --test \
+            tests/telegramCommandsV2.test.ts \
+            tests/telegramBotV2Contract.test.ts \
+            tests/telegramPanelV2.test.ts \
+            tests/telegramReadPanel.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/publishCommand.test.ts \
+            tests/promotionReview.test.ts \
+            tests/previewTelegramRoutes.test.ts \
+            tests/shopeeCommand.test.ts
+
+      - name: Structural invariants
+        run: |
+          set -euo pipefail
+          ! grep -q 'categoriesRepository' server/services/telegramBot.ts
+          ! grep -q 'getLatestPendingReviewForUser(senderId, chatId)' server/services/telegramBot.ts
+          ! grep -q 'addCategory(' server/services/telegramBot.ts
+          ! grep -q 'renameCategory(' server/services/telegramBot.ts
+          grep -q 'parseTelegramCommand(text)' server/services/telegramBot.ts
+          grep -q 'shouldProcessTelegramUpdate' server/services/telegramBot.ts
+          grep -q 'listReviewsByStatus' server/repositories/telegramRepository.ts
+          grep -q 'setTestUserStateHandlers' server/repositories/telegramRepository.ts
+
+      - name: Global test suite
+        run: npm test
+
+      - name: TypeScript lint
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Diff check and exact allowlist
+        run: |
+          set -euo pipefail
+          git diff --check
+          cat > /tmp/expected-files <<'EOF'
+          .github/scripts/apply_telegram_v2.py
+          server/repositories/telegramRepository.ts
+          server/services/telegramBot.ts
+          tests/newsletterCampaign.test.ts
+          tests/promotionReview.test.ts
+          tests/socialLinks.test.ts
+          tests/telegramAndMarketplace.test.ts
+          tests/telegramDiagnostics.test.ts
+          tests/telegramReadPanel.test.ts
+          EOF
+          sort -o /tmp/expected-files /tmp/expected-files
+          git diff --name-only HEAD | sort > /tmp/actual-files
+          echo 'FILES_MODIFIED='
+          cat /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+      - name: Secret scan changed content
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff HEAD -- \
+            .github/scripts/apply_telegram_v2.py \
+            server/repositories/telegramRepository.ts \
+            server/services/telegramBot.ts \
+            tests/newsletterCampaign.test.ts \
+            tests/promotionReview.test.ts \
+            tests/socialLinks.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramReadPanel.test.ts > /tmp/gitleaks-scan/bot-v2.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Commit validated content on diagnostic branch
+        run: |
+          set -euo pipefail
+          git config user.name "kauabrennan5-bit"
+          git config user.email "kauabrennan5@gmail.com"
+          git add \
+            .github/scripts/apply_telegram_v2.py \
+            server/repositories/telegramRepository.ts \
+            server/services/telegramBot.ts \
+            tests/newsletterCampaign.test.ts \
+            tests/promotionReview.test.ts \
+            tests/socialLinks.test.ts \
+            tests/telegramAndMarketplace.test.ts \
+            tests/telegramDiagnostics.test.ts \
+            tests/telegramReadPanel.test.ts
+          git diff --cached --check
+          git commit -m 'test(diag): stage fully validated Telegram Bot V2'
+          git push origin HEAD:diag/telegram-v2-global-failures-2026-08-28
