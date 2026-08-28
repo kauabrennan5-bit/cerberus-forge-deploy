@@ -51,7 +51,43 @@ jobs:
         run: npm ci
 
       - name: Run full test suite
-        run: npm test
+        shell: bash
+        run: |
+          set +e
+          npm test 2>&1 | tee telegram-v2-full-test.log
+          test_status=${PIPESTATUS[0]}
+
+          node <<'NODE'
+          const fs = require('fs');
+          const raw = fs.readFileSync('telegram-v2-full-test.log', 'utf8');
+          const clean = raw.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+          const summaryLines = clean
+            .split(/\r?\n/)
+            .filter((line) => /^\s*(Test Files|Tests|Start at|Duration)\b/.test(line));
+          const summary = summaryLines.slice(-4).join('\n') || 'Vitest summary lines were not found.';
+          fs.writeFileSync('telegram-v2-test-summary.txt', `${summary}\n`);
+          NODE
+
+          {
+            echo '## Telegram V2 full-test diagnostics'
+            echo
+            echo '```text'
+            cat telegram-v2-test-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$test_status"
+
+      - name: Upload full test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-v2-full-test-diagnostics
+          path: |
+            telegram-v2-full-test.log
+            telegram-v2-test-summary.txt
+          if-no-files-found: error
+          retention-days: 7
 
       - name: TypeScript contract
         run: npm run lint
