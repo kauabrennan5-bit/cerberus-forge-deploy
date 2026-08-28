@@ -73,6 +73,29 @@ jobs:
               raise SystemExit('catalogNavigation product read shape changed')
           nav_path.write_text(nav.replace(read_old, read_new, 1), encoding='utf-8')
 
+          detail_path = Path('src/components/ProductDetail.tsx')
+          detail = detail_path.read_text(encoding='utf-8')
+          detail = detail.replace(
+              "  metaAccessToken?: string;\n}",
+              "  metaAccessToken?: string;\n  initialRelatedScrollX?: number;\n  onRelatedScrollPositionChange?: (scrollLeft: number) => void;\n}",
+              1,
+          )
+          detail = detail.replace(
+              "  metaPixelId,\n  metaAccessToken\n}) => {",
+              "  metaPixelId,\n  metaAccessToken,\n  initialRelatedScrollX = 0,\n  onRelatedScrollPositionChange,\n}) => {",
+              1,
+          )
+          reset_marker = """  useEffect(() => {\n    setSelectedImageIndex(0);\n    setImageError({});\n    setIsZoomOpen(false);\n  }, [product.id]);\n"""
+          restore_effect = reset_marker + """\n  useEffect(() => {\n    if (!initialRelatedScrollX || !relatedRailRef.current) return;\n    const frameId = window.requestAnimationFrame(() => {\n      if (relatedRailRef.current) relatedRailRef.current.scrollLeft = initialRelatedScrollX;\n    });\n    return () => window.cancelAnimationFrame(frameId);\n  }, [product.id, initialRelatedScrollX, relatedProducts.length]);\n"""
+          if reset_marker not in detail:
+              raise SystemExit('ProductDetail reset effect shape changed')
+          detail = detail.replace(reset_marker, restore_effect, 1)
+          rail_marker = """              ref={relatedRailRef}\n              role=\"region\"\n"""
+          rail_replacement = """              ref={relatedRailRef}\n              onScroll={(event) => onRelatedScrollPositionChange?.(event.currentTarget.scrollLeft)}\n              role=\"region\"\n"""
+          if rail_marker not in detail:
+              raise SystemExit('ProductDetail related rail marker changed')
+          detail_path.write_text(detail.replace(rail_marker, rail_replacement, 1), encoding='utf-8')
+
           app_path = Path('src/App.tsx')
           app = app_path.read_text(encoding='utf-8')
           app = app.replace(
@@ -99,7 +122,18 @@ jobs:
           pop_new = "queueScrollRestore(\n            path,\n            historyEntry?.view === 'product-detail' ? historyEntry.scrollY : 0,\n            historyEntry?.view === 'product-detail' ? historyEntry.relatedScrollX : 0,\n          );"
           if pop_old not in app:
               raise SystemExit('App popstate detail restore shape changed')
-          app_path.write_text(app.replace(pop_old, pop_new, 1), encoding='utf-8')
+          app = app.replace(pop_old, pop_new, 1)
+
+          related_marker = """  const relatedProducts = selectedProduct ? getRelatedProducts(selectedProduct, products) : [];\n\n  return (\n"""
+          related_replacement = """  const relatedProducts = selectedProduct ? getRelatedProducts(selectedProduct, products) : [];\n  const activeProductHistoryEntry = typeof window !== 'undefined' ? readCerberusHistoryEntry(window.history.state) : null;\n  const initialRelatedScrollX = activeProductHistoryEntry?.view === 'product-detail'\n    && selectedProduct\n    && activeProductHistoryEntry.productKey === (selectedProduct.slug || selectedProduct.id)\n      ? activeProductHistoryEntry.relatedScrollX\n      : 0;\n\n  const handleRelatedScrollPositionChange = (scrollLeft: number) => {\n    if (typeof window === 'undefined' || !selectedProduct) return;\n    const currentEntry = readCerberusHistoryEntry(window.history.state);\n    if (currentEntry?.view !== 'product-detail') return;\n    if (currentEntry.productKey !== (selectedProduct.slug || selectedProduct.id)) return;\n    window.history.replaceState(\n      mergeCerberusHistoryState(\n        window.history.state,\n        createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {\n          canGoBack: currentEntry.canGoBack,\n          fromView: currentEntry.fromView,\n          relatedScrollX: scrollLeft,\n        }),\n      ),\n      '',\n      window.location.href,\n    );\n  };\n\n  return (\n"""
+          if related_marker not in app:
+              raise SystemExit('App relatedProducts marker changed')
+          app = app.replace(related_marker, related_replacement, 1)
+          prop_marker = """            metaPixelId={config.metaPixelId}\n            metaAccessToken={config.metaAccessToken}\n          />\n"""
+          prop_replacement = """            metaPixelId={config.metaPixelId}\n            metaAccessToken={config.metaAccessToken}\n            initialRelatedScrollX={initialRelatedScrollX}\n            onRelatedScrollPositionChange={handleRelatedScrollPositionChange}\n          />\n"""
+          if prop_marker not in app:
+              raise SystemExit('App ProductDetail prop marker changed')
+          app_path.write_text(app.replace(prop_marker, prop_replacement, 1), encoding='utf-8')
 
           test_path = Path('tests/catalogNavigation.test.ts')
           test_source = test_path.read_text(encoding='utf-8')
@@ -159,7 +193,7 @@ jobs:
         run: |
           git config user.name "kauabrennan5-bit"
           git config user.email "kauabrennan5@gmail.com"
-          git add src/components/ProductGrid.tsx src/lib/catalogNavigation.ts src/App.tsx tests/catalogNavigation.test.ts
+          git add src/components/ProductGrid.tsx src/components/ProductDetail.tsx src/lib/catalogNavigation.ts src/App.tsx tests/catalogNavigation.test.ts
           if git diff --cached --quiet; then
             echo 'No interaction patch changes to commit.'
           else
