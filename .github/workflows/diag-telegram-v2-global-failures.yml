@@ -1,0 +1,101 @@
+name: Diagnose Telegram V2 global failures
+
+on:
+  push:
+    branches:
+      - diag/telegram-v2-global-failures-2026-08-28
+    paths:
+      - .github/workflows/diag-telegram-v2-global-failures.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply exact ephemeral V2 preparation from finalizer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          workflow = Path('.github/workflows/finalize-telegram-v2.yml').read_text(encoding='utf-8').splitlines()
+          targets = [
+              'Apply deterministic V2 base patch',
+              'Prioritize explicit promotion states',
+              'Add isolated user-state test hooks',
+              'Isolate promotion test state and legacy product routing assertion',
+              'Align advanced-panel test contract',
+          ]
+
+          def extract_run(name: str) -> str:
+              marker = f'      - name: {name}'
+              try:
+                  start = workflow.index(marker)
+              except ValueError:
+                  raise SystemExit(f'missing finalizer step: {name}')
+              run_idx = start + 1
+              while run_idx < len(workflow) and workflow[run_idx].strip() == '':
+                  run_idx += 1
+              if run_idx >= len(workflow) or workflow[run_idx] != '        run: |':
+                  raise SystemExit(f'missing run block: {name}')
+              out = []
+              i = run_idx + 1
+              while i < len(workflow):
+                  line = workflow[i]
+                  if line.startswith('      - name: ') or line.startswith('      - uses: '):
+                      break
+                  if line.startswith('          '):
+                      out.append(line[10:])
+                  elif line.strip() == '':
+                      out.append('')
+                  else:
+                      raise SystemExit(f'unexpected indentation in {name}: {line!r}')
+                  i += 1
+              return '\n'.join(out) + '\n'
+
+          for target in targets:
+              script = extract_run(target)
+              print(f'::group::{target}')
+              subprocess.run(['bash', '-euo', 'pipefail', '-c', script], check=True)
+              print('::endgroup::')
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Capture full global suite
+        id: global
+        shell: bash
+        run: |
+          set +e
+          npm test > full-test.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "GLOBAL_TEST_EXIT=$status"
+          tail -n 500 full-test.log
+          exit 0
+
+      - name: Upload full test log
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-v2-global-test-log
+          path: full-test.log
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Preserve test conclusion
+        if: steps.global.outputs.status != '0'
+        run: exit 1
