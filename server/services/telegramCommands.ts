@@ -8,23 +8,29 @@ export interface TelegramCommandDefinition {
   description: string;
 }
 
-/** Apenas o que merece aparecer no menu nativo do Telegram. */
+/**
+ * Menu nativo do Telegram: curto e operacional.
+ * Comandos secundários continuam suportados, mas não poluem a lista principal.
+ */
 export const PRIMARY_TELEGRAM_COMMANDS: readonly TelegramCommandDefinition[] = Object.freeze([
-  { command: "start", description: "Abrir o painel Cerberus" },
-  { command: "menu", description: "Atalhos principais" },
-  { command: "hoje", description: "Resumo e prioridade de agora" },
-  { command: "status", description: "Saúde do sistema" },
+  { command: "start", description: "Abrir painel Cerberus" },
+  { command: "hoje", description: "Resumo e prioridade agora" },
+  { command: "produtos", description: "Ver e gerenciar catálogo" },
   { command: "pendentes", description: "Revisões aguardando decisão" },
-  { command: "aprovados", description: "Decisões e catálogo ativo" },
-  { command: "produtos", description: "Gerenciar catálogo" },
-  { command: "categorias", description: "Taxonomia pública e contagens" },
-  { command: "shopee", description: "Analisar até 10 itens Shopee" },
-  { command: "publicar", description: "Encaminhar review com confirmação" },
+  { command: "shopee", description: "Descobrir produtos Shopee" },
   { command: "analytics", description: "Cliques e desempenho" },
-  { command: "campanhas", description: "Campanhas recentes" },
+  { command: "campanhas", description: "Campanhas de e-mail" },
   { command: "redes", description: "Links sociais oficiais" },
+  { command: "status", description: "Saúde do sistema" },
+  { command: "ajuda", description: "Ajuda e comandos" },
+]);
+
+export const SECONDARY_TELEGRAM_COMMANDS: readonly TelegramCommandDefinition[] = Object.freeze([
+  { command: "menu", description: "Atalhos principais" },
+  { command: "aprovados", description: "Decisões e catálogo ativo" },
+  { command: "categorias", description: "Taxonomia pública e contagens" },
+  { command: "publicar", description: "Encaminhar review com confirmação" },
   { command: "cancelar", description: "Cancelar o fluxo atual" },
-  { command: "ajuda", description: "Como usar o bot" },
   { command: "avancado", description: "Comandos técnicos" },
 ]);
 
@@ -54,6 +60,7 @@ const ALIASES: Readonly<Record<string, string>> = Object.freeze({
 
 const KNOWN_COMMANDS = new Set([
   ...PRIMARY_TELEGRAM_COMMANDS.map(item => item.command),
+  ...SECONDARY_TELEGRAM_COMMANDS.map(item => item.command),
   "admin",
   "help",
   "listar",
@@ -147,8 +154,9 @@ function levenshtein(a: string, b: string): number {
 
 export function suggestTelegramCommand(name: string): string | null {
   const normalized = String(name || "").toLowerCase();
+  const candidates = [...PRIMARY_TELEGRAM_COMMANDS, ...SECONDARY_TELEGRAM_COMMANDS];
   let best: { name: string; distance: number } | null = null;
-  for (const item of PRIMARY_TELEGRAM_COMMANDS) {
+  for (const item of candidates) {
     const distance = levenshtein(normalized, item.command);
     if (!best || distance < best.distance) best = { name: item.command, distance };
   }
@@ -158,22 +166,21 @@ export function suggestTelegramCommand(name: string): string | null {
 export function renderPrimaryCommandHelp(): string {
   return (
     "🛡️ <b>CERBERUS FINDS</b>\n" +
-    "Use o bot como painel, não como terminal.\n\n" +
+    "Painel administrativo do catálogo e da operação.\n\n" +
     "⚡ <b>AGORA</b>\n" +
-    "/hoje — resumo + próxima prioridade\n" +
+    "/hoje — resumo + prioridade\n" +
     "/pendentes — fila humana\n" +
-    "/aprovados — decisões e catálogo ativo\n" +
     "/status — saúde do sistema\n\n" +
     "📦 <b>CATÁLOGO</b>\n" +
-    "/produtos · /categorias · /analytics\n\n" +
+    "/produtos — todos os produtos, ativos e pausados\n" +
+    "/aprovados · /categorias · /analytics\n\n" +
     "🔎 <b>DESCOBERTA</b>\n" +
     "/shopee N [termo ou link]\n" +
-    "/publicar &lt;review_id&gt; — sempre com confirmação humana\n\n" +
-    "🧰 <b>ADMIN</b>\n" +
+    "/publicar &lt;review_id&gt; — confirmação humana obrigatória\n\n" +
+    "📣 <b>OPERAÇÃO</b>\n" +
     "/campanhas · /redes · /cancelar\n" +
     "/avancado — ferramentas técnicas\n\n" +
-    "Você também pode escrever: <i>status</i>, <i>ver pendentes</i>, <i>listar produtos</i>.\n" +
-    "DECISION ≠ ACTION · mutações só acontecem em fluxos explícitos."
+    "Os produtos exibidos vêm da mesma fonte canônica do site (Supabase)."
   );
 }
 
