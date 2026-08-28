@@ -221,6 +221,16 @@ test("campaign cards expose only actions valid for each campaign state", () => {
   assert.ok(pendingCallbacks.includes(`campaign_subject_edit:${pending.id}`));
   assert.ok(pendingCallbacks.includes(`campaign_cancel:${pending.id}`));
 
+  const approved = { ...draft("campaign-card-approved"), status: "approved" as const };
+  const approvedCallbacks = campaignKeyboard(approved).flat().map(button => button.callback_data);
+  assert.ok(approvedCallbacks.includes(`campaign_test:${approved.id}`));
+  assert.ok(approvedCallbacks.includes(`campaign_confirm_general:${approved.id}`));
+  assert.equal(approvedCallbacks.includes(`campaign_start:${approved.id}`), false);
+  const confirmedApproved = { ...approved, generalSendConfirmedAt: "2026-08-28T01:00:00.000Z", generalSendConfirmedByTelegramId: "admin-1" };
+  const confirmedApprovedCallbacks = campaignKeyboard(confirmedApproved).flat().map(button => button.callback_data);
+  assert.ok(confirmedApprovedCallbacks.includes(`campaign_start:${approved.id}`));
+  assert.equal(confirmedApprovedCallbacks.includes(`campaign_test:${approved.id}`), false);
+
   const tested = {
     ...draft("campaign-card-tested"),
     status: "test_sent" as const,
@@ -541,10 +551,17 @@ test("renderer omits unconfigured legal, social and browser-view blocks", () => 
   assert.equal(rendered.html.includes("Google Play"), false);
 });
 
-test("state machine refuses general send before approved test and requires explicit confirmation", () => {
+test("state machine requires explicit confirmation for direct or tested general send", () => {
   const pending = transitionCampaign(draft(), { type: "submit_for_approval", actorTelegramId: "admin-1" });
   const approved = transitionCampaign(pending, { type: "approve", actorTelegramId: "admin-1" });
-  assert.throws(() => transitionCampaign(approved, { type: "begin_sending", actorTelegramId: "admin-1" }), /Envio geral exige teste enviado/);
+  assert.throws(() => transitionCampaign(approved, { type: "begin_sending", actorTelegramId: "admin-1" }), /Confirmação humana do envio geral ausente/);
+
+  const directConfirmed = transitionCampaign(approved, { type: "confirm_general_send", actorTelegramId: "admin-1" });
+  const directSending = transitionCampaign(directConfirmed, { type: "begin_sending", actorTelegramId: "admin-1" });
+  assert.equal(directSending.status, "sending");
+  assert.equal(directSending.testSentAt, null);
+  assert.equal(directSending.testProviderMessageId, null);
+
   const tested = transitionCampaign(approved, { type: "record_test_sent", actorTelegramId: "admin-1", providerReference: "provider-test-1" });
   const confirmed = transitionCampaign(tested, { type: "confirm_general_send", actorTelegramId: "admin-1" });
   const sending = transitionCampaign(confirmed, { type: "begin_sending", actorTelegramId: "admin-1" });
@@ -906,7 +923,7 @@ test("Telegram callback approval/test paths use injected transports and mask the
   assert.equal(answers.length >= 2, true);
 });
 
-test("legitimate pending approval updates the Telegram card to approved with only the test gate", async () => {
+test("legitimate pending approval updates the Telegram card with test and direct-send gates", async () => {
   const store = new FakeCampaignStore();
   const pending = { ...draft("campaign-legitimate-approval"), status: "pending_approval" as const };
   store.campaigns.set(pending.id, pending);
@@ -924,7 +941,7 @@ test("legitimate pending approval updates the Telegram card to approved with onl
   assert.match(answers[0], /Prévia aprovada/);
   assert.match(markups[0].text, /Status: <code>approved<\/code>/);
   assert.equal(markups[0].markup.inline_keyboard[0][0].callback_data, `campaign_test:${pending.id}`);
-  assert.equal(markups[0].markup.inline_keyboard.some((row: any[]) => row.some(button => String(button.callback_data).includes("campaign_confirm_general"))), false);
+  assert.equal(markups[0].markup.inline_keyboard.some((row: any[]) => row.some(button => String(button.callback_data).includes("campaign_confirm_general"))), true);
 });
 
 test("stale approval card reloads test_sent state and blocks without a provider call", async () => {
@@ -1047,6 +1064,30 @@ test("two concurrent test callbacks produce one provider call and one persisted 
   assert.equal(store.campaigns.get(campaign.id)?.status, "test_sent");
   assert.equal(store.recipients.length, 0);
   assert.equal(answers.filter(answer => /test_sent/.test(answer)).length, 1);
+});
+
+test("Telegram direct confirmation on approved campaign exposes only the general start gate", async () => {
+  const store = new FakeCampaignStore();
+  const campaign = { ...draft("campaign-direct-confirm"), status: "approved" as const };
+  store.campaigns.set(campaign.id, campaign);
+  const markups: any[] = [];
+  const answers: string[] = [];
+  const deps = {
+    store,
+    env: { NEWSLETTER_TEST_EMAIL: "operator@example.test", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberusfinds.com" },
+    productLoader: async () => product,
+    answerCallbackQuery: async (_id: string, text?: string) => { answers.push(text || ""); },
+    editTelegramMessageText: async (_chat: number | string, _message: number, _text: string, replyMarkup?: unknown) => { markups.push(replyMarkup); },
+    sendTelegramMessage: async () => undefined,
+  };
+
+  await handleNewsletterCampaignCallback(`campaign_confirm_general:${campaign.id}`, "callback-direct-confirm", "admin-1", 1, 778, deps);
+  const saved = store.campaigns.get(campaign.id);
+  assert.equal(saved?.status, "approved");
+  assert.equal(saved?.generalSendConfirmedByTelegramId, "admin-1");
+  assert.ok(markups[0]["inline_keyboard"].flat().some((button: any) => button.callback_data === `campaign_start:${campaign.id}`));
+  assert.equal(markups[0]["inline_keyboard"].flat().some((button: any) => button.callback_data === `campaign_test:${campaign.id}`), false);
+  assert.match(answers[0], /Confirmação registrada/);
 });
 
 test("Telegram confirmation callback preserves test_sent without creating recipients", async () => {

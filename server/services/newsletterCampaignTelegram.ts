@@ -162,7 +162,7 @@ async function handleNewsletterCampaignCallbackOnce(
     }
 
     if (data.startsWith("campaign_confirm_general:")) {
-      if (campaign.status !== "test_sent") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      if (campaign.status !== "approved" && campaign.status !== "test_sent") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const confirmed = await confirmGeneralSend(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Confirmação registrada. Revise antes de iniciar o envio geral.");
       await syncCampaignTelegramState(confirmed.id, deps, messageReference(chatId, messageId));
@@ -170,7 +170,7 @@ async function handleNewsletterCampaignCallbackOnce(
     }
 
     if (data.startsWith("campaign_start:")) {
-      if (campaign.status !== "test_sent" && campaign.status !== "failed") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      if (campaign.status !== "approved" && campaign.status !== "test_sent" && campaign.status !== "failed") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const sending = await startGeneralSend(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Envio geral enfileirado.");
       await syncCampaignTelegramState(sending.id, deps, messageReference(chatId, messageId));
@@ -406,8 +406,15 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${campaign.id}` }, { text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
     case "approved":
+      if (campaign.generalSendConfirmedAt && campaign.generalSendConfirmedByTelegramId) {
+        return [
+          [{ text: "🚀 Enviar campanha geral", callback_data: `campaign_start:${campaign.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+        ];
+      }
       return [
         [{ text: "🧪 Enviar teste controlado", callback_data: `campaign_test:${campaign.id}` }],
+        [{ text: "📣 Confirmar envio geral direto", callback_data: `campaign_confirm_general:${campaign.id}` }],
         [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
     case "test_sent":

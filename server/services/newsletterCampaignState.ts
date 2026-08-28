@@ -178,15 +178,20 @@ export function transitionCampaign(
   }
 
   if (transition.type === "confirm_general_send") {
-    expectStatus(campaign, "test_sent", "TEST_CONFIRMATION_REQUIRED");
+    if (campaign.status !== "test_sent" && campaign.status !== "approved") {
+      throw new CampaignStateError("TEST_CONFIRMATION_REQUIRED", "Confirmação geral exige campanha aprovada ou teste enviado.");
+    }
+    if (campaign.status === "approved" && (campaign.testSentAt || campaign.testProviderMessageId)) {
+      throw new CampaignStateError("GENERAL_SEND_GATE_REQUIRED", "Campanha com teste registrado deve seguir o fluxo de teste.");
+    }
     next.generalSendConfirmedAt = timestamp;
     next.generalSendConfirmedByTelegramId = actor;
     return next;
   }
 
   if (transition.type === "begin_sending") {
-    if (campaign.status !== "test_sent" && campaign.status !== "failed") {
-      throw new CampaignStateError("GENERAL_SEND_GATE_REQUIRED", "Envio geral exige teste enviado e confirmação humana.");
+    if (campaign.status !== "test_sent" && campaign.status !== "approved" && campaign.status !== "failed") {
+      throw new CampaignStateError("GENERAL_SEND_GATE_REQUIRED", "Envio geral exige campanha aprovada, confirmação humana e, quando aplicável, teste enviado.");
     }
     if (!campaign.generalSendConfirmedAt || !campaign.generalSendConfirmedByTelegramId) {
       throw new CampaignStateError("GENERAL_SEND_CONFIRMATION_REQUIRED", "Confirmação humana do envio geral ausente.");
