@@ -17,7 +17,7 @@ const STORAGE_KEY = 'cerberus_utm_attribution_v1';
 
 /**
  * Captura atribuição somente após consentimento explícito. Sem consentimento,
- * nenhum UTM, click id, referrer ou landing page é persistido.
+ * nenhum UTM, click id, referrer ou landing page é persistido no navegador.
  */
 export function captureUTMs(): UTMParams {
   if (typeof window === 'undefined' || !hasAnalyticsConsent()) return {};
@@ -94,9 +94,16 @@ export function clearUTMs(): void {
   }
 }
 
+/**
+ * Acrescenta parâmetros de atribuição fornecidos explicitamente pelo chamador.
+ *
+ * O consentimento é obrigatório para CAPTURAR/LER atribuição do navegador
+ * (captureUTMs/getStoredUTMs). Já os renderizadores server-side de newsletter
+ * fornecem UTMs editoriais explícitas e não consultam armazenamento do usuário;
+ * essas marcações de link precisam continuar funcionando fora do browser.
+ */
 export function appendUTMsToUrl(targetUrl: string, customUtms?: UTMParams): string {
   if (!targetUrl) return '';
-  if (!hasAnalyticsConsent()) return targetUrl;
 
   try {
     const utms = customUtms || getStoredUTMs();
