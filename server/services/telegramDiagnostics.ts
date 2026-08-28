@@ -1,3 +1,5 @@
+import { getTelegramBotToken, telegramApiFetch } from "./telegramApiClient";
+
 export interface TelegramWebhookDiagnostics {
   configured: boolean;
   tokenConfigured: boolean;
@@ -16,7 +18,6 @@ export interface TelegramWebhookDiagnostics {
   lastWebhookCheck: string;
 }
 
-const TELEGRAM_API_TIMEOUT_MS = 15_000;
 const DEFAULT_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
 let telegramBackendReady = false;
 let lastTelegramBootstrapAt: string | undefined;
@@ -49,41 +50,31 @@ export function getTelegramBootstrapStatus(): { ready: boolean; initializedAt?: 
   return { ready: telegramBackendReady, initializedAt: lastTelegramBootstrapAt };
 }
 
-async function telegramGet(method: string, timeoutMs = TELEGRAM_API_TIMEOUT_MS): Promise<any> {
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim();
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN não configurado.");
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-      signal: controller.signal,
-      headers: { "User-Agent": "cerberus-telegram-diagnostics" },
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload?.ok) {
-      const error = new Error(sanitizeTelegramText(payload?.description) || `Telegram API HTTP ${response.status}`) as Error & { status?: number };
-      error.status = response.status;
-      throw error;
-    }
-    return payload.result;
-  } finally {
-    clearTimeout(timer);
+async function telegramGet(method: string): Promise<any> {
+  if (!getTelegramBotToken()) throw new Error("TELEGRAM_BOT_TOKEN não configurado.");
+  const response = await telegramApiFetch(method, {});
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.ok) {
+    const error = new Error(
+      sanitizeTelegramText(payload?.description) || `Telegram API HTTP ${response.status}`,
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
+  return payload.result;
 }
 
 export async function getTelegramWebhookDiagnostics(): Promise<TelegramWebhookDiagnostics> {
   const now = new Date().toISOString();
-  const tokenConfigured = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
+  const tokenConfigured = Boolean(getTelegramBotToken());
   const whitelistValue = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "";
   const whitelistConfigured = whitelistValue.split(",").map(value => value.trim()).filter(Boolean).length > 0;
-  const effectiveWhitelistConfigured = whitelistConfigured || Boolean("1976526372");
   const expectedWebhookUrl = getExpectedTelegramWebhookUrl();
   const base: TelegramWebhookDiagnostics = {
     configured: tokenConfigured,
     tokenConfigured,
     whitelistConfigured,
-    effectiveWhitelistConfigured,
+    effectiveWhitelistConfigured: whitelistConfigured,
     webhookConfigured: false,
     webhookMatchesExpectedUrl: null,
     expectedWebhookUrl,
