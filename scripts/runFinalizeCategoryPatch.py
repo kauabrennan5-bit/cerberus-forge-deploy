@@ -22,30 +22,11 @@ for legacy_alias in (
     if legacy_alias not in category_source:
         raise SystemExit(f'generic accessory alias shape changed: {legacy_alias!r}')
     category_source = category_source.replace(legacy_alias, '', 1)
-
-# Resolve primeiro a categoria canônica exata; rótulos não-canônicos dependem
-# de sinais factuais do produto. Isso mantém "Acessórios" fail-closed como
-# categoria isolada sem impedir inferência segura por título/descrição.
-old_order = '''  const contentCategory = inferPublicProductCategory({ category: "", ...context });
-  return contentCategory || CATEGORY_ALIASES[normalized] || "";
-'''
-if old_order not in category_source:
-    raise SystemExit('productCategory resolver order shape changed')
-# Preserve inferência contextual antes de aliases legados restantes. Aliases
-# específicos continuam úteis quando o contexto não oferece sinal melhor.
-category_source = category_source.replace(
-    old_order,
-    '''  const contentCategory = inferPublicProductCategory({ category: "", ...context });
-  return contentCategory || CATEGORY_ALIASES[normalized] || "";
-''',
-    1,
-)
 category_path.write_text(category_source, encoding='utf-8')
 
 # A review pode chegar com metadado técnico (affiliate_preview), desde que a
 # categoria pública seja resolvida deterministicamente antes do pipeline. O
-# readiness deve bloquear apenas quando a resolução falhar, não exigir edição
-# manual de uma review que já tem evidência suficiente.
+# readiness bloqueia apenas quando a resolução falha.
 telegram_path = Path('server/services/telegramBot.ts')
 telegram_source = telegram_path.read_text(encoding='utf-8')
 old_completeness = '''  const publicCategory = resolveTelegramReviewCategory(review);
@@ -59,9 +40,7 @@ if old_completeness not in telegram_source:
 telegram_source = telegram_source.replace(old_completeness, new_completeness, 1)
 telegram_path.write_text(telegram_source, encoding='utf-8')
 
-# A ressalva de checkout é informação comercial importante. O refactor do
-# card deve preservá-la dentro de um slot de altura previsível para não voltar
-# a criar cards com alturas diferentes.
+# A ressalva comercial permanece em um slot de altura previsível.
 card_path = Path('src/components/ProductCard.tsx')
 card_source = card_path.read_text(encoding='utf-8')
 button_marker = '''            <button
@@ -79,8 +58,7 @@ if 'Condições finais de pagamento e frete são confirmadas na loja oficial.' n
     card_source = card_source.replace(button_marker, disclaimer + button_marker, 1)
 card_path.write_text(card_source, encoding='utf-8')
 
-# O teste antigo exigia a implementação local BASE_CATEGORIES. Agora a fonte
-# correta é PUBLIC_PRODUCT_CATEGORIES compartilhada por frontend e pipeline.
+# O grid agora depende da taxonomia pública compartilhada, não de uma cópia local.
 promotion_test_path = Path('tests/promotionOffer.test.ts')
 promotion_test = promotion_test_path.read_text(encoding='utf-8')
 old_assertions = '''  assert.match(gridSource, /const BASE_CATEGORIES = \\[/);
@@ -95,13 +73,50 @@ if old_assertions not in promotion_test:
 promotion_test = promotion_test.replace(old_assertions, new_assertions, 1)
 promotion_test_path.write_text(promotion_test, encoding='utf-8')
 
-# O teste Telegram gerado deve provar que o rótulo não-canônico "Acessórios"
-# é resolvido pelo contexto da luminária, e nunca persistido como categoria.
+# Fixtures N7 exercitam resolução de afiliado, não classificação de categoria.
+# Elas recebem uma categoria pública válida para alcançar o gate que pretendem testar.
+affiliate_test_path = Path('tests/affiliateResolverN7.test.ts')
+affiliate_test = affiliate_test_path.read_text(encoding='utf-8')
+old_candidate_category = '            category: "Acessórios",\n'
+old_product_category = '          categoria: "Acessórios",\n'
+if affiliate_test.count(old_candidate_category) != 1:
+    raise SystemExit('N7 candidate category fixture shape changed')
+if affiliate_test.count(old_product_category) != 1:
+    raise SystemExit('N7 product category fixture shape changed')
+affiliate_test = affiliate_test.replace(old_candidate_category, '            category: "Iluminação",\n', 1)
+affiliate_test = affiliate_test.replace(old_product_category, '          categoria: "Iluminação",\n', 1)
+affiliate_test_path.write_text(affiliate_test, encoding='utf-8')
+
+# Os testes de segurança precisam isolar a variável sob teste. A descrição
+# contaminada usa categoria pública válida; prompt-injection sem sinais
+# classificatórios deve permanecer fail-closed, nunca virar categoria genérica.
 telegram_test_path = Path('tests/telegramAndMarketplace.test.ts')
 telegram_test = telegram_test_path.read_text(encoding='utf-8')
+contaminated_fixture = '''    produto: "Produto editorial",
+    categoria: "Acessórios",
+    preco: 10,
+'''
+if telegram_test.count(contaminated_fixture) != 1:
+    raise SystemExit('contaminated-description fixture shape changed')
+telegram_test = telegram_test.replace(
+    contaminated_fixture,
+    '''    produto: "Produto editorial",
+    categoria: "Iluminação",
+    preco: 10,
+''',
+    1,
+)
 telegram_test = telegram_test.replace(
     'assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Calçados & Acessórios");',
     'assert.equal(resolveTelegramReviewCategory(review as any, "Acessórios"), "Iluminação");',
+    1,
+)
+old_prompt_expectation = '  assert.equal(curated.category, "Calçados & Acessórios");\n'
+if telegram_test.count(old_prompt_expectation) != 1:
+    raise SystemExit('prompt-injection category expectation shape changed')
+telegram_test = telegram_test.replace(
+    old_prompt_expectation,
+    '  assert.equal(curated.category, "", "categoria sem evidência pública permanece em revisão");\n',
     1,
 )
 telegram_test_path.write_text(telegram_test, encoding='utf-8')
