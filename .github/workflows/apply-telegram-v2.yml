@@ -32,6 +32,35 @@ jobs:
           python -c "from pathlib import Path; p=Path('.github/scripts/apply_telegram_v2.py'); s=p.read_text(); old='re.subn(pattern, replacement, src, count=1, flags=re.S)'; new='re.subn(pattern, lambda _match: replacement, src, count=1, flags=re.S)'; assert old in s; p.write_text(s.replace(old, new, 1))"
           python .github/scripts/apply_telegram_v2.py
 
+      - name: Align legacy static routing assertion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('tests/telegramAndMarketplace.test.ts')
+          s = p.read_text(encoding='utf-8')
+          old = '''  const directStart = source.indexOf('if (text.startsWith("/listar") || text.startsWith("/produtos"))');
+          const directEnd = source.indexOf('if (text.startsWith("/categorias"))', directStart);
+          const directHandler = source.slice(directStart, directEnd);
+
+          assert.ok(directStart >= 0 && directEnd > directStart);
+          assert.match(directHandler, /renderProductList\\(0\\)/);
+          assert.match(directHandler, /sendTelegramMessage\\(chatId, listView\\.text, listView\\.keyboard\\)/);
+          assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
+          assert.match(source, /if \\(data\\.startsWith\\("products_list:"\\)\\)[\\s\\S]{0,700}editTelegramMessageText/);'''
+          new = '''  const directStart = source.indexOf('if (commandName === "produtos")');
+          const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
+          const directHandler = source.slice(directStart, directEnd);
+
+          assert.ok(directStart >= 0 && directEnd > directStart);
+          assert.match(directHandler, /renderProductList\\(0\\)/);
+          assert.match(directHandler, /sendTelegramMessage\\(chatId, listView\\.text, listView\\.keyboard\\)/);
+          assert.doesNotMatch(directHandler, /fakeCb|message_id|handleTelegramWebhookUpdate/);
+          assert.match(source, /if \\(data\\.startsWith\\("products_list:"\\)\\)[\\s\\S]{0,700}editTelegramMessageText/);'''
+          if old not in s:
+              raise SystemExit('legacy static routing assertion marker not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Install dependencies
         run: npm ci
 
