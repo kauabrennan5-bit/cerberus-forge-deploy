@@ -1,0 +1,63 @@
+name: Mobile catalog baseline
+
+on:
+  push:
+    branches:
+      - fix/mobile-catalog-categories-2026-08-28
+    paths:
+      - scripts/mobileCatalogBaseline.mjs
+      - .github/workflows/mobile-catalog-baseline.yml
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Install browser probe dependency
+        run: npm install --no-save --package-lock=false playwright@1.55.0
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build local frontend baseline
+        run: npx vite build
+
+      - name: Serve local baseline
+        run: |
+          npx vite preview --host 127.0.0.1 --port 4173 > /tmp/cerberus-vite-preview.log 2>&1 &
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:4173/data/products.json >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/cerberus-vite-preview.log
+          exit 1
+
+      - name: Audit local branch and live production
+        env:
+          LOCAL_BASE_URL: http://127.0.0.1:4173
+          LIVE_BASE_URL: https://cerberus-static-catalog.onrender.com
+          ARTIFACT_DIR: mobile-baseline-artifacts
+        run: node scripts/mobileCatalogBaseline.mjs
+
+      - name: Upload baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-catalog-baseline
+          path: mobile-baseline-artifacts
+          if-no-files-found: error
+          retention-days: 2
