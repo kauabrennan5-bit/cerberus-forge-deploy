@@ -1,5 +1,4 @@
 import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
-import { clearAdminSessionPassword, getAdminSessionPassword, setAdminSessionPassword } from "../lib/adminSession";
 
 export interface CreateProductInput {
   senha?: string;
@@ -51,7 +50,7 @@ function getApiUrl(path: string): string {
 
 function adminHeaders(password?: string): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  const normalized = String(password || getAdminSessionPassword() || '').trim();
+  const normalized = String(password || '').trim();
   if (normalized) headers['x-admin-password'] = normalized;
   return headers;
 }
@@ -115,20 +114,17 @@ export async function verifyAdminPassword(password: string): Promise<{ success: 
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || data?.success !== true) {
-      clearAdminSessionPassword();
       return { success: false, error: data?.error || 'Senha incorreta.' };
     }
-    setAdminSessionPassword(normalizedPassword);
     return { success: true };
   } catch {
-    clearAdminSessionPassword();
     return { success: false, error: 'Erro ao conectar ao servidor.' };
   }
 }
 
 export async function createProduct(payload: any, password?: string): Promise<ApiResponse<any>> {
   try {
-    const activePassword = password || payload?.senha || getAdminSessionPassword();
+    const activePassword = password || payload?.senha;
     const { senha: _ignoredSenha, ...safePayload } = payload || {};
     const res = await fetch(getApiUrl('/api/products'), {
       method: 'POST',
@@ -155,7 +151,7 @@ export async function createProduct(payload: any, password?: string): Promise<Ap
 
 export async function updateProduct(id: string, payload: any, password?: string): Promise<ApiResponse<any>> {
   try {
-    const activePassword = password || payload?.senha || getAdminSessionPassword();
+    const activePassword = password || payload?.senha;
     const { senha: _ignoredSenha, ...safePayload } = payload || {};
     const res = await fetch(getApiUrl(`/api/products/${id}`), {
       method: 'PUT',
