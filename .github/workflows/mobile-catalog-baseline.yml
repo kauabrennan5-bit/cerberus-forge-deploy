@@ -27,32 +27,100 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Apply catalog state patch
+      - name: Apply interaction patches
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/components/ProductGrid.tsx')
-          source = path.read_text(encoding='utf-8')
-          source = source.replace(
+
+          grid_path = Path('src/components/ProductGrid.tsx')
+          grid = grid_path.read_text(encoding='utf-8')
+          grid = grid.replace(
               "import React, { useMemo } from 'react';",
               "import React, { useMemo, type Dispatch, type SetStateAction } from 'react';",
               1,
           )
-          source = source.replace(
+          grid = grid.replace(
               "  onViewStateChange: (state: CatalogViewState) => void;",
               "  onViewStateChange: Dispatch<SetStateAction<CatalogViewState>>;",
               1,
           )
-          old = """  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;\n  const setSelectedCategory = (value: string) => onViewStateChange({ ...viewState, selectedCategory: value });\n  const setSearchQuery = (value: string) => onViewStateChange({ ...viewState, searchQuery: value });\n  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {\n    const resolved = typeof next === 'function' ? next(isCategoryPanelOpen) : next;\n    onViewStateChange({ ...viewState, isCategoryPanelOpen: resolved });\n  };\n"""
-          new = """  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;\n  const setSelectedCategory = (value: string) => onViewStateChange((current) => ({ ...current, selectedCategory: value }));\n  const setSearchQuery = (value: string) => onViewStateChange((current) => ({ ...current, searchQuery: value }));\n  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {\n    onViewStateChange((current) => ({\n      ...current,\n      isCategoryPanelOpen: typeof next === 'function' ? next(current.isCategoryPanelOpen) : next,\n    }));\n  };\n"""
-          if old not in source:
+          old_grid = """  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;\n  const setSelectedCategory = (value: string) => onViewStateChange({ ...viewState, selectedCategory: value });\n  const setSearchQuery = (value: string) => onViewStateChange({ ...viewState, searchQuery: value });\n  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {\n    const resolved = typeof next === 'function' ? next(isCategoryPanelOpen) : next;\n    onViewStateChange({ ...viewState, isCategoryPanelOpen: resolved });\n  };\n"""
+          new_grid = """  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;\n  const setSelectedCategory = (value: string) => onViewStateChange((current) => ({ ...current, selectedCategory: value }));\n  const setSearchQuery = (value: string) => onViewStateChange((current) => ({ ...current, searchQuery: value }));\n  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {\n    onViewStateChange((current) => ({\n      ...current,\n      isCategoryPanelOpen: typeof next === 'function' ? next(current.isCategoryPanelOpen) : next,\n    }));\n  };\n"""
+          if old_grid not in grid:
               raise SystemExit('ProductGrid catalog state setter shape changed')
-          source = source.replace(old, new, 1)
-          path.write_text(source, encoding='utf-8')
+          grid_path.write_text(grid.replace(old_grid, new_grid, 1), encoding='utf-8')
+
+          nav_path = Path('src/lib/catalogNavigation.ts')
+          nav = nav_path.read_text(encoding='utf-8')
+          nav = nav.replace(
+              "  scrollY: number;\n  canGoBack: boolean;",
+              "  scrollY: number;\n  relatedScrollX: number;\n  canGoBack: boolean;",
+              1,
+          )
+          nav = nav.replace(
+              "  options: { canGoBack: boolean; fromView: ProductHistoryEntry['fromView'] },",
+              "  options: { canGoBack: boolean; fromView: ProductHistoryEntry['fromView']; relatedScrollX?: unknown },",
+              1,
+          )
+          nav = nav.replace(
+              "      scrollY: normalizeScrollY(scrollY),\n      canGoBack: options.canGoBack === true,",
+              "      scrollY: normalizeScrollY(scrollY),\n      relatedScrollX: normalizeScrollY(options.relatedScrollX),\n      canGoBack: options.canGoBack === true,",
+              1,
+          )
+          read_old = """      productKey: entry.productKey.trim(),\n      scrollY: normalizeScrollY(entry.scrollY),\n      canGoBack: entry.canGoBack === true,\n"""
+          read_new = """      productKey: entry.productKey.trim(),\n      scrollY: normalizeScrollY(entry.scrollY),\n      relatedScrollX: normalizeScrollY(entry.relatedScrollX),\n      canGoBack: entry.canGoBack === true,\n"""
+          if read_old not in nav:
+              raise SystemExit('catalogNavigation product read shape changed')
+          nav_path.write_text(nav.replace(read_old, read_new, 1), encoding='utf-8')
+
+          app_path = Path('src/App.tsx')
+          app = app_path.read_text(encoding='utf-8')
+          app = app.replace(
+              "  const pendingScrollRestoreRef = useRef<{ path: string; y: number } | null>(null);",
+              "  const pendingScrollRestoreRef = useRef<{ path: string; y: number; relatedScrollX?: number } | null>(null);",
+              1,
+          )
+          restore_old = """      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);\n      if (maxY >= pending.y || attempts >= 12) {\n        window.scrollTo({ top: Math.min(pending.y, maxY), behavior: 'auto' });\n        pendingScrollRestoreRef.current = null;\n        return;\n      }\n      attempts += 1;\n      frameId = window.requestAnimationFrame(restore);\n"""
+          restore_new = """      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);\n      const relatedRail = pending.relatedScrollX && pending.relatedScrollX > 0\n        ? document.querySelector<HTMLElement>('[data-testid=\"related-products-rail\"]')\n        : null;\n      const pageReady = maxY >= pending.y || attempts >= 12;\n      const railReady = !pending.relatedScrollX || relatedRail !== null || attempts >= 12;\n      if (pageReady && railReady) {\n        window.scrollTo({ top: Math.min(pending.y, maxY), behavior: 'auto' });\n        if (relatedRail && pending.relatedScrollX) relatedRail.scrollLeft = pending.relatedScrollX;\n        pendingScrollRestoreRef.current = null;\n        return;\n      }\n      attempts += 1;\n      frameId = window.requestAnimationFrame(restore);\n"""
+          if restore_old not in app:
+              raise SystemExit('App scroll restore shape changed')
+          app = app.replace(restore_old, restore_new, 1)
+          queue_old = """  const queueScrollRestore = useCallback((path: string, y: number) => {\n  pendingScrollRestoreRef.current = { path, y: Math.max(0, Math.round(y || 0)) };\n}, []);\n"""
+          queue_new = """  const queueScrollRestore = useCallback((path: string, y: number, relatedScrollX = 0) => {\n  pendingScrollRestoreRef.current = {\n    path,\n    y: Math.max(0, Math.round(y || 0)),\n    relatedScrollX: Math.max(0, Math.round(relatedScrollX || 0)),\n  };\n}, []);\n"""
+          if queue_old not in app:
+              raise SystemExit('App queueScrollRestore shape changed')
+          app = app.replace(queue_old, queue_new, 1)
+          detail_old = """        const currentEntry = readCerberusHistoryEntry(window.history.state);\n        window.history.replaceState(\n          mergeCerberusHistoryState(\n            window.history.state,\n            createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {\n              canGoBack: currentEntry?.view === 'product-detail' ? currentEntry.canGoBack : false,\n              fromView: currentEntry?.view === 'product-detail' ? currentEntry.fromView : 'other',\n            }),\n"""
+          detail_new = """        const currentEntry = readCerberusHistoryEntry(window.history.state);\n        const relatedScrollX = document.querySelector<HTMLElement>('[data-testid=\"related-products-rail\"]')?.scrollLeft\n          ?? (currentEntry?.view === 'product-detail' ? currentEntry.relatedScrollX : 0);\n        window.history.replaceState(\n          mergeCerberusHistoryState(\n            window.history.state,\n            createProductHistoryState(selectedProduct.slug || selectedProduct.id, window.scrollY, {\n              canGoBack: currentEntry?.view === 'product-detail' ? currentEntry.canGoBack : false,\n              fromView: currentEntry?.view === 'product-detail' ? currentEntry.fromView : 'other',\n              relatedScrollX,\n            }),\n"""
+          if detail_old not in app:
+              raise SystemExit('App detail history persistence shape changed')
+          app = app.replace(detail_old, detail_new, 1)
+          pop_old = "queueScrollRestore(path, historyEntry?.view === 'product-detail' ? historyEntry.scrollY : 0);"
+          pop_new = "queueScrollRestore(\n            path,\n            historyEntry?.view === 'product-detail' ? historyEntry.scrollY : 0,\n            historyEntry?.view === 'product-detail' ? historyEntry.relatedScrollX : 0,\n          );"
+          if pop_old not in app:
+              raise SystemExit('App popstate detail restore shape changed')
+          app_path.write_text(app.replace(pop_old, pop_new, 1), encoding='utf-8')
+
+          test_path = Path('tests/catalogNavigation.test.ts')
+          test_source = test_path.read_text(encoding='utf-8')
+          test_source = test_source.replace(
+              'createProductHistoryState("produto-a", 321, { canGoBack: true, fromView: "catalog" })',
+              'createProductHistoryState("produto-a", 321, { canGoBack: true, fromView: "catalog", relatedScrollX: 165.4 })',
+              1,
+          )
+          test_source = test_source.replace(
+              '  assert.equal((detailEntry as any).scrollY, 321);\n  assert.equal((detailEntry as any).productKey, "produto-a");',
+              '  assert.equal((detailEntry as any).scrollY, 321);\n  assert.equal((detailEntry as any).relatedScrollX, 165);\n  assert.equal((detailEntry as any).productKey, "produto-a");',
+              1,
+          )
+          test_path.write_text(test_source, encoding='utf-8')
           PY
 
       - name: Install project dependencies
         run: npm ci
+
+      - name: Navigation regression test
+        run: node --import tsx/esm --test tests/catalogNavigation.test.ts
 
       - name: TypeScript
         run: npm run lint
@@ -87,15 +155,15 @@ jobs:
       - name: Diff integrity
         run: git diff --check
 
-      - name: Commit interaction fix
+      - name: Commit interaction fixes
         run: |
           git config user.name "kauabrennan5-bit"
           git config user.email "kauabrennan5@gmail.com"
-          git add src/components/ProductGrid.tsx
+          git add src/components/ProductGrid.tsx src/lib/catalogNavigation.ts src/App.tsx tests/catalogNavigation.test.ts
           if git diff --cached --quiet; then
             echo 'No interaction patch changes to commit.'
           else
-            git commit -m "fix(catalog): preserve batched filter state"
+            git commit -m "fix(catalog): preserve navigation interaction state"
             git push origin HEAD:fix/mobile-catalog-categories-2026-08-28
           fi
 
