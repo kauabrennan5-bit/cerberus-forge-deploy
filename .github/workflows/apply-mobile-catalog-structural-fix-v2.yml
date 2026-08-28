@@ -33,17 +33,17 @@ jobs:
           end = next(i for i in range(start, len(lines)) if lines[i].strip() == 'PY')
           script = textwrap.dedent('\n'.join(lines[start:end])) + '\n'
 
-          start_marker = 'old_restore = """'
-          end_marker = "    'App restoration queue',\n)\n"
-          start_at = script.find(start_marker)
-          if start_at < 0:
-              raise SystemExit('Bootstrap could not find old_restore start marker')
-          end_at = script.find(end_marker, start_at)
-          if end_at < 0:
-              raise SystemExit('Bootstrap could not find App restoration queue end marker')
-          end_at += len(end_marker)
+          def replace_script_block(source: str, start_marker: str, end_marker: str, replacement: str, label: str) -> str:
+              start_at = source.find(start_marker)
+              if start_at < 0:
+                  raise SystemExit(f'Bootstrap could not find {label} start marker')
+              end_at = source.find(end_marker, start_at)
+              if end_at < 0:
+                  raise SystemExit(f'Bootstrap could not find {label} end marker')
+              end_at += len(end_marker)
+              return source[:start_at] + replacement + source[end_at:]
 
-          replacement = '''restore_pattern = re.compile(
+          restore_replacement_script = '''restore_pattern = re.compile(
               r"  const restoreCatalogScroll = useCallback\\(\\(\\) => \\{.*?\\n  \\}, \\[\\]\\);\\n\\n",
               re.S,
           )
@@ -56,7 +56,44 @@ jobs:
           if count != 1:
               raise SystemExit(f'App restoration queue: expected 1 occurrence, found {count}')
           '''
-          script = script[:start_at] + replacement + script[end_at:]
+          script = replace_script_block(
+              script,
+              'old_restore = """',
+              "    'App restoration queue',\n)\n",
+              restore_replacement_script,
+              'restore block',
+          )
+
+          direct_detail_replacement_script = '''found_pattern = re.compile(
+              r"          if \\(found\\) \\{\\n            setSelectedProduct\\(found\\);\\n            setCurrentView\\('product-detail'\\);\\n          \\}",
+          )
+          found_replacement = """          if (found) {
+            setSelectedProduct(found);
+            setCurrentView('product-detail');
+            const existingEntry = readCerberusHistoryEntry(window.history.state);
+            if (existingEntry?.view !== 'product-detail') {
+              window.history.replaceState(
+                mergeCerberusHistoryState(
+                  window.history.state,
+                  createProductHistoryState(found.slug || found.id, 0, { canGoBack: false, fromView: 'other' }),
+                ),
+                '',
+                window.location.href,
+              );
+            }
+          }"""
+          text, count = found_pattern.subn(found_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'App direct detail history: expected 1 occurrence, found {count}')
+          '''
+          script = replace_script_block(
+              script,
+              'old_found = """',
+              "text = replace_once(text, old_found, new_found, 'App direct detail history')\n",
+              direct_detail_replacement_script,
+              'direct-detail block',
+          )
+
           Path('/tmp/mobile_catalog_patch.py').write_text(script, encoding='utf-8')
           BOOT
           python /tmp/mobile_catalog_patch.py
