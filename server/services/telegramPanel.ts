@@ -1,124 +1,92 @@
-/**
- * N17 — FASE 25B — COMMIT 1 — TELEGRAM READ PANEL
- * Painel operacional de LEITURA para o Telegram.
- *
- * REGRAS DE SEGURANÇA (contrato desta fase):
- * - ZERO escrita no Supabase causada por qualquer função deste módulo.
- * - FASE 25C (Commit 3): o /publicar <id> é executado pelo dispatcher do bot
- *   (telegramBot.ts) e SEMPRE exige confirmação humana no card de confirmação.
- *   Este módulo continua read-only.
- * - ZERO chamada de publication, N16 execute, N17 acquisition, syncCatalogAndDeploy.
- * - ZERO alteração de produto, PendingReview, lifecycle ou governança.
- * - Dados ausentes são reportados explicitamente como "não disponível".
- * - Nenhuma credencial, token ou valor sensível é logado ou embutido aqui.
- */
 import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
-import { telegramApiFetch, getTelegramBotToken } from "./telegramBot";
+import { telegramApiFetch, getTelegramBotToken } from "./telegramApiClient";
+import {
+  PRIMARY_TELEGRAM_COMMANDS,
+  renderAdvancedCommandHelp,
+  renderPrimaryCommandHelp,
+} from "./telegramCommands";
 import * as telegramRepo from "../repositories/telegramRepository";
 import * as productsRepository from "../repositories/productsRepository";
+import {
+  PUBLIC_PRODUCT_CATEGORIES,
+  resolvePublicProductCategory,
+} from "../../src/lib/productCategory";
 
-// ---------------------------------------------------------------
-// setMyCommands — registro dos comandos no BotFather
-// ---------------------------------------------------------------
-/**
- * Lista canônica de comandos registrados no Telegram.
- * /shopee e /publicar estão implementados (Fase 25C): o /publicar exige
- * confirmação humana explícita antes de qualquer ação do pipeline canônico.
- */
-export const TELEGRAM_PANEL_COMMANDS: Array<{ command: string; description: string }> = [
-  { command: "start", description: "Iniciar o bot" },
-  { command: "menu", description: "Menu consolidado de comandos" },
-  { command: "status", description: "Status geral do sistema (somente leitura)" },
-  { command: "pendentes", description: "Propostas pendentes de decisão" },
-  { command: "aprovados", description: "Reviews aprovadas e catálogo atual" },
-  { command: "shopee", description: "Lote Shopee (em breve)" },
-  { command: "publicar", description: "Encaminhar review à publicação (confirmação humana)" },
-  { command: "listar", description: "Listar produtos do catálogo" },
-  { command: "produtos", description: "Catálogo de produtos" },
-  { command: "categorias", description: "Gestão de categorias" },
-  { command: "redes", description: "Atualizar links das redes sociais" },
-  { command: "discover", description: "Descobrir produtos por URL ou busca" },
-  { command: "discover_batch", description: "Descoberta em lote" },
-  { command: "campanhas", description: "Reabrir campanhas recentes" },
-  { command: "campanha2", description: "Criar campanha semanal multi-produto" },
-  { command: "boasvindas", description: "Criar campanha de boas-vindas" },
-  { command: "research", description: "Pesquisa de candidato" },
-  { command: "assess", description: "Avaliação de candidato" },
-  { command: "priority", description: "Painel de prioridades" },
-  { command: "opportunities", description: "Oportunidades comerciais" },
-  { command: "risks", description: "Painel de riscos" },
-  { command: "experiments", description: "Experiments registrados" },
-  { command: "agents", description: "Agentes registrados" },
-  { command: "decisions", description: "Decisões registradas" },
-  { command: "recommendations", description: "Recomendações do brain" },
-  { command: "affiliates", description: "Registry de links afiliados" },
-  { command: "cycle", description: "Estado do ciclo comercial" },
-  { command: "help", description: "Ajuda e acesso rápido" },
-];
+/** Menu nativo: só comandos que realmente precisam estar à mão. */
+export const TELEGRAM_PANEL_COMMANDS = PRIMARY_TELEGRAM_COMMANDS.map(item => ({ ...item }));
 
-/**
- * Chamada Telegram setMyCommands. Fail-safe: qualquer falha da API do
- * Telegram é logada (sem credenciais) e NUNCA derruba o processo principal.
- * A aplicação é webhook-only e o bot continua operando mesmo sem menu registrado.
- */
 export async function registerTelegramCommands(): Promise<{ ok: boolean; reason?: string }> {
   if (!getTelegramBotToken()) {
-    return { ok: false, reason: "TELEGRAM_BOT_TOKEN ausente; menu não registrado (bot inoperante)" };
+    return { ok: false, reason: "TELEGRAM_BOT_TOKEN ausente; menu não registrado" };
   }
   try {
     const commands = TELEGRAM_PANEL_COMMANDS.map(({ command, description }) => ({ command, description }));
     const res = await telegramApiFetch("setMyCommands", { commands });
     const result = await res.json();
-    if (result?.ok === true) {
-      return { ok: true };
-    }
-    return { ok: false, reason: typeof result?.description === "string" ? result.description : "unknown_error" };
+    if (result?.ok === true) return { ok: true };
+    return {
+      ok: false,
+      reason: typeof result?.description === "string" ? result.description : "unknown_error",
+    };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : "unknown_error" };
   }
 }
 
-// ---------------------------------------------------------------
-// /menu — menu consolidado (read-only)
-// ---------------------------------------------------------------
 export function renderReadPanelMenu(): string {
+  return "🧭 <b>MENU PRINCIPAL</b>\n\n" + renderPrimaryCommandHelp();
+}
+
+export function renderAdvancedPanel(): string {
+  return renderAdvancedCommandHelp();
+}
+
+export async function renderToday(): Promise<string> {
+  let summary: any = null;
+  let pendingCount: number | null = null;
+
+  try {
+    summary = await productsRepository.getAnalyticsSummary();
+  } catch {
+    summary = null;
+  }
+
+  try {
+    pendingCount = (await telegramRepo.listPendingReviews(50)).length;
+  } catch {
+    pendingCount = null;
+  }
+
+  const total = summary?.totalProducts ?? "?";
+  const active = summary?.activeProducts ?? "?";
+  const todayClicks = summary?.todayClicks ?? "?";
+  const clicks7d = summary?.clicks7d ?? "?";
+  const topName = Array.isArray(summary?.topProducts) && summary.topProducts[0]?.name
+    ? String(summary.topProducts[0].name).slice(0, 48)
+    : "sem dados ainda";
+
+  let priority = "Verifique /status antes da próxima ação.";
+  if (typeof pendingCount === "number" && pendingCount > 0) {
+    priority = `Revisar <b>${pendingCount}</b> proposta(s) em /pendentes.`;
+  } else if (typeof active === "number" && active === 0) {
+    priority = "O catálogo não tem produtos ativos; revise /produtos.";
+  } else if (summary) {
+    priority = "Fila humana limpa. Próximo passo: acompanhar /analytics ou descobrir novos itens.";
+  }
+
   return (
-    "🛡️ <b>CERBERUS FINDS — MENU CONSOLIDADO</b>\n" +
+    "⚡ <b>CERBERUS — AGORA</b>\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "🧭 <b>PAINEL OPERACIONAL</b>\n" +
-    "/status — status geral do sistema\n" +
-    "/pendentes — propostas aguardando decisão\n" +
-    "/aprovados — aprovadas e catálogo atual\n\n" +
-    "📦 <b>CATÁLOGO</b>\n" +
-    "/listar · /produtos · /categorias\n" +
-    "/redes — atualizar links oficiais das redes sociais\n\n" +
-    "🔎 <b>DESCOBERTA E ANÁLISE</b>\n" +
-    "/discover · /discover_batch\n" +
-    "/campanhas — reabrir campanhas recentes\n" +
-    "/campanha2 — criar campanha semanal multi-produto\n" +
-    "/boasvindas — criar campanha institucional de boas-vindas\n" +
-    "/research · /assess\n" +
-    "/priority · /opportunities · /risks\n\n" +
-    "🧠 <b>COMERCIAL E GOVERNANÇA</b>\n" +
-    "/experiments · /agents · /decisions\n" +
-    "/recommendations · /affiliates · /cycle\n\n" +
-    "🛒 <b>SHOPEE AFFILIATE (PREVIEW)</b>\n" +
-    "/shopee N — lote Shopee com cards de decisão humana\n" +
-    "/publicar &lt;id&gt; — encaminhar review à publicação (confirmação humana)\n\n" +
-    "/start · /help\n" +
+    `📦 Catálogo: <b>${active}/${total}</b> ativos\n` +
+    `⏳ Pendentes: <b>${pendingCount ?? "?"}</b>\n` +
+    `👆 Cliques hoje: <b>${todayClicks}</b> · 7d: <b>${clicks7d}</b>\n` +
+    `🏆 Destaque recente: <i>${topName}</i>\n\n` +
+    `🎯 <b>Prioridade:</b> ${priority}\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "DECISION ≠ ACTION · nada é publicado sem decisão humana."
+    "Resumo read-only; nenhuma ação foi executada."
   );
 }
 
-// ---------------------------------------------------------------
-// /status — contagens existentes + diagnóstico Telegram (read-only)
-// ---------------------------------------------------------------
-/**
- * Agrega somente dados que já têm repositório/serviço existente.
- * Nenhum componente é chamado com efeito colateral; se algum estiver
- * indisponível, o valor é reportado como "não disponível".
- */
 export async function renderStatus(): Promise<string> {
   let productsCount = "não disponível";
   let activeCount = "não disponível";
@@ -132,110 +100,128 @@ export async function renderStatus(): Promise<string> {
       activeCount = String(products.filter(p => p.ativo !== false).length);
     }
   } catch {
-    productsCount = "não disponível";
-    activeCount = "não disponível";
+    // explicit unavailable state below
   }
 
   try {
-    const pending = await telegramRepo.listPendingReviews(20);
+    const pending = await telegramRepo.listPendingReviews(50);
     pendingCount = String(Array.isArray(pending) ? pending.length : 0);
   } catch {
-    pendingCount = "não disponível";
+    // explicit unavailable state below
   }
 
   try {
     const diag = await getTelegramWebhookDiagnostics();
     telegramDiag =
-      `🔑 token: ${diag?.tokenConfigured === true ? "configurado" : "ausente"} · ` +
-      `🛡️ whitelist: ${diag?.whitelistConfigured === true ? "ok" : "ausente"} · ` +
-      `🔗 webhook: ${diag?.webhookConfigured === true ? "configurado" : "não configurado"} · ` +
-      `💚 api: ${diag?.apiHealthy === true ? "saudável" : "indisponível"}`;
+      `token ${diag?.tokenConfigured === true ? "✅" : "❌"} · ` +
+      `whitelist ${diag?.whitelistConfigured === true ? "✅" : "❌"} · ` +
+      `webhook ${diag?.webhookMatchesExpectedUrl === true ? "✅" : "⚠️"} · ` +
+      `API ${diag?.apiHealthy === true ? "✅" : "❌"} · ` +
+      `secret ${diag?.secretConfigured === true ? "✅" : "⚠️"}`;
   } catch {
-    telegramDiag = "não disponível";
+    // explicit unavailable state below
   }
 
   return (
-    "🛡️ <b>CERBERUS FINDS — STATUS</b>\n" +
+    "🩺 <b>CERBERUS — STATUS</b>\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    `📦 Catálogo: <b>${productsCount}</b> produtos (${activeCount} ativos)\n` +
-    `⏳ Propostas pendentes: <b>${pendingCount}</b>\n` +
+    `📦 Produtos: <b>${productsCount}</b> (${activeCount} ativos)\n` +
+    `⏳ Pendentes: <b>${pendingCount}</b>\n` +
     `🤖 Telegram: ${telegramDiag}\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "Painel de leitura — nenhum estado foi alterado."
+    "Read-only · nenhum estado foi alterado."
   );
 }
 
-// ---------------------------------------------------------------
-// /pendentes — listPendingReviews existente (read-only)
-// ---------------------------------------------------------------
-/**
- * Usa telegramRepo.listPendingReviews, que já filtra status='pending'.
- * Registros expirados são lidos como o próprio repositório os classifica —
- * este módulo não altera nem reclassifica nenhum registro.
- */
 export async function renderPendingReviews(): Promise<string> {
   try {
     const pending = await telegramRepo.listPendingReviews(20);
     if (!Array.isArray(pending) || pending.length === 0) {
-      return "⏳ <b>NENHUMA PROPOSTA PENDENTE</b>\n\nNão há PendingReviews com status=pending no momento.";
+      return "✅ <b>FILA LIMPA</b>\n\nNenhuma proposta pendente no momento.";
     }
-    const lines = pending.map((r, i) => {
-      const nome = typeof r.produto === "string" && r.produto.trim() ? r.produto.slice(0, 40) : "(sem nome)";
-      const status = typeof r.status === "string" && r.status ? r.status : "pending";
-      return `<b>${i + 1}.</b> ${nome}\n   ID: <code>${r.id}</code> · status: <code>${status}</code>`;
+    const lines = pending.map((review, index) => {
+      const name = typeof review.produto === "string" && review.produto.trim()
+        ? review.produto.slice(0, 44)
+        : "(sem nome)";
+      const price = Number.isFinite(review.preco) && review.preco > 0
+        ? `R$ ${review.preco.toFixed(2).replace(".", ",")}`
+        : "preço pendente";
+      return `${index + 1}. <b>${name}</b>\n   <code>${review.id}</code> · ${price}`;
     });
-    return "⏳ <b>PROPOSTAS PENDENTES</b>\n\n" + lines.join("\n\n") + "\n\nUse o card no Telegram para decidir (✅ PUBLICAR · ❌ DESCARTAR) ou encaminhe uma review ao pipeline com <code>/publicar &lt;ID&gt;</code>.";
+    return (
+      `⏳ <b>PENDENTES — ${pending.length}</b>\n\n` +
+      lines.join("\n\n") +
+      "\n\nUse o card da review ou <code>/publicar &lt;ID&gt;</code>. A publicação continua exigindo confirmação humana."
+    );
   } catch {
-    return "⚠️ <b>ERRO DE INFRAESTRUTURA</b>\n\nNão foi possível consultar as propostas pendentes (leitura falhou). Nenhum dado foi alterado.";
+    return "⚠️ <b>FILA INDISPONÍVEL</b>\n\nA leitura falhou; nenhum dado foi alterado.";
   }
 }
 
-// ---------------------------------------------------------------
-// /aprovados — reviews publicadas + catálogo canônico (read-only)
-// ---------------------------------------------------------------
-/**
- * Limitação documentada: a tabela telegram_pending_reviews não possui um
- * estado "aprovado e encaminhado à publicação" além de status='published'
- * (decisão humana registrada via approve_only). Portanto este comando
- * mostra os dois conjuntos com rótulos explícitos, sem inventar estado:
- * - "DECISÕES HUMANAS REGISTRADAS" = reviews com status=published
- * - "CATÁLOGO CANÔNICO" = produtos ativos do Supabase
- */
 export async function renderApproved(): Promise<string> {
-  let publishedReviews = "não disponível";
-  let catalog = "não disponível";
+  let published: any[] | null = null;
+  let activeProducts: any[] | null = null;
 
   try {
-    const reviews = await telegramRepo.listPendingReviews(50);
-    const published = Array.isArray(reviews) ? reviews.filter(r => r.status === "published") : [];
-    publishedReviews = published.length === 0
-      ? "nenhuma decisão registrada ainda"
-      : published.map((r, i) => {
-          const nome = typeof r.produto === "string" && r.produto.trim() ? r.produto.slice(0, 40) : "(sem nome)";
-          return `<b>${i + 1}.</b> ${nome}`;
-        }).join("\n");
+    published = await telegramRepo.listReviewsByStatus(["published"], 10);
   } catch {
-    publishedReviews = "não disponível";
+    published = null;
   }
 
   try {
     const products = await productsRepository.getProducts();
-    const active = Array.isArray(products) ? products.filter(p => p.ativo !== false) : [];
-    catalog = active.length === 0
-      ? "catálogo vazio"
-      : active.map(p => `• ${String(p.produto).slice(0, 40)}`).join("\n");
+    activeProducts = Array.isArray(products) ? products.filter(p => p.ativo !== false) : [];
   } catch {
-    catalog = "não disponível";
+    activeProducts = null;
   }
 
+  const reviewText = published === null
+    ? "não disponível"
+    : published.length === 0
+      ? "nenhuma decisão publicada recente"
+      : published.map((review, index) => `${index + 1}. ${String(review.produto || "(sem nome)").slice(0, 44)}`).join("\n");
+
+  const catalogText = activeProducts === null
+    ? "não disponível"
+    : activeProducts.length === 0
+      ? "catálogo vazio"
+      : activeProducts.slice(0, 10).map(product => `• ${String(product.produto).slice(0, 44)}`).join("\n") +
+        (activeProducts.length > 10 ? `\n… +${activeProducts.length - 10}` : "");
+
   return (
-    "✅ <b>APROVADOS</b>\n" +
+    "✅ <b>APROVADOS / PUBLICADOS</b>\n" +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "📋 <b>DECISÕES HUMANAS REGISTRADAS</b>\n" +
-    `(reviews com status=published)\n${publishedReviews}\n\n` +
-    "📦 <b>CATÁLOGO CANÔNICO ATIVO</b>\n" +
-    `(produtos ativos no Supabase)\n${catalog}\n` +
+    `<b>Decisões recentes</b>\n${reviewText}\n\n` +
+    `<b>Catálogo ativo</b>\n${catalogText}\n` +
     "━━━━━━━━━━━━━━━━━━\n" +
-    "Painel de leitura — nenhum estado foi alterado."
+    "Read-only · nenhum estado foi alterado."
+  );
+}
+
+export async function renderCategories(): Promise<string> {
+  const counts = new Map(PUBLIC_PRODUCT_CATEGORIES.map(category => [category, 0]));
+  let invalidCount = 0;
+
+  try {
+    const products = await productsRepository.getProducts();
+    for (const product of products) {
+      if (product.ativo === false) continue;
+      const category = resolvePublicProductCategory(product.categoria, {
+        title: product.displayTitle || product.rawTitle || product.produto,
+        description: product.descricao,
+      });
+      if (category && counts.has(category)) counts.set(category, (counts.get(category) || 0) + 1);
+      else invalidCount += 1;
+    }
+  } catch {
+    return "⚠️ <b>CATEGORIAS INDISPONÍVEIS</b>\n\nNão foi possível ler o catálogo. Nenhuma categoria foi alterada.";
+  }
+
+  const rows = PUBLIC_PRODUCT_CATEGORIES.map(category => `• <b>${category}</b> — ${counts.get(category) || 0}`);
+  return (
+    "🏷️ <b>TAXONOMIA PÚBLICA</b>\n\n" +
+    rows.join("\n") +
+    (invalidCount > 0 ? `\n\n⚠️ Produtos ativos fora da taxonomia: <b>${invalidCount}</b>` : "") +
+    "\n\nCategorias são canônicas: o bot não cria nem renomeia categorias livremente."
   );
 }
