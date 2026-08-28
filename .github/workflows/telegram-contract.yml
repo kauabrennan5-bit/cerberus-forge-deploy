@@ -63,6 +63,143 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Prepare observable test diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > telegram-v2-test-summary.txt
+
+          cat > "$RUNNER_TEMP/parse-node-test-summary.mjs" <<'NODE'
+          import fs from "node:fs";
+
+          const [logPath, label, summaryPath] = process.argv.slice(2);
+          if (!logPath || !label || !summaryPath) {
+            console.error("summary parser requires: <log> <label> <summary>");
+            process.exit(2);
+          }
+          if (!fs.existsSync(logPath)) {
+            console.error(`missing test log: ${logPath}`);
+            process.exit(3);
+          }
+
+          const clean = fs
+            .readFileSync(logPath, "utf8")
+            .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+
+          const required = ["tests", "pass", "fail", "skipped", "cancelled"];
+          const values = {};
+
+          for (const key of required) {
+            const re = new RegExp(`^\\s*(?:ℹ\\s+|#\\s*)?${key}\\s+(\\d+)\\s*$`, "gmi");
+            const matches = [...clean.matchAll(re)];
+            if (matches.length === 0) {
+              console.error(`missing node:test summary field "${key}" in ${label} log`);
+              process.exit(4);
+            }
+            const value = Number(matches.at(-1)[1]);
+            if (!Number.isSafeInteger(value) || value < 0) {
+              console.error(`invalid node:test summary field "${key}" in ${label} log`);
+              process.exit(5);
+            }
+            values[key] = value;
+          }
+
+          const todoMatches = [...clean.matchAll(/^\s*(?:ℹ\s+|#\s*)?todo\s+(\d+)\s*$/gmi)];
+          const todo = todoMatches.length ? Number(todoMatches.at(-1)[1]) : 0;
+          if (!Number.isSafeInteger(todo) || todo < 0) {
+            console.error(`invalid node:test todo count in ${label} log`);
+            process.exit(6);
+          }
+
+          const outputPath = process.env.GITHUB_OUTPUT;
+          if (!outputPath) {
+            console.error("GITHUB_OUTPUT is unavailable");
+            process.exit(10);
+          }
+
+          fs.appendFileSync(
+            outputPath,
+            [
+              `total=${values.tests}`,
+              `passed=${values.pass}`,
+              `failures=${values.fail}`,
+              `skipped=${values.skipped}`,
+              `cancelled=${values.cancelled}`,
+              `todo=${todo}`,
+              "",
+            ].join("\n"),
+          );
+
+          fs.appendFileSync(
+            summaryPath,
+            [
+              `[${label}]`,
+              `tests=${values.tests}`,
+              `pass=${values.pass}`,
+              `fail=${values.fail}`,
+              `skipped=${values.skipped}`,
+              `cancelled=${values.cancelled}`,
+              `todo=${todo}`,
+              "",
+            ].join("\n"),
+          );
+
+          console.log(`${label.toUpperCase()}_TOTAL=${values.tests}`);
+          console.log(`${label.toUpperCase()}_PASS=${values.pass}`);
+          console.log(`${label.toUpperCase()}_FAILURES=${values.fail}`);
+          console.log(`${label.toUpperCase()}_SKIPPED=${values.skipped}`);
+          console.log(`${label.toUpperCase()}_CANCELLED=${values.cancelled}`);
+
+          if (values.tests <= 0) {
+            console.error(`${label} summary reports no tests`);
+            process.exit(7);
+          }
+          if (values.fail !== 0 || values.skipped !== 0 || values.cancelled !== 0 || todo !== 0) {
+            console.error(
+              `${label} count gate failed: fail=${values.fail} skipped=${values.skipped} cancelled=${values.cancelled} todo=${todo}`,
+            );
+            process.exit(8);
+          }
+          if (values.pass !== values.tests) {
+            console.error(`${label} count gate failed: pass=${values.pass} tests=${values.tests}`);
+            process.exit(9);
+          }
+          NODE
+
+          cat > "$RUNNER_TEMP/sanitize-test-log.mjs" <<'NODE'
+          import fs from "node:fs";
+
+          const [inputPath, outputPath] = process.argv.slice(2);
+          if (!inputPath || !outputPath) {
+            console.error("sanitizer requires: <input> <output>");
+            process.exit(2);
+          }
+
+          if (!fs.existsSync(inputPath)) {
+            fs.writeFileSync(outputPath, "[log unavailable: test step did not run]\n");
+            process.exit(0);
+          }
+
+          let text = fs
+            .readFileSync(inputPath, "utf8")
+            .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+
+          const replacements = [
+            [/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB_TOKEN]"],
+            [/\b\d{6,12}:[A-Za-z0-9_-]{20,}\b/g, "[REDACTED_TELEGRAM_TOKEN]"],
+            [/\bBearer\s+[A-Za-z0-9._~+/-]+=*\b/gi, "Bearer [REDACTED]"],
+            [/\b(authorization|token|secret|password)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED]"],
+            [/\b(chat_id|user_id|sender_id|allowed_user_ids)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi, "$1=[REDACTED_ID]"],
+            [/\b(message|caption)\s*[:=]\s*("[^"]*"|'[^']*'|[^\n]+)/gi, "$1=[REDACTED_MESSAGE]"],
+          ];
+
+          for (const [pattern, replacement] of replacements) {
+            text = text.replace(pattern, replacement);
+          }
+
+          fs.writeFileSync(outputPath, text);
+          NODE
+
       - name: Verify focused suite structure
         shell: bash
         run: |
@@ -94,9 +231,11 @@ jobs:
         run: node --import tsx/esm --test --test-concurrency=1 tests/telegramReadPanel.test.ts
 
       - name: Focused Telegram V2 suite
+        id: focused
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
             tests/publishCommand.test.ts \
             tests/telegramReadPanel.test.ts \
@@ -107,20 +246,22 @@ jobs:
             tests/previewTelegramRoutes.test.ts \
             tests/shopeeCommand.test.ts \
             tests/socialLinks.test.ts \
-            tests/newsletterCampaign.test.ts 2>&1 | tee bot-v2-focused.log
-          status=${PIPESTATUS[0]}
-          tests=$(awk '$1=="#" && $2=="tests" {v=$3} END{print v+0}' bot-v2-focused.log)
-          pass=$(awk '$1=="#" && $2=="pass" {v=$3} END{print v+0}' bot-v2-focused.log)
-          fail=$(awk '$1=="#" && $2=="fail" {v=$3} END{print v+0}' bot-v2-focused.log)
-          skipped=$(awk '$1=="#" && $2=="skipped" {v=$3} END{print v+0}' bot-v2-focused.log)
-          cancelled=$(awk '$1=="#" && $2=="cancelled" {v=$3} END{print v+0}' bot-v2-focused.log)
-          printf 'FOCUSED_TOTAL=%s\nFOCUSED_PASS=%s\nFOCUSED_FAIL=%s\nFOCUSED_SKIPPED=%s\nFOCUSED_CANCELLED=%s\n' "$tests" "$pass" "$fail" "$skipped" "$cancelled"
-          test "$status" -eq 0
-          test "$tests" -gt 0
-          test "$pass" -eq "$tests"
-          test "$fail" -eq 0
-          test "$skipped" -eq 0
-          test "$cancelled" -eq 0
+            tests/newsletterCampaign.test.ts 2>&1 | tee "$RUNNER_TEMP/telegram-v2-focused-test.raw.log"
+          test_status=${PIPESTATUS[0]}
+
+          node "$RUNNER_TEMP/parse-node-test-summary.mjs" \
+            "$RUNNER_TEMP/telegram-v2-focused-test.raw.log" \
+            focused \
+            telegram-v2-test-summary.txt
+          summary_status=$?
+          set -e
+
+          if [ "$test_status" -ne 0 ]; then
+            exit "$test_status"
+          fi
+          if [ "$summary_status" -ne 0 ]; then
+            exit "$summary_status"
+          fi
 
       - name: Bot V2 structural invariants
         shell: bash
@@ -139,26 +280,70 @@ jobs:
         run: npm run lint
 
       - name: Full global test suite
+        id: global
         shell: bash
         run: |
           set -uo pipefail
-          npm test 2>&1 | tee telegram-v2-global.log
-          status=${PIPESTATUS[0]}
-          summary() {
-            awk -v key="$1" '($1=="#" || $1=="ℹ") && $2==key {v=$3} END{print v+0}' telegram-v2-global.log
-          }
-          tests=$(summary tests)
-          pass=$(summary pass)
-          fail=$(summary fail)
-          skipped=$(summary skipped)
-          cancelled=$(summary cancelled)
-          printf 'GLOBAL_TOTAL=%s\nGLOBAL_PASS=%s\nGLOBAL_FAILURES=%s\nGLOBAL_SKIPPED=%s\nGLOBAL_CANCELLED=%s\n' "$tests" "$pass" "$fail" "$skipped" "$cancelled"
-          test "$status" -eq 0
-          test "$tests" -gt 0
-          test "$pass" -eq "$tests"
-          test "$fail" -eq 0
-          test "$skipped" -eq 0
-          test "$cancelled" -eq 0
+          set +e
+          npm test 2>&1 | tee "$RUNNER_TEMP/telegram-v2-global-test.raw.log"
+          test_status=${PIPESTATUS[0]}
+
+          node "$RUNNER_TEMP/parse-node-test-summary.mjs" \
+            "$RUNNER_TEMP/telegram-v2-global-test.raw.log" \
+            global \
+            telegram-v2-test-summary.txt
+          summary_status=$?
+          set -e
+
+          if [ "$test_status" -ne 0 ]; then
+            exit "$test_status"
+          fi
+          if [ "$summary_status" -ne 0 ]; then
+            exit "$summary_status"
+          fi
+
+      - name: Enforce numeric test summaries
+        shell: bash
+        env:
+          FOCUSED_TOTAL: ${{ steps.focused.outputs.total }}
+          FOCUSED_PASS: ${{ steps.focused.outputs.passed }}
+          FOCUSED_FAILURES: ${{ steps.focused.outputs.failures }}
+          FOCUSED_SKIPPED: ${{ steps.focused.outputs.skipped }}
+          FOCUSED_CANCELLED: ${{ steps.focused.outputs.cancelled }}
+          FOCUSED_TODO: ${{ steps.focused.outputs.todo }}
+          GLOBAL_TOTAL: ${{ steps.global.outputs.total }}
+          GLOBAL_PASS: ${{ steps.global.outputs.passed }}
+          GLOBAL_FAILURES: ${{ steps.global.outputs.failures }}
+          GLOBAL_SKIPPED: ${{ steps.global.outputs.skipped }}
+          GLOBAL_CANCELLED: ${{ steps.global.outputs.cancelled }}
+          GLOBAL_TODO: ${{ steps.global.outputs.todo }}
+        run: |
+          set -euo pipefail
+          names=(
+            FOCUSED_TOTAL FOCUSED_PASS FOCUSED_FAILURES FOCUSED_SKIPPED FOCUSED_CANCELLED FOCUSED_TODO
+            GLOBAL_TOTAL GLOBAL_PASS GLOBAL_FAILURES GLOBAL_SKIPPED GLOBAL_CANCELLED GLOBAL_TODO
+          )
+          for name in "${names[@]}"; do
+            value="${!name:-}"
+            if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+              echo "Missing or non-numeric test summary: $name"
+              exit 1
+            fi
+          done
+
+          test "$FOCUSED_TOTAL" -gt 0
+          test "$FOCUSED_PASS" -eq "$FOCUSED_TOTAL"
+          test "$FOCUSED_FAILURES" -eq 0
+          test "$FOCUSED_SKIPPED" -eq 0
+          test "$FOCUSED_CANCELLED" -eq 0
+          test "$FOCUSED_TODO" -eq 0
+
+          test "$GLOBAL_TOTAL" -gt 0
+          test "$GLOBAL_PASS" -eq "$GLOBAL_TOTAL"
+          test "$GLOBAL_FAILURES" -eq 0
+          test "$GLOBAL_SKIPPED" -eq 0
+          test "$GLOBAL_CANCELLED" -eq 0
+          test "$GLOBAL_TODO" -eq 0
 
       - name: Lint
         run: npm run lint
@@ -189,3 +374,57 @@ jobs:
           curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Sanitize test diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/sanitize-test-log.mjs" \
+            "$RUNNER_TEMP/telegram-v2-focused-test.raw.log" \
+            telegram-v2-focused-test.log
+          node "$RUNNER_TEMP/sanitize-test-log.mjs" \
+            "$RUNNER_TEMP/telegram-v2-global-test.raw.log" \
+            telegram-v2-global-test.log
+
+      - name: Upload observable test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telegram-v2-test-diagnostics
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            telegram-v2-focused-test.log
+            telegram-v2-global-test.log
+            telegram-v2-test-summary.txt
+
+      - name: Publish validation summary
+        if: success()
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Telegram V2 Validation
+
+          ### Focused
+          - tests: ${{ steps.focused.outputs.total }}
+          - pass: ${{ steps.focused.outputs.passed }}
+          - fail: ${{ steps.focused.outputs.failures }}
+          - skipped: ${{ steps.focused.outputs.skipped }}
+          - cancelled: ${{ steps.focused.outputs.cancelled }}
+
+          ### Global
+          - tests: ${{ steps.global.outputs.total }}
+          - pass: ${{ steps.global.outputs.passed }}
+          - fail: ${{ steps.global.outputs.failures }}
+          - skipped: ${{ steps.global.outputs.skipped }}
+          - cancelled: ${{ steps.global.outputs.cancelled }}
+
+          ### Gates
+          - Invariants: 8/8
+          - TypeScript: PASS
+          - Lint: PASS
+          - Build: PASS
+          - Diff check: PASS
+          - Gitleaks: PASS
+          EOF
