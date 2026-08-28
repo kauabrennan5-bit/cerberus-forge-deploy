@@ -5,10 +5,15 @@ import {
   deleteUserState,
   setTestGetPendingReview,
   setTestSavePendingReview,
+  setTestUserStateHandlers,
 } from "../server/repositories/telegramRepository";
 
-const adminId = Number(process.env.TELEGRAM_ALLOWED_USER_IDS ?? "1976526372");
+// Usa um administrador exclusivo deste arquivo para não disputar o mesmo
+// telegram_user_states.json com outros arquivos executados em paralelo.
+const adminId = 1976526373;
+const originalAllowedUsers = process.env.TELEGRAM_ALLOWED_USER_IDS;
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+process.env.TELEGRAM_ALLOWED_USER_IDS = String(adminId);
 process.env.TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "fake-bot-token";
 
 function callback(data: string) {
@@ -56,6 +61,12 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
   setTestSavePendingReview(async (saved) => {
     Object.assign(review, saved);
   });
+  let localState: { action: string; reviewId?: string; productId?: string } | null = null;
+  setTestUserStateHandlers({
+    set: async (_senderId, state) => { localState = { ...state }; },
+    get: async () => localState,
+    delete: async () => { localState = null; },
+  });
   await deleteUserState(adminId);
 
   try {
@@ -81,6 +92,9 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
     setTestTelegramSenders(null, null);
     setTestGetPendingReview(null);
     setTestSavePendingReview(null);
+    setTestUserStateHandlers(null);
+    if (originalAllowedUsers === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+    else process.env.TELEGRAM_ALLOWED_USER_IDS = originalAllowedUsers;
     if (originalToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = originalToken;
   }

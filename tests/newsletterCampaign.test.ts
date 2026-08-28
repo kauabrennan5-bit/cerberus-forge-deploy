@@ -199,15 +199,17 @@ function draft(id = "campaign-1"): EmailCampaign {
   return createCampaignDraft("prod-campaign-1", "admin-1", renderNewsletterCampaign(product, { trackingCampaignId: id }), new Date("2026-08-26T00:00:00.000Z"), id);
 }
 
-test("telegram menu exposes campaign recovery and only valid command names", () => {
+test("telegram menu exposes primary campaign recovery and keeps advanced commands out of BotFather", async () => {
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanhas"), true);
-  assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanha2"), true);
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "redes"), true);
+  assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "campanha2"), false);
   assert.equal(TELEGRAM_PANEL_COMMANDS.some(command => command.command === "discover-batch"), false);
   assert.equal(TELEGRAM_PANEL_COMMANDS.every(command => /^[a-z0-9_]+$/.test(command.command)), true);
   assert.match(renderReadPanelMenu(), /\/campanhas/);
-  assert.match(renderReadPanelMenu(), /\/campanha2/);
   assert.match(renderReadPanelMenu(), /\/redes/);
+  assert.doesNotMatch(renderReadPanelMenu(), /\/campanha2/);
+  const { renderAdvancedPanel } = await import("../server/services/telegramPanel");
+  assert.match(renderAdvancedPanel(), /\/campanha2/);
 });
 
 test("campaign list renders recovery buttons for existing statuses without touching recipients", () => {

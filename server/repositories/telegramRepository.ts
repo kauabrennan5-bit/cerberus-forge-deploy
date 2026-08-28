@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import { PendingReview } from "../services/telegramBot";
+import type { PendingReview, TelegramReviewStatus } from "../services/telegramTypes";
 
 dotenv.config();
 
@@ -14,10 +14,8 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Expiração Padrão da Sessão de Revisão: 1 hora (3.600.000 ms)
 const SESSION_EXPIRATION_MS = 60 * 60 * 1000;
 
-// Supabase Client Initialization
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -33,9 +31,6 @@ export interface UserState {
   updatedAt: number;
 }
 
-/**
- * Lê do arquivo de revisões com fallback seguro
- */
 function readReviewsFromFile(): Record<string, PendingReview> {
   try {
     if (fs.existsSync(REVIEWS_FILE)) {
@@ -48,9 +43,6 @@ function readReviewsFromFile(): Record<string, PendingReview> {
   return {};
 }
 
-/**
- * Grava no arquivo de revisões
- */
 function writeReviewsToFile(reviews: Record<string, PendingReview>): void {
   try {
     fs.writeFileSync(REVIEWS_FILE, JSON.stringify(reviews, null, 2), "utf-8");
@@ -59,9 +51,6 @@ function writeReviewsToFile(reviews: Record<string, PendingReview>): void {
   }
 }
 
-/**
- * Lê estados dos usuários do arquivo
- */
 function readUserStatesFromFile(): Record<string, UserState> {
   try {
     if (fs.existsSync(USER_STATES_FILE)) {
@@ -74,9 +63,6 @@ function readUserStatesFromFile(): Record<string, UserState> {
   return {};
 }
 
-/**
- * Grava estados dos usuários no arquivo
- */
 function writeUserStatesToFile(states: Record<string, UserState>): void {
   try {
     fs.writeFileSync(USER_STATES_FILE, JSON.stringify(states, null, 2), "utf-8");
@@ -85,32 +71,59 @@ function writeUserStatesToFile(states: Record<string, UserState>): void {
   }
 }
 
-// --- HOOKS DE TESTE CONTROLADO (padrão setXForTests da codebase) ---
-// Fase 23 (2026-08-20): substitui a persistência SOMENTE em testes unitários
-// (sem tocar em Supabase/arquivo). NUNCA usar em produção — os overrides são
-// null por padrão e devem ser restaurados ao final de cada teste.
 let testOverrideSavePendingReview: ((review: PendingReview) => Promise<void>) | null = null;
 let testOverrideGetPendingReview: ((reviewId: string) => Promise<PendingReview | null>) | null = null;
+let testOverrideListReviewsByStatus: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null = null;
+let testOverrideSetUserState: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null = null;
+let testOverrideGetUserState: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null = null;
+let testOverrideDeleteUserState: ((senderId: string | number) => Promise<void>) | null = null;
 
-/** Substitui savePendingReview em testes unitários; null restaura o real. */
 export function setTestSavePendingReview(
   override: ((review: PendingReview) => Promise<void>) | null,
 ): void {
   testOverrideSavePendingReview = override;
 }
 
-/** Substitui getPendingReview em testes unitários; null restaura o real. */
 export function setTestGetPendingReview(
   override: ((reviewId: string) => Promise<PendingReview | null>) | null,
 ): void {
   testOverrideGetPendingReview = override;
 }
 
-// --- MÉTODOS PÚBLICOS DE PERSISTÊNCIA ---
+export function setTestListReviewsByStatus(
+  override: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null,
+): void {
+  testOverrideListReviewsByStatus = override;
+}
 
-/**
- * Salva ou atualiza uma revisão pendente (no arquivo e Supabase)
- */
+/** Isola a máquina de estados em testes sem tocar no arquivo/Supabase. */
+export function setTestUserStateHandlers(handlers: {
+  set?: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null;
+  get?: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null;
+  delete?: ((senderId: string | number) => Promise<void>) | null;
+} | null): void {
+  testOverrideSetUserState = handlers?.set ?? null;
+  testOverrideGetUserState = handlers?.get ?? null;
+  testOverrideDeleteUserState = handlers?.delete ?? null;
+}
+
+function reviewExpiresAt(review: PendingReview): number {
+  return review.expiresAt || review.createdAt + SESSION_EXPIRATION_MS;
+}
+
+export function isActivePendingReview(review: PendingReview, now = Date.now()): boolean {
+  return (review.status === undefined || review.status === "pending") && now < reviewExpiresAt(review);
+}
+
+function normalizeReviewRow(row: any): PendingReview | null {
+  if (!row?.data || typeof row.data !== "object") return null;
+  const review = { ...row.data } as PendingReview;
+  if (row.created_at && !review.createdAt) review.createdAt = Number(row.created_at);
+  if (row.expires_at) review.expiresAt = Number(row.expires_at);
+  if (row.status) review.status = row.status as TelegramReviewStatus;
+  return review;
+}
+
 export async function savePendingReview(review: PendingReview): Promise<void> {
   if (testOverrideSavePendingReview) {
     await testOverrideSavePendingReview(review);
@@ -124,15 +137,13 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
     ...review,
     createdAt,
     expiresAt,
-    status
+    status,
   };
 
-  // 1. Salva no arquivo local (backup)
   const reviews = readReviewsFromFile();
   reviews[normReview.id] = normReview;
   writeReviewsToFile(reviews);
 
-  // 2. Salva no Supabase se configurado
   if (supabase) {
     try {
       const { error } = await supabase.from("telegram_pending_reviews").upsert({
@@ -144,7 +155,7 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
         created_at: normReview.createdAt,
         expires_at: normReview.expiresAt,
         status: normReview.status,
-        data: normReview
+        data: normReview,
       }, { onConflict: "id" });
 
       if (error && error.code !== "PGRST205") {
@@ -156,16 +167,12 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
   }
 }
 
-/**
- * Obtém uma revisão pendente por ID (marca como expirada se passou de 1 hora, sem apagar do banco)
- */
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
   if (testOverrideGetPendingReview) {
     return testOverrideGetPendingReview(reviewId);
   }
   let review: PendingReview | null = null;
 
-  // 1. Tenta buscar no Supabase
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -174,17 +181,12 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
         .eq("id", reviewId)
         .single();
 
-      if (!error && data?.data) {
-        review = data.data as PendingReview;
-        if (data.expires_at) review.expiresAt = data.expires_at;
-        if (data.status) review.status = data.status;
-      }
-    } catch (err) {
-      // Fallback para arquivo local se Supabase falhar
+      if (!error && data) review = normalizeReviewRow(data);
+    } catch {
+      // Fallback para arquivo local se Supabase falhar.
     }
   }
 
-  // 2. Se não encontrou no Supabase, busca no arquivo local
   if (!review) {
     const reviews = readReviewsFromFile();
     review = reviews[reviewId] || null;
@@ -192,19 +194,13 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
 
   if (!review) return null;
 
-  // Garantia de propriedades obrigatórias
   if (!review.createdAt) review.createdAt = Date.now();
-  // BUG F02: Se o registro já possui expiresAt (ex: 24h do /shopee), não devemos 
-  // sobrepor com a constante global de sessão de 1h.
-  if (!review.expiresAt) {
-    review.expiresAt = review.createdAt + SESSION_EXPIRATION_MS;
-  }
+  if (!review.expiresAt) review.expiresAt = review.createdAt + SESSION_EXPIRATION_MS;
   if (!review.status) review.status = "pending";
 
-  // 3. Validação de expiração: Apenas altera o status se 'pending' e tempo estourado
   const now = Date.now();
   if (review.status === "pending" && now >= review.expiresAt) {
-    console.log(`[Telegram Repo] Sessão de revisão ${reviewId} atingiu limite de expiração (${Math.round((now - review.createdAt)/1000)}s). Atualizando status para 'expired'.`);
+    console.log(`[Telegram Repo] Sessão de revisão ${reviewId} expirada; status atualizado para expired.`);
     review.status = "expired";
     await savePendingReview(review);
   }
@@ -213,22 +209,23 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
 }
 
 /**
- * Obtém a revisão pendente mais recente para um determinado usuário ou chat (não expirada)
+ * Obtém somente a revisão PENDENTE mais recente do usuário/chat.
+ * Reviews publicadas, rejeitadas, canceladas ou expiradas nunca são retornadas.
  */
 export async function getLatestPendingReviewForUser(
   senderId: string | number,
-  chatId?: string | number
+  chatId?: string | number,
 ): Promise<PendingReview | null> {
   const sId = String(senderId);
-  const cId = chatId ? String(chatId) : null;
+  const cId = chatId !== undefined && chatId !== null ? String(chatId) : null;
   const now = Date.now();
 
-  // 1. Tenta buscar no Supabase se disponível
   if (supabase) {
     try {
       let query = supabase
         .from("telegram_pending_reviews")
-        .select("data, created_at")
+        .select("data, created_at, expires_at, status")
+        .eq("status", "pending")
         .order("created_at", { ascending: false });
 
       if (cId) {
@@ -237,96 +234,118 @@ export async function getLatestPendingReviewForUser(
         query = query.eq("sender_id", sId);
       }
 
-      const { data, error } = await query.limit(1);
-
-      if (!error && data && data.length > 0 && data[0].data) {
-        const rev = data[0].data as PendingReview;
-        const expiresAt = rev.expiresAt || (rev.createdAt + SESSION_EXPIRATION_MS);
-        if (now < expiresAt) {
-          return rev;
+      const { data, error } = await query.limit(10);
+      if (!error && data) {
+        for (const row of data) {
+          const review = normalizeReviewRow(row);
+          if (review && isActivePendingReview(review, now)) return review;
         }
       }
     } catch {
-      // Fallback para o arquivo local
+      // Fallback para arquivo local.
     }
   }
 
-  // 2. Fallback para arquivo local
-  const reviews = readReviewsFromFile();
-  const userReviews = Object.values(reviews).filter((r) => {
-    const matchUser = String(r.senderId) === sId || (cId && String(r.chatId) === cId);
-    const expiresAt = r.expiresAt || (r.createdAt + SESSION_EXPIRATION_MS);
-    const valid = now < expiresAt;
-    return matchUser && valid;
-  });
+  const reviews = Object.values(readReviewsFromFile())
+    .filter((review) => {
+      const matchUser = String(review.senderId) === sId || (cId !== null && String(review.chatId) === cId);
+      return Boolean(matchUser) && isActivePendingReview(review, now);
+    })
+    .sort((a, b) => b.createdAt - a.createdAt);
 
-  if (userReviews.length === 0) return null;
-
-  userReviews.sort((a, b) => b.createdAt - a.createdAt);
-  return userReviews[0];
+  return reviews[0] || null;
 }
 
-/** Lista propostas pendentes da fila humana; não representa catálogo nem fonte canônica de produtos. */
-export async function listPendingReviews(limit = 20): Promise<PendingReview[]> {
+/**
+ * Lista reviews por status real. É a consulta-base para painéis de pendentes,
+ * aprovados e auditoria; não mistura status diferentes silenciosamente.
+ */
+export async function listReviewsByStatus(
+  statuses: TelegramReviewStatus[],
+  limit = 20,
+): Promise<PendingReview[]> {
+  const uniqueStatuses = Array.from(new Set(statuses)).filter(Boolean);
+  if (uniqueStatuses.length === 0) return [];
+  const safeLimit = Math.min(Math.max(1, Math.trunc(limit || 20)), 100);
+
+  if (testOverrideListReviewsByStatus) {
+    return testOverrideListReviewsByStatus(uniqueStatuses, safeLimit);
+  }
+
   if (supabase) {
     try {
       const { data, error } = await supabase
         .from("telegram_pending_reviews")
-        .select("data, created_at")
-        .eq("status", "pending")
-        .order("created_at", { ascending: true })
-        .limit(limit);
-      if (!error && data) return data.map(row => row.data as PendingReview).filter(Boolean);
+        .select("data, created_at, expires_at, status")
+        .in("status", uniqueStatuses)
+        .order("created_at", { ascending: false })
+        .limit(safeLimit);
+      if (!error && data) {
+        const now = Date.now();
+        return data
+          .map(normalizeReviewRow)
+          .filter((review): review is PendingReview => Boolean(review))
+          .filter(review => review.status !== "pending" || isActivePendingReview(review, now));
+      }
     } catch {
-      // A fila local de sessões continua disponível quando a tabela operacional não existir.
+      // Fallback local quando a tabela operacional estiver indisponível.
     }
   }
+
+  const statusSet = new Set<TelegramReviewStatus>(uniqueStatuses);
+  const now = Date.now();
   return Object.values(readReviewsFromFile())
-    .filter(review => review.status === "pending" && Date.now() < (review.expiresAt || review.createdAt + SESSION_EXPIRATION_MS))
-    .sort((a, b) => a.createdAt - b.createdAt)
-    .slice(0, limit);
+    .filter((review) => {
+      const status = review.status || "pending";
+      if (!statusSet.has(status)) return false;
+      return status !== "pending" || isActivePendingReview(review, now);
+    })
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, safeLimit);
 }
 
-/**
- * Remove uma revisão pendente (após publicação ou cancelamento)
- */
+export async function listPendingReviews(limit = 20): Promise<PendingReview[]> {
+  const reviews = await listReviewsByStatus(["pending"], limit);
+  return reviews.sort((a, b) => a.createdAt - b.createdAt);
+}
+
 export async function deletePendingReview(reviewId: string): Promise<void> {
-  // 1. Remove do arquivo local
   const reviews = readReviewsFromFile();
   if (reviews[reviewId]) {
     delete reviews[reviewId];
     writeReviewsToFile(reviews);
   }
 
-  // 2. Remove do Supabase
   if (supabase) {
     try {
       await supabase.from("telegram_pending_reviews").delete().eq("id", reviewId);
-    } catch (err) {
-      // Ignora erro de exclusão no Supabase
+    } catch {
+      // Best effort; o registro operacional pode já não existir.
     }
   }
 }
 
-/**
- * Define o estado do usuário (ex: aguardando digitação de preço)
- */
-export async function setUserState(senderId: string | number, state: { action: string; reviewId?: string; productId?: string }): Promise<void> {
+export async function setUserState(
+  senderId: string | number,
+  state: { action: string; reviewId?: string; productId?: string },
+): Promise<void> {
+  if (testOverrideSetUserState) {
+    await testOverrideSetUserState(senderId, state);
+    return;
+  }
   const sId = String(senderId);
   const userStateObj: UserState = {
     senderId: sId,
     action: state.action,
     reviewId: state.reviewId,
     productId: state.productId,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
   };
 
-  // 1. Salva no arquivo local
   const states = readUserStatesFromFile();
   states[sId] = userStateObj;
   writeUserStatesToFile(states);
 
-  // 2. Salva no Supabase se disponível
   if (supabase) {
     try {
       await supabase.from("telegram_user_states").upsert({
@@ -334,22 +353,21 @@ export async function setUserState(senderId: string | number, state: { action: s
         action: state.action,
         review_id: state.reviewId,
         product_id: state.productId,
-        updated_at: userStateObj.updatedAt
+        updated_at: userStateObj.updatedAt,
       }, { onConflict: "sender_id" });
-    } catch (err) {
-      // Ignora erro no Supabase
+    } catch {
+      // Fallback local já foi persistido.
     }
   }
 }
 
-/**
- * Obtém o estado atual do usuário
- */
-export async function getUserState(senderId: string | number): Promise<{ action: string; reviewId?: string; productId?: string } | null> {
+export async function getUserState(
+  senderId: string | number,
+): Promise<{ action: string; reviewId?: string; productId?: string } | null> {
+  if (testOverrideGetUserState) return testOverrideGetUserState(senderId);
   const sId = String(senderId);
   let stateObj: UserState | null = null;
 
-  // 1. Busca no Supabase
   if (supabase) {
     try {
       const { data, error } = await supabase
@@ -364,15 +382,14 @@ export async function getUserState(senderId: string | number): Promise<{ action:
           action: data.action,
           reviewId: data.review_id,
           productId: data.product_id,
-          updatedAt: data.updated_at || Date.now()
+          updatedAt: data.updated_at || Date.now(),
         };
       }
-    } catch (err) {
-      // Fallback
+    } catch {
+      // Fallback local.
     }
   }
 
-  // 2. Fallback para arquivo local
   if (!stateObj) {
     const states = readUserStatesFromFile();
     stateObj = states[sId] || null;
@@ -380,7 +397,6 @@ export async function getUserState(senderId: string | number): Promise<{ action:
 
   if (!stateObj) return null;
 
-  // 3. Expira estados mais antigos que 1 hora
   if (Date.now() - stateObj.updatedAt > SESSION_EXPIRATION_MS) {
     await deleteUserState(senderId);
     return null;
@@ -389,25 +405,24 @@ export async function getUserState(senderId: string | number): Promise<{ action:
   return { action: stateObj.action, reviewId: stateObj.reviewId, productId: stateObj.productId };
 }
 
-/**
- * Remove o estado do usuário
- */
 export async function deleteUserState(senderId: string | number): Promise<void> {
+  if (testOverrideDeleteUserState) {
+    await testOverrideDeleteUserState(senderId);
+    return;
+  }
   const sId = String(senderId);
 
-  // 1. Remove do arquivo local
   const states = readUserStatesFromFile();
   if (states[sId]) {
     delete states[sId];
     writeUserStatesToFile(states);
   }
 
-  // 2. Remove do Supabase
   if (supabase) {
     try {
       await supabase.from("telegram_user_states").delete().eq("sender_id", sId);
-    } catch (err) {
-      // Ignora
+    } catch {
+      // Best effort.
     }
   }
 }

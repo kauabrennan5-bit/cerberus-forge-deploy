@@ -19,6 +19,12 @@ import {
   registerTelegramCommands,
   TELEGRAM_PANEL_COMMANDS,
 } from "../server/services/telegramPanel";
+import {
+  PRIMARY_TELEGRAM_COMMANDS,
+  SECONDARY_TELEGRAM_COMMANDS,
+  isKnownTelegramCommand,
+} from "../server/services/telegramCommands";
+import { setTestListReviewsByStatus } from "../server/repositories/telegramRepository";
 
 // ------------------------------------------------------------------
 // 1. Menu consolidado (pura, sem side-effects)
@@ -39,7 +45,7 @@ test("renderReadPanelMenu retorna menu consolidado sem executar nada", () => {
   assert.match(menu, /shopee/i);
   assert.match(menu, /publicar/i);
   assert.match(menu, /DECISION ≠ ACTION/i);
-  assert.match(menu, /\/publicar &lt;id&gt;/i, "placeholder do comando deve ser entidade HTML segura");
+  assert.match(menu, /\/publicar &lt;review_id&gt;/i, "placeholder do comando deve ser entidade HTML segura");
   assert.doesNotMatch(menu, /\/publicar <id>/i, "menu não pode conter tag HTML literal inválida");
 });
 
@@ -80,7 +86,8 @@ test("renderStatus reporta componentes indisponíveis como 'não disponível'", 
     const { renderStatus } = await import("../server/services/telegramPanel");
     const status = await renderStatus();
     assert.match(status, /não disponível/i);
-    assert.match(status, /Painel de leitura — nenhum estado foi alterado/i);
+    assert.match(status, /STATUS READ-ONLY/i);
+    assert.match(status, /Nenhuma alteração foi executada/i);
   } finally {
     restore();
   }
@@ -106,9 +113,10 @@ test("renderStatus com dados do ambiente renderiza o status sem alterar nada", a
     process.env.PUBLIC_BACKEND_URL = "https://backend.example.test";
     const { renderStatus } = await import("../server/services/telegramPanel");
     const status = await renderStatus();
-    assert.match(status, /propostas pendentes: <b>\d+/i, "contagem de pendentes presente");
-    assert.match(status, /🔑 token: configurado/i);
-    assert.match(status, /Painel de leitura — nenhum estado foi alterado/i);
+    assert.match(status, /Pendentes: <b>\d+/i, "contagem de pendentes presente");
+    assert.match(status, /token ✅/i);
+    assert.match(status, /STATUS READ-ONLY/i);
+    assert.match(status, /Nenhuma alteração foi executada/i);
   } finally {
     restore();
     for (const [key, value] of Object.entries(envs)) {
@@ -127,7 +135,7 @@ test("renderPendingReviews: lista pendentes reais ou declara fila vazia, sem mut
   // (b) fila vazia é declarada explicitamente, (c) nada é escrito.
   const { renderPendingReviews } = await import("../server/services/telegramPanel");
   const status = await renderPendingReviews();
-  assert.match(status, /PROPOSTAS PENDENTES|nenhuma proposta pendente|erro de infraestrutura/i);
+  assert.match(status, /PENDENTES|FILA LIMPA|FILA INDISPONÍVEL/i);
 });
 
 test("renderPendingReviews trata falha de leitura sem alterar estado", async () => {
@@ -160,7 +168,7 @@ test("renderPendingReviews trata falha de leitura sem alterar estado", async () 
 // ------------------------------------------------------------------
 // 4. /aprovados
 // ------------------------------------------------------------------
-test("renderApproved combina decisões registradas e catálogo sem inventar estado", async () => {
+test("renderApproved preserva decisões publicadas quando outra fonte fica indisponível", async () => {
   const envs = {
     SUPABASE_URL: process.env.SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -169,13 +177,20 @@ test("renderApproved combina decisões registradas e catálogo sem inventar esta
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.SUPABASE_KEY;
+  setTestListReviewsByStatus(async statuses => {
+    assert.deepEqual(statuses, ["published"], "/aprovados consulta somente decisões publicadas");
+    return [{ id: "published-test", produto: "Produto publicado de teste", status: "published" } as any];
+  });
   try {
     const { renderApproved } = await import("../server/services/telegramPanel");
     const report = await renderApproved();
-    assert.match(report, /decisões humanas registradas/i);
-    assert.match(report, /catálogo canônico ativo/i);
-    assert.match(report, /Painel de leitura — nenhum estado foi alterado/i);
+    assert.match(report, /decisões recentes/i);
+    assert.match(report, /Produto publicado de teste/i, "fonte saudável permanece visível");
+    assert.match(report, /catálogo ativo/i);
+    assert.match(report, /não disponível/i, "fonte indisponível é declarada sem inventar dados");
+    assert.match(report, /Read-only · nenhum estado foi alterado/i);
   } finally {
+    setTestListReviewsByStatus(null);
     for (const [key, value] of Object.entries(envs)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -199,11 +214,20 @@ test("registerTelegramCommands envia exatamente os comandos esperados", async ()
     process.env.TELEGRAM_BOT_TOKEN = "123456789:abcdefghijklmnopqrstuvwxyz";
     const { registerTelegramCommands } = await import("../server/services/telegramPanel");
     const result = await registerTelegramCommands();
-    console.log("R8:", JSON.stringify(result), "payload:", callPayload, "token env:", process.env.TELEGRAM_BOT_TOKEN?.slice(0,8)); assert.equal(result.ok, true, "setMyCommands registrado");
+    assert.equal(result.ok, true, "setMyCommands registrado");
     assert.ok(callPayload, "API chamada");
-    assert.equal(callPayload.commands.length, TELEGRAM_PANEL_COMMANDS.length, "todos os comandos registrados");
-    for (const cmd of TELEGRAM_PANEL_COMMANDS) {
-      assert.ok(callPayload.commands.some((c: any) => c.command === cmd.command), `comando ${cmd.command} registrado`);
+    const nativeNames = callPayload.commands.map((c: any) => c.command);
+    const primaryNames = PRIMARY_TELEGRAM_COMMANDS.map(c => c.command);
+    assert.equal(primaryNames.length, 10, "contrato V2 mantém exatamente dez comandos principais");
+    assert.equal(new Set(nativeNames).size, nativeNames.length, "menu nativo sem duplicatas");
+    assert.deepEqual(nativeNames, primaryNames, "setMyCommands reflete exatamente o menu primário V2");
+    for (const command of SECONDARY_TELEGRAM_COMMANDS.map(c => c.command)) {
+      assert.equal(nativeNames.includes(command), false, `comando secundário ${command} não polui menu nativo`);
+      assert.ok(TELEGRAM_PANEL_COMMANDS.some(c => c.command === command), `comando secundário ${command} preservado no painel`);
+      assert.equal(isKnownTelegramCommand(command), true, `comando secundário ${command} continua roteável`);
+    }
+    for (const command of ["discover", "research", "assess", "priority", "opportunities", "risks", "experiments", "agents", "decisions", "recommendations", "affiliates", "cycle", "shopee-schema", "shopee-offer", "campanha2", "boasvindas"]) {
+      assert.equal(isKnownTelegramCommand(command), true, `comando avançado ${command} continua roteável`);
     }
   } finally {
     restore();
@@ -289,7 +313,7 @@ test("dispatcher: /menu rejeitado para usuário não autorizado e aceito para au
       message: { chat: { id: 888111222 }, from: { id: 888111222 }, text: "/menu", message_id: 2, date: Math.floor(Date.now() / 1000) },
     });
     assert.equal(sentCount, unauthorizedCount + 1, "exatamente uma resposta ao autorizado");
-    assert.match(sentText, /CERBERUS FINDS — MENU CONSOLIDADO/i, "menu entregue");
+    assert.match(sentText, /MENU PRINCIPAL/i, "menu entregue");
   } finally {
     restore();
     for (const [key, value] of Object.entries(envs)) {
