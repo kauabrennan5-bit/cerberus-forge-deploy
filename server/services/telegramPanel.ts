@@ -157,23 +157,43 @@ export async function renderPendingReviews(): Promise<string> {
 }
 
 export async function renderApproved(): Promise<string> {
+  let published: any[] | null = null;
+  let activeProducts: any[] | null = null;
+
   try {
-    const [reviews, products] = await Promise.all([
-      telegramRepo.listReviewsByStatus(["published"], 25),
-      productsRepository.getProducts(),
-    ]);
-    const activeProducts = products.filter(product => product.ativo !== false);
-    return (
-      "✅ <b>APROVADOS / PUBLICADOS</b>\n\n" +
-      `Decisões registradas: <b>${reviews.length}</b>\n` +
-      `Produtos ativos no catálogo: <b>${activeProducts.length}</b>\n\n` +
-      (activeProducts.length
-        ? activeProducts.slice(0, 15).map(product => `• <code>${product.ref}</code> · ${product.produto}`).join("\n")
-        : "Nenhum produto ativo no catálogo.")
-    );
+    published = await telegramRepo.listReviewsByStatus(["published"], 25);
   } catch {
-    return "✅ <b>APROVADOS / PUBLICADOS</b>\n\nDados indisponíveis para leitura agora.";
+    published = null;
   }
+
+  try {
+    const products = await productsRepository.getProducts();
+    activeProducts = Array.isArray(products) ? products.filter(product => product.ativo !== false) : [];
+  } catch {
+    activeProducts = null;
+  }
+
+  const reviewText = published === null
+    ? "não disponível"
+    : published.length === 0
+      ? "nenhuma decisão publicada recente"
+      : published.map((review, index) => `${index + 1}. ${String(review.produto || "(sem nome)").slice(0, 44)}`).join("\n");
+
+  const catalogText = activeProducts === null
+    ? "não disponível"
+    : activeProducts.length === 0
+      ? "catálogo vazio"
+      : activeProducts.slice(0, 15).map(product => `• <code>${product.ref}</code> · ${String(product.produto).slice(0, 44)}`).join("\n") +
+        (activeProducts.length > 15 ? `\n… +${activeProducts.length - 15}` : "");
+
+  return (
+    "✅ <b>APROVADOS / PUBLICADOS</b>\n" +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    `<b>Decisões recentes</b>\n${reviewText}\n\n` +
+    `<b>Catálogo ativo</b>\n${catalogText}\n` +
+    "━━━━━━━━━━━━━━━━━━\n" +
+    "Read-only · nenhum estado foi alterado."
+  );
 }
 
 export async function renderProducts(): Promise<string> {
