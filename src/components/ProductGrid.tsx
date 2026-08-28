@@ -1,23 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 // Mobile refinement: preserve the existing archival grid while making filters, headings, and controls wrap within the viewport.
 import { Product } from '../types';
 import { getProductDisplayCategory, getProductDisplayTitle } from '../lib/productPresentation';
+import { PUBLIC_PRODUCT_CATEGORIES } from '../lib/productCategory';
+import type { CatalogViewState } from '../lib/catalogNavigation';
 import { ProductCard } from './ProductCard';
 import { Search, RefreshCw, AlertCircle, Sparkles, ChevronDown, ChevronUp, ArrowUpRight, X, Heart } from 'lucide-react';
 import { CerberusLogo } from './CerberusLogo';
-
-const BASE_CATEGORIES = [
-  'Iluminação',
-  'Decoração',
-  'Móveis',
-  'Cozinha & Mesa',
-  'Organização',
-  'Vestuário',
-  'Calçados & Acessórios',
-  'Tecnologia',
-  'Beleza & Bem-estar',
-  'Infantil',
-] as const;
 
 interface ProductGridProps {
   products: Product[];
@@ -32,6 +21,8 @@ interface ProductGridProps {
   onOpenSettings: () => void;
   metaPixelId?: string;
   metaAccessToken?: string;
+  viewState: CatalogViewState;
+  onViewStateChange: (state: CatalogViewState) => void;
 }
 
 export const ProductGrid: React.FC<ProductGridProps> = ({
@@ -46,16 +37,22 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
   onRefresh,
   onOpenSettings,
   metaPixelId,
-  metaAccessToken
+  metaAccessToken,
+  viewState,
+  onViewStateChange,
 }) => {
-  const [selectedCategory, setSelectedCategory] = useState<string>('Todos');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isCategoryPanelOpen, setIsCategoryPanelOpen] = useState(false);
+  const { selectedCategory, searchQuery, isCategoryPanelOpen } = viewState;
+  const setSelectedCategory = (value: string) => onViewStateChange({ ...viewState, selectedCategory: value });
+  const setSearchQuery = (value: string) => onViewStateChange({ ...viewState, searchQuery: value });
+  const setIsCategoryPanelOpen = (next: boolean | ((open: boolean) => boolean)) => {
+    const resolved = typeof next === 'function' ? next(isCategoryPanelOpen) : next;
+    onViewStateChange({ ...viewState, isCategoryPanelOpen: resolved });
+  };
 
   // A navegação apresenta a taxonomia editorial que será aplicada às próximas
   // publicações. Não reclassifica produtos históricos automaticamente.
   const categories = useMemo(() => {
-    return BASE_CATEGORIES.map((name) => ({
+    return [...PUBLIC_PRODUCT_CATEGORIES].map((name) => ({
       name,
       count: products.filter((product) => getProductDisplayCategory(product).toLowerCase() === name.toLowerCase()).length,
     }));
@@ -191,6 +188,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
                 <button
                   type="button"
                   key={category.name}
+                  data-testid={`category-option-${category.name}`}
                   onClick={() => {
                     setSelectedCategory(category.name);
                     setIsCategoryPanelOpen(false);
@@ -225,7 +223,7 @@ export const ProductGrid: React.FC<ProductGridProps> = ({
             </span>
           </div>
 
-          <div className="grid min-w-0 grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
+          <div data-testid="product-grid" className="grid min-w-0 grid-cols-2 items-stretch md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-4 lg:gap-5">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
               <div key={n} className="bg-[#141210] border border-[#3A342E] rounded-none p-3 space-y-3">
                 <div className="aspect-square skeleton-shimmer rounded-none border border-[#3A342E]" />
