@@ -64,7 +64,7 @@ jobs:
           social.write_text(s, encoding='utf-8')
 
           trigger = Path('.github/scripts/apply_telegram_v2.py')
-          trigger.write_text(trigger.read_text(encoding='utf-8').rstrip() + '\n\n', encoding='utf-8')
+          trigger.write_text(trigger.read_text(encoding='utf-8').rstrip() + '\n# validation trigger: global V2 contracts migrated\n', encoding='utf-8')
           PY
       - name: Commit migrated tests and remove one-shot workflow
         run: |
