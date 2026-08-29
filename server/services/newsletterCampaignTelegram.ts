@@ -199,7 +199,12 @@ async function handleNewsletterCampaignCallbackOnce(
       ) {
         return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       }
-      if (campaign.counts.total !== 0 || campaign.counts.success !== 0 || campaign.counts.failed !== 0) {
+      if (
+        campaign.counts.total !== 0
+        || campaign.counts.success !== 0
+        || campaign.counts.failed !== 0
+        || campaign.counts.skipped !== 0
+      ) {
         await deps.answerCallbackQuery(callbackId, "Retry bloqueado: estado de destinatários incompatível.", true);
         return true;
       }
@@ -563,23 +568,36 @@ export async function syncCampaignTelegramState(
 
   const presentation = await buildCampaignPresentation(campaign, deps);
   try {
-    const result = await deps.editTelegramMessageText(card.chatId, card.messageId, presentation.text, { inline_keyboard: presentation.keyboard });
-    if (telegramOperationSucceeded(result)) {
+    const textResult = await deps.editTelegramMessageText(card.chatId, card.messageId, presentation.text, { inline_keyboard: presentation.keyboard });
+    if (telegramOperationSucceeded(textResult)) {
       const persisted = await persistCardIfNeeded(store, savedCard, card);
       return { campaign, card: persisted, outcome: "updated", providerCalled: false };
     }
-    if (telegramMessageIsNotModified(result)) {
-      if (deps.editTelegramMessageReplyMarkup) {
+
+    const textAlreadySynchronized = telegramMessageIsNotModified(textResult);
+    let markupSynchronized = !deps.editTelegramMessageReplyMarkup;
+    if (deps.editTelegramMessageReplyMarkup) {
+      try {
         const markupResult = await deps.editTelegramMessageReplyMarkup(card.chatId, card.messageId, { inline_keyboard: presentation.keyboard });
-        if (!telegramOperationSucceeded(markupResult) && !telegramMessageIsNotModified(markupResult)) {
-          throw new Error("TELEGRAM_REPLY_MARKUP_RECONCILIATION_FAILED");
-        }
+        markupSynchronized = telegramOperationSucceeded(markupResult) || telegramMessageIsNotModified(markupResult);
+      } catch {
+        markupSynchronized = false;
       }
+    }
+
+    if (textAlreadySynchronized && markupSynchronized) {
       const persisted = await persistCardIfNeeded(store, savedCard, card);
       return { campaign, card: persisted, outcome: "already_synchronized", providerCalled: false };
     }
   } catch {
-    // Falha de edição não remove keyboard: callbacks antigos continuam fail-closed pelo estado autoritativo.
+    // Falha de edição não cancela a campanha nem altera o provider; a reconciliação abaixo usa o estado autoritativo.
+    if (deps.editTelegramMessageReplyMarkup) {
+      try {
+        await deps.editTelegramMessageReplyMarkup(card.chatId, card.messageId, { inline_keyboard: presentation.keyboard });
+      } catch {
+        // O cartão antigo pode estar inacessível; a nova apresentação ainda será tentada.
+      }
+    }
   }
 
   const reconciliationText = [
