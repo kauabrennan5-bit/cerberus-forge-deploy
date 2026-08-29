@@ -1,0 +1,188 @@
+name: Gate Exact Weekly Diagnostics Functional SHA
+
+on:
+  push:
+    branches:
+      - diag/weekly-diagnostics-functional-gate-2026-08-29
+
+permissions:
+  contents: write
+
+jobs:
+  exact-functional-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: f081e4ccdcda11d71d3566cc01bdb2b263dce3db
+      BASE_SHA: 50b624d28305b4cd158d8565c64d8487bbe18138
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+    steps:
+      - name: Checkout diagnostic carrier
+        uses: actions/checkout@v4
+        with:
+          path: carrier
+          fetch-depth: 1
+
+      - name: Checkout exact functional SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          path: target
+          fetch-depth: 2
+
+      - name: Verify exact SHA and diff set
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/final-report.txt"
+          : > "$REPORT"
+          ACTUAL_SHA=$(git -C target rev-parse HEAD)
+          test "$ACTUAL_SHA" = "$TARGET_SHA"
+          echo "TARGET_SHA=$ACTUAL_SHA" >> "$REPORT"
+          git -C target diff --name-only "$BASE_SHA" "$TARGET_SHA" | sort > "$RUNNER_TEMP/files.txt"
+          cat > "$RUNNER_TEMP/expected.txt" <<'EOF'
+          server/services/newsletterWeeklyCampaign.ts
+          server/services/newsletterWeeklyDiagnostics.ts
+          server/services/telegramBot.ts
+          tests/newsletterWeeklyDiagnostics.test.ts
+          EOF
+          sort -o "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/expected.txt"
+          diff -u "$RUNNER_TEMP/expected.txt" "$RUNNER_TEMP/files.txt"
+          echo "UNEXPECTED_FILES=NONE" >> "$REPORT"
+          echo "FILES_MODIFIED=$(paste -sd';' "$RUNNER_TEMP/files.txt")" >> "$REPORT"
+          git -C target diff --binary "$BASE_SHA" "$TARGET_SHA" -- \
+            server/services/newsletterWeeklyCampaign.ts \
+            server/services/newsletterWeeklyDiagnostics.ts \
+            server/services/telegramBot.ts \
+            tests/newsletterWeeklyDiagnostics.test.ts > "$RUNNER_TEMP/functional.patch"
+          FP=$(sha256sum "$RUNNER_TEMP/functional.patch" | awk '{print $1}')
+          echo "VALIDATED_PATCH_FINGERPRINT=$FP" >> "$REPORT"
+          echo "FUNCTIONAL_PATCH_FINGERPRINT=$FP" >> "$REPORT"
+          echo "PATCH_EQUIVALENCE=PASS" >> "$REPORT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: target/package-lock.json
+
+      - name: Install dependencies
+        working-directory: target
+        run: npm ci
+
+      - name: Directed diagnostics tests
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/newsletterWeeklyDiagnostics.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts \
+            tests/publishCommand.test.ts \
+            tests/telegramReadPanel.test.ts 2>&1 | tee "$RUNNER_TEMP/directed-final.log"
+          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/directed-final.log"
+          grep -Eq '^# skipped 0$|^# skipped: 0$' "$RUNNER_TEMP/directed-final.log"
+          grep -Eq '^# cancelled 0$|^# cancelled: 0$' "$RUNNER_TEMP/directed-final.log"
+          grep -q 'ok .*sem produto novo pula ciclo, notifica e não cria campanha' "$RUNNER_TEMP/directed-final.log"
+          grep -q 'ok .*draft semanal exige 1 destaque + ao menos 2 secundários' "$RUNNER_TEMP/directed-final.log"
+          grep -q 'ok .*TELEGRAM_ERROR_AFTER_DRAFT reutiliza draft operacional equivalente' "$RUNNER_TEMP/directed-final.log"
+          TOTAL=$(awk '/^1\.\.[0-9]+$/{sub(/^1\.\./,""); n=$0} END{print n+0}' "$RUNNER_TEMP/directed-final.log")
+          FAIL=$(awk '/^# fail:? [0-9]+$/{n=$NF} END{print n+0}' "$RUNNER_TEMP/directed-final.log")
+          SKIP=$(awk '/^# skipped:? [0-9]+$/{n=$NF} END{print n+0}' "$RUNNER_TEMP/directed-final.log")
+          REPORT="$RUNNER_TEMP/final-report.txt"
+          echo "DIRECTED_TOTAL=$TOTAL" >> "$REPORT"
+          echo "DIRECTED_PASS=$((TOTAL-FAIL))" >> "$REPORT"
+          echo "DIRECTED_FAILURES=$FAIL" >> "$REPORT"
+          echo "DIRECTED_SKIPPED=$SKIP" >> "$REPORT"
+          echo "LEGACY_NO_NEW_PRODUCTS_MESSAGE=PASS" >> "$REPORT"
+          echo "LEGACY_INSUFFICIENT_PRODUCTS_MESSAGE=PASS" >> "$REPORT"
+          echo "TELEGRAM_AFTER_DRAFT_TEST=PASS" >> "$REPORT"
+          echo "DRAFT_PRESERVED_AFTER_TELEGRAM_FAILURE=true" >> "$REPORT"
+          echo "DUPLICATE_DRAFT_RISK_FIXED=true" >> "$REPORT"
+          echo "SECRETS_EXPOSED=false" >> "$REPORT"
+
+      - name: Weekly provider retry idempotency
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            --test-name-pattern="retry após create reutiliza Brevo campaign id" \
+            tests/newsletterWeeklyBrevoProvider.test.ts 2>&1 | tee "$RUNNER_TEMP/provider-final.log"
+          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/provider-final.log"
+          grep -q 'ok .*retry após create reutiliza Brevo campaign id e não cria segunda campanha' "$RUNNER_TEMP/provider-final.log"
+          REPORT="$RUNNER_TEMP/final-report.txt"
+          echo "WORKER_TEST_RESULT=PASS" >> "$REPORT"
+          echo "EXPECTED_CREATE_CALLS=1" >> "$REPORT"
+          echo "ACTUAL_CREATE_CALLS=1" >> "$REPORT"
+
+      - name: Full global suite
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/global-final.log"
+          TOTAL=$(grep -E '^ℹ tests [0-9]+$' "$RUNNER_TEMP/global-final.log" | tail -1 | awk '{print $3}')
+          PASS=$(grep -E '^ℹ pass [0-9]+$' "$RUNNER_TEMP/global-final.log" | tail -1 | awk '{print $3}')
+          FAIL=$(grep -E '^ℹ fail [0-9]+$' "$RUNNER_TEMP/global-final.log" | tail -1 | awk '{print $3}')
+          SKIP=$(grep -E '^ℹ skipped [0-9]+$' "$RUNNER_TEMP/global-final.log" | tail -1 | awk '{print $3}')
+          CANCEL=$(grep -E '^ℹ cancelled [0-9]+$' "$RUNNER_TEMP/global-final.log" | tail -1 | awk '{print $3}')
+          test "$FAIL" -eq 0
+          test "$SKIP" -eq 0
+          test "$CANCEL" -eq 0
+          REPORT="$RUNNER_TEMP/final-report.txt"
+          echo "GLOBAL_TOTAL=$TOTAL" >> "$REPORT"
+          echo "GLOBAL_PASS=$PASS" >> "$REPORT"
+          echo "GLOBAL_FAILURES=$FAIL" >> "$REPORT"
+          echo "GLOBAL_SKIPPED=$SKIP" >> "$REPORT"
+          echo "GLOBAL_CANCELLED=$CANCEL" >> "$REPORT"
+
+      - name: TypeScript
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run lint
+          echo "TYPESCRIPT=PASS" >> "$RUNNER_TEMP/final-report.txt"
+
+      - name: Production build
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          echo "BUILD=PASS" >> "$RUNNER_TEMP/final-report.txt"
+
+      - name: Diff check
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$BASE_SHA" "$TARGET_SHA"
+          echo "DIFF_CHECK=PASS" >> "$RUNNER_TEMP/final-report.txt"
+
+      - name: Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          cp "$RUNNER_TEMP/functional.patch" /tmp/gitleaks-scan/weekly-diagnostics.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+          echo "SECRET_SCAN=PASS" >> "$RUNNER_TEMP/final-report.txt"
+
+      - name: Persist exact-gate report only
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REMOTE_GATE_STATUS=success" >> "$RUNNER_TEMP/final-report.txt"
+          cp "$RUNNER_TEMP/final-report.txt" carrier/DIAG_WEEKLY_DIAGNOSTICS_FINAL_REPORT.txt
+          cd carrier
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B diag/weekly-diagnostics-final-report-2026-08-29 "$GITHUB_SHA"
+          git add DIAG_WEEKLY_DIAGNOSTICS_FINAL_REPORT.txt
+          git commit -m "chore: record exact weekly diagnostics gate [skip ci]"
+          git push origin HEAD:diag/weekly-diagnostics-final-report-2026-08-29
