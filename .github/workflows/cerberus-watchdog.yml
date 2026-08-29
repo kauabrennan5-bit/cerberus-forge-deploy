@@ -3,7 +3,22 @@ name: Cerberus external watchdog
 on:
   schedule:
     - cron: "*/15 * * * *"
+    # Sexta 10:00 America/Fortaleza (13:00 UTC): cria somente o rascunho.
+    - cron: "0 13 * * 5"
+    # Sábado 10:00 America/Fortaleza: lembra rascunhos sem decisão; nunca envia.
+    - cron: "0 13 * * 6"
   workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operação controlada"
+        required: true
+        type: choice
+        default: health
+        options:
+          - health
+          - weekly-draft
+          - weekly-draft-test
+          - weekly-stale
 
 permissions:
   contents: write
@@ -14,6 +29,7 @@ concurrency:
 
 jobs:
   health-check:
+    if: github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch' && inputs.operation == 'health'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     env:
@@ -43,3 +59,48 @@ jobs:
           git add state/watchdog-state.json
           git commit -m "chore(watchdog): persist health transition state"
           git push
+
+
+  weekly-draft:
+    if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5' || github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
+      CERBERUS_AUTOMATION_TOKEN: ${{ secrets.CERBERUS_AUTOMATION_TOKEN }}
+    steps:
+      - name: Trigger weekly draft only
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${CERBERUS_HEALTH_URL:-}" ] || { echo "CERBERUS_HEALTH_URL missing"; exit 1; }
+          [ -n "${CERBERUS_AUTOMATION_TOKEN:-}" ] || { echo "CERBERUS_AUTOMATION_TOKEN missing"; exit 1; }
+          base="${CERBERUS_HEALTH_URL%/health}"
+          body='{}'
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "weekly-draft-test" ]; then body='{"testMode":true}'; fi
+          curl --fail-with-body --silent --show-error --max-time 45 \
+            -H "Content-Type: application/json" \
+            -H "X-Cerberus-Automation-Token: ${CERBERUS_AUTOMATION_TOKEN}" \
+            -d "$body" \
+            "$base/api/internal/newsletter/weekly-draft"
+
+  weekly-stale:
+    if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 6' || github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-stale'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
+      CERBERUS_AUTOMATION_TOKEN: ${{ secrets.CERBERUS_AUTOMATION_TOKEN }}
+    steps:
+      - name: Notify stale weekly draft without sending
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${CERBERUS_HEALTH_URL:-}" ] || { echo "CERBERUS_HEALTH_URL missing"; exit 1; }
+          [ -n "${CERBERUS_AUTOMATION_TOKEN:-}" ] || { echo "CERBERUS_AUTOMATION_TOKEN missing"; exit 1; }
+          base="${CERBERUS_HEALTH_URL%/health}"
+          curl --fail-with-body --silent --show-error --max-time 45 \
+            -H "Content-Type: application/json" \
+            -H "X-Cerberus-Automation-Token: ${CERBERUS_AUTOMATION_TOKEN}" \
+            -d '{}' \
+            "$base/api/internal/newsletter/weekly-stale"

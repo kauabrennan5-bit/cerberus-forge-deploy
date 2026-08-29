@@ -13,6 +13,10 @@ on:
       - "tests/shopeeCommand.test.ts"
       - "tests/socialLinks.test.ts"
       - "tests/newsletterCampaign.test.ts"
+      - "tests/newsletterWeeklyCampaign.test.ts"
+      - "server/services/newsletterWeekly*.ts"
+      - "server/routes/newsletterWeeklyRoutes.ts"
+      - ".github/workflows/cerberus-watchdog.yml"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/telegram-contract.yml"
@@ -31,6 +35,10 @@ on:
       - "tests/shopeeCommand.test.ts"
       - "tests/socialLinks.test.ts"
       - "tests/newsletterCampaign.test.ts"
+      - "tests/newsletterWeeklyCampaign.test.ts"
+      - "server/services/newsletterWeekly*.ts"
+      - "server/routes/newsletterWeeklyRoutes.ts"
+      - ".github/workflows/cerberus-watchdog.yml"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/telegram-contract.yml"
@@ -215,6 +223,7 @@ jobs:
             tests/shopeeCommand.test.ts
             tests/socialLinks.test.ts
             tests/newsletterCampaign.test.ts
+            tests/newsletterWeeklyCampaign.test.ts
           )
           for file in "${files[@]}"; do
             test -f "$file" || { echo "Focused suite file missing: $file"; exit 1; }
@@ -246,7 +255,8 @@ jobs:
             tests/previewTelegramRoutes.test.ts \
             tests/shopeeCommand.test.ts \
             tests/socialLinks.test.ts \
-            tests/newsletterCampaign.test.ts 2>&1 | tee "$RUNNER_TEMP/telegram-v2-focused-test.raw.log"
+            tests/newsletterCampaign.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts 2>&1 | tee "$RUNNER_TEMP/telegram-v2-focused-test.raw.log"
           test_status=${PIPESTATUS[0]}
 
           node "$RUNNER_TEMP/parse-node-test-summary.mjs" \

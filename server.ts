@@ -35,6 +35,7 @@ import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
 import { listPublicSocialLinks } from "./server/services/socialLinks";
 import { setCommercialBrainClient } from "./server/repositories/commercialBrainRepository";
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
+import { registerNewsletterWeeklyRoutes } from "./server/routes/newsletterWeeklyRoutes";
 import { registerPolicyEngineRoutes } from "./server/routes/policyEngineRoutes";
 import { setPolicyJournalClient } from "./server/repositories/policyJournalRepository";
 import { setAgentExecutionClient } from "./server/repositories/agentExecutionsRepository";
@@ -1161,6 +1162,7 @@ NUNCA modifique ou invente preços ou imagens.`,
     setPolicyJournalClient(productsRepository.supabase as any);
   }
   registerCommercialBrainRoutes({ app, requireAdminAuth });
+  registerNewsletterWeeklyRoutes(app);
   // Fase 23 — PREVIEW != PUBLICATION · DECISION != ACTION: a rota registra
   // a decisão manual sem executar pipeline de publicação.
   setupPreviewTelegramRoutes({ app, requireAdminAuth });

@@ -16,6 +16,7 @@ import {
 } from "./newsletterCampaignService";
 import type { EmailCampaign } from "./newsletterCampaignState";
 import type { NewsletterCampaignProvider } from "./newsletterProvider";
+import type { WeeklyBrevoMarketingProvider } from "./newsletterWeeklyBrevoProvider";
 import {
   createSupabaseNewsletterCampaignStore,
   type CampaignTelegramCard,
@@ -32,6 +33,7 @@ export type CampaignTelegramDeps = {
   store?: NewsletterCampaignStore;
   env?: NodeJS.ProcessEnv;
   provider?: NewsletterCampaignProvider;
+  weeklyProvider?: WeeklyBrevoMarketingProvider;
   productLoader?: (productId: string) => Promise<import("../../src/types").Product | null>;
   productsLoader?: () => Promise<import("../../src/types").Product[]>;
   now?: Date;
@@ -141,6 +143,37 @@ async function handleNewsletterCampaignCallbackOnce(
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Prévia enviada para aprovação.");
       await syncCampaignTelegramState(pending.id, deps, messageReference(chatId, messageId));
+      return true;
+    }
+
+    if (data.startsWith("campaign_weekly_approve:")) {
+      if (campaign.status !== "pending_approval" && campaign.status !== "approved") {
+        return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      }
+      const approved = campaign.status === "pending_approval"
+        ? await approveCampaign(campaign, senderId, { store, env })
+        : campaign;
+      if (approved.editionKey?.startsWith("weekly-test:")) {
+        const tested = await sendCampaignTest(approved, senderId, {
+          store,
+          env,
+          provider: deps.provider,
+          weeklyProvider: deps.weeklyProvider,
+        });
+        await deps.answerCallbackQuery(callbackId, "Rascunho aprovado. Teste enviado somente ao destino controlado.");
+        await syncCampaignTelegramState(tested.campaign.id, deps, messageReference(chatId, messageId));
+        return true;
+      }
+      const confirmed = approved.generalSendConfirmedAt
+        ? approved
+        : await confirmGeneralSend(approved, senderId, { store, env });
+      const sending = await startGeneralSend(confirmed, senderId, {
+        store,
+        env,
+        weeklyProvider: deps.weeklyProvider,
+      });
+      await deps.answerCallbackQuery(callbackId, "Campanha aprovada. Envio de marketing entregue ao provider Brevo.");
+      await syncCampaignTelegramState(sending.id, deps, messageReference(chatId, messageId));
       return true;
     }
 

@@ -69,6 +69,10 @@ export async function processNewsletterCampaignOnce(
   if (campaign.status !== "sending") {
     return { outcome: "idle", providerCalled: false, campaign, recipient: null, processed: 0 };
   }
+  if (campaign.editionKey?.startsWith("weekly:")) {
+    // Weekly marketing is owned by the Brevo Email Campaign provider, never by SMTP per-recipient delivery.
+    return { outcome: "idle", providerCalled: false, campaign, recipient: null, processed: 0 };
+  }
 
   const config = getNewsletterCampaignWorkerConfig();
   const dryRun = options.dryRun ?? config.dryRun;
@@ -116,17 +120,26 @@ export async function processNewsletterCampaignOnce(
         lastOutcome = "failed";
         continue;
       }
-      let unsubscribeUrl: string;
-      try {
-        const token = await store.prepareUnsubscribeToken(claimed.recipient.subscriberEmail);
-        unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
-      } catch {
-        lastRecipient = await store.markRecipientFailed(claimed.recipient.id, claimed.leaseToken, "UNSUBSCRIBE_TOKEN_PREPARATION_FAILED", new Date(now().getTime() + retryDelayMs(claimed.recipient.attemptCount)).toISOString());
-        lastOutcome = "failed";
-        continue;
+      let htmlContent: string;
+      let textContent: string;
+      if (campaign.editionKey?.startsWith("weekly:")) {
+        // Weekly marketing campaigns deliberately use Brevo's native {{ unsubscribe }} link.
+        // Do not mint the legacy Supabase unsubscribe token for this campaign family.
+        htmlContent = campaign.bodyHtml;
+        textContent = campaign.bodyText;
+      } else {
+        let unsubscribeUrl: string;
+        try {
+          const token = await store.prepareUnsubscribeToken(claimed.recipient.subscriberEmail);
+          unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
+        } catch {
+          lastRecipient = await store.markRecipientFailed(claimed.recipient.id, claimed.leaseToken, "UNSUBSCRIBE_TOKEN_PREPARATION_FAILED", new Date(now().getTime() + retryDelayMs(claimed.recipient.attemptCount)).toISOString());
+          lastOutcome = "failed";
+          continue;
+        }
+        htmlContent = campaign.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
+        textContent = campaign.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
       }
-      const htmlContent = campaign.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
-      const textContent = campaign.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
       const input: NewsletterCampaignProviderInput = {
         campaignId: campaign.id,
         recipientId: claimed.recipient.id,
