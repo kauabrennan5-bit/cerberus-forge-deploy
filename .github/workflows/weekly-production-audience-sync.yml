@@ -1,0 +1,90 @@
+name: Weekly Production Audience Sync
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Safe production audience operation
+        required: true
+        default: sync
+        type: choice
+        options:
+          - sync
+          - bootstrap
+          - status
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-production-audience-sync
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
+      CERBERUS_AUTOMATION_TOKEN: ${{ secrets.CERBERUS_AUTOMATION_TOKEN }}
+    steps:
+      - name: Reconcile only the consented production audience
+        shell: bash
+        env:
+          OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'sync' }}
+        run: |
+          set -euo pipefail
+          [ -n "${CERBERUS_HEALTH_URL:-}" ] || { echo "CERBERUS_HEALTH_URL missing"; exit 1; }
+          [ -n "${CERBERUS_AUTOMATION_TOKEN:-}" ] || { echo "CERBERUS_AUTOMATION_TOKEN missing"; exit 1; }
+          base="${CERBERUS_HEALTH_URL%/health}"
+          response_file="$RUNNER_TEMP/weekly-production-audience.json"
+
+          case "$OPERATION" in
+            status)
+              method=GET
+              endpoint="$base/api/internal/newsletter/weekly-production/status"
+              ;;
+            bootstrap)
+              method=POST
+              endpoint="$base/api/internal/newsletter/weekly-production/bootstrap"
+              ;;
+            sync)
+              method=POST
+              endpoint="$base/api/internal/newsletter/weekly-production/sync"
+              ;;
+            *)
+              echo "Unsupported operation"
+              exit 1
+              ;;
+          esac
+
+          args=(--fail-with-body --silent --show-error --max-time 90
+            -o "$response_file"
+            -H "X-Cerberus-Automation-Token: ${CERBERUS_AUTOMATION_TOKEN}")
+          if [ "$method" = POST ]; then
+            args+=(-H 'Content-Type: application/json' -d '{}')
+          fi
+          curl "${args[@]}" "$endpoint"
+
+          node - "$response_file" "$OPERATION" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const operation = process.argv[3];
+          if (body?.success !== true) process.exit(1);
+          if (operation === 'status') {
+            const p = body.production || {};
+            console.log(`WEEKLY_PRODUCTION_STATUS enabled=${Boolean(p.enabled)} list_configured=${Boolean(p.listConfigured)} sync_status=${p.syncStatus || 'unknown'} eligible=${Number(p.eligibleSubscribers || 0)} members=${Number(p.brevoMembers || 0)}`);
+            process.exit(0);
+          }
+          if (operation === 'bootstrap') {
+            const p = body.production || {};
+            if (p.enabled !== true || p.listConfigured !== true || p.syncStatus !== 'ready' || Number(p.eligibleSubscribers || 0) <= 0 || Number(p.eligibleSubscribers) !== Number(p.brevoMembers)) process.exit(1);
+            console.log(`WEEKLY_PRODUCTION_BOOTSTRAP_READY=true eligible=${p.eligibleSubscribers} members=${p.brevoMembers}`);
+            process.exit(0);
+          }
+          const r = body.result || {};
+          if (r.state !== 'ready' || r.listConfigured !== true || Number(r.eligibleSubscribers) !== Number(r.brevoMembers)) process.exit(1);
+          console.log(`WEEKLY_PRODUCTION_AUDIENCE_SYNC=ready eligible=${Number(r.eligibleSubscribers || 0)} members=${Number(r.brevoMembers || 0)} created=${Number(r.contactsCreated || 0)} associated=${Number(r.contactsAssociated || 0)} removed=${Number(r.contactsRemoved || 0)} suppressed=${Number(r.locallySuppressedFromBrevo || 0)} unsubscribed=${Number(r.locallyUnsubscribedFromBrevo || 0)}`);
+          NODE
