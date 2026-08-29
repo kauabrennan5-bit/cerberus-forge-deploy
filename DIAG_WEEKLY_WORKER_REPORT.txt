@@ -1,0 +1,388 @@
+BASE_SHA=50b624d28305b4cd158d8565c64d8487bbe18138
+DIAG_SOURCE_SHA=4c2fce87177fe880f5fae6d2fa5081386027d8ec
+USER_REPORTED_FILE_PRESENT=false
+ACTUAL_PROVIDER_TEST_FILE=tests/newsletterWeeklyBrevoProvider.test.ts
+187:test("retry após create reutiliza Brevo campaign id e não cria segunda campanha", async () => {
+BASE_ISOLATED_EXIT=0
+BASE_FILE_EXIT=0
+PATCHED_ISOLATED_EXIT=0
+PATCHED_FILE_EXIT=0
+--- BASE_ISOLATED_TAIL ---
+TAP version 13
+# ◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+# ❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!
+# Subtest: retry após create reutiliza Brevo campaign id e não cria segunda campanha
+ok 1 - retry após create reutiliza Brevo campaign id e não cria segunda campanha
+  ---
+  duration_ms: 4.640712
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 487.221607
+--- PATCHED_ISOLATED_TAIL ---
+TAP version 13
+# ◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
+# ❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!
+# Subtest: retry após create reutiliza Brevo campaign id e não cria segunda campanha
+ok 1 - retry após create reutiliza Brevo campaign id e não cria segunda campanha
+  ---
+  duration_ms: 3.100335
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 432.560501
+--- PATCHED_FILE_TAIL ---
+TAP version 13
+# ◇ injected env (0) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+# ❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!
+# Subtest: Brevo weekly create usa /v3/emailCampaigns e preserva htmlContent/unsubscribe
+ok 1 - Brevo weekly create usa /v3/emailCampaigns e preserva htmlContent/unsubscribe
+  ---
+  duration_ms: 26.708913
+  type: 'test'
+  ...
+# Subtest: Brevo weekly sendTest usa endpoint oficial e exatamente um emailTo
+ok 2 - Brevo weekly sendTest usa endpoint oficial e exatamente um emailTo
+  ---
+  duration_ms: 1.114376
+  type: 'test'
+  ...
+# Subtest: Brevo weekly sendTest vazio falha fechado e não chama fetch
+ok 3 - Brevo weekly sendTest vazio falha fechado e não chama fetch
+  ---
+  duration_ms: 0.628306
+  type: 'test'
+  ...
+# Subtest: Brevo weekly sendNow usa /v3/emailCampaigns/:id/sendNow
+ok 4 - Brevo weekly sendNow usa /v3/emailCampaigns/:id/sendNow
+  ---
+  duration_ms: 0.481702
+  type: 'test'
+  ...
+# Subtest: weekly-test usa somente NEWSLETTER_TEST_EMAIL, zero subscribers/recipients e nunca sendNow
+ok 5 - weekly-test usa somente NEWSLETTER_TEST_EMAIL, zero subscribers/recipients e nunca sendNow
+  ---
+  duration_ms: 1.63971
+  type: 'test'
+  ...
+# Subtest: retry após create reutiliza Brevo campaign id e não cria segunda campanha
+ok 6 - retry após create reutiliza Brevo campaign id e não cria segunda campanha
+  ---
+  duration_ms: 0.586829
+  type: 'test'
+  ...
+# Subtest: callback lógico duplicado após test_sent não recria nem reenvia
+ok 7 - callback lógico duplicado após test_sent não recria nem reenvia
+  ---
+  duration_ms: 0.586888
+  type: 'test'
+  ...
+# Subtest: produção semanal bloqueia sem listId/sync e não toca subscribers
+ok 8 - produção semanal bloqueia sem listId/sync e não toca subscribers
+  ---
+  duration_ms: 0.561781
+  type: 'test'
+  ...
+# Subtest: produção weekly mock usa listId verificado e sendNow sem recipients Supabase
+ok 9 - produção weekly mock usa listId verificado e sendNow sem recipients Supabase
+  ---
+  duration_ms: 0.681506
+  type: 'test'
+  ...
+# Subtest: provider transacional legado continua usando /v3/smtp/email
+ok 10 - provider transacional legado continua usando /v3/smtp/email
+  ---
+  duration_ms: 1.486172
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 303.918352
+--- FUNCTIONAL_DIFF_NAMES ---
+server/services/newsletterWeeklyCampaign.ts
+server/services/newsletterWeeklyDiagnostics.ts
+server/services/telegramBot.ts
+tests/newsletterWeeklyDiagnostics.test.ts
+DELIVERY_FILE_CHANGED=0
+PROVIDER_FILE_CHANGED=0
+--- DELIVERY_CONTRACT_STATIC ---
+30:    if (current.status === "test_sent" && current.testProviderMessageId?.trim()) {
+33:    if (current.status !== "approved") throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
+35:    const testEmail = normalizeNewsletterEmail(env.NEWSLETTER_TEST_EMAIL);
+37:      throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
+42:    let brevoCampaignId = current.testProviderMessageId?.trim() || "";
+43:    if (!brevoCampaignId) {
+44:      const created = await provider.createCampaign({
+57:    const sent = await provider.sendTest(brevoCampaignId, [testEmail]);
+89:    if (current.status !== "approved") throw new Error("WEEKLY_MARKETING_PRODUCTION_APPROVAL_REQUIRED");
+105:    let brevoCampaignId = current.testProviderMessageId?.trim() || "";
+106:    if (!brevoCampaignId) {
+107:      const created = await provider.createCampaign({
+PATCHED_GLOBAL_EXIT=0
+--- PATCHED_GLOBAL_FAILURE_CONTEXT ---
+5:✔ N8-A fail-closed: sem credenciais → AUTH_REQUIRED, nunca inventa URL (1.125998ms)
+22:✔ N8-01 serviço: sem fonte API e sem URL manual → AUTH_REQUIRED (fail-closed) (1.584577ms)
+28:✔ N8-09 API retorna resposta inesperada → RESOLUTION_FAILED (fail-closed) (0.498002ms)
+40:✔ N8-23 whitelist de hosts oficiais é o catálogo N6 (fail-closed) (1.409549ms)
+43:✔ N8-26 API com listing incompleto → IDENTITY_UNCERTAIN com rationale rastreável (fail-closed p/ publicação) (0.339626ms)
+65:✔ N6-FailClosed: resolver é fail-closed em qualquer erro (adapter N5) (0.617426ms)
+107:✔ N7-J: erro de registry → RESOLUTION_ERROR (fail-closed; sem URL, sem link inventado) (0.216074ms)
+174:▶ Budget contract — 0 = não alocado (fail-closed)
+176:  ✔ qualquer campo zero → fail-closed (0.125916ms)
+178:  ✔ negative budget → fail-closed (0.087393ms)
+179:✔ Budget contract — 0 = não alocado (fail-closed) (1.22308ms)
+390:✔ FaseD-28: OfficialApprovalProvider — falha de leitura → PENDING (fail-closed) (0.224089ms)
+424:✔ E30. candidate inexistente → assessment_failed (404), sem inventar avaliação (0.287348ms)
+433:✔ F39. fail-closed: sem client → erro explícito 'missing_supabase', nada persistido (0.327443ms)
+453:✔ cliente indisponível → fail-closed sem fallback em memória (0.26164ms)
+456:✔ deleteEvidenceForProof sem cliente → fail-closed (0.17644ms)
+461:✔ N1: fail-closed — sem cliente Supabase todo registro recusa (6.15363ms)
+615:✔ F. falha de leitura do repositório não inventa sinal (fail-closed) (1.488752ms)
+646:✔ service: N13 BLOCKED → N14 não executa (fail-closed) (0.414561ms)
+651:✔ service: candidate inexistente → fail-closed (0.309232ms)
+652:✔ service: candidate_id inválido → fail-closed sem consultar nada (0.291769ms)
+693:✔ B17 cockpit: renderExperiments SEM registry → fail-closed sem execução (0.412125ms)
+696:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+699:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+703:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+705:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+707:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+709:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+713:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para incidentes.
+735:✔ N9-22 gate: BLOCK_RESOLUTION_ERROR — erro de infra bloqueia (fail-closed) (0.510066ms)
+750:✔ N9-11 runAcquisition: sem credenciais → AUTH_REQUIRED (fail-closed) (1.087277ms)
+755:✔ N9-14 runResolution: resolver lança → RESOLUTION_FAILED (fail-closed) (0.489488ms)
+799:✔ N13: deriveVerdict respeita precedência failed > blocked (0.17605ms)
+807:✔ N13 service: exceção inesperada → fail-closed, decisão BLOCKED persistida (0.548198ms)
+831:✔ N13 Fase 2: FAIL nunca vira PASS — mutação checked→failed em qualquer critério bloqueia PASS (0.676248ms)
+842:✔ N13 Fase 2: IDs com 23 ou 33 hex chars permanecem BLOCKED (fail-closed) (0.493595ms)
+869:✔ N2 (B): domínio ML não permitido é recusado (fail-closed) (0.201647ms)
+871:✔ N2 (B): domínio Shopee não permitido é recusado (fail-closed) (0.159208ms)
+874:✔ N2 (B): URL malformada ou javascript: é recusada (fail-closed) (0.349164ms)
+1046:✔ N2 (U-E): CANDIDATE != FACT CANÔNICO com título derivado — N1 recebe null e collection_failed (501.581694ms)
+1064:✔ C.5 — PUBLISH risk 0.5 exato → APPROVED (limite inclusivo, fail-closed até >0.5) (0.60844ms)
+1066:✔ C.7 — PUBLISH risk NaN → BLOCKED (fail-closed) (0.268443ms)
+1067:✔ C.8 — PUBLISH risk Infinity → BLOCKED (fail-closed) (0.199935ms)
+1153:✔ E — HTTP 401 é fail-closed (0.54405ms)
+1154:✔ F — HTTP 403 é fail-closed (0.359644ms)
+1155:✔ G — HTTP 404 é fail-closed (0.337222ms)
+1156:✔ H — HTTP 429 é fail-closed (0.406772ms)
+1157:✔ I — HTTP 500 é fail-closed (0.256501ms)
+1228:  ✔ batch vazio não chama executor e retorna failed/BATCH_EMPTY (2.055662ms)
+1246:  ✔ quando todos falham antes de desfecho útil, batch=failed (0.517259ms)
+1258:  ✔ fail-closed (domain_not_allowed) nunca é retentado, mesmo com max_retries alto (0.442499ms)
+1306:  ✔ batch > MAX_BATCH_ITEMS: nenhum item executado, failed/BATCH_EXCEEDED, métricas não processadas (0.320291ms)
+1320:  ✔ determineBatchStatus: success/partial/failed/cancelled (0.142978ms)
+1342:✔ N11-RT-09 host fora da whitelist permanece fail-closed (N2/N10 seguem como autoridade) (1.064044ms)
+1345:✔ N11-RT-12 search/keywords/categorias não entram no batch (fail-closed) (0.644778ms)
+1346:✔ N11-RT-13 signal do request chega ao executor (abort pré-execução fica fail-closed) (0.942426ms)
+1365:✔ N12-09 — candidate inexistente → failed/candidate_inexistente, executor não chamado (1.235647ms)
+1370:✔ N12-14 — erro determinístico → failed, zero retries (0.483838ms)
+1371:✔ N12-15 — fetch_failed transitório → retry permitido (1002.04124ms)
+1372:✔ N12-16 — session_registration_failed → retry permitido (1003.074194ms)
+1386:✔ N12-30 — batch failed (0.350176ms)
+1398:✔ N12-42 — retry nunca ocorre para erro fail-closed (0.312325ms)
+1425:✔ N12-RT-14: falha de coleta N2 → failed + fetch_failed (4.421917ms)
+1436:✔ REG B: snapshot alterado por nova evidência - NOVA avaliação (NUNCA replay_lookup_failed) (0.966812ms)
+1439:✔ REG E: IDs inválidos - fail-closed (400, nenhuma avaliação) (0.196649ms)
+1441:✔ REG G: provenance invalida - bloqueio (fail-closed, sem avaliacao) (0.49629ms)
+1467:  ✔ resolution failed (0.158356ms)
+1484:✔ adapter N17 de affiliateRepository persiste e resolve idempotência de forma fail-closed (4.046774ms)
+1490:✔ wiring N15→N17→N8→N6 é sequencial e fail-closed (0.742452ms)
+1499:  ✔ returns an informative message for transport failures (0.31456ms)
+1509:✔ syncCampaignTelegramState never calls provider when message edit fails (0.844854ms)
+1536:✔ sent recipient is not claimed again and retry resets only failed recipients (1.655463ms)
+1537:✔ permanent provider failures are sanitized and do not trigger a duplicate second delivery (1.150726ms)
+1547:✔ Telegram completion report includes counts and retry only for failed campaigns (0.895388ms)
+1555:✔ multi-product renderer fails closed for a product without a valid image or destination (0.25636ms)
+1559:✔ known marketplace image overlays fail closed instead of being silently cropped (0.24023ms)
+1563:✔ weekly collection selector respects the current-week date window and fails when the minimum cannot be met (0.499076ms)
+1584:✔ migration mantém a política fail-closed: product + test_sent, recipients protegidos e welcome fora do escopo (0.444453ms)
+1619:[NEWSLETTER-OUTBOX] newsletter.outbox.failure {"outbox_id":"nout-test-1","outcome":"retryable","error_code":"PROVIDER_HTTP_503","correlation_id":"corr-test-1"}
+1621:[NEWSLETTER-OUTBOX] newsletter.outbox.failure {"outbox_id":"nout-test-1","outcome":"dead_letter","error_code":"PROVIDER_HTTP_400","correlation_id":"corr-test-1"}
+1630:  ✔ keeps transient failures retryable and permanent failures in dead_letter (0.627155ms)
+1639:  ✔ maps provider duplicate and transient/permanent HTTP failures without exposing response bodies (5.106169ms)
+1932:✔ weekly flag ausente e false permanecem fail-closed; somente true habilita (1.6377ms)
+1961:[MEMORY] memory.persistence.failed code=DATABASE_UNAVAILABLE reason=Cliente Supabase não configurado para memória operacional.
+1976:✔ estado persistido inválido é rejeitado fail-closed (0.143759ms)
+2072:✔ recusa sem senha de admin (fail-closed) (30.197405ms)
+2404:✔ fail-closed quando a fonte não retorna offerLink (not_eligible) (3.586392ms)
+2405:✔ fail-closed quando a fonte retorna 401 (auth_error) (2.836096ms)
+2406:✔ fail-closed sem credenciais Affiliate configuradas (2.878655ms)
+2568:✔ scraper com anúncio bloqueado → fail-closed 424 (sem card e sem review) (6.7817ms)
+2649:✔ scraper com item divergente → fail-closed 424 por identidade (5.379583ms)
+2929:✔ fails readiness when the injected image probe reports inaccessible (0.329999ms)
+3118:✔ /publicar com preco=0 entrega alerta de preço AUSENTE e mantém fail-closed (1.134627ms)
+3163:✔ startResearch — Shopee BLOCKED por anúncio não encontrado é fail-closed (1.127975ms)
+3235:  ✔ error SHOPEE_GRAPHQL_ERROR para código oficial desconhecido (fail-closed) (0.524674ms)
+3274:▶ SHOPEE-14 provider → RESOLUTION_FAILED (fail-closed)
+3279:✔ SHOPEE-14 provider → RESOLUTION_FAILED (fail-closed) (4508.964143ms)
+3281:  ✔ sem fonte oficial → 401 AUTH_REQUIRED (fail-closed) (25.855487ms)
+3327:[SHOPEE LOT] lot=shopee-mtejj1sq discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3336:[SHOPEE LOT] lot=shopee-mtejj1sv discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3347:[SHOPEE LOT] lot=shopee-mtejj1sx discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3370:[SHOPEE LOT] lot=shopee-mtejj1t2 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3375:[SHOPEE LOT] lot=shopee-mtejj1t3 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3406:[SHOPEE LOT] lot=shopee-mtejj1t6 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3417:[SHOPEE LOT] lot=shopee-mtejj1t6 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3418:[SHOPEE LOT] lot=shopee-mtejj1t6 discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3419:[SHOPEE LOT] lot=shopee-mtejj1t8 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3422:[SHOPEE LOT] lot=shopee-mtejj1t8 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3433:[SHOPEE LOT] lot=shopee-mtejj1td discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3436:[SHOPEE LOT] lot=shopee-mtejj1td candidate=1 discovery_round=1 stage=telegram outcome=rejected reason=telegram_photo_failed
+3437:[SHOPEE LOT] lot=shopee-mtejj1td candidate=2 discovery_round=1 stage=telegram outcome=rejected reason=telegram_photo_failed
+3438:[SHOPEE LOT] lot=shopee-mtejj1td discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3439:[SHOPEE LOT] lot=shopee-mtejj1td discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3441:[SHOPEE LOT] lot=shopee-mtejj1tg discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3450:[SHOPEE LOT] lot=shopee-mtejj1tg candidate=4 discovery_round=1 stage=telegram outcome=rejected reason=telegram_photo_failed
+3471:  ✔ resposta vazia do Gemini → lote fail-closed (1.534526ms)
+3472:  ✔ erro do Gemini na busca → lote fail-closed com reason do erro (1.358917ms)
+3497:✔ SHOPEE-D1-13 directed: 10020 Invalid Signature → auth_error (fail-closed) (0.313738ms)
+3503:  ✔ classifies official auth failure as collection failure with status and no evidence (0.439253ms)
+3505:  ✔ fails closed when the reused client throws unexpectedly (0.263714ms)
+3517:✔ string vazia e só espaços → null (fail-closed) (0.161893ms)
+3518:✔ ausência ou tipo não suportado → null (fail-closed) (0.114905ms)
+3617:✔ curadoria editorial aceita fixture factual e remove instruções, logs e payload (1.437023ms)
+3704:✔ autorização permanece fail-closed e update_id é deduplicado (0.318958ms)
+3713:ℹ fail 0
+--- PATCHED_GLOBAL_TAIL ---
+[Marketplace Resolver] Destino intermediário rejeitado para https://meli.la/controlled: /offers/controlled
+✔ resolveShortUrlIfNeeded classifica meli.la sem falhar mesmo sem rede (297.631386ms)
+✔ resolveShortUrlIfNeeded resolve shortlink Shopee antes da extração (0.468267ms)
+✔ Pipeline avalia meli.la corretamente sem erro de marketplace não reconhecido (2.477794ms)
+✔ /listar constrói a primeira página com cinco produtos e botão de próxima (1.090092ms)
+✔ products_list em página posterior preserva edição e navegação com message_id real (0.224621ms)
+✔ /listar direto envia mensagem nova e não cria fakeCb nem depende de message_id (0.929902ms)
+✔ Telegram, automação e lifecycle usam somente o detector canônico (0.97615ms)
+✔ revisão do Telegram usa a extração editorial compartilhada e não publica rawContent como descricao (0.82684ms)
+✔ Telegram resolve edição de categoria somente para a taxonomia pública (0.236062ms)
+✔ Telegram não aceita mais categoria livre no caminho de review/publicação (0.586089ms)
+✔ rawContent técnico em descricao é detectado e limpo na normalização (0.327333ms)
+✔ resolveShortUrlIfNeeded rejeita destino intermediário do Mercado Livre (0.390783ms)
+✔ publicação é bloqueada se descricao contaminada atravessar a revisão (0.833613ms)
+✔ gerador de build sanitiza descricao contaminada antes de escrever o catálogo público (0.173325ms)
+✔ gerador estático projeta apenas oferta promocional confirmada e preserva ausência segura (0.20805ms)
+✔ API pública sanitiza descricao contaminada sem alterar o registro canônico (0.35771ms)
+✔ hardening do Bloco 8 trata scraper como dado e remove bypass de publicação automática (1.120009ms)
+✔ Bloco 9 bloqueia todos os destinos intermediários do Mercado Livre (0.863428ms)
+✔ curadoria editorial aceita fixture factual e remove instruções, logs e payload (1.437023ms)
+✔ fluxo controlado percorre lifecycle e persiste somente descrição editorial em adaptador MOCK (0.899035ms)
+✔ ProductDetail usa apenas campos editoriais e não contém bypass de rawContent (0.283892ms)
+✔ conteúdo externo com prompt injection não altera configuração nem cria persistência (0.294963ms)
+✔ projeções runtime e build preservam ref existente e não expõem marketplace (0.428854ms)
+◇ injected env (0) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+◇ injected env (0) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+API key should be set when using the Gemini API.
+API key should be set when using the Gemini API.
+◇ injected env (0) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+◇ injected env (0) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+API key should be set when using the Gemini API.
+API key should be set when using the Gemini API.
+[Telegram] response chat_id=1 response_method=sendMessage response_success=false error=Bad Request: message rejected
+[Telegram] response chat_id=1 response_method=sendPhoto response_success=false error=Bad Request: photo rejected
+[Telegram] response chat_id=1 response_method=sendMessage response_success=false error=telegram_http_502
+[Telegram] response chat_id=1 response_method=sendPhoto response_success=false error=request timeout
+Erro ao enviar foto Telegram: DOMException [AbortError]: request timeout
+    at new DOMException (node:internal/per_context/domexception:76:18)
+    at globalThis.fetch (/home/runner/work/cerberus-forge-deploy/cerberus-forge-deploy/patched/tests/telegramDelivery.test.ts:56:44)
+    at telegramApiFetch (/home/runner/work/cerberus-forge-deploy/cerberus-forge-deploy/patched/server/services/telegramApiClient.ts:22:18)
+    at sendTelegramPhoto (/home/runner/work/cerberus-forge-deploy/cerberus-forge-deploy/patched/server/services/telegramBot.ts:172:23)
+    at TestContext.<anonymous> (/home/runner/work/cerberus-forge-deploy/cerberus-forge-deploy/patched/tests/telegramDelivery.test.ts:57:26)
+    at Test.runInAsyncScope (node:async_hooks:214:14)
+    at Test.run (node:internal/test_runner/test:1047:25)
+    at async Suite.processPendingSubtests (node:internal/test_runner/test:744:7)
+▶ Telegram truthful delivery
+  ✔ sendMessage HTTP 200 com ok:false retorna falha lógica (1.799182ms)
+  ✔ sendPhoto HTTP 200 com ok:false retorna falha lógica (0.744505ms)
+  ✔ erro HTTP retorna falha explícita mesmo sem payload JSON legível (0.773279ms)
+  ✔ timeout ou erro de transporte retorna falha explícita (10.226896ms)
+  ✔ não registra chat_id não numérico no log (0.772628ms)
+✔ Telegram truthful delivery (15.538462ms)
+✔ diagnóstico do Telegram compara webhook canônico sem expor token (25.279122ms)
+✔ boot do Telegram é independente do Operator e setWebhook usa URL canônica (1.086957ms)
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+◇ injected env (0) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+API key should be set when using the Gemini API.
+API key should be set when using the Gemini API.
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+◇ injected env (0) from .env // tip: ⌘ enable debugging { debug: true }
+API key should be set when using the Gemini API.
+API key should be set when using the Gemini API.
+[Telegram] update_received update_type=message
+[Telegram] admin_authorized chat_id=999000111 authorized=false
+[Telegram] response chat_id=999000111 response_method=sendMessage response_success=true
+[Telegram] update_received update_type=message
+[Telegram] admin_authorized chat_id=888111222 authorized=true
+[Telegram] command chat_id=888111222 command=menu
+[Telegram] response chat_id=888111222 response_method=sendMessage response_success=true
+✔ TELEGRAM_PANEL_COMMANDS contém os comandos do painel operacional sem duplicatas (1.077299ms)
+✔ renderReadPanelMenu retorna menu consolidado sem executar nada (0.427542ms)
+✔ renderStatus reporta componentes indisponíveis como 'não disponível' (1.950765ms)
+✔ renderStatus com dados do ambiente renderiza o status sem alterar nada (19.110356ms)
+✔ renderPendingReviews: lista pendentes reais ou declara fila vazia, sem mutation (0.648385ms)
+✔ renderPendingReviews trata falha de leitura sem alterar estado (0.481733ms)
+✔ renderApproved preserva decisões publicadas quando outra fonte fica indisponível (1.348678ms)
+✔ registerTelegramCommands envia exatamente os comandos esperados (1.003971ms)
+✔ registerTelegramCommands: falha da API Telegram não derruba a inicialização (0.981499ms)
+✔ registerTelegramCommands: sem token, nenhuma chamada à API (0.5976ms)
+✔ dispatcher: /menu rejeitado para usuário não autorizado e aceito para autorizado (694.630336ms)
+✔ handlers do painel não chamam acquisition, publication, approve, reject, sync ou deploy (1.318652ms)
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+◇ injected env (0) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+✔ cria o cliente quando SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY existem (115.374021ms)
+✔ não usa SUPABASE_KEY quando SUPABASE_SERVICE_ROLE_KEY está ausente (2.436537ms)
+✔ mantém o cliente indisponível quando nenhuma credencial existe (2.277509ms)
+◇ injected env (0) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+❌ [Supabase Config Error] SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY não configurados nas variáveis de ambiente!
+◇ injected env (0) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+◇ injected env (0) from .env // tip: ⌘ enable debugging { debug: true }
+API key should be set when using the Gemini API.
+API key should be set when using the Gemini API.
+◇ injected env (0) from .env // tip: ⌘ enable debugging { debug: true }
+◇ injected env (0) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+API key should be set when using the Gemini API.
+API key should be set when using the Gemini API.
+✔ menu nativo tem dez comandos, descrições válidas e preserva compatibilidade (1.053614ms)
+✔ parser, aliases e atalhos naturais preservam o contrato V2 (1.411776ms)
+✔ autorização permanece fail-closed e update_id é deduplicado (0.318958ms)
+✔ botões do menu principal possuem handlers alcançáveis (0.420598ms)
+✔ ações críticas de produto possuem handlers (0.468358ms)
+✔ catálogo do Telegram não esconde produtos pausados (0.431418ms)
+✔ painel de categorias usa taxonomia pública fixa e não expõe CRUD livre (0.231163ms)
+✔ lista do Telegram lê a fonte canônica sem filtro ativo/inativo (0.180508ms)
+ℹ tests 1757
+ℹ suites 107
+ℹ pass 1757
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 144112.055634
