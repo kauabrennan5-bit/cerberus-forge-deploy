@@ -100,7 +100,11 @@ export async function syncWeeklyBrevoProductionAudience(
     const list = await ensureProductionList(request, listName, folderName);
     const listId = list.listId;
     const initialMembers = await loadListContacts(request, listId);
-    const memberByEmail = new Map(initialMembers.map(contact => [normalizeNewsletterEmail(contact.email), contact]).filter(([email]) => Boolean(email)));
+    const memberByEmail = new Map<string, BrevoContact>();
+    for (const contact of initialMembers) {
+      const email = normalizeNewsletterEmail(contact.email);
+      if (email) memberByEmail.set(email, contact);
+    }
     const localByEmail = new Map(localInitial.map(row => [row.email, row]));
 
     const remove = new Set<string>();
@@ -178,7 +182,6 @@ export async function syncWeeklyBrevoProductionAudience(
       .map(row => row.email));
     const finalContacts = await loadListContacts(request, listId);
     const actual = new Set(finalContacts
-      .filter(contact => contact.emailBlacklisted !== true && !normalizeIds(contact.listUnsubscribed).includes(listId))
       .map(contact => normalizeNewsletterEmail(contact.email))
       .filter(Boolean));
 
