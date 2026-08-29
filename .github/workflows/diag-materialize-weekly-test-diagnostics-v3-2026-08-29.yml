@@ -52,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m py_compile source/.github/scripts/materialize_weekly_test_diagnostics.py
+          python3 -m py_compile source/.github/scripts/patch_weekly_diagnostics_legacy_messages.py
           echo "PYTHON_SYNTAX=PASS"
 
       - name: Materialize functional diagnostics
@@ -62,6 +63,10 @@ jobs:
           grep -q '^TARGET_BLOCK_FOUND=true$' "$RUNNER_TEMP/materializer-v3.log"
           grep -q '^TARGET_BLOCK_COUNT=1$' "$RUNNER_TEMP/materializer-v3.log"
           grep -q '^PATCH_APPLIED=true$' "$RUNNER_TEMP/materializer-v3.log"
+          python3 source/.github/scripts/patch_weekly_diagnostics_legacy_messages.py work | tee "$RUNNER_TEMP/legacy-compat.log"
+          grep -q '^LEGACY_NO_NEW_PRODUCTS_MESSAGE=PASS$' "$RUNNER_TEMP/legacy-compat.log"
+          grep -q '^LEGACY_INSUFFICIENT_PRODUCTS_MESSAGE=PASS$' "$RUNNER_TEMP/legacy-compat.log"
+          grep -q '^DUPLICATE_DRAFT_REGRESSION_ADDED=true$' "$RUNNER_TEMP/legacy-compat.log"
 
       - name: Verify materialized file set
         shell: bash
@@ -93,6 +98,9 @@ jobs:
           grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/directed.log"
           grep -Eq '^# skipped 0$|^# skipped: 0$' "$RUNNER_TEMP/directed.log"
           grep -Eq '^# cancelled 0$|^# cancelled: 0$' "$RUNNER_TEMP/directed.log"
+          grep -q 'ok .*sem produto novo pula ciclo, notifica e não cria campanha' "$RUNNER_TEMP/directed.log"
+          grep -q 'ok .*draft semanal exige 1 destaque + ao menos 2 secundários' "$RUNNER_TEMP/directed.log"
+          grep -q 'ok .*TELEGRAM_ERROR_AFTER_DRAFT reutiliza draft operacional equivalente' "$RUNNER_TEMP/directed.log"
 
       - name: TypeScript
         working-directory: work
