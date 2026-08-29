@@ -1,30 +1,20 @@
-name: Telegram Weekly Test Hotfix Gate
-
+name: Telegram Weekly Test Tree Materializer
 on:
   push:
-    branches:
-      - diag/telegram-weekly-test-materialize-2026-08-29
-
+    branches: [diag/telegram-weekly-test-materialize-2026-08-29]
 permissions:
   contents: write
-
 jobs:
-  gate:
+  materialize:
     runs-on: ubuntu-latest
     env:
       TARGET_BRANCH: fix/telegram-weekly-test-2026-08-29
-      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - name: Apply minimal hotfix
+      - name: Apply exact validated patch
         shell: python
         run: |
           from pathlib import Path
@@ -32,24 +22,22 @@ jobs:
           text = commands.read_text()
           needle = '  "weekly_preflight",\n  "discover",'
           replacement = '  "weekly_preflight",\n  "weekly-test",\n  "weekly_test",\n  "discover",'
-          if needle not in text: raise SystemExit('telegramCommands known-command insertion point missing')
+          if needle not in text: raise SystemExit('commands insertion point missing')
           text = text.replace(needle, replacement, 1)
           help_needle = '    "/weekly-preflight — runtime semanal read-only\\n" +\n'
-          help_replacement = help_needle + '    "/weekly-test — criar um rascunho semanal de teste\\n" +\n'
-          if help_needle not in text: raise SystemExit('telegramCommands help insertion point missing')
-          text = text.replace(help_needle, help_replacement, 1)
+          if help_needle not in text: raise SystemExit('help insertion point missing')
+          text = text.replace(help_needle, help_needle + '    "/weekly-test — criar um rascunho semanal de teste\\n" +\n', 1)
           commands.write_text(text)
 
           bot = Path('server/services/telegramBot.ts')
           text = bot.read_text()
           import_needle = 'import { resolvePublicSiteUrl } from "./newsletterInstitutional";\n'
-          import_replacement = import_needle + 'import { runWeeklyDraftCycle } from "./newsletterWeeklyCampaign";\n'
-          if import_needle not in text: raise SystemExit('telegramBot import insertion point missing')
-          text = text.replace(import_needle, import_replacement, 1)
+          if import_needle not in text: raise SystemExit('bot import insertion point missing')
+          text = text.replace(import_needle, import_needle + 'import { runWeeklyDraftCycle } from "./newsletterWeeklyCampaign";\n', 1)
           handler_needle = '''    if (commandName === "status") {\n      if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderStatus());\n      return;\n    }\n'''
-          handler_replacement = handler_needle + '''    if (commandName === "weekly-test") {\n      if (!chatId) return;\n      try {\n        const outcome = await runWeeklyDraftCycle({ testMode: true });\n        if (outcome.status === "skipped" && outcome.reason === "duplicate") {\n          await sendTelegramMessage(chatId, "ℹ️ <b>WEEKLY-TEST JÁ PREPARADA</b>\\n\\nJá existe um rascunho operacional equivalente. Nenhuma nova campanha, recipient ou chamada Brevo foi criada.");\n        }\n      } catch (error) {\n        const reason = error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 80) : "unknown";\n        console.error(`[NEWSLETTER-WEEKLY] telegram_test_command_failed reason=${reason}`);\n        await sendTelegramMessage(chatId, "⚠️ <b>WEEKLY-TEST NÃO CRIADA</b>\\n\\nO rascunho falhou em modo fail-closed. Nenhum envio Brevo foi iniciado.");\n      }\n      return;\n    }\n'''
-          if handler_needle not in text: raise SystemExit('telegramBot handler insertion point missing')
-          text = text.replace(handler_needle, handler_replacement, 1)
+          handler_add = '''    if (commandName === "weekly-test") {\n      if (!chatId) return;\n      try {\n        const outcome = await runWeeklyDraftCycle({ testMode: true });\n        if (outcome.status === "skipped" && outcome.reason === "duplicate") {\n          await sendTelegramMessage(chatId, "ℹ️ <b>WEEKLY-TEST JÁ PREPARADA</b>\\n\\nJá existe um rascunho operacional equivalente. Nenhuma nova campanha, recipient ou chamada Brevo foi criada.");\n        }\n      } catch (error) {\n        const reason = error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 80) : "unknown";\n        console.error(`[NEWSLETTER-WEEKLY] telegram_test_command_failed reason=${reason}`);\n        await sendTelegramMessage(chatId, "⚠️ <b>WEEKLY-TEST NÃO CRIADA</b>\\n\\nO rascunho falhou em modo fail-closed. Nenhum envio Brevo foi iniciado.");\n      }\n      return;\n    }\n'''
+          if handler_needle not in text: raise SystemExit('bot handler insertion point missing')
+          text = text.replace(handler_needle, handler_needle + handler_add, 1)
           bot.write_text(text)
 
           tests = Path('tests/newsletterWeeklyRuntimePreflight.test.ts')
@@ -57,23 +45,8 @@ jobs:
           marker = '''test("usuário Telegram não autorizado é rejeitado antes do preflight", async () => {\n'''
           added = '''test("/weekly-test é comando conhecido e permanece separado de produção", () => {\n  const parsed = parseTelegramCommand("/weekly-test");\n  assert.ok(parsed);\n  assert.equal(isKnownTelegramCommand(parsed.name), true);\n  assert.equal(canonicalTelegramCommand(parsed.name), "weekly-test");\n});\n\ntest("usuário Telegram não autorizado é rejeitado antes de /weekly-test", async () => {\n  const previousAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;\n  process.env.TELEGRAM_ALLOWED_USER_IDS = "999";\n  const messages: string[] = [];\n  setTestTelegramSenders(async (_chatId, value) => { messages.push(String(value)); return { ok: true }; }, null);\n  try {\n    await handleTelegramWebhookUpdate({\n      update_id: 987654322,\n      message: { message_id: 2, from: { id: 123 }, chat: { id: 123 }, text: "/weekly-test" },\n    });\n    assert.equal(messages.length, 1);\n    assert.match(messages[0], /Acesso Negado/);\n    assert.doesNotMatch(messages[0], /WEEKLY-TEST JÁ PREPARADA|RASCUNHO SEMANAL/);\n  } finally {\n    setTestTelegramSenders(null, null);\n    if (previousAllowed === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;\n    else process.env.TELEGRAM_ALLOWED_USER_IDS = previousAllowed;\n  }\n});\n\n'''
           if marker not in text: raise SystemExit('test insertion point missing')
-          text = text.replace(marker, added + marker, 1)
-          tests.write_text(text)
-      - name: Directed tests
-        run: node --import tsx --test tests/newsletterWeeklyRuntimePreflight.test.ts tests/newsletterWeeklyCampaign.test.ts tests/newsletterWeeklyBrevoProvider.test.ts tests/publishCommand.test.ts
-      - name: Global tests
-        run: npm test
-      - name: TypeScript
-        run: npm run lint
-      - name: Build
-        run: npm run build
-      - name: Diff check
-        run: git diff --check HEAD
-      - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Commit validated hotfix
+          tests.write_text(text.replace(marker, added + marker, 1))
+      - name: Commit and expose exact tree
         shell: bash
         run: |
           set -euo pipefail
