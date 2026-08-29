@@ -19,10 +19,11 @@ jobs:
     timeout-minutes: 45
     env:
       TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+      DIAG_BASE_SHA: "defa6fe6bbda8eff5e7c8e80b2241a29011ace8c"
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -30,32 +31,24 @@ jobs:
       - run: python .github/scripts/materialize_weekly_newsletter.py
       - name: Apply validated candidate corrections
         run: python .github/scripts/diag_weekly_candidate_patch.py
-      - name: Remove temporary materializer
-        run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
-      - name: Capture complete generated candidate diff
+      - name: Remove temporary materializer and diagnostic helper
+        run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml .github/scripts/diag_weekly_candidate_patch.py
+      - name: Capture canonical candidate diff from feature base
         shell: bash
         run: |
           set -euo pipefail
+          git cat-file -e "${DIAG_BASE_SHA}^{commit}"
           git add -N .
-          git diff --no-ext-diff --binary > weekly-candidate.patch
-          git diff --name-only > weekly-candidate-files.txt
-          git diff --no-ext-diff --binary -- . \
-            ':(exclude).github/scripts/materialize_weekly_newsletter.py' \
-            ':(exclude).github/workflows/weekly-newsletter-materialize.yml' \
-            ':(exclude).github/scripts/diag_weekly_candidate_patch.py' \
-            > weekly-functional.patch
-          git diff --name-only -- . \
-            ':(exclude).github/scripts/materialize_weekly_newsletter.py' \
-            ':(exclude).github/workflows/weekly-newsletter-materialize.yml' \
-            ':(exclude).github/scripts/diag_weekly_candidate_patch.py' \
-            > weekly-functional-files.txt
+          git diff --no-ext-diff --binary "$DIAG_BASE_SHA" -- . > weekly-functional.patch
+          git diff --name-only "$DIAG_BASE_SHA" -- . > weekly-functional-files.txt
+          cp weekly-functional.patch weekly-candidate.patch
+          cp weekly-functional-files.txt weekly-candidate-files.txt
           sha256sum weekly-functional.patch | awk '{print "sha256:" $1}' > weekly-functional.sha256
-          test -s weekly-candidate.patch
-          test -s weekly-candidate-files.txt
           test -s weekly-functional.patch
           test -s weekly-functional-files.txt
           test -s weekly-functional.sha256
           cat weekly-functional.sha256
+          cat weekly-functional-files.txt
       - name: Upload generated candidate diff
         uses: actions/upload-artifact@v4
         with:
@@ -275,13 +268,13 @@ jobs:
       - name: Build
         run: npm run build
       - name: Diff check
-        run: git diff --check
-      - name: Secret scan changed content
+        run: git diff "$DIAG_BASE_SHA" --check -- .
+      - name: Secret scan canonical candidate
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p /tmp/gitleaks-scan
-          git diff --no-ext-diff --binary > /tmp/gitleaks-scan/weekly-candidate.patch
+          git diff --no-ext-diff --binary "$DIAG_BASE_SHA" -- . > /tmp/gitleaks-scan/weekly-candidate.patch
           curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
