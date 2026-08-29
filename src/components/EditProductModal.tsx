@@ -12,22 +12,40 @@ interface EditProductModalProps {
   onSaveSuccess: (updatedProduct: Product) => void;
 }
 
+type EditProductModalContentProps = Omit<EditProductModalProps, 'isOpen' | 'product'> & {
+  product: Product;
+};
+
 interface ImageItem {
   id: string;
   urlOrBase64: string;
 }
 
-export const EditProductModal: React.FC<EditProductModalProps> = ({
-  isOpen,
+/**
+ * The gate owns the conditional mount. The stateful child is therefore only
+ * mounted when a product exists, so its Hook order can never change between
+ * renders (fixes the previous Rules of Hooks violation).
+ */
+export const EditProductModal: React.FC<EditProductModalProps> = (props) => {
+  if (!props.isOpen || !props.product) return null;
+  return (
+    <EditProductModalContent
+      product={props.product}
+      existingCategories={props.existingCategories}
+      adminPassword={props.adminPassword}
+      onClose={props.onClose}
+      onSaveSuccess={props.onSaveSuccess}
+    />
+  );
+};
+
+const EditProductModalContent: React.FC<EditProductModalContentProps> = ({
   product,
   existingCategories,
   adminPassword,
   onClose,
   onSaveSuccess
 }) => {
-  if (!isOpen || !product) return null;
-
-  // Form states initialized from product
   const [produto, setProduto] = useState<string>(product.produto || '');
   const [selectedCategory, setSelectedCategory] = useState<string>(product.categoria || '');
   const [customCategory, setCustomCategory] = useState<string>('');
@@ -53,35 +71,30 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync state whenever product changes
   useEffect(() => {
-    if (product) {
-      setProduto(product.produto || '');
-      setSelectedCategory(product.categoria || '');
-      setCustomCategory('');
-      setIsNewCategory(false);
-      setPreco(product.preco ? String(product.preco) : '');
-      setLink(product.link || '');
-      setDescricao(product.descricao || '');
-      setPaginaPonteUrl(product.paginaPonteUrl || '');
-      setDestaque(Boolean(product.destaque));
-      
-      const list = Array.isArray(product.imagens) ? product.imagens : [];
-      setImages(
-        list.map((url) => ({
-          id: Math.random().toString(36).substring(2, 9),
-          urlOrBase64: url
-        }))
-      );
-      setValidationError(null);
-      setSubmitError(null);
-      setShowSuccessToast(false);
-    }
+    setProduto(product.produto || '');
+    setSelectedCategory(product.categoria || '');
+    setCustomCategory('');
+    setIsNewCategory(false);
+    setPreco(product.preco ? String(product.preco) : '');
+    setLink(product.link || '');
+    setDescricao(product.descricao || '');
+    setPaginaPonteUrl(product.paginaPonteUrl || '');
+    setDestaque(Boolean(product.destaque));
+
+    const list = Array.isArray(product.imagens) ? product.imagens : [];
+    setImages(
+      list.map((url) => ({
+        id: Math.random().toString(36).substring(2, 9),
+        urlOrBase64: url
+      }))
+    );
+    setValidationError(null);
+    setSubmitError(null);
+    setShowSuccessToast(false);
   }, [product]);
 
-  // Check if form was modified
   const isFormDirty = (): boolean => {
-    if (!product) return false;
     const initialCategory = product.categoria || '';
     const currentCategory = isNewCategory ? customCategory.trim() : selectedCategory.trim();
     const initialPrice = product.preco ? String(product.preco) : '';
@@ -110,7 +123,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     onClose();
   };
 
-  // Convert uploaded image file to Base64
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const filesArray = Array.from(e.target.files) as File[];
@@ -165,7 +177,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     setValidationError(null);
     setSubmitError(null);
 
-    // Validation
     if (!produto.trim()) {
       setValidationError('O Nome da peça é obrigatório.');
       return;
@@ -193,13 +204,16 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       return;
     }
 
+    const activePassword = String(adminPassword || '').trim();
+    if (!activePassword) {
+      setSubmitError('Sessão administrativa sem credencial em memória. Faça login novamente.');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const imagePayload = images.map((i) => i.urlOrBase64);
-
-      const activePassword = adminPassword || (typeof window !== 'undefined' ? localStorage.getItem('cerberus_admin_password') || '' : '');
-
       const payload = {
         produto: produto.trim(),
         categoria: finalCategory,
@@ -208,8 +222,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         descricao: descricao.trim(),
         paginaPonteUrl: paginaPonteUrl.trim(),
         destaque,
-        imagens: imagePayload,
-        senha: activePassword
+        imagens: imagePayload
       };
 
       const res = await updateProduct(product.id, payload, activePassword);
@@ -229,10 +242,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         };
 
         onSaveSuccess(updatedObj);
-
-        setTimeout(() => {
-          onClose();
-        }, 600);
+        setTimeout(() => onClose(), 600);
       } else {
         setSubmitError(res.error || 'Não foi possível salvar as alterações do produto.');
       }
@@ -246,11 +256,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0B0908]/95 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-fade-in font-sans">
-      
-      {/* Modal Container */}
       <div className="bg-[#181512] border border-[#3A342E] w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl rounded-none relative overflow-hidden">
-        
-        {/* Header Bar */}
         <div className="p-4 sm:p-5 bg-[#0B0908] border-b border-[#3A342E] flex items-center justify-between shrink-0">
           <div className="flex items-center space-x-2 min-w-0">
             <div className="w-8 h-8 bg-[#181512] border border-[#8A1F1F] text-[#8A1F1F] flex items-center justify-center shrink-0">
@@ -260,13 +266,12 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               <span className="text-[9px] font-mono text-[#8A1F1F] uppercase tracking-widest block">
                 EDITAR PRODUTO — ID: {product.id}
               </span>
-              <h2 className="font-gothic text-xl sm:text-2xl text-[#E8E1D3] truncate">
-                {product.produto}
-              </h2>
+              <h2 className="font-gothic text-xl sm:text-2xl text-[#E8E1D3] truncate">{product.produto}</h2>
             </div>
           </div>
 
           <button
+            type="button"
             onClick={handleCloseAttempt}
             className="p-1.5 bg-[#181512] border border-[#3A342E] hover:border-[#8A1F1F] text-[#E8E1D3]/70 hover:text-[#E8E1D3] transition-colors rounded-none shrink-0"
             title="Fechar formulário de edição"
@@ -275,10 +280,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           </button>
         </div>
 
-        {/* Modal Scrollable Body */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-5">
-          
-          {/* Validation Error Banner */}
           {validationError && (
             <div className="bg-[#8A1F1F]/20 border border-[#8A1F1F] p-3 text-xs text-[#E8E1D3] flex items-center space-x-2">
               <AlertTriangle className="w-4 h-4 text-[#8A1F1F] shrink-0" />
@@ -286,7 +288,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
           )}
 
-          {/* Submit Error Banner */}
           {submitError && (
             <div className="bg-[#8A1F1F]/30 border border-[#8A1F1F] p-3 text-xs text-[#E8E1D3] flex items-center space-x-2">
               <AlertTriangle className="w-4 h-4 text-[#8A1F1F] shrink-0" />
@@ -294,7 +295,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
           )}
 
-          {/* Success Toast Banner */}
           {showSuccessToast && (
             <div className="bg-[#181512] border border-[#8A1F1F] p-3 text-xs text-[#E8E1D3] flex items-center space-x-2">
               <Check className="w-4 h-4 text-[#8A1F1F] shrink-0" />
@@ -303,8 +303,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           )}
 
           <form id="edit-product-form" onSubmit={handleSubmit} className="space-y-4">
-            
-            {/* Título / Nome do Produto */}
             <div>
               <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">
                 Nome da Peça / Título <span className="text-[#8A1F1F]">*</span>
@@ -318,7 +316,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
             </div>
 
-            {/* Categoria */}
             <div>
               <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">
                 Categoria <span className="text-[#8A1F1F]">*</span>
@@ -337,11 +334,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                   className="w-full bg-[#0B0908] border border-[#3A342E] focus:border-[#8A1F1F] text-[#E8E1D3] text-xs font-display uppercase tracking-wider rounded-none px-3.5 py-2.5 focus:outline-none transition-colors"
                 >
                   <option value="">-- Selecione a Categoria --</option>
-                  {existingCategories.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
+                  {existingCategories.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
                   <option value="__NEW__">+ Criar nova categoria...</option>
                 </select>
               ) : (
@@ -368,7 +361,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               )}
             </div>
 
-            {/* Preço */}
             <div>
               <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">
                 Preço Atual (R$) <span className="text-[#8A1F1F]">*</span>
@@ -384,7 +376,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
             </div>
 
-            {/* Link do Produto */}
             <div>
               <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">
                 Link do Produto / URL de Afiliado <span className="text-[#8A1F1F]">*</span>
@@ -398,11 +389,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
             </div>
 
-            {/* Descrição / Especificações */}
             <div>
-              <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">
-                Descrição Curatorial / Especificações
-              </label>
+              <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">Descrição Curatorial / Especificações</label>
               <textarea
                 value={descricao}
                 onChange={(e) => setDescricao(e.target.value)}
@@ -412,11 +400,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
             </div>
 
-            {/* URL da Página Ponte / Presell */}
             <div>
-              <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">
-                URL da Página Ponte / Presell (Opcional)
-              </label>
+              <label className="block text-xs font-display uppercase tracking-widest text-[#E8E1D3] mb-1">URL da Página Ponte / Presell (Opcional)</label>
               <input
                 type="url"
                 value={paginaPonteUrl}
@@ -426,28 +411,17 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
             </div>
 
-            {/* Gerenciamento de Fotos / Imagens */}
             <div className="space-y-3 pt-2 border-t border-[#3A342E]">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-display uppercase tracking-widest text-[#E8E1D3] flex items-center space-x-1.5">
-                  <ImageIcon className="w-3.5 h-3.5 text-[#8A1F1F]" />
-                  <span>Galeria de Imagens ({images.length})</span>
-                </label>
-              </div>
+              <label className="text-xs font-display uppercase tracking-widest text-[#E8E1D3] flex items-center space-x-1.5">
+                <ImageIcon className="w-3.5 h-3.5 text-[#8A1F1F]" />
+                <span>Galeria de Imagens ({images.length})</span>
+              </label>
 
-              {/* Existing Images Grid */}
               {images.length > 0 && (
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
                   {images.map((img, idx) => (
-                    <div
-                      key={img.id}
-                      className="relative bg-[#0B0908] border border-[#3A342E] rounded-none p-1 group aspect-square flex items-center justify-center overflow-hidden"
-                    >
-                      <img
-                        src={img.urlOrBase64}
-                        alt={`Foto ${idx + 1}`}
-                        className="w-full h-full object-contain"
-                      />
+                    <div key={img.id} className="relative bg-[#0B0908] border border-[#3A342E] rounded-none p-1 group aspect-square flex items-center justify-center overflow-hidden">
+                      <img src={img.urlOrBase64} alt={`Foto ${idx + 1}`} className="w-full h-full object-contain" />
                       <button
                         type="button"
                         onClick={() => handleRemoveImage(img.id)}
@@ -456,25 +430,14 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                      <span className="absolute bottom-1 left-1 px-1 bg-[#0B0908]/90 text-[8px] font-mono text-[#E8E1D3]/70">
-                        #{idx + 1}
-                      </span>
+                      <span className="absolute bottom-1 left-1 px-1 bg-[#0B0908]/90 text-[8px] font-mono text-[#E8E1D3]/70">#{idx + 1}</span>
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* Upload Image & URL Addition Actions */}
               <div className="flex flex-col sm:flex-row gap-2 pt-1">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-
+                <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleFileChange} className="hidden" />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -503,37 +466,22 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               </div>
             </div>
 
-            {/* Limited Edition Badge Toggle */}
             <div className="pt-3 border-t border-[#3A342E] flex items-center justify-between">
               <div>
-                <span className="text-xs font-display text-[#E8E1D3] uppercase tracking-wider block">
-                  Etiqueta Edição Limitada (Badge "LIMITED")
-                </span>
-                <span className="text-[11px] font-condensed text-[#E8E1D3]/60 block">
-                  Destaca a peça com o badge no catálogo.
-                </span>
+                <span className="text-xs font-display text-[#E8E1D3] uppercase tracking-wider block">Etiqueta Edição Limitada (Badge "LIMITED")</span>
+                <span className="text-[11px] font-condensed text-[#E8E1D3]/60 block">Destaca a peça com o badge no catálogo.</span>
               </div>
-
               <button
                 type="button"
                 onClick={() => setDestaque(!destaque)}
-                className={`w-11 h-6 transition-colors relative p-1 rounded-none border ${
-                  destaque ? 'bg-[#8A1F1F] border-[#8A1F1F]' : 'bg-[#0B0908] border-[#3A342E]'
-                }`}
+                className={`w-11 h-6 transition-colors relative p-1 rounded-none border ${destaque ? 'bg-[#8A1F1F] border-[#8A1F1F]' : 'bg-[#0B0908] border-[#3A342E]'}`}
               >
-                <span
-                  className={`w-4 h-4 bg-[#E8E1D3] block transition-transform ${
-                    destaque ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
+                <span className={`w-4 h-4 bg-[#E8E1D3] block transition-transform ${destaque ? 'translate-x-5' : 'translate-x-0'}`} />
               </button>
             </div>
-
           </form>
-
         </div>
 
-        {/* Modal Footer Controls */}
         <div className="p-4 bg-[#0B0908] border-t border-[#3A342E] flex items-center justify-between shrink-0 gap-3">
           <button
             type="button"
@@ -552,21 +500,13 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             className="px-6 py-2.5 bg-[#8A1F1F] hover:bg-[#8A1F1F]/80 disabled:opacity-50 text-[#E8E1D3] text-xs font-display uppercase tracking-widest flex items-center space-x-2 rounded-none transition-colors border border-[#8A1F1F]"
           >
             {isSubmitting ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-[#E8E1D3]" />
-                <span>Salva...</span>
-              </>
+              <><Loader2 className="w-4 h-4 animate-spin text-[#E8E1D3]" /><span>Salvando...</span></>
             ) : (
-              <>
-                <ShieldCheck className="w-4 h-4 text-[#E8E1D3]" />
-                <span>Salvar Alterações</span>
-              </>
+              <><ShieldCheck className="w-4 h-4 text-[#E8E1D3]" /><span>Salvar Alterações</span></>
             )}
           </button>
         </div>
-
       </div>
-
     </div>
   );
 };

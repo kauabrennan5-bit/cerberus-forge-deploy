@@ -1,7 +1,6 @@
 import { Product } from '../types';
-
-// Declare window global pixel functions
 import { sendMetaCapiEvent } from '../services/api';
+import { hasAnalyticsConsent } from './privacyConsent';
 
 declare global {
   interface Window {
@@ -15,12 +14,10 @@ declare global {
   }
 }
 
-/**
- * Dynamically inject Meta Pixel base script into <head>
- */
+/** Dynamically inject Meta Pixel only after explicit analytics consent. */
 export function initMetaPixel(pixelId: string) {
-  if (!pixelId || typeof window === 'undefined') return;
-  
+  if (!hasAnalyticsConsent() || !pixelId || typeof window === 'undefined') return;
+
   if (window.fbq) {
     try {
       window.fbq('init', pixelId);
@@ -30,7 +27,6 @@ export function initMetaPixel(pixelId: string) {
     return;
   }
 
-  /* eslint-disable */
   (function(f: any, b: any, e: any, v: any, n?: any, t?: any, s?: any) {
     if (f.fbq) return;
     n = f.fbq = function() {
@@ -49,18 +45,16 @@ export function initMetaPixel(pixelId: string) {
   })(window, document, 'script', 'https://connect.facebook.net/en_US/fbevents.js');
 
   try {
-    window.fbq('init', pixelId);
-    window.fbq('track', 'PageView');
+    window.fbq?.('init', pixelId);
+    window.fbq?.('track', 'PageView');
   } catch (e) {
     console.warn('Meta Pixel PageView warning:', e);
   }
 }
 
-/**
- * Dynamically inject TikTok Pixel base script into <head>
- */
+/** Dynamically inject TikTok Pixel only after explicit analytics consent. */
 export function initTikTokPixel(pixelId: string) {
-  if (!pixelId || typeof window === 'undefined') return;
+  if (!hasAnalyticsConsent() || !pixelId || typeof window === 'undefined') return;
 
   if (window.ttq) {
     try {
@@ -71,58 +65,58 @@ export function initTikTokPixel(pixelId: string) {
     return;
   }
 
-  /* eslint-disable */
   (function(w: any, d: any, t: any) {
     w.TiktokAnalyticsObject = t;
-    var ttq = w[t] = w[t] || [];
+    const ttq = w[t] = w[t] || [];
     ttq.methods = ["page", "track", "identify", "instances", "debug", "on", "off", "once", "ready", "alias", "group", "enableCookie", "disableCookie"];
-    ttq.setAndDefer = function(t: any, e: any) {
-      t[e] = function() {
-        t.push([e].concat(Array.prototype.slice.call(arguments, 0)));
+    ttq.setAndDefer = function(target: any, method: any) {
+      target[method] = function() {
+        target.push([method].concat(Array.prototype.slice.call(arguments, 0)));
       };
     };
-    for (var i = 0; i < ttq.methods.length; i++) ttq.setAndDefer(ttq, ttq.methods[i]);
-    ttq.instance = function(t: any) {
-      for (var e = ttq.methods[i], n = 0; n < ttq.methods.length; n++) ttq.setAndDefer(t, ttq.methods[n]);
-      return t;
+    for (let i = 0; i < ttq.methods.length; i++) ttq.setAndDefer(ttq, ttq.methods[i]);
+    ttq.instance = function(target: any) {
+      for (let n = 0; n < ttq.methods.length; n++) ttq.setAndDefer(target, ttq.methods[n]);
+      return target;
     };
-    ttq.load = function(e: any, n: any) {
-      var i = "https://analytics.tiktok.com/i18n/pixel/sdk.js";
+    ttq.load = function(id: any, options: any) {
+      const url = "https://analytics.tiktok.com/i18n/pixel/sdk.js";
       ttq._i = ttq._i || {};
-      ttq._i[e] = [];
-      ttq._i[e]._u = i;
+      ttq._i[id] = [];
+      ttq._i[id]._u = url;
       ttq._t = ttq._t || {};
-      ttq._t[e] = +new Date();
+      ttq._t[id] = +new Date();
       ttq._o = ttq._o || {};
-      ttq._o[e] = n || {};
-      var o = document.createElement("script");
-      o.type = "text/javascript";
-      o.async = true;
-      o.src = i + "?sdkid=" + e + "&lib=" + t;
-      var a = document.getElementsByTagName("script")[0];
-      a.parentNode?.insertBefore(o, a);
+      ttq._o[id] = options || {};
+      const script = document.createElement("script");
+      script.type = "text/javascript";
+      script.async = true;
+      script.src = `${url}?sdkid=${id}&lib=${t}`;
+      const first = document.getElementsByTagName("script")[0];
+      first.parentNode?.insertBefore(script, first);
     };
   })(window, document, 'ttq');
 
   try {
-    window.ttq.load(pixelId);
-    window.ttq.page();
+    window.ttq?.load(pixelId);
+    window.ttq?.page();
   } catch (e) {
     console.warn('TikTok Pixel page warning:', e);
   }
 }
 
 /**
- * Track InitiateCheckout Event across Client Meta Pixel + Server Meta CAPI + TikTok Pixel
- * Deduplication via matching event_id
+ * Track product click only after consent. Pixel IDs and access tokens are never
+ * forwarded from browser state to CAPI; server-side env is the authority.
  */
 export function trackProductClick(
   product: Product,
-  metaPixelId?: string,
-  metaAccessToken?: string
+  _metaPixelId?: string,
+  _metaAccessToken?: string
 ) {
-  const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  if (!hasAnalyticsConsent()) return;
 
+  const eventId = `evt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   const payload = {
     content_name: product.produto,
     content_category: product.categoria,
@@ -132,32 +126,30 @@ export function trackProductClick(
     currency: 'BRL'
   };
 
-  // 1. Client-Side Meta Pixel (InitiateCheckout with eventID for deduplication)
   if (typeof window !== 'undefined' && window.fbq) {
     try {
       window.fbq('track', 'InitiateCheckout', payload, { eventID: eventId });
-      console.log('⚡ Meta Pixel (Client) InitiateCheckout fired:', { payload, eventID: eventId });
     } catch (e) {
       console.warn('Meta Pixel track error:', e);
     }
   }
 
-  // 2. Server-Side Meta Conversions API (CAPI) sending matching event_id
   sendMetaCapiEvent({
     event_name: 'InitiateCheckout',
     event_id: eventId,
-    product,
-    metaPixelId,
-    metaAccessToken
+    product: {
+      id: product.id,
+      produto: product.produto,
+      categoria: product.categoria,
+      preco: product.preco
+    }
   }).catch((err) => {
     console.warn('Meta CAPI fetch warning:', err);
   });
 
-  // 3. TikTok Pixel (InitiateCheckout)
   if (typeof window !== 'undefined' && window.ttq && typeof window.ttq.track === 'function') {
     try {
       window.ttq.track('InitiateCheckout', payload);
-      console.log('⚡ TikTok Pixel InitiateCheckout fired:', payload);
     } catch (e) {
       console.warn('TikTok Pixel track error:', e);
     }
