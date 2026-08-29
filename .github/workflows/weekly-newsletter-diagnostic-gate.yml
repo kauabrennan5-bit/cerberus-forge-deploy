@@ -32,33 +32,18 @@ jobs:
       - name: Materialize exact weekly candidate
         run: python .github/scripts/materialize_weekly_newsletter.py
 
-      - name: Apply validated UTM click contract fix
+      - name: Apply complete materializer patch
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("server/routes/newsletterWeeklyRoutes.ts")
-          text = path.read_text(encoding="utf-8")
-          replacements = [
-              ("utmSource:", "utm_source:"),
-              ("utmMedium:", "utm_medium:"),
-              ("utmCampaign:", "utm_campaign:"),
-              ("utmContent:", "utm_content:"),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f"expected exactly one {old!r}, found {text.count(old)}")
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding="utf-8")
-          PY
+          python .github/scripts/diag_weekly_candidate_patch.py
 
       - name: Remove diagnostic and materializer files from final candidate
         shell: bash
         run: |
           set -euo pipefail
           rm -f \
+            .github/scripts/diag_weekly_candidate_patch.py \
             .github/scripts/materialize_weekly_newsletter.py \
             .github/workflows/weekly-newsletter-materialize.yml \
             .github/workflows/weekly-newsletter-diagnostic-gate.yml
