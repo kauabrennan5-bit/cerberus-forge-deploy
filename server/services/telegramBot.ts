@@ -36,7 +36,10 @@ import {
 } from "./newsletterCampaignTelegram";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 import { resolvePublicSiteUrl } from "./newsletterInstitutional";
-import { runWeeklyDraftCycle } from "./newsletterWeeklyCampaign";
+import {
+  redeliverLatestWeeklyTestDraftCard,
+  runWeeklyDraftCycle,
+} from "./newsletterWeeklyCampaign";
 import { formatWeeklyDraftDiagnosticTelegram, isWeeklyDraftDiagnosticError } from "./newsletterWeeklyDiagnostics";
 import {
   isSocialNetwork,
@@ -152,6 +155,64 @@ export async function sendTelegramMessage(chatId: number | string, text: string,
     logTelegramEvent("response", { chat_id: chatId, response_method: "sendMessage", response_success: false, error: failureReason });
     console.error("Erro ao enviar mensagem Telegram:", err);
     return { ok: false, failureReason };
+  }
+}
+
+export type WeeklyTestCommandDeps = {
+  recoverDraftCard?: typeof redeliverLatestWeeklyTestDraftCard;
+  runDraftCycle?: typeof runWeeklyDraftCycle;
+  sendMessage?: typeof sendTelegramMessage;
+};
+
+export async function executeWeeklyTestCommand(
+  chatId: string | number,
+  deps: WeeklyTestCommandDeps = {},
+): Promise<void> {
+  const recoverDraftCard = deps.recoverDraftCard || redeliverLatestWeeklyTestDraftCard;
+  const runDraftCycle = deps.runDraftCycle || runWeeklyDraftCycle;
+  const reply = deps.sendMessage || sendTelegramMessage;
+
+  const reportRecoveryDeliveryFailure = async (campaignId: string): Promise<void> => {
+    console.error("[NEWSLETTER-WEEKLY] telegram_test_recovery_failed stage=TELEGRAM_DELIVERY reason=EXISTING_DRAFT_TELEGRAM_DELIVERY_FAILED");
+    await reply(
+      chatId,
+      "⚠️ <b>WEEKLY-TEST NÃO REEXIBIDA</b>\n\n" +
+        "O rascunho existente foi preservado em <code>pending_approval</code>, mas o Telegram não confirmou a entrega do card.\n\n" +
+        `<code>${escapeTelegramHtml(campaignId)}</code>\n\n` +
+        "Nenhum novo draft, recipient ou envio Brevo foi criado.",
+    );
+  };
+
+  try {
+    // A recuperação vem antes do ciclo completo para impedir que mudanças
+    // de catálogo/ranking produzam outra edition_key enquanto há um teste pendente.
+    const existing = await recoverDraftCard({ chatId });
+    if (existing.status === "delivered") return;
+    if (existing.status === "delivery_failed") {
+      await reportRecoveryDeliveryFailure(existing.campaign.id);
+      return;
+    }
+
+    const outcome = await runDraftCycle({ testMode: true, telegramChatId: chatId });
+    if (outcome.status === "skipped" && outcome.reason === "duplicate") {
+      // Protege a janela de corrida entre a consulta inicial e a persistência.
+      const recovery = await recoverDraftCard({ chatId });
+      if (recovery.status === "delivered") return;
+      if (recovery.status === "delivery_failed") {
+        await reportRecoveryDeliveryFailure(recovery.campaign.id);
+        return;
+      }
+      await reply(chatId, "ℹ️ <b>WEEKLY-TEST JÁ PREPARADA</b>\n\nJá existe um rascunho operacional equivalente, mas nenhum card pendente foi localizado para reexibição. Nenhuma nova campanha, recipient ou chamada Brevo foi criada.");
+    }
+  } catch (error) {
+    if (isWeeklyDraftDiagnosticError(error)) {
+      const diagnostic = error.diagnostic;
+      console.error(`[NEWSLETTER-WEEKLY] telegram_test_command_failed attempt=${diagnostic.attemptId} stage=${diagnostic.stage} reason=${diagnostic.reason}`);
+      await reply(chatId, formatWeeklyDraftDiagnosticTelegram(diagnostic));
+    } else {
+      console.error("[NEWSLETTER-WEEKLY] telegram_test_command_failed stage=UNKNOWN_INTERNAL reason=UNKNOWN_INTERNAL");
+      await reply(chatId, "⚠️ <b>WEEKLY-TEST NÃO CRIADA</b>\n\nEtapa: <b>Interno</b>\nMotivo: <code>UNKNOWN_INTERNAL</code>\n\nNenhum email foi enviado e nenhuma chamada Brevo foi iniciada.");
+    }
   }
 }
 
@@ -1763,21 +1824,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
 if (commandName === "weekly-test") {
   if (!chatId) return;
-  try {
-    const outcome = await runWeeklyDraftCycle({ testMode: true });
-    if (outcome.status === "skipped" && outcome.reason === "duplicate") {
-      await sendTelegramMessage(chatId, "ℹ️ <b>WEEKLY-TEST JÁ PREPARADA</b>\n\nJá existe um rascunho operacional equivalente. Nenhuma nova campanha, recipient ou chamada Brevo foi criada.");
-    }
-  } catch (error) {
-    if (isWeeklyDraftDiagnosticError(error)) {
-      const diagnostic = error.diagnostic;
-      console.error(`[NEWSLETTER-WEEKLY] telegram_test_command_failed attempt=${diagnostic.attemptId} stage=${diagnostic.stage} reason=${diagnostic.reason}`);
-      await sendTelegramMessage(chatId, formatWeeklyDraftDiagnosticTelegram(diagnostic));
-    } else {
-      console.error("[NEWSLETTER-WEEKLY] telegram_test_command_failed stage=UNKNOWN_INTERNAL reason=UNKNOWN_INTERNAL");
-      await sendTelegramMessage(chatId, "⚠️ <b>WEEKLY-TEST NÃO CRIADA</b>\n\nEtapa: <b>Interno</b>\nMotivo: <code>UNKNOWN_INTERNAL</code>\n\nNenhum email foi enviado e nenhuma chamada Brevo foi iniciada.");
-    }
-  }
+  await executeWeeklyTestCommand(chatId);
   return;
 }
     if (commandName === "pendentes") {

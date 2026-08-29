@@ -32,6 +32,7 @@ export type WeeklyDraftDeps = {
   copyGenerator?: (products: readonly Product[]) => Promise<WeeklyNewsletterCopy>;
   institutionalLoader?: (env: NodeJS.ProcessEnv) => Promise<Awaited<ReturnType<typeof getNewsletterInstitutionalOptions>>>;
   telegramSender?: (chatId: string, text: string, replyMarkup?: unknown) => Promise<TelegramDeliveryResult>;
+  telegramChatId?: string | number;
   now?: Date;
   env?: NodeJS.ProcessEnv;
   testMode?: boolean;
@@ -117,6 +118,96 @@ async function notify(sender: WeeklyDraftDeps["telegramSender"], chatId: string,
   return (sender || sendTelegramMessage)(chatId, text, markup);
 }
 
+function escapeWeeklyTelegramHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export type WeeklyDraftCardRecoveryOutcome =
+  | {
+      status: "delivered";
+      campaign: EmailCampaign;
+      messageId: number | null;
+      cardReferencePersisted: boolean;
+    }
+  | { status: "not_found" }
+  | { status: "delivery_failed"; campaign: EmailCampaign };
+
+export type WeeklyDraftCardRecoveryDeps = {
+  chatId: string | number;
+  store?: NewsletterCampaignStore;
+  telegramSender?: WeeklyDraftDeps["telegramSender"];
+};
+
+/**
+ * Reexibe o rascunho weekly-test persistido sem recriar campanha, produtos,
+ * recipients ou qualquer recurso no provider de email.
+ */
+export async function redeliverLatestWeeklyTestDraftCard(
+  deps: WeeklyDraftCardRecoveryDeps,
+): Promise<WeeklyDraftCardRecoveryOutcome> {
+  const chatId = String(deps.chatId ?? "").trim();
+  if (!chatId) return { status: "not_found" };
+
+  const store = deps.store || createSupabaseNewsletterCampaignStore();
+  const recent = await store.listRecentCampaigns(20);
+  const campaign = recent.find(item =>
+    item.status === "pending_approval"
+    && item.campaignType === "collection"
+    && Boolean(item.editionKey?.startsWith("weekly-test:")),
+  );
+  if (!campaign) return { status: "not_found" };
+
+  const selectedProductCount = campaign.collectionProducts.length;
+  const text = [
+    "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>",
+    "",
+    "<i>Rascunho existente recuperado sem recriar campanha.</i>",
+    "",
+    `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(campaign.subject)}`,
+    `<b>Produtos selecionados:</b> ${selectedProductCount}`,
+    "",
+    "Nenhum e-mail foi enviado ainda.",
+    "Ao aprovar, somente o destino de teste configurado receberá a campanha.",
+    `<code>${escapeWeeklyTelegramHtml(campaign.id)}</code>`,
+  ].join("\n");
+
+  let delivery: TelegramDeliveryResult;
+  try {
+    delivery = await notify(deps.telegramSender, chatId, text, {
+      inline_keyboard: [
+        [{ text: "✅ Aprovar teste", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+        [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+      ],
+    });
+  } catch {
+    return { status: "delivery_failed", campaign };
+  }
+  if (!delivery.ok) return { status: "delivery_failed", campaign };
+
+  const messageId = Number(delivery.result?.message_id);
+  const validMessageId = Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null;
+  let cardReferencePersisted = false;
+  if (validMessageId !== null) {
+    try {
+      await store.saveCampaignTelegramCard(campaign.id, chatId, validMessageId);
+      cardReferencePersisted = true;
+    } catch {
+      cardReferencePersisted = false;
+    }
+  }
+
+  return {
+    status: "delivered",
+    campaign,
+    messageId: validMessageId,
+    cardReferencePersisted,
+  };
+}
+
 
 export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<WeeklyDraftOutcome> {
   const env = deps.env || process.env;
@@ -141,7 +232,7 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
 
   try {
     startStage("RUNTIME_CONFIG");
-    const chatId = (env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
+    const chatId = String(deps.telegramChatId ?? env.TELEGRAM_ADMIN_CHAT_ID ?? "").trim();
     if (!chatId) fail("RUNTIME_CONFIG", "TELEGRAM_ADMIN_CHAT_MISSING");
     const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
     if (!publicBaseUrl) fail("RUNTIME_CONFIG", "PUBLIC_URL_MISSING");
