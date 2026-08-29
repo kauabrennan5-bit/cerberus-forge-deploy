@@ -1,0 +1,82 @@
+name: Weekly SendTest Real Recovery Preflight
+
+on:
+  push:
+    branches:
+      - diag/weekly-sendtest-real-recovery-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TARGET_SHA: c51a7f1987046c1e7f53ae32b46f8bdefcfd2503
+      LIVE_BASE: https://cerberus-forge-deploy-backend.onrender.com
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+    steps:
+      - name: Verify exact live backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          health="$(curl --fail-with-body --silent --show-error --max-time 20 "$LIVE_BASE/health")"
+          status="$(printf '%s' "$health" | jq -r '.status // empty')"
+          version="$(printf '%s' "$health" | jq -r '.version // empty')"
+          echo "HEALTH_STATUS=$status"
+          echo "LIVE_VERSION_SHA=$version"
+          [ "$status" = ok ]
+          [ "$version" = "$TARGET_SHA" ]
+
+      - name: Verify Telegram runtime without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail-with-body --silent --show-error --max-time 20 "$LIVE_BASE/api/telegram-status")"
+          backend_sha="$(printf '%s' "$body" | jq -r '.backendSha // empty')"
+          configured="$(printf '%s' "$body" | jq -r '.configured // false')"
+          whitelist="$(printf '%s' "$body" | jq -r '.effectiveWhitelistConfigured // false')"
+          webhook="$(printf '%s' "$body" | jq -r '.webhookConfigured // false')"
+          webhook_match="$(printf '%s' "$body" | jq -r '.webhookMatchesExpectedUrl // false')"
+          api_healthy="$(printf '%s' "$body" | jq -r '.apiHealthy // false')"
+          backend_ready="$(printf '%s' "$body" | jq -r '.backendReady // false')"
+          runtime_secret="$(printf '%s' "$body" | jq -r '.secretConfigured // false')"
+          echo "TELEGRAM_CONFIGURED=$configured"
+          echo "TELEGRAM_WHITELIST_CONFIGURED=$whitelist"
+          echo "TELEGRAM_WEBHOOK_CONFIGURED=$webhook"
+          echo "TELEGRAM_WEBHOOK_MATCH=$webhook_match"
+          echo "TELEGRAM_API_HEALTHY=$api_healthy"
+          echo "TELEGRAM_BACKEND_READY=$backend_ready"
+          echo "TELEGRAM_RUNTIME_WEBHOOK_SECRET_CONFIGURED=$runtime_secret"
+          echo "TELEGRAM_GITHUB_BOT_TOKEN_PRESENT=$([ -n "${TELEGRAM_BOT_TOKEN:-}" ] && echo true || echo false)"
+          echo "TELEGRAM_GITHUB_ADMIN_CHAT_PRESENT=$([ -n "${TELEGRAM_ADMIN_CHAT_ID:-}" ] && echo true || echo false)"
+          echo "TELEGRAM_GITHUB_WEBHOOK_SECRET_PRESENT=$([ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ] && echo true || echo false)"
+          echo "TELEGRAM_STATUS_BACKEND_SHA=$backend_sha"
+          [ "$backend_sha" = "$TARGET_SHA" ]
+          [ "$configured" = true ]
+          [ "$whitelist" = true ]
+          [ "$webhook" = true ]
+          [ "$webhook_match" = true ]
+          [ "$api_healthy" = true ]
+          [ -n "${TELEGRAM_BOT_TOKEN:-}" ]
+          [ -n "${TELEGRAM_ADMIN_CHAT_ID:-}" ]
+
+      - name: Verify bot and admin chat are reachable without sending
+        shell: bash
+        run: |
+          set -euo pipefail
+          me="$(curl --fail-with-body --silent --show-error --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe")"
+          chat="$(curl --fail-with-body --silent --show-error --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChat?chat_id=${TELEGRAM_ADMIN_CHAT_ID}")"
+          echo "TELEGRAM_GETME_OK=$(printf '%s' "$me" | jq -r '.ok // false')"
+          echo "TELEGRAM_GETCHAT_OK=$(printf '%s' "$chat" | jq -r '.ok // false')"
+          [ "$(printf '%s' "$me" | jq -r '.ok // false')" = true ]
+          [ "$(printf '%s' "$chat" | jq -r '.ok // false')" = true ]
+
+      - name: Confirm no recovery action executed
+        run: |
+          echo "REAL_WEEKLY_TEST_COMMAND_EXECUTED=false"
+          echo "BREVO_REAL_RETRY_EXECUTED=false"
+          echo "SENDNOW_CALLED=false"
