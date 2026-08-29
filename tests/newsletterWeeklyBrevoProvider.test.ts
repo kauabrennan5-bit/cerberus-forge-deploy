@@ -15,7 +15,7 @@ import type { NewsletterCampaignStore } from "../server/repositories/newsletterC
 const HTML = '<html><body><a href="{{ unsubscribe }}">Cancelar inscrição</a><a href="https://cerberus.example.com/go/REF-A">Oferta</a></body></html>';
 
 function response(status: number, body = ""): Response {
-  return new Response(body, { status, headers: { "content-type": "application/json" } });
+  return new Response(status === 204 ? null : body, { status, headers: { "content-type": "application/json" } });
 }
 
 function baseCampaign(editionKey = "weekly-test:2026-08-29:abc"): EmailCampaign {
