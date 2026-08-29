@@ -27,6 +27,28 @@ jobs:
           node-version: 22
           cache: npm
       - run: python .github/scripts/materialize_weekly_newsletter.py
+      - name: Apply validated UTM click contract fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("server/routes/newsletterWeeklyRoutes.ts")
+          text = path.read_text(encoding="utf-8")
+          replacements = [
+              ("utmSource:", "utm_source:"),
+              ("utmMedium:", "utm_medium:"),
+              ("utmCampaign:", "utm_campaign:"),
+              ("utmContent:", "utm_content:"),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one {old!r}, found {count}")
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
       - name: Remove temporary materializer
         run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
       - name: Capture generated candidate diff
@@ -200,3 +222,12 @@ jobs:
         run: npm run build
       - name: Diff check
         run: git diff --check
+      - name: Secret scan changed content
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff --binary > /tmp/gitleaks-scan/weekly-candidate.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
