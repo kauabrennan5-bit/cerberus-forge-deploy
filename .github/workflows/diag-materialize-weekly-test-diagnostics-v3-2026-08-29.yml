@@ -68,6 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           cd work
+          git add -N server/services/newsletterWeeklyDiagnostics.ts tests/newsletterWeeklyDiagnostics.test.ts
           git diff --name-only | sort > "$RUNNER_TEMP/materialized-files.txt"
           cat > "$RUNNER_TEMP/expected-files.txt" <<'EOF'
           server/services/newsletterWeeklyCampaign.ts
