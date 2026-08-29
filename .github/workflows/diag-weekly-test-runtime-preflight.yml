@@ -1,0 +1,112 @@
+name: Weekly Test Runtime Preflight Diagnostics
+
+on:
+  push:
+    branches:
+      - diag/weekly-test-runtime-preflight-2026-08-29
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_BRANCH: fix/weekly-test-runtime-preflight-2026-08-29
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Apply read-only runtime preflight diagnostics
+        shell: python
+        run: |
+          from pathlib import Path
+
+          preflight = Path('server/services/newsletterWeeklyRuntimePreflight.ts')
+          text = preflight.read_text()
+          type_needle = '''  brevoMarketingProviderReady: boolean;\n  eligibleSubscribers: number | null;\n  readyForTest: boolean;\n};\n'''
+          type_replacement = '''  brevoMarketingProviderReady: boolean;\n  telegramAdminChatConfigured: boolean;\n  publicBaseUrlConfigured: boolean;\n  geminiApiKeyPresent: boolean;\n  eligibleSubscribers: number | null;\n  readyForTest: boolean;\n};\n'''
+          if type_needle not in text:
+              raise SystemExit('preflight type insertion point missing')
+          text = text.replace(type_needle, type_replacement, 1)
+
+          eval_needle = '''  const brevoApiKeyPresent = Boolean((env.BREVO_API_KEY || "").trim());\n\n  let brevoMarketingProviderReady = false;\n'''
+          eval_replacement = '''  const brevoApiKeyPresent = Boolean((env.BREVO_API_KEY || "").trim());\n  const telegramAdminChatConfigured = Boolean((env.TELEGRAM_ADMIN_CHAT_ID || "").trim());\n  const publicBaseUrlConfigured = Boolean((env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim());\n  const geminiApiKeyPresent = Boolean((env.GEMINI_API_KEY || "").trim());\n\n  let brevoMarketingProviderReady = false;\n'''
+          if eval_needle not in text:
+              raise SystemExit('preflight eval insertion point missing')
+          text = text.replace(eval_needle, eval_replacement, 1)
+
+          return_needle = '''    brevoApiKeyPresent,\n    brevoMarketingProviderReady,\n    eligibleSubscribers,\n    readyForTest:\n      !weeklyProductionEnabled &&\n      testEmail.configured &&\n      testEmail.valid &&\n      brevoMarketingProviderReady,\n'''
+          return_replacement = '''    brevoApiKeyPresent,\n    brevoMarketingProviderReady,\n    telegramAdminChatConfigured,\n    publicBaseUrlConfigured,\n    geminiApiKeyPresent,\n    eligibleSubscribers,\n    readyForTest:\n      !weeklyProductionEnabled &&\n      testEmail.configured &&\n      testEmail.valid &&\n      brevoMarketingProviderReady &&\n      telegramAdminChatConfigured &&\n      publicBaseUrlConfigured &&\n      geminiApiKeyPresent,\n'''
+          if return_needle not in text:
+              raise SystemExit('preflight return insertion point missing')
+          text = text.replace(return_needle, return_replacement, 1)
+          preflight.write_text(text)
+
+          panel = Path('server/services/telegramPanel.ts')
+          text = panel.read_text()
+          vars_needle = '''  const providerReady = preflight.brevoMarketingProviderReady ? "MARKETING CAMPAIGN ✅" : "NÃO PRONTO ❌";\n  const subscribers = preflight.eligibleSubscribers === null ? "indisponível" : String(preflight.eligibleSubscribers);\n'''
+          vars_replacement = '''  const providerReady = preflight.brevoMarketingProviderReady ? "MARKETING CAMPAIGN ✅" : "NÃO PRONTO ❌";\n  const telegramAdminChat = preflight.telegramAdminChatConfigured ? "CONFIGURADO ✅" : "AUSENTE ❌";\n  const publicBaseUrl = preflight.publicBaseUrlConfigured ? "CONFIGURADA ✅" : "AUSENTE ❌";\n  const gemini = preflight.geminiApiKeyPresent ? "CONFIGURADO ✅" : "AUSENTE ❌";\n  const subscribers = preflight.eligibleSubscribers === null ? "indisponível" : String(preflight.eligibleSubscribers);\n'''
+          if vars_needle not in text:
+              raise SystemExit('panel vars insertion point missing')
+          text = text.replace(vars_needle, vars_replacement, 1)
+
+          render_needle = '''    `Provider: <b>${providerReady}</b>\\n` +\n    `Subscribers elegíveis: <b>${subscribers}</b>\\n` +\n'''
+          render_replacement = '''    `Provider: <b>${providerReady}</b>\\n` +\n    `Telegram admin chat: <b>${telegramAdminChat}</b>\\n` +\n    `URL pública: <b>${publicBaseUrl}</b>\\n` +\n    `Gemini: <b>${gemini}</b>\\n` +\n    `Subscribers elegíveis: <b>${subscribers}</b>\\n` +\n'''
+          if render_needle not in text:
+              raise SystemExit('panel render insertion point missing')
+          text = text.replace(render_needle, render_replacement, 1)
+          panel.write_text(text)
+
+          tests = Path('tests/newsletterWeeklyRuntimePreflight.test.ts')
+          text = tests.read_text()
+          env_needle = '''  NEWSLETTER_REPLY_TO_EMAIL: "reply@cerberusfinds.com",\n});\n'''
+          env_replacement = '''  NEWSLETTER_REPLY_TO_EMAIL: "reply@cerberusfinds.com",\n  TELEGRAM_ADMIN_CHAT_ID: "123456",\n  PUBLIC_SITE_URL: "https://cerberusfinds.com",\n  GEMINI_API_KEY: "gemini-secret-that-must-never-render",\n});\n'''
+          if env_needle not in text:
+              raise SystemExit('test env insertion point missing')
+          text = text.replace(env_needle, env_replacement, 1)
+
+          marker = '''test("NEWSLETTER_TEST_EMAIL ausente, inválido, múltiplo e válido único", () => {\n'''
+          added = '''test("preflight bloqueia teste quando dependências do draft estão ausentes", async () => {\n  const base = readyEnv();\n  const missingChat = await evaluateWeeklyRuntimePreflight({ env: { ...base, TELEGRAM_ADMIN_CHAT_ID: undefined }, countEligibleSubscribers: async () => 1 });\n  const missingUrl = await evaluateWeeklyRuntimePreflight({ env: { ...base, PUBLIC_SITE_URL: undefined }, countEligibleSubscribers: async () => 1 });\n  const missingGemini = await evaluateWeeklyRuntimePreflight({ env: { ...base, GEMINI_API_KEY: undefined }, countEligibleSubscribers: async () => 1 });\n  assert.equal(missingChat.telegramAdminChatConfigured, false);\n  assert.equal(missingUrl.publicBaseUrlConfigured, false);\n  assert.equal(missingGemini.geminiApiKeyPresent, false);\n  assert.equal(missingChat.readyForTest, false);\n  assert.equal(missingUrl.readyForTest, false);\n  assert.equal(missingGemini.readyForTest, false);\n});\n\n'''
+          if marker not in text:
+              raise SystemExit('test marker missing')
+          text = text.replace(marker, added + marker, 1)
+
+          privacy_needle = '''  assert.doesNotMatch(rendered, /secret-api-key-that-must-never-render/);\n});\n'''
+          privacy_replacement = '''  assert.doesNotMatch(rendered, /secret-api-key-that-must-never-render/);\n  assert.doesNotMatch(rendered, /gemini-secret-that-must-never-render/);\n  assert.doesNotMatch(rendered, /123456/);\n  assert.doesNotMatch(rendered, /https:\/\/cerberusfinds\\.com/);\n});\n'''
+          if privacy_needle not in text:
+              raise SystemExit('privacy assertion insertion point missing')
+          text = text.replace(privacy_needle, privacy_replacement, 1)
+          tests.write_text(text)
+
+      - name: Focused tests
+        run: node --import tsx --test tests/newsletterWeeklyRuntimePreflight.test.ts tests/newsletterWeeklyCampaign.test.ts tests/newsletterWeeklyBrevoProvider.test.ts tests/publishCommand.test.ts
+      - name: Full global tests
+        run: npm test
+      - name: TypeScript
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Diff check
+        run: git diff --check HEAD
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit validated diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "cerberus-ci"
+          git config user.email "actions@users.noreply.github.com"
+          git add server/services/newsletterWeeklyRuntimePreflight.ts server/services/telegramPanel.ts tests/newsletterWeeklyRuntimePreflight.test.ts
+          git diff --cached --check
+          git commit -m "fix: expand weekly-test runtime preflight"
+          git push origin HEAD:${TARGET_BRANCH}
