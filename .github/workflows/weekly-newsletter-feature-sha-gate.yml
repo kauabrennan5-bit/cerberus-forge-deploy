@@ -1,0 +1,160 @@
+name: Weekly newsletter exact feature SHA gate
+
+on:
+  push:
+    branches:
+      - diag/weekly-newsletter-feature-gate-2026-08-28
+    paths:
+      - .github/workflows/weekly-newsletter-feature-sha-gate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_SHA: "84e0ad209f8f025534bd3130e27c13b4c0d294a4"
+      EXPECTED_TREE: "9780d40ebe3f0fbea61a814ba286ced56b559dab"
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - name: Checkout exact functional commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          echo "TARGET_SHA=$TARGET_SHA"
+          echo "TARGET_TREE=$EXPECTED_TREE"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish command isolated
+        run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts
+
+      - name: Publish and Telegram contract group
+        run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts tests/telegramBotV2Contract.test.ts
+
+      - name: Weekly focused tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          node --import tsx/esm --test --test-concurrency=1 \
+            tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts \
+            > "$RUNNER_TEMP/focused.raw" 2>&1
+          status=$?
+          set -e
+          python - "$RUNNER_TEMP/focused.raw" feature-focused-summary.txt <<'PY'
+          from pathlib import Path
+          import re, sys
+          text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          keys = {
+              "FOCUSED_TOTAL": r"(?m)^[#ℹ]\s+tests\s+(\d+)\s*$",
+              "FOCUSED_PASS": r"(?m)^[#ℹ]\s+pass\s+(\d+)\s*$",
+              "FOCUSED_FAILURES": r"(?m)^[#ℹ]\s+fail\s+(\d+)\s*$",
+              "FOCUSED_SKIPPED": r"(?m)^[#ℹ]\s+skipped\s+(\d+)\s*$",
+              "FOCUSED_CANCELLED": r"(?m)^[#ℹ]\s+cancelled\s+(\d+)\s*$",
+          }
+          values = {}
+          for key, pattern in keys.items():
+              matches = re.findall(pattern, text)
+              if not matches: raise SystemExit(f"unparseable:{key}")
+              values[key] = int(matches[-1])
+          Path(sys.argv[2]).write_text("\n".join(f"{k}={v}" for k,v in values.items()) + "\n", encoding="utf-8")
+          print(Path(sys.argv[2]).read_text(), end="")
+          if values["FOCUSED_TOTAL"] <= 0 or values["FOCUSED_PASS"] != values["FOCUSED_TOTAL"] or values["FOCUSED_FAILURES"] or values["FOCUSED_SKIPPED"] or values["FOCUSED_CANCELLED"]:
+              raise SystemExit(98)
+          PY
+          exit "$status"
+
+      - name: Full global suite
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npm test > "$RUNNER_TEMP/global.raw" 2>&1
+          status=$?
+          set -e
+          python - "$RUNNER_TEMP/global.raw" feature-global-summary.txt <<'PY'
+          from pathlib import Path
+          import re, sys
+          text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          keys = {
+              "GLOBAL_TOTAL": r"(?m)^[#ℹ]\s+tests\s+(\d+)\s*$",
+              "GLOBAL_PASS": r"(?m)^[#ℹ]\s+pass\s+(\d+)\s*$",
+              "GLOBAL_FAILURES": r"(?m)^[#ℹ]\s+fail\s+(\d+)\s*$",
+              "GLOBAL_SKIPPED": r"(?m)^[#ℹ]\s+skipped\s+(\d+)\s*$",
+              "GLOBAL_CANCELLED": r"(?m)^[#ℹ]\s+cancelled\s+(\d+)\s*$",
+          }
+          values = {}
+          for key, pattern in keys.items():
+              matches = re.findall(pattern, text)
+              if not matches: raise SystemExit(f"unparseable:{key}")
+              values[key] = int(matches[-1])
+          Path(sys.argv[2]).write_text("\n".join(f"{k}={v}" for k,v in values.items()) + "\n", encoding="utf-8")
+          print(Path(sys.argv[2]).read_text(), end="")
+          if values["GLOBAL_TOTAL"] < 1724 or values["GLOBAL_PASS"] != values["GLOBAL_TOTAL"] or values["GLOBAL_FAILURES"] or values["GLOBAL_SKIPPED"] or values["GLOBAL_CANCELLED"]:
+              raise SystemExit(99)
+          PY
+          exit "$status"
+
+      - name: TypeScript
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npm run lint -- --pretty false 2>&1 | tee feature-typescript.log
+          status=${PIPESTATUS[0]}
+          set -e
+          count="$(grep -Ec 'error TS[0-9]+:' feature-typescript.log || true)"
+          printf 'TS_EXIT_CODE=%s\nTS_ERROR_COUNT=%s\n' "$status" "$count" > feature-typescript-summary.txt
+          cat feature-typescript-summary.txt
+          test "$status" -eq 0
+          test "$count" -eq 0
+
+      - name: Build
+        run: npm run build
+
+      - name: Diff check
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$TARGET_SHA^" "$TARGET_SHA"
+
+      - name: Secret scan functional commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff --binary "$TARGET_SHA^" "$TARGET_SHA" > /tmp/gitleaks-scan/feature.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Upload exact SHA gate summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-feature-sha-gate-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            feature-focused-summary.txt
+            feature-global-summary.txt
+            feature-typescript-summary.txt
+            feature-typescript.log
