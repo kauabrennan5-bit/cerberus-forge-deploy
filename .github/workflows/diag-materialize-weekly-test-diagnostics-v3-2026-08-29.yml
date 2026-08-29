@@ -1,0 +1,139 @@
+name: Diagnostic Materialize Weekly Test Diagnostics V3
+
+on:
+  push:
+    branches:
+      - diag/weekly-test-diagnostics-materialize-v3-2026-08-29
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: fix/weekly-test-diagnostics-2026-08-29
+      BASE_SHA: 50b624d28305b4cd158d8565c64d8487bbe18138
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+    steps:
+      - name: Checkout V3 materializer
+        uses: actions/checkout@v4
+        with:
+          path: source
+          fetch-depth: 1
+
+      - name: Checkout functional target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: work
+          fetch-depth: 2
+
+      - name: Verify exact functional base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C work rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: work/package-lock.json
+
+      - name: Install dependencies
+        working-directory: work
+        run: npm ci
+
+      - name: Validate Python syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile source/.github/scripts/materialize_weekly_test_diagnostics.py
+          echo "PYTHON_SYNTAX=PASS"
+
+      - name: Materialize functional diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 source/.github/scripts/materialize_weekly_test_diagnostics.py work | tee "$RUNNER_TEMP/materializer-v3.log"
+          grep -q '^TARGET_BLOCK_FOUND=true$' "$RUNNER_TEMP/materializer-v3.log"
+          grep -q '^TARGET_BLOCK_COUNT=1$' "$RUNNER_TEMP/materializer-v3.log"
+          grep -q '^PATCH_APPLIED=true$' "$RUNNER_TEMP/materializer-v3.log"
+
+      - name: Verify materialized file set
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd work
+          git diff --name-only | sort > "$RUNNER_TEMP/materialized-files.txt"
+          cat > "$RUNNER_TEMP/expected-files.txt" <<'EOF'
+          server/services/newsletterWeeklyCampaign.ts
+          server/services/newsletterWeeklyDiagnostics.ts
+          server/services/telegramBot.ts
+          tests/newsletterWeeklyDiagnostics.test.ts
+          EOF
+          sort -o "$RUNNER_TEMP/expected-files.txt" "$RUNNER_TEMP/expected-files.txt"
+          diff -u "$RUNNER_TEMP/expected-files.txt" "$RUNNER_TEMP/materialized-files.txt"
+          echo "UNEXPECTED_FILES=NONE"
+
+      - name: Directed diagnostics tests
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/newsletterWeeklyDiagnostics.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts \
+            tests/publishCommand.test.ts \
+            tests/telegramReadPanel.test.ts 2>&1 | tee "$RUNNER_TEMP/directed.log"
+          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/directed.log"
+          grep -Eq '^# skipped 0$|^# skipped: 0$' "$RUNNER_TEMP/directed.log"
+          grep -Eq '^# cancelled 0$|^# cancelled: 0$' "$RUNNER_TEMP/directed.log"
+
+      - name: TypeScript
+        working-directory: work
+        run: npm run lint
+
+      - name: Full global suite
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/global.log"
+          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/global.log"
+          grep -Eq '^# skipped 0$|^# skipped: 0$' "$RUNNER_TEMP/global.log"
+          grep -Eq '^# cancelled 0$|^# cancelled: 0$' "$RUNNER_TEMP/global.log"
+
+      - name: Production build
+        working-directory: work
+        run: npm run build
+
+      - name: Diff check
+        working-directory: work
+        run: git diff --check
+
+      - name: Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git -C work diff --no-ext-diff > /tmp/gitleaks-scan/weekly-diagnostics.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Persist functional commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd work
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/services/newsletterWeeklyCampaign.ts server/services/newsletterWeeklyDiagnostics.ts server/services/telegramBot.ts tests/newsletterWeeklyDiagnostics.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m "fix: expose safe weekly test failure diagnostics"
+          echo "FUNCTIONAL_COMMIT_SHA=$(git rev-parse HEAD)"
+          git push origin HEAD:${TARGET_BRANCH}
