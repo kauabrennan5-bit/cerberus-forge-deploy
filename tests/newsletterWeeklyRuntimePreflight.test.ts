@@ -83,6 +83,33 @@ test("/weekly-preflight é comando conhecido e roteia para status read-only", ()
   assert.equal(canonicalTelegramCommand(parsed.name), "status");
 });
 
+test("/weekly-test é comando conhecido e permanece separado de produção", () => {
+  const parsed = parseTelegramCommand("/weekly-test");
+  assert.ok(parsed);
+  assert.equal(isKnownTelegramCommand(parsed.name), true);
+  assert.equal(canonicalTelegramCommand(parsed.name), "weekly-test");
+});
+
+test("usuário Telegram não autorizado é rejeitado antes de /weekly-test", async () => {
+  const previousAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;
+  process.env.TELEGRAM_ALLOWED_USER_IDS = "999";
+  const messages: string[] = [];
+  setTestTelegramSenders(async (_chatId, value) => { messages.push(String(value)); return { ok: true }; }, null);
+  try {
+    await handleTelegramWebhookUpdate({
+      update_id: 987654322,
+      message: { message_id: 2, from: { id: 123 }, chat: { id: 123 }, text: "/weekly-test" },
+    });
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /Acesso Negado/);
+    assert.doesNotMatch(messages[0], /WEEKLY-TEST JÁ PREPARADA|RASCUNHO SEMANAL/);
+  } finally {
+    setTestTelegramSenders(null, null);
+    if (previousAllowed === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+    else process.env.TELEGRAM_ALLOWED_USER_IDS = previousAllowed;
+  }
+});
+
 test("usuário Telegram não autorizado é rejeitado antes do preflight", async () => {
   const previousAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;
   process.env.TELEGRAM_ALLOWED_USER_IDS = "999";
