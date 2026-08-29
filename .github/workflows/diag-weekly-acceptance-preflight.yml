@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
-      EXPECTED_SHA: 65675e87443265921dc0dc3ee58db2fea349e92b
+      EXPECTED_SHA: c51a7f1987046c1e7f53ae32b46f8bdefcfd2503
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
     steps:
