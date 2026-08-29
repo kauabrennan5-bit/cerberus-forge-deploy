@@ -58,11 +58,11 @@ jobs:
           python3 source/.github/scripts/materialize_weekly_test_diagnostics.py patched > "$RUNNER_TEMP/materialize.log"
           python3 source/.github/scripts/patch_weekly_diagnostics_legacy_messages.py patched > "$RUNNER_TEMP/legacy.log"
 
-      - name: Reproduce baseline and patched worker tests
+      - name: Reproduce isolated baseline and patched provider contract
         shell: bash
         run: |
           set +e
-          REPORT="$RUNNER_TEMP/weekly-worker-report.txt"
+          REPORT="$RUNNER_TEMP/weekly-worker-report-v2.txt"
           : > "$REPORT"
           echo "BASE_SHA=$BASE_SHA" >> "$REPORT"
           echo "DIAG_SOURCE_SHA=$GITHUB_SHA" >> "$REPORT"
@@ -77,63 +77,73 @@ jobs:
 
           cd base
           node --import tsx/esm --test --test-concurrency=1 --test-name-pattern="retry após create reutiliza Brevo campaign id" "$CANDIDATE" > "$RUNNER_TEMP/base-isolated.log" 2>&1
-          BISO=$?
+          echo "BASE_ISOLATED_EXIT=$?" >> "$REPORT"
           node --import tsx/esm --test --test-concurrency=1 "$CANDIDATE" > "$RUNNER_TEMP/base-file.log" 2>&1
-          BFILE=$?
+          echo "BASE_FILE_EXIT=$?" >> "$REPORT"
+
           cd ../patched
           node --import tsx/esm --test --test-concurrency=1 --test-name-pattern="retry após create reutiliza Brevo campaign id" "$CANDIDATE" > "$RUNNER_TEMP/patched-isolated.log" 2>&1
-          PISO=$?
+          echo "PATCHED_ISOLATED_EXIT=$?" >> "$REPORT"
           node --import tsx/esm --test --test-concurrency=1 "$CANDIDATE" > "$RUNNER_TEMP/patched-file.log" 2>&1
-          PFILE=$?
+          echo "PATCHED_FILE_EXIT=$?" >> "$REPORT"
           cd ..
-
-          echo "BASE_ISOLATED_EXIT=$BISO" >> "$REPORT"
-          echo "BASE_FILE_EXIT=$BFILE" >> "$REPORT"
-          echo "PATCHED_ISOLATED_EXIT=$PISO" >> "$REPORT"
-          echo "PATCHED_FILE_EXIT=$PFILE" >> "$REPORT"
-          echo "--- BASE_ISOLATED_TAIL ---" >> "$REPORT"
-          tail -80 "$RUNNER_TEMP/base-isolated.log" >> "$REPORT"
-          echo "--- PATCHED_ISOLATED_TAIL ---" >> "$REPORT"
-          tail -80 "$RUNNER_TEMP/patched-isolated.log" >> "$REPORT"
-          echo "--- PATCHED_FILE_TAIL ---" >> "$REPORT"
-          tail -120 "$RUNNER_TEMP/patched-file.log" >> "$REPORT"
 
           echo "--- FUNCTIONAL_DIFF_NAMES ---" >> "$REPORT"
           git -C patched add -N server/services/newsletterWeeklyDiagnostics.ts tests/newsletterWeeklyDiagnostics.test.ts
           git -C patched diff --name-only | sort >> "$REPORT"
           echo "DELIVERY_FILE_CHANGED=$(git -C patched diff --name-only | grep -c '^server/services/newsletterWeeklyDelivery.ts$')" >> "$REPORT"
           echo "PROVIDER_FILE_CHANGED=$(git -C patched diff --name-only | grep -c '^server/services/newsletterWeeklyBrevoProvider.ts$')" >> "$REPORT"
-
           echo "--- DELIVERY_CONTRACT_STATIC ---" >> "$REPORT"
           grep -nE 'current\.testProviderMessageId|if \(!brevoCampaignId\)|provider\.createCampaign|provider\.sendTest|NEWSLETTER_TEST_EMAIL|current\.status' base/server/services/newsletterWeeklyDelivery.ts >> "$REPORT"
-
           exit 0
 
-      - name: Run patched global suite and capture exact failure
+      - name: Reproduce exact V3 pre-global sequence
         shell: bash
         run: |
           set +e
+          REPORT="$RUNNER_TEMP/weekly-worker-report-v2.txt"
           cd patched
-          npm test > "$RUNNER_TEMP/patched-global.log" 2>&1
-          RC=$?
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/newsletterWeeklyDiagnostics.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts \
+            tests/publishCommand.test.ts \
+            tests/telegramReadPanel.test.ts > "$RUNNER_TEMP/directed-v2.log" 2>&1
+          echo "DIRECTED_EXIT=$?" >> "$REPORT"
+          npm run lint > "$RUNNER_TEMP/lint-v2.log" 2>&1
+          echo "LINT_EXIT=$?" >> "$REPORT"
           cd ..
-          REPORT="$RUNNER_TEMP/weekly-worker-report.txt"
-          echo "PATCHED_GLOBAL_EXIT=$RC" >> "$REPORT"
-          echo "--- PATCHED_GLOBAL_FAILURE_CONTEXT ---" >> "$REPORT"
-          grep -nE 'not ok|fail|AssertionError|createCalls|expected|actual|newsletterWeekly' "$RUNNER_TEMP/patched-global.log" | tail -160 >> "$REPORT" || true
-          echo "--- PATCHED_GLOBAL_TAIL ---" >> "$REPORT"
-          tail -120 "$RUNNER_TEMP/patched-global.log" >> "$REPORT"
           exit 0
 
-      - name: Persist diagnostic report only
+      - name: Repeat patched global suite three times
+        shell: bash
+        run: |
+          set +e
+          REPORT="$RUNNER_TEMP/weekly-worker-report-v2.txt"
+          for n in 1 2 3; do
+            cd patched
+            npm test > "$RUNNER_TEMP/global-$n.log" 2>&1
+            RC=$?
+            cd ..
+            echo "GLOBAL_${n}_EXIT=$RC" >> "$REPORT"
+            echo "--- GLOBAL_${n}_FAILURE_CONTEXT ---" >> "$REPORT"
+            grep -nE 'not ok|AssertionError|createCalls|expected|actual|newsletterWeekly|# fail|# skipped|# cancelled|tests [0-9]+|pass [0-9]+' "$RUNNER_TEMP/global-$n.log" | tail -120 >> "$REPORT" || true
+            cd patched
+            node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyBrevoProvider.test.ts > "$RUNNER_TEMP/provider-after-$n.log" 2>&1
+            PRC=$?
+            cd ..
+            echo "PROVIDER_FILE_AFTER_GLOBAL_${n}_EXIT=$PRC" >> "$REPORT"
+          done
+          exit 0
+
+      - name: Persist diagnostic report V2 only
         shell: bash
         run: |
           set -euo pipefail
-          cp "$RUNNER_TEMP/weekly-worker-report.txt" source/DIAG_WEEKLY_WORKER_REPORT.txt
+          cp "$RUNNER_TEMP/weekly-worker-report-v2.txt" source/DIAG_WEEKLY_WORKER_REPORT_V2.txt
           cd source
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B diag/weekly-worker-report-2026-08-29 "$GITHUB_SHA"
-          git add DIAG_WEEKLY_WORKER_REPORT.txt
-          git commit -m "chore: record weekly worker regression diagnosis [skip ci]"
-          git push origin HEAD:diag/weekly-worker-report-2026-08-29
+          git checkout -B diag/weekly-worker-report-v2-2026-08-29 "$GITHUB_SHA"
+          git add DIAG_WEEKLY_WORKER_REPORT_V2.txt
+          git commit -m "chore: record weekly worker regression diagnosis v2 [skip ci]"
+          git push origin HEAD:diag/weekly-worker-report-v2-2026-08-29
