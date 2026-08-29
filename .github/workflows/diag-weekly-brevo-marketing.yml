@@ -1,0 +1,175 @@
+name: Weekly Brevo Marketing Diagnostic
+
+on:
+  push:
+    branches:
+      - diag/weekly-brevo-marketing-2026-08-29
+
+permissions:
+  contents: write
+
+env:
+  TARGET_SHA: 84e0ad209f8f025534bd3130e27c13b4c0d294a4
+  CANDIDATE_BRANCH: diag/weekly-brevo-functional-candidate-2026-08-29
+  TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout diagnostic source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Stage diagnostic materializer inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/weekly-brevo-stage/server/services" "$RUNNER_TEMP/weekly-brevo-stage/tests"
+          cp .github/scripts/diag_patch_weekly_brevo.py "$RUNNER_TEMP/weekly-brevo-stage/patch.py"
+          cp server/services/newsletterWeeklyBrevoProvider.ts "$RUNNER_TEMP/weekly-brevo-stage/server/services/"
+          cp server/services/newsletterWeeklyDelivery.ts "$RUNNER_TEMP/weekly-brevo-stage/server/services/"
+          cp tests/newsletterWeeklyBrevoProvider.test.ts "$RUNNER_TEMP/weekly-brevo-stage/tests/"
+
+      - name: Materialize exact functional candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          cp "$RUNNER_TEMP/weekly-brevo-stage/server/services/newsletterWeeklyBrevoProvider.ts" server/services/
+          cp "$RUNNER_TEMP/weekly-brevo-stage/server/services/newsletterWeeklyDelivery.ts" server/services/
+          cp "$RUNNER_TEMP/weekly-brevo-stage/tests/newsletterWeeklyBrevoProvider.test.ts" tests/
+          python "$RUNNER_TEMP/weekly-brevo-stage/patch.py"
+          test ! -e .github/scripts/diag_patch_weekly_brevo.py
+          test ! -e .github/workflows/diag-weekly-brevo-marketing.yml
+          git diff --check
+          git status --short
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare test summary parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/parse-summary.mjs" <<'NODE'
+          import fs from "node:fs";
+          const [logPath, label, outputPath] = process.argv.slice(2);
+          const clean = fs.readFileSync(logPath, "utf8").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+          const values = {};
+          for (const key of ["tests", "pass", "fail", "skipped", "cancelled"]) {
+            const matches = [...clean.matchAll(new RegExp(`^\\s*(?:ℹ\\s+|#\\s*)?${key}\\s+(\\d+)\\s*$`, "gmi"))];
+            if (!matches.length) throw new Error(`missing ${key} for ${label}`);
+            values[key] = Number(matches.at(-1)[1]);
+          }
+          const todoMatches = [...clean.matchAll(/^\s*(?:ℹ\s+|#\s*)?todo\s+(\d+)\s*$/gmi)];
+          const todo = todoMatches.length ? Number(todoMatches.at(-1)[1]) : 0;
+          const lines = [
+            `${label.toUpperCase()}_TOTAL=${values.tests}`,
+            `${label.toUpperCase()}_PASS=${values.pass}`,
+            `${label.toUpperCase()}_FAILURES=${values.fail}`,
+            `${label.toUpperCase()}_SKIPPED=${values.skipped}`,
+            `${label.toUpperCase()}_CANCELLED=${values.cancelled}`,
+            `${label.toUpperCase()}_TODO=${todo}`,
+          ];
+          fs.appendFileSync(outputPath, lines.join("\n") + "\n");
+          console.log(lines.join("\n"));
+          if (!values.tests || values.pass !== values.tests || values.fail || values.skipped || values.cancelled || todo) process.exit(8);
+          NODE
+          : > weekly-brevo-gate-summary.txt
+
+      - name: Provider contract tests
+        run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyBrevoProvider.test.ts
+
+      - name: Focused weekly and campaign tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/newsletterWeeklyBrevoProvider.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts \
+            tests/newsletterCampaign.test.ts \
+            tests/publishCommand.test.ts 2>&1 | tee "$RUNNER_TEMP/focused.log"
+          status=${PIPESTATUS[0]}
+          node "$RUNNER_TEMP/parse-summary.mjs" "$RUNNER_TEMP/focused.log" focused weekly-brevo-gate-summary.txt
+          summary_status=$?
+          set -e
+          test "$status" -eq 0
+          test "$summary_status" -eq 0
+
+      - name: Full global test suite
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npm test -- --test-reporter=tap 2>&1 | tee "$RUNNER_TEMP/global.log"
+          status=${PIPESTATUS[0]}
+          node "$RUNNER_TEMP/parse-summary.mjs" "$RUNNER_TEMP/global.log" global weekly-brevo-gate-summary.txt
+          summary_status=$?
+          set -e
+          test "$status" -eq 0
+          test "$summary_status" -eq 0
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Diff check
+        run: git diff --check "$TARGET_SHA"
+
+      - name: Secret scan changed content
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff "$TARGET_SHA" > /tmp/gitleaks-scan/weekly-brevo.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Create exact functional candidate commit
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/services/newsletterWeeklyBrevoProvider.ts \
+                  server/services/newsletterWeeklyDelivery.ts \
+                  server/services/newsletterCampaignService.ts \
+                  server/services/newsletterCampaignTelegram.ts \
+                  server/services/newsletterCampaignWorker.ts \
+                  tests/newsletterWeeklyBrevoProvider.test.ts \
+                  tests/newsletterWeeklyCampaign.test.ts
+          git diff --cached --check
+          git commit -m "feat: use Brevo marketing provider for weekly newsletter"
+          sha="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          parent="$(git rev-parse HEAD^)"
+          test "$parent" = "$TARGET_SHA"
+          echo "CANDIDATE_SHA=$sha" | tee -a weekly-brevo-gate-summary.txt
+          echo "CANDIDATE_TREE=$tree" | tee -a weekly-brevo-gate-summary.txt
+          echo "CANDIDATE_PARENT=$parent" | tee -a weekly-brevo-gate-summary.txt
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          git push origin "HEAD:refs/heads/$CANDIDATE_BRANCH"
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-brevo-marketing-${{ github.run_id }}
+          path: |
+            weekly-brevo-gate-summary.txt
+          if-no-files-found: warn
