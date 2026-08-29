@@ -1,9 +1,11 @@
 import type { NewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 import { normalizeNewsletterEmail, isValidNewsletterEmail } from "./newsletterConsent";
 import { transitionCampaign, type EmailCampaign } from "./newsletterCampaignState";
-import type { NewsletterProviderResult } from "./newsletterProvider";
+import { NewsletterProviderError, type NewsletterProviderResult } from "./newsletterProvider";
 import {
   createConfiguredWeeklyBrevoMarketingProvider,
+  getWeeklyBrevoErrorDetails,
+  type WeeklyBrevoErrorDetails,
   type WeeklyBrevoMarketingProvider,
 } from "./newsletterWeeklyBrevoProvider";
 
@@ -16,30 +18,52 @@ export type WeeklyMarketingDeliveryOptions = {
   provider?: WeeklyBrevoMarketingProvider;
 };
 
+export type WeeklyMarketingTestSuccess = {
+  campaign: EmailCampaign;
+  providerResult: NewsletterProviderResult;
+  providerCampaignCreated: true;
+  providerCampaignCreatedThisAttempt: boolean;
+  providerCampaignId: string;
+  sendTestSucceeded: true;
+};
+
+export class WeeklyMarketingTestSendError extends Error {
+  readonly provider = "BREVO" as const;
+  readonly operation = "SEND_TEST" as const;
+  readonly providerCampaignCreated = true as const;
+  readonly sendTestSucceeded = false as const;
+
+  constructor(
+    public readonly providerCampaignId: string,
+    public readonly providerCampaignCreatedThisAttempt: boolean,
+    public readonly safeCode: string,
+    public readonly providerError: WeeklyBrevoErrorDetails | null,
+    public readonly sendTestResult: "failed" | "unknown",
+    internalReason?: string | null,
+  ) {
+    super(internalReason ? `${safeCode}:${internalReason}` : safeCode);
+    this.name = "WeeklyMarketingTestSendError";
+  }
+}
+
+export function getWeeklyMarketingTestSendError(error: unknown): WeeklyMarketingTestSendError | null {
+  return error instanceof WeeklyMarketingTestSendError ? error : null;
+}
+
 export async function sendWeeklyMarketingTest(
   campaign: EmailCampaign,
   actorTelegramId: string,
   options: WeeklyMarketingDeliveryOptions,
-): Promise<{ campaign: EmailCampaign; providerResult: NewsletterProviderResult }> {
+): Promise<WeeklyMarketingTestSuccess> {
   return withWeeklyDeliveryLock(campaign.id, async () => {
     const env = options.env || process.env;
-    const current = await requireCampaign(options.store, campaign.id);
-    if (!current.editionKey?.startsWith("weekly-test:")) {
-      throw new Error("WEEKLY_MARKETING_TEST_CAMPAIGN_REQUIRED");
-    }
-    if (current.status === "test_sent" && current.testProviderMessageId?.trim()) {
-      throw new Error("CAMPAIGN_TEST_ALREADY_SENT");
-    }
-    if (current.status !== "approved") throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
-
-    const testEmail = normalizeNewsletterEmail(env.NEWSLETTER_TEST_EMAIL);
-    if (!testEmail || !isValidNewsletterEmail(testEmail)) {
-      throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
-    }
-
+    const current = await requireWeeklyTestCampaign(options.store, campaign.id);
+    const testEmail = requireWeeklyTestEmail(env);
     const provider = options.provider || createConfiguredWeeklyBrevoMarketingProvider(env);
+
     let working = current;
     let brevoCampaignId = current.testProviderMessageId?.trim() || "";
+    let providerCampaignCreatedThisAttempt = false;
     if (!brevoCampaignId) {
       const created = await provider.createCampaign({
         campaignId: current.id,
@@ -48,30 +72,111 @@ export async function sendWeeklyMarketingTest(
         htmlContent: current.bodyHtml,
       });
       brevoCampaignId = created.brevoCampaignId;
+      providerCampaignCreatedThisAttempt = true;
       working = await options.store.updateCampaign({
         ...current,
         testProviderMessageId: brevoCampaignId,
       });
     }
 
-    const sent = await provider.sendTest(brevoCampaignId, [testEmail]);
-    const tested = transitionCampaign(
+    return sendWeeklyTestWithExistingProviderCampaign(
       working,
-      {
-        type: "record_test_sent",
-        actorTelegramId,
-        providerReference: brevoCampaignId,
-      },
-      options.now || new Date(),
+      actorTelegramId,
+      brevoCampaignId,
+      testEmail,
+      providerCampaignCreatedThisAttempt,
+      options,
     );
-    return {
-      campaign: await options.store.updateCampaign(tested),
-      providerResult: {
-        status: sent.status,
-        providerReference: brevoCampaignId,
-      },
-    };
   });
+}
+
+/**
+ * Retry humano fail-closed. Exige referência Brevo já persistida e nunca possui
+ * fallback para createCampaign. Cada chamada executa no máximo um /sendTest.
+ */
+export async function retryWeeklyMarketingTest(
+  campaign: EmailCampaign,
+  actorTelegramId: string,
+  options: WeeklyMarketingDeliveryOptions,
+): Promise<WeeklyMarketingTestSuccess> {
+  return withWeeklyDeliveryLock(campaign.id, async () => {
+    const env = options.env || process.env;
+    const current = await requireWeeklyTestCampaign(options.store, campaign.id);
+    const brevoCampaignId = current.testProviderMessageId?.trim() || "";
+    if (!brevoCampaignId) throw new Error("WEEKLY_MARKETING_TEST_PROVIDER_REFERENCE_REQUIRED");
+    if (
+      current.counts.total !== 0
+      || current.counts.success !== 0
+      || current.counts.failed !== 0
+      || current.counts.skipped !== 0
+    ) {
+      throw new Error("WEEKLY_MARKETING_TEST_REAL_RECIPIENTS_FORBIDDEN");
+    }
+    const testEmail = requireWeeklyTestEmail(env);
+    const provider = options.provider || createConfiguredWeeklyBrevoMarketingProvider(env);
+    return sendWeeklyTestWithExistingProviderCampaign(
+      current,
+      actorTelegramId,
+      brevoCampaignId,
+      testEmail,
+      false,
+      options,
+    );
+  });
+}
+
+async function sendWeeklyTestWithExistingProviderCampaign(
+  current: EmailCampaign,
+  actorTelegramId: string,
+  brevoCampaignId: string,
+  testEmail: string,
+  providerCampaignCreatedThisAttempt: boolean,
+  options: WeeklyMarketingDeliveryOptions,
+): Promise<WeeklyMarketingTestSuccess> {
+  const provider = options.provider || createConfiguredWeeklyBrevoMarketingProvider(options.env || process.env);
+  let sent: Awaited<ReturnType<WeeklyBrevoMarketingProvider["sendTest"]>>;
+  try {
+    sent = await provider.sendTest(brevoCampaignId, [testEmail]);
+  } catch (error) {
+    const details = getWeeklyBrevoErrorDetails(error);
+    const safeCode = error instanceof NewsletterProviderError
+      ? error.code
+      : "WEEKLY_BREVO_SENDTEST_FAILED";
+    const sendTestResult = details?.sendTestResult === "unknown" ? "unknown" : "failed";
+    console.error(
+      `[NEWSLETTER-WEEKLY] send_test_failed provider=BREVO operation=SEND_TEST kind=${details?.kind || "unknown"}` +
+      ` status=${details?.status ?? "none"} code=${safeCode} result=${sendTestResult}`,
+    );
+    throw new WeeklyMarketingTestSendError(
+      brevoCampaignId,
+      providerCampaignCreatedThisAttempt,
+      safeCode,
+      details,
+      sendTestResult,
+      sanitizeInternalReason(error),
+    );
+  }
+
+  const tested = transitionCampaign(
+    current,
+    {
+      type: "record_test_sent",
+      actorTelegramId,
+      providerReference: brevoCampaignId,
+    },
+    options.now || new Date(),
+  );
+  return {
+    campaign: await options.store.updateCampaign(tested),
+    providerResult: {
+      status: sent.status,
+      providerReference: brevoCampaignId,
+    },
+    providerCampaignCreated: true,
+    providerCampaignCreatedThisAttempt,
+    providerCampaignId: brevoCampaignId,
+    sendTestSucceeded: true,
+  };
 }
 
 export async function sendWeeklyMarketingNow(
@@ -128,6 +233,26 @@ export async function sendWeeklyMarketingNow(
   });
 }
 
+async function requireWeeklyTestCampaign(store: NewsletterCampaignStore, campaignId: string): Promise<EmailCampaign> {
+  const current = await requireCampaign(store, campaignId);
+  if (!current.editionKey?.startsWith("weekly-test:") || current.campaignType !== "collection") {
+    throw new Error("WEEKLY_MARKETING_TEST_CAMPAIGN_REQUIRED");
+  }
+  if (current.status === "test_sent" && current.testProviderMessageId?.trim()) {
+    throw new Error("CAMPAIGN_TEST_ALREADY_SENT");
+  }
+  if (current.status !== "approved") throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
+  return current;
+}
+
+function requireWeeklyTestEmail(env: NodeJS.ProcessEnv): string {
+  const testEmail = normalizeNewsletterEmail(env.NEWSLETTER_TEST_EMAIL);
+  if (!testEmail || !isValidNewsletterEmail(testEmail)) {
+    throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
+  }
+  return testEmail;
+}
+
 function assertWeeklyApprovalFresh(campaign: EmailCampaign, env: NodeJS.ProcessEnv, now: Date): void {
   const sourceTimestamp = campaign.approvedAt || campaign.createdAt;
   const sourceMs = Date.parse(sourceTimestamp || "");
@@ -164,6 +289,12 @@ async function withWeeklyDeliveryLock<T>(campaignId: string, operation: () => Pr
     release();
     if (weeklyDeliveryLocks.get(campaignId) === tail) weeklyDeliveryLocks.delete(campaignId);
   }
+}
+
+function sanitizeInternalReason(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.trim();
+  return /^[A-Z0-9_:-]{1,80}$/.test(normalized) ? normalized : null;
 }
 
 function parsePositiveInteger(value: string | undefined): number | null {

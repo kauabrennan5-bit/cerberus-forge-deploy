@@ -143,8 +143,10 @@ export type WeeklyDraftCardRecoveryDeps = {
 };
 
 /**
- * Reexibe o rascunho weekly-test persistido sem recriar campanha, produtos,
- * recipients ou qualquer recurso no provider de email.
+ * Reexibe uma weekly-test operacional persistida sem recriar campanha,
+ * products, recipients ou qualquer recurso no provider de email.
+ * pending_approval volta ao gate de aprovação; approved sem test_sent volta
+ * ao gate humano apropriado de create+test ou de retry somente /sendTest.
  */
 export async function redeliverLatestWeeklyTestDraftCard(
   deps: WeeklyDraftCardRecoveryDeps,
@@ -155,34 +157,76 @@ export async function redeliverLatestWeeklyTestDraftCard(
   const store = deps.store || createSupabaseNewsletterCampaignStore();
   const recent = await store.listRecentCampaigns(20);
   const campaign = recent.find(item =>
-    item.status === "pending_approval"
-    && item.campaignType === "collection"
-    && Boolean(item.editionKey?.startsWith("weekly-test:")),
+    item.campaignType === "collection"
+    && Boolean(item.editionKey?.startsWith("weekly-test:"))
+    && (
+      item.status === "pending_approval"
+      || (item.status === "approved" && !item.testSentAt)
+    ),
   );
   if (!campaign) return { status: "not_found" };
 
   const selectedProductCount = campaign.collectionProducts.length;
-  const text = [
-    "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>",
-    "",
-    "<i>Rascunho existente recuperado sem recriar campanha.</i>",
-    "",
-    `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(campaign.subject)}`,
-    `<b>Produtos selecionados:</b> ${selectedProductCount}`,
-    "",
-    "Nenhum e-mail foi enviado ainda.",
-    "Ao aprovar, somente o destino de teste configurado receberá a campanha.",
-    `<code>${escapeWeeklyTelegramHtml(campaign.id)}</code>`,
-  ].join("\n");
+  const providerCampaignId = campaign.testProviderMessageId?.trim() || "";
+  let text: string;
+  let keyboard: any[][];
+
+  if (campaign.status === "pending_approval") {
+    text = [
+      "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>",
+      "",
+      "<i>Rascunho existente recuperado sem recriar campanha.</i>",
+      "",
+      `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(campaign.subject)}`,
+      `<b>Produtos selecionados:</b> ${selectedProductCount}`,
+      "",
+      "Nenhum e-mail foi enviado ainda.",
+      "Ao aprovar, somente o destino de teste configurado receberá a campanha.",
+      `<code>${escapeWeeklyTelegramHtml(campaign.id)}</code>`,
+    ].join("\n");
+    keyboard = [
+      [{ text: "✅ Aprovar teste", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+      [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+    ];
+  } else if (providerCampaignId) {
+    text = [
+      "⚠️ <b>ENVIO DE TESTE NÃO CONFIRMADO</b>",
+      "",
+      "A aprovação humana foi preservada e a Marketing Campaign da Brevo já existe.",
+      "",
+      `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(campaign.subject)}`,
+      `<b>Produtos selecionados:</b> ${selectedProductCount}`,
+      "Brevo Campaign: <b>criada ✅</b>",
+      "Envio de teste: <b>não confirmado ⚠️</b>",
+      "Erro: <code>WEEKLY_BREVO_SENDTEST_FAILED</code>",
+      "",
+      "Nenhum cliente real foi envolvido. Um novo clique reutilizará a mesma campanha Brevo e repetirá somente /sendTest.",
+      `<code>${escapeWeeklyTelegramHtml(campaign.id)}</code>`,
+    ].join("\n");
+    keyboard = [
+      [{ text: "🔄 Tentar envio de teste novamente", callback_data: `campaign_weekly_retry_test:${campaign.id}` }],
+      [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+    ];
+  } else {
+    text = [
+      "🧪 <b>TESTE APROVADO — BREVO AINDA NÃO CRIADA</b>",
+      "",
+      "A aprovação humana está preservada, mas nenhuma referência de Marketing Campaign foi confirmada.",
+      "",
+      `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(campaign.subject)}`,
+      `<b>Produtos selecionados:</b> ${selectedProductCount}`,
+      "Nenhum cliente real foi envolvido.",
+      `<code>${escapeWeeklyTelegramHtml(campaign.id)}</code>`,
+    ].join("\n");
+    keyboard = [
+      [{ text: "▶️ Continuar teste controlado", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+      [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+    ];
+  }
 
   let delivery: TelegramDeliveryResult;
   try {
-    delivery = await notify(deps.telegramSender, chatId, text, {
-      inline_keyboard: [
-        [{ text: "✅ Aprovar teste", callback_data: `campaign_weekly_approve:${campaign.id}` }],
-        [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
-      ],
-    });
+    delivery = await notify(deps.telegramSender, chatId, text, { inline_keyboard: keyboard });
   } catch {
     return { status: "delivery_failed", campaign };
   }

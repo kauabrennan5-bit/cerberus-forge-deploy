@@ -4,6 +4,7 @@ import type { Product } from "../src/types";
 import { buildWeeklyCopyPrompt, sanitizeWeeklyNewsletterCopy } from "../server/services/newsletterWeeklyCopy";
 import { buildWeeklyGoUrl, renderWeeklyNewsletter, BREVO_NATIVE_UNSUBSCRIBE } from "../server/services/newsletterWeeklyTemplate";
 import { runWeeklyDraftCycle } from "../server/services/newsletterWeeklyCampaign";
+import "./newsletterWeeklySendTestRecoveryCases";
 
 function product(id: string, ref: string, createdAt: string, price: number, clicks = 0): Product & { clicks?: number } {
   return {
