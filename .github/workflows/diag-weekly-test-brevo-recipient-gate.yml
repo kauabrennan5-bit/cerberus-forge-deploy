@@ -1,0 +1,49 @@
+name: Weekly Test Brevo Recipient Gate
+
+on:
+  push:
+    branches:
+      - diag/weekly-test-brevo-recipient-gate-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: fix/weekly-test-brevo-recipient-2026-08-29
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Directed Brevo recipient tests
+        run: node --import tsx --test tests/newsletterWeeklyBrevoTestRecipient.test.ts tests/newsletterWeeklyBrevoProvider.test.ts tests/newsletterWeeklySendTestRecoveryCases.ts tests/newsletterWeeklyTelegramRecovery.test.ts
+
+      - name: Global tests
+        run: npm test
+
+      - name: TypeScript and lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Diff check
+        run: git diff --check origin/main...HEAD
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
