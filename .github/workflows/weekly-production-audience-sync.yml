@@ -3,6 +3,13 @@ name: Weekly Production Audience Sync
 on:
   schedule:
     - cron: "7 * * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/weekly-production-audience-sync.yml"
+      - "server/services/newsletterWeeklyAutomationAuth.ts"
+      - "server/routes/newsletterWeeklyRoutes.ts"
   workflow_dispatch:
     inputs:
       operation:
@@ -18,6 +25,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: weekly-production-audience-sync
@@ -26,26 +34,64 @@ concurrency:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     env:
-      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
-      CERBERUS_AUTOMATION_TOKEN: ${{ secrets.CERBERUS_AUTOMATION_TOKEN }}
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      OIDC_AUDIENCE: cerberus-weekly-automation
+      OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || github.event_name == 'push' && 'bootstrap_after_deploy' || 'scheduled' }}
     steps:
-      - name: Reconcile production audience and provider state
+      - name: Wait for exact Render SHA after deployment
+        if: github.event_name == 'push'
         shell: bash
-        env:
-          OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'scheduled' }}
         run: |
           set -euo pipefail
-          [ -n "${CERBERUS_HEALTH_URL:-}" ] || { echo "CERBERUS_HEALTH_URL missing"; exit 1; }
-          [ -n "${CERBERUS_AUTOMATION_TOKEN:-}" ] || { echo "CERBERUS_AUTOMATION_TOKEN missing"; exit 1; }
+          response_file="$RUNNER_TEMP/cerberus-health.json"
+          for attempt in $(seq 1 48); do
+            status="$(curl --silent --show-error --max-time 20 -o "$response_file" -w '%{http_code}' "$CERBERUS_HEALTH_URL" || true)"
+            if [ "$status" = "200" ]; then
+              live_sha="$(node - "$response_file" <<'NODE'
+          const fs = require('node:fs');
+          try {
+            const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+            process.stdout.write(typeof body?.version === 'string' ? body.version.trim() : '');
+          } catch { process.stdout.write(''); }
+          NODE
+          )"
+              if [ "$live_sha" = "$GITHUB_SHA" ]; then
+                echo "RENDER_LIVE_SHA_VERIFIED=true"
+                break
+              fi
+            fi
+            if [ "$attempt" = "48" ]; then
+              echo "Render did not serve the expected SHA."
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Sync production audience and provider state
+        shell: bash
+        run: |
+          set -euo pipefail
           base="${CERBERUS_HEALTH_URL%/health}"
 
           if [ "$OPERATION" = "scheduled" ]; then
             operations=(sync reconcile)
+          elif [ "$OPERATION" = "bootstrap_after_deploy" ]; then
+            operations=(bootstrap sync reconcile status)
           else
             operations=("$OPERATION")
           fi
+
+          get_oidc_token() {
+            local token_json token
+            token_json="$(curl --fail --silent --show-error --max-time 20 \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+            token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+            echo "::add-mask::$token" >&2
+            printf '%s' "$token"
+          }
 
           for operation in "${operations[@]}"; do
             response_file="$RUNNER_TEMP/weekly-production-${operation}.json"
@@ -72,9 +118,10 @@ jobs:
                 ;;
             esac
 
+            oidc_token="$(get_oidc_token)"
             args=(--fail-with-body --silent --show-error --max-time 90
               -o "$response_file"
-              -H "X-Cerberus-Automation-Token: ${CERBERUS_AUTOMATION_TOKEN}")
+              -H "Authorization: Bearer ${oidc_token}")
             if [ "$method" = POST ]; then
               args+=(-H 'Content-Type: application/json' -d '{}')
             fi
@@ -84,16 +131,20 @@ jobs:
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const operation = process.argv[3];
-          if (body?.success !== true) process.exit(1);
+          if (body?.success !== true) {
+            console.error(`${operation.toUpperCase()}_FAILED code=${body?.code || 'UNKNOWN'}`);
+            process.exit(1);
+          }
           if (operation === 'status') {
             const p = body.production || {};
-            console.log(`WEEKLY_PRODUCTION_STATUS enabled=${Boolean(p.enabled)} list_configured=${Boolean(p.listConfigured)} sync_status=${p.syncStatus || 'unknown'} eligible=${Number(p.eligibleSubscribers || 0)} members=${Number(p.brevoMembers || 0)}`);
+            if (p.enabled !== true || p.listConfigured !== true || p.syncStatus !== 'ready' || Number(p.eligibleSubscribers || 0) <= 0 || Number(p.eligibleSubscribers) !== Number(p.brevoMembers)) process.exit(1);
+            console.log(`WEEKLY_PRODUCTION_STATUS=ready enabled=true eligible=${p.eligibleSubscribers} members=${p.brevoMembers}`);
             process.exit(0);
           }
           if (operation === 'bootstrap') {
             const p = body.production || {};
             if (p.enabled !== true || p.listConfigured !== true || p.syncStatus !== 'ready' || Number(p.eligibleSubscribers || 0) <= 0 || Number(p.eligibleSubscribers) !== Number(p.brevoMembers)) process.exit(1);
-            console.log(`WEEKLY_PRODUCTION_BOOTSTRAP_READY=true eligible=${p.eligibleSubscribers} members=${p.brevoMembers}`);
+            console.log(`WEEKLY_PRODUCTION_BOOTSTRAP=ready eligible=${p.eligibleSubscribers} members=${p.brevoMembers}`);
             process.exit(0);
           }
           if (operation === 'reconcile') {
