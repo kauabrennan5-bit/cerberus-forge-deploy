@@ -39,8 +39,9 @@ export class WeeklyMarketingTestSendError extends Error {
     public readonly safeCode: string,
     public readonly providerError: WeeklyBrevoErrorDetails | null,
     public readonly sendTestResult: "failed" | "unknown",
+    internalReason?: string | null,
   ) {
-    super(safeCode);
+    super(internalReason ? `${safeCode}:${internalReason}` : safeCode);
     this.name = "WeeklyMarketingTestSendError";
   }
 }
@@ -152,6 +153,7 @@ async function sendWeeklyTestWithExistingProviderCampaign(
       safeCode,
       details,
       sendTestResult,
+      sanitizeInternalReason(error),
     );
   }
 
@@ -287,6 +289,12 @@ async function withWeeklyDeliveryLock<T>(campaignId: string, operation: () => Pr
     release();
     if (weeklyDeliveryLocks.get(campaignId) === tail) weeklyDeliveryLocks.delete(campaignId);
   }
+}
+
+function sanitizeInternalReason(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.trim();
+  return /^[A-Z0-9_:-]{1,80}$/.test(normalized) ? normalized : null;
 }
 
 function parsePositiveInteger(value: string | undefined): number | null {
