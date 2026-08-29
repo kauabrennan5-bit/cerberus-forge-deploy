@@ -8,6 +8,7 @@ import {
   type WeeklyBrevoErrorDetails,
   type WeeklyBrevoMarketingProvider,
 } from "./newsletterWeeklyBrevoProvider";
+import { ensureWeeklyBrevoTestRecipient } from "./newsletterWeeklyBrevoTestRecipient";
 
 const weeklyDeliveryLocks = new Map<string, Promise<void>>();
 
@@ -16,6 +17,12 @@ export type WeeklyMarketingDeliveryOptions = {
   env?: NodeJS.ProcessEnv;
   now?: Date;
   provider?: WeeklyBrevoMarketingProvider;
+  /**
+   * Dependency-injection seam for tests. In the real runtime, when no provider
+   * is injected, retryWeeklyMarketingTest prepares only NEWSLETTER_TEST_EMAIL
+   * through ensureWeeklyBrevoTestRecipient before the single /sendTest.
+   */
+  ensureTestRecipient?: () => Promise<unknown>;
 };
 
 export type WeeklyMarketingTestSuccess = {
@@ -92,7 +99,8 @@ export async function sendWeeklyMarketingTest(
 
 /**
  * Retry humano fail-closed. Exige referência Brevo já persistida e nunca possui
- * fallback para createCampaign. Cada chamada executa no máximo um /sendTest.
+ * fallback para createCampaign. No runtime real, prepara idempotentemente apenas
+ * NEWSLETTER_TEST_EMAIL e então executa exatamente um /sendTest.
  */
 export async function retryWeeklyMarketingTest(
   campaign: EmailCampaign,
@@ -113,6 +121,14 @@ export async function retryWeeklyMarketingTest(
       throw new Error("WEEKLY_MARKETING_TEST_REAL_RECIPIENTS_FORBIDDEN");
     }
     const testEmail = requireWeeklyTestEmail(env);
+
+    // Runtime: self-heal do único destinatário de teste antes de qualquer sendTest.
+    // Testes que injetam provider continuam herméticos; podem injetar explicitamente
+    // ensureTestRecipient para validar esta etapa sem acessar a Brevo real.
+    const ensureTestRecipient = options.ensureTestRecipient
+      || (!options.provider ? () => ensureWeeklyBrevoTestRecipient({ env }) : null);
+    if (ensureTestRecipient) await ensureTestRecipient();
+
     const provider = options.provider || createConfiguredWeeklyBrevoMarketingProvider(env);
     return sendWeeklyTestWithExistingProviderCampaign(
       current,
