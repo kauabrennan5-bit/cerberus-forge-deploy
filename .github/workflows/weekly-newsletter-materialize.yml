@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/weekly-newsletter-curation-2026-08-28
+      - diag/weekly-newsletter-ts-2026-08-28
     paths:
       - .github/scripts/materialize_weekly_newsletter.py
       - .github/workflows/weekly-newsletter-materialize.yml
@@ -148,8 +149,53 @@ jobs:
       - name: Clean observability files
         if: success()
         run: rm -f weekly-global-test.log weekly-global-summary.txt weekly-global-failures.txt weekly-candidate.patch weekly-candidate-files.txt
-      - name: TypeScript
-        run: npm run lint
+      - name: TypeScript diagnostics
+        id: typescript
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npm run lint -- --pretty false 2>&1 | tee weekly-typescript.log
+          ts_status=${PIPESTATUS[0]}
+          set -e
+
+          TS_EXIT_CODE="$ts_status" python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          text = Path("weekly-typescript.log").read_text(encoding="utf-8", errors="replace")
+          error_pattern = re.compile(r"(?m)^(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$")
+          errors = error_pattern.findall(text)
+
+          lines = [
+              f"TS_EXIT_CODE={os.environ['TS_EXIT_CODE']}",
+              f"TS_ERROR_COUNT={len(errors)}",
+          ]
+          for index, (file, line, column, code, message) in enumerate(errors, start=1):
+              lines.extend([
+                  f"TS_ERROR_{index}_CODE={code}",
+                  f"TS_ERROR_{index}_FILE={file}",
+                  f"TS_ERROR_{index}_LINE={line}",
+                  f"TS_ERROR_{index}_COLUMN={column}",
+                  f"TS_ERROR_{index}_MESSAGE={message}",
+              ])
+
+          Path("weekly-typescript-summary.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(Path("weekly-typescript-summary.txt").read_text(encoding="utf-8"), end="")
+          PY
+
+          exit "$ts_status"
+      - name: Upload TypeScript diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-typescript-diagnostics-${{ github.run_id }}
+          path: |
+            weekly-typescript.log
+            weekly-typescript-summary.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Build
         run: npm run build
       - name: Diff check
