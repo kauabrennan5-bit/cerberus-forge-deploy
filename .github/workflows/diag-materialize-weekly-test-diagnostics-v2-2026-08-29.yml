@@ -1,0 +1,137 @@
+name: Diagnostic Materialize Weekly Test Diagnostics V2
+
+on:
+  push:
+    branches:
+      - diag/weekly-test-diagnostics-materialize-v2-2026-08-29
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: fix/weekly-test-diagnostics-2026-08-29
+      BASE_SHA: 50b624d28305b4cd158d8565c64d8487bbe18138
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+    steps:
+      - name: Checkout diagnostic source
+        uses: actions/checkout@v4
+        with:
+          ref: diag/weekly-test-diagnostics-materialize-2026-08-29
+          path: source
+          fetch-depth: 1
+
+      - name: Checkout functional branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: work
+          fetch-depth: 2
+
+      - name: Verify exact base
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: work/package-lock.json
+
+      - name: Install dependencies
+        working-directory: work
+        run: npm ci
+
+      - name: Extract and repair materializer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          source = Path("source/.github/workflows/diag-materialize-weekly-test-diagnostics-2026-08-29.yml").read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY", start)
+          script = dedent(source[start:end])
+
+          bad_start = script.index("old_catch = dedent('''")
+          bad_end = script.index("bot.write_text(text)", bad_start) + len("bot.write_text(text)")
+          repaired = dedent(r'''
+          handler_start = text.index('    if (commandName === "weekly-test") {')
+          handler_end = text.index('    if (commandName === "pendentes") {', handler_start)
+          block = text[handler_start:handler_end]
+          catch_start = block.index('      } catch (error) {')
+          return_start = block.index('      return;', catch_start)
+          new_catch = dedent('''
+                } catch (error) {
+                  if (isWeeklyDraftDiagnosticError(error)) {
+                    const diagnostic = error.diagnostic;
+                    console.error(`[NEWSLETTER-WEEKLY] telegram_test_command_failed attempt=${diagnostic.attemptId} stage=${diagnostic.stage} reason=${diagnostic.reason}`);
+                    await sendTelegramMessage(chatId, formatWeeklyDraftDiagnosticTelegram(diagnostic));
+                  } else {
+                    console.error("[NEWSLETTER-WEEKLY] telegram_test_command_failed stage=UNKNOWN_INTERNAL reason=UNKNOWN_INTERNAL");
+                    await sendTelegramMessage(chatId, "⚠️ <b>WEEKLY-TEST NÃO CRIADA</b>\\n\\nEtapa: <b>Interno</b>\\nMotivo: <code>UNKNOWN_INTERNAL</code>\\n\\nNenhum email foi enviado e nenhuma chamada Brevo foi iniciada.");
+                  }
+                }
+          ''').strip()
+          block = block[:catch_start] + new_catch + "\n" + block[return_start:]
+          text = text[:handler_start] + block + text[handler_end:]
+          bot.write_text(text)
+          ''')
+          script = script[:bad_start] + repaired + script[bad_end:]
+          Path("work/.materialize_weekly_diagnostics.py").write_text(script)
+          PY
+          (cd work && python3 .materialize_weekly_diagnostics.py)
+          rm work/.materialize_weekly_diagnostics.py
+
+      - name: Directed weekly diagnostics tests
+        working-directory: work
+        run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterWeeklyBrevoProvider.test.ts tests/newsletterWeeklyStaleGuard.test.ts
+
+      - name: TypeScript
+        working-directory: work
+        run: npm run lint
+
+      - name: Full global suite
+        working-directory: work
+        run: npm test
+
+      - name: Production build
+        working-directory: work
+        run: npm run build
+
+      - name: Diff check
+        working-directory: work
+        run: git diff --check
+
+      - name: Gitleaks
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-weekly-diagnostics
+          git diff --no-ext-diff > /tmp/gitleaks-weekly-diagnostics/weekly-diagnostics.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-weekly-diagnostics --redact --exit-code 1
+
+      - name: Persist functional commit
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/services/newsletterWeeklyDiagnostics.ts server/services/newsletterWeeklyCampaign.ts server/services/telegramBot.ts tests/newsletterWeeklyCampaign.test.ts
+          test "$(git diff --cached --name-only | wc -l)" -eq 4
+          git commit -m "fix: expose safe weekly test failure diagnostics"
+          git push origin "HEAD:$TARGET_BRANCH"
