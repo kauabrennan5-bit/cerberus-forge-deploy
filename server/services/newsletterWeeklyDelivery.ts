@@ -103,7 +103,12 @@ export async function retryWeeklyMarketingTest(
     const current = await requireWeeklyTestCampaign(options.store, campaign.id);
     const brevoCampaignId = current.testProviderMessageId?.trim() || "";
     if (!brevoCampaignId) throw new Error("WEEKLY_MARKETING_TEST_PROVIDER_REFERENCE_REQUIRED");
-    if (current.counts.total !== 0 || current.counts.success !== 0 || current.counts.failed !== 0) {
+    if (
+      current.counts.total !== 0
+      || current.counts.success !== 0
+      || current.counts.failed !== 0
+      || current.counts.skipped !== 0
+    ) {
       throw new Error("WEEKLY_MARKETING_TEST_REAL_RECIPIENTS_FORBIDDEN");
     }
     const testEmail = requireWeeklyTestEmail(env);
