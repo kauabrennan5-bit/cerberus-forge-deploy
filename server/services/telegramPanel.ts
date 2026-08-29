@@ -103,27 +103,38 @@ export async function renderToday(): Promise<string> {
 }
 
 export function renderWeeklyRuntimePreflight(preflight: WeeklyRuntimePreflight): string {
-  const weeklyState = preflight.weeklyProductionEnabled ? "ATIVADA ❌" : "DESATIVADA ✅";
+  const weeklyState = preflight.weeklyProductionEnabled
+    ? preflight.productionAudienceReady ? "ATIVADA E PRONTA ✅" : "ATIVADA, MAS BLOQUEADA ⚠️"
+    : "DESATIVADA";
   const configured = preflight.testEmailConfigured ? "CONFIGURADO ✅" : "AUSENTE ❌";
   const valid = preflight.testEmailValid ? "VÁLIDO ✅" : "INVÁLIDO ❌";
   const brevoConfigured = preflight.brevoApiKeyPresent ? "CONFIGURADO ✅" : "AUSENTE ❌";
   const providerReady = preflight.brevoMarketingProviderReady ? "MARKETING CAMPAIGN ✅" : "NÃO PRONTO ❌";
   const subscribers = preflight.eligibleSubscribers === null ? "indisponível" : String(preflight.eligibleSubscribers);
-  const ready = preflight.readyForTest ? "PRONTO ✅" : "BLOQUEADO ❌";
-  const automatic = preflight.weeklyProductionEnabled ? "NÃO BLOQUEADO ❌" : "BLOQUEADO ✅";
+  const members = preflight.productionBrevoMembers === null ? "não verificado" : String(preflight.productionBrevoMembers);
+  const list = preflight.productionListConfigured ? "CONFIGURADA ✅" : "NÃO CONFIGURADA";
+  const sync = preflight.productionSyncVerified ? "VERIFICADO ✅" : "NÃO VERIFICADO";
+  const productionReady = preflight.productionAudienceReady ? "PRONTA ✅" : "BLOQUEADA";
+  const testReady = preflight.readyForTest ? "PRONTO ✅" : preflight.weeklyProductionEnabled ? "SEPARADO DA PRODUÇÃO" : "BLOQUEADO ❌";
+  const draftAutomation = preflight.weeklyProductionEnabled ? "ATIVA ✅" : "INATIVA";
+  const generalSend = "EXIGE APROVAÇÃO HUMANA ✅";
   const masked = preflight.testEmailMasked ? ` (${preflight.testEmailMasked})` : "";
 
   return (
     "🛡️ <b>Cerberus Weekly — Preflight</b>\n" +
     `Produção semanal: <b>${weeklyState}</b>\n` +
+    `Lista Brevo: <b>${list}</b>\n` +
+    `Sincronização de consentimento: <b>${sync}</b>\n` +
+    `Subscribers elegíveis / membros Brevo: <b>${subscribers} / ${members}</b>\n` +
+    `Audiência de produção: <b>${productionReady}</b>\n` +
+    `Criação automática de rascunho: <b>${draftAutomation}</b>\n` +
+    `Envio geral: <b>${generalSend}</b>\n\n` +
     `Email de teste: <b>${configured}</b>${masked}\n` +
     `Formato do email: <b>${valid}</b>\n` +
     `Brevo: <b>${brevoConfigured}</b>\n` +
     `Provider: <b>${providerReady}</b>\n` +
-    `Subscribers elegíveis: <b>${subscribers}</b>\n` +
-    `Modo de teste: <b>${ready}</b>\n` +
-    `Envio automático: <b>${automatic}</b>\n\n` +
-    "Read-only · nenhum secret, campaign, recipient ou envio foi criado."
+    `Modo de teste: <b>${testReady}</b>\n\n` +
+    "Read-only · nenhum secret, campaign, recipient ou envio foi criado por esta consulta."
   );
 }
 
