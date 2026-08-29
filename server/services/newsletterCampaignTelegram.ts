@@ -144,6 +144,22 @@ async function handleNewsletterCampaignCallbackOnce(
       return true;
     }
 
+    if (data.startsWith("campaign_weekly_approve:")) {
+      if (campaign.status !== "pending_approval") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      const approved = await approveCampaign(campaign, senderId, { store, env });
+      if (approved.editionKey?.startsWith("weekly-test:")) {
+        const tested = await sendCampaignTest(approved, senderId, { store, env, provider: deps.provider });
+        await deps.answerCallbackQuery(callbackId, "Rascunho aprovado. Teste enviado somente ao destino controlado.");
+        await syncCampaignTelegramState(tested.campaign.id, deps, messageReference(chatId, messageId));
+        return true;
+      }
+      const confirmed = await confirmGeneralSend(approved, senderId, { store, env });
+      const sending = await startGeneralSend(confirmed, senderId, { store, env });
+      await deps.answerCallbackQuery(callbackId, "Campanha aprovada. Envio geral enfileirado.");
+      await syncCampaignTelegramState(sending.id, deps, messageReference(chatId, messageId));
+      return true;
+    }
+
     if (data.startsWith("campaign_approve:")) {
       if (campaign.status !== "pending_approval") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const approved = await approveCampaign(campaign, senderId, { store, env });
