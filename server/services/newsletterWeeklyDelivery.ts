@@ -81,6 +81,7 @@ export async function sendWeeklyMarketingNow(
 ): Promise<EmailCampaign> {
   return withWeeklyDeliveryLock(campaign.id, async () => {
     const env = options.env || process.env;
+    const now = options.now || new Date();
     const current = await requireCampaign(options.store, campaign.id);
     if (!current.editionKey?.startsWith("weekly:")) {
       throw new Error("WEEKLY_MARKETING_PRODUCTION_CAMPAIGN_REQUIRED");
@@ -89,6 +90,7 @@ export async function sendWeeklyMarketingNow(
     if (!current.generalSendConfirmedAt || !current.generalSendConfirmedByTelegramId) {
       throw new Error("GENERAL_SEND_CONFIRMATION_REQUIRED");
     }
+    assertWeeklyApprovalFresh(current, env, now);
     if (env.NEWSLETTER_WEEKLY_ENABLED !== "true") {
       throw new Error("WEEKLY_MARKETING_PRODUCTION_DISABLED");
     }
@@ -120,10 +122,23 @@ export async function sendWeeklyMarketingNow(
     const sending = transitionCampaign(
       working,
       { type: "begin_sending", actorTelegramId },
-      options.now || new Date(),
+      now,
     );
     return options.store.updateCampaign(sending);
   });
+}
+
+function assertWeeklyApprovalFresh(campaign: EmailCampaign, env: NodeJS.ProcessEnv, now: Date): void {
+  const sourceTimestamp = campaign.approvedAt || campaign.createdAt;
+  const sourceMs = Date.parse(sourceTimestamp || "");
+  if (!Number.isFinite(sourceMs)) {
+    throw new Error("WEEKLY_MARKETING_PRODUCTION_APPROVAL_TIMESTAMP_INVALID");
+  }
+  const configured = Number.parseInt(env.NEWSLETTER_WEEKLY_APPROVAL_TTL_HOURS || "24", 10);
+  const ttlHours = Number.isSafeInteger(configured) ? Math.max(1, Math.min(168, configured)) : 24;
+  if (now.getTime() - sourceMs >= ttlHours * 60 * 60 * 1000) {
+    throw new Error("WEEKLY_MARKETING_PRODUCTION_STALE");
+  }
 }
 
 function buildBrevoCampaignName(campaign: EmailCampaign): string {
