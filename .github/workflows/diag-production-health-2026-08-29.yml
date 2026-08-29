@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      TARGET_SHA: df214bfbdda31e4cb0544ee99f183872309a504d
+      TARGET_SHA: c51a7f1987046c1e7f53ae32b46f8bdefcfd2503
       HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
     steps:
       - name: Checkout diagnostic carrier
