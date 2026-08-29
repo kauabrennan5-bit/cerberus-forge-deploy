@@ -1,0 +1,43 @@
+name: Weekly Runtime Health Verify
+
+on:
+  push:
+    branches:
+      - diag/weekly-runtime-health-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      EXPECTED_SHA: 97532bd2b0ab77313588bfb6fadd368cf94b129f
+      HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+    steps:
+      - name: Verify live SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_sha=""
+          health_status="FAIL"
+          for attempt in $(seq 1 24); do
+            body="$(curl --fail-with-body --silent --show-error --max-time 15 "$HEALTH_URL" || true)"
+            status="$(printf '%s' "$body" | jq -r '.status // empty' 2>/dev/null || true)"
+            live_sha="$(printf '%s' "$body" | jq -r '.version // empty' 2>/dev/null || true)"
+            if [ "$status" = "ok" ] && [ "$live_sha" = "$EXPECTED_SHA" ]; then
+              health_status="PASS"
+              break
+            fi
+            sleep 10
+          done
+          printf 'HEALTH_STATUS=%s\nLIVE_VERSION_SHA=%s\nEXPECTED_SHA=%s\n' "$health_status" "${live_sha:-UNKNOWN}" "$EXPECTED_SHA" | tee health-evidence.txt
+          [ "$health_status" = "PASS" ]
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-runtime-health-${{ github.run_id }}
+          path: health-evidence.txt
+          retention-days: 7
