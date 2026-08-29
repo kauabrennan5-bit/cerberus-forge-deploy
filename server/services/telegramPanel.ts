@@ -12,6 +12,10 @@ import {
   PUBLIC_PRODUCT_CATEGORIES,
   resolvePublicProductCategory,
 } from "../../src/lib/productCategory";
+import {
+  evaluateWeeklyRuntimePreflight,
+  type WeeklyRuntimePreflight,
+} from "./newsletterWeeklyRuntimePreflight";
 
 /**
  * Contrato completo do painel. Inclui comandos secundários por compatibilidade,
@@ -98,6 +102,31 @@ export async function renderToday(): Promise<string> {
   );
 }
 
+export function renderWeeklyRuntimePreflight(preflight: WeeklyRuntimePreflight): string {
+  const weeklyState = preflight.weeklyProductionEnabled ? "ATIVADA ❌" : "DESATIVADA ✅";
+  const configured = preflight.testEmailConfigured ? "CONFIGURADO ✅" : "AUSENTE ❌";
+  const valid = preflight.testEmailValid ? "VÁLIDO ✅" : "INVÁLIDO ❌";
+  const brevoConfigured = preflight.brevoApiKeyPresent ? "CONFIGURADO ✅" : "AUSENTE ❌";
+  const providerReady = preflight.brevoMarketingProviderReady ? "MARKETING CAMPAIGN ✅" : "NÃO PRONTO ❌";
+  const subscribers = preflight.eligibleSubscribers === null ? "indisponível" : String(preflight.eligibleSubscribers);
+  const ready = preflight.readyForTest ? "PRONTO ✅" : "BLOQUEADO ❌";
+  const automatic = preflight.weeklyProductionEnabled ? "NÃO BLOQUEADO ❌" : "BLOQUEADO ✅";
+  const masked = preflight.testEmailMasked ? ` (${preflight.testEmailMasked})` : "";
+
+  return (
+    "🛡️ <b>Cerberus Weekly — Preflight</b>\n" +
+    `Produção semanal: <b>${weeklyState}</b>\n` +
+    `Email de teste: <b>${configured}</b>${masked}\n` +
+    `Formato do email: <b>${valid}</b>\n` +
+    `Brevo: <b>${brevoConfigured}</b>\n` +
+    `Provider: <b>${providerReady}</b>\n` +
+    `Subscribers elegíveis: <b>${subscribers}</b>\n` +
+    `Modo de teste: <b>${ready}</b>\n` +
+    `Envio automático: <b>${automatic}</b>\n\n` +
+    "Read-only · nenhum secret, campaign, recipient ou envio foi criado."
+  );
+}
+
 export async function renderStatus(): Promise<string> {
   let productsCount = "não disponível";
   let activeCount = "não disponível";
@@ -133,12 +162,15 @@ export async function renderStatus(): Promise<string> {
     // explicit unavailable state below
   }
 
+  const weeklyPreflight = await evaluateWeeklyRuntimePreflight();
+
   return (
     "🩺 <b>STATUS READ-ONLY</b>\n" +
     `Produtos: <b>${productsCount}</b> · ativos: <b>${activeCount}</b>\n` +
     `Pendentes: <b>${pendingCount}</b>\n` +
     `Telegram: ${telegramDiag}\n\n` +
-    "Nenhuma alteração foi executada."
+    renderWeeklyRuntimePreflight(weeklyPreflight) +
+    "\n\nNenhuma alteração foi executada."
   );
 }
 
