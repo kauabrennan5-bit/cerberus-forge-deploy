@@ -1,0 +1,134 @@
+name: Weekly Brevo Final Feature Gate
+
+on:
+  push:
+    branches:
+      - diag/weekly-brevo-feature-gate-2026-08-29
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: 01e0bb6dfde849678dc7d4c0fff93a59b244fbb5
+  TARGET_PARENT: 84e0ad209f8f025534bd3130e27c13b4c0d294a4
+  TARGET_TREE: 0761836b5a983bc3d693c09407dc923e82a42bee
+  TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact functional commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact SHA tree and parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test "$(git rev-parse HEAD^)" = "$TARGET_PARENT"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare test summary parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/parse-summary.mjs" <<'NODE'
+          import fs from "node:fs";
+          const [logPath, label, outputPath] = process.argv.slice(2);
+          const clean = fs.readFileSync(logPath, "utf8").replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "");
+          const values = {};
+          for (const key of ["tests", "pass", "fail", "skipped", "cancelled"]) {
+            const matches = [...clean.matchAll(new RegExp(`^\\s*(?:ℹ\\s+|#\\s*)?${key}\\s+(\\d+)\\s*$`, "gmi"))];
+            if (!matches.length) throw new Error(`missing ${key} for ${label}`);
+            values[key] = Number(matches.at(-1)[1]);
+          }
+          const todoMatches = [...clean.matchAll(/^\s*(?:ℹ\s+|#\s*)?todo\s+(\d+)\s*$/gmi)];
+          const todo = todoMatches.length ? Number(todoMatches.at(-1)[1]) : 0;
+          const lines = [
+            `${label.toUpperCase()}_TOTAL=${values.tests}`,
+            `${label.toUpperCase()}_PASS=${values.pass}`,
+            `${label.toUpperCase()}_FAILURES=${values.fail}`,
+            `${label.toUpperCase()}_SKIPPED=${values.skipped}`,
+            `${label.toUpperCase()}_CANCELLED=${values.cancelled}`,
+            `${label.toUpperCase()}_TODO=${todo}`,
+          ];
+          fs.appendFileSync(outputPath, lines.join("\n") + "\n");
+          console.log(lines.join("\n"));
+          if (!values.tests || values.pass !== values.tests || values.fail || values.skipped || values.cancelled || todo) process.exit(8);
+          NODE
+          : > weekly-brevo-final-gate-summary.txt
+          printf 'TARGET_SHA=%s\nTARGET_TREE=%s\nTARGET_PARENT=%s\n' "$TARGET_SHA" "$TARGET_TREE" "$TARGET_PARENT" >> weekly-brevo-final-gate-summary.txt
+
+      - name: Provider contract tests
+        run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyBrevoProvider.test.ts
+
+      - name: Focused weekly and campaign tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/newsletterWeeklyBrevoProvider.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts \
+            tests/newsletterCampaign.test.ts \
+            tests/publishCommand.test.ts 2>&1 | tee "$RUNNER_TEMP/focused.log"
+          status=${PIPESTATUS[0]}
+          node "$RUNNER_TEMP/parse-summary.mjs" "$RUNNER_TEMP/focused.log" focused weekly-brevo-final-gate-summary.txt
+          summary_status=$?
+          set -e
+          test "$status" -eq 0
+          test "$summary_status" -eq 0
+
+      - name: Full global test suite
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          npm test -- --test-reporter=tap 2>&1 | tee "$RUNNER_TEMP/global.log"
+          status=${PIPESTATUS[0]}
+          node "$RUNNER_TEMP/parse-summary.mjs" "$RUNNER_TEMP/global.log" global weekly-brevo-final-gate-summary.txt
+          summary_status=$?
+          set -e
+          test "$status" -eq 0
+          test "$summary_status" -eq 0
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Diff check
+        run: git diff --check "$TARGET_PARENT" "$TARGET_SHA"
+
+      - name: Secret scan changed content
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff "$TARGET_PARENT" "$TARGET_SHA" > /tmp/gitleaks-scan/weekly-brevo.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+
+      - name: Upload final gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-brevo-final-feature-${{ github.run_id }}
+          path: weekly-brevo-final-gate-summary.txt
+          if-no-files-found: warn
