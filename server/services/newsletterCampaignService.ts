@@ -10,6 +10,8 @@ import {
   type NewsletterCampaignProvider,
   type NewsletterProviderResult,
 } from "./newsletterProvider";
+import type { WeeklyBrevoMarketingProvider } from "./newsletterWeeklyBrevoProvider";
+import { sendWeeklyMarketingNow, sendWeeklyMarketingTest } from "./newsletterWeeklyDelivery";
 import {
   createDryRunCampaignProvider,
   processNewsletterCampaignOnce,
@@ -52,6 +54,7 @@ export type CampaignServiceOptions = {
   collectionSize?: number;
   minimumCollectionProducts?: number;
   provider?: NewsletterCampaignProvider;
+  weeklyProvider?: WeeklyBrevoMarketingProvider;
   /** Probe injetável para validar acessibilidade da imagem principal sem duplicar lógica. */
   imageProbe?: ProductImageProbe;
   verifyImageAccessibility?: boolean;
@@ -252,6 +255,14 @@ export async function sendCampaignTest(
     const env = options.env || process.env;
     const store = options.store || createSupabaseNewsletterCampaignStore();
     const current = await readCurrentCampaign(store, campaign.id);
+    if (current.editionKey?.startsWith("weekly-test:")) {
+      return sendWeeklyMarketingTest(current, actorTelegramId, {
+        store,
+        env,
+        now: options.now || new Date(),
+        provider: options.weeklyProvider,
+      });
+    }
     if (current.status !== "approved") {
       if (current.status === "test_sent" && current.testProviderMessageId?.trim()) {
         throw new Error("CAMPAIGN_TEST_ALREADY_SENT");
@@ -317,6 +328,14 @@ export async function startGeneralSend(
   const store = options.store || createSupabaseNewsletterCampaignStore();
   const now = options.now || new Date();
   const current = await readCurrentCampaign(store, campaign.id);
+  if (current.editionKey?.startsWith("weekly:")) {
+    return sendWeeklyMarketingNow(current, actorTelegramId, {
+      store,
+      env: options.env || process.env,
+      now,
+      provider: options.weeklyProvider,
+    });
+  }
   const sending = transitionCampaign(current, { type: "begin_sending", actorTelegramId }, now);
   // A campanha geral deve alcançar todos os assinantes elegíveis; o endereço de teste
   // não é excluído aqui porque o teste controlado já terminou e a confirmação humana

@@ -69,6 +69,10 @@ export async function processNewsletterCampaignOnce(
   if (campaign.status !== "sending") {
     return { outcome: "idle", providerCalled: false, campaign, recipient: null, processed: 0 };
   }
+  if (campaign.editionKey?.startsWith("weekly:")) {
+    // Weekly marketing is owned by the Brevo Email Campaign provider, never by SMTP per-recipient delivery.
+    return { outcome: "idle", providerCalled: false, campaign, recipient: null, processed: 0 };
+  }
 
   const config = getNewsletterCampaignWorkerConfig();
   const dryRun = options.dryRun ?? config.dryRun;

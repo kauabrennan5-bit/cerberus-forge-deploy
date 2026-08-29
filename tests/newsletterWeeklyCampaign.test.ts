@@ -56,6 +56,7 @@ test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe na
   assert.match(rendered.html, /\/go\/REF-A/);
   assert.doesNotMatch(rendered.html, /market\.example\.com/);
   assert.match(rendered.html, new RegExp(BREVO_NATIVE_UNSUBSCRIBE.replace(/[{}]/g, "\\$&")));
+  assert.match(rendered.html, /<a\b[^>]*href=["']\{\{\s*unsubscribe\s*\}\}["'][^>]*>[^<]*Cancelar inscrição[^<]*<\/a>/i);
   assert.doesNotMatch(rendered.html, /display\s*:\s*(flex|grid)/i);
 });
 
