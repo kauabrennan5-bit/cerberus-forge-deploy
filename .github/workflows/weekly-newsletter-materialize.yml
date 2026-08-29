@@ -49,6 +49,83 @@ jobs:
               text = text.replace(old, new, 1)
           path.write_text(text, encoding="utf-8")
           PY
+      - name: Apply weekly production flag contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          campaign_path = Path("server/services/newsletterWeeklyCampaign.ts")
+          campaign = campaign_path.read_text(encoding="utf-8")
+          outcome_old = '''export type WeeklyDraftOutcome =
+            | { status: "created"; campaign: EmailCampaign; products: Product[] }
+            | { status: "skipped"; reason: "no_new_products" | "insufficient_new_products" | "duplicate"; newProductCount: number };'''.replace("          ", "")
+          outcome_new = '''export type WeeklyDraftOutcome =
+            | { status: "created"; campaign: EmailCampaign; products: Product[] }
+            | { status: "skipped"; reason: "disabled" | "no_new_products" | "insufficient_new_products" | "duplicate"; newProductCount: number };'''.replace("          ", "")
+          if campaign.count(outcome_old) != 1:
+              raise SystemExit("weekly outcome contract source mismatch")
+          campaign = campaign.replace(outcome_old, outcome_new, 1)
+          gate_old = '''  const testMode = deps.testMode === true;
+            const chatId = (env.TELEGRAM_ADMIN_CHAT_ID || "").trim();'''.replace("          ", "")
+          gate_new = '''  const testMode = deps.testMode === true;
+            const weeklyEnabled = env.NEWSLETTER_WEEKLY_ENABLED === "true";
+            if (!testMode && !weeklyEnabled) return { status: "skipped", reason: "disabled", newProductCount: 0 };
+            const chatId = (env.TELEGRAM_ADMIN_CHAT_ID || "").trim();'''.replace("          ", "")
+          if campaign.count(gate_old) != 1:
+              raise SystemExit("weekly production gate source mismatch")
+          campaign = campaign.replace(gate_old, gate_new, 1)
+          campaign_path.write_text(campaign, encoding="utf-8")
+
+          test_path = Path("tests/newsletterWeeklyCampaign.test.ts")
+          tests = test_path.read_text(encoding="utf-8")
+          env_old = 'env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com" }'
+          env_new = 'env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com", NEWSLETTER_WEEKLY_ENABLED: "true" }'
+          if tests.count(env_old) != 3:
+              raise SystemExit(f"expected 3 enabled weekly test envs, found {tests.count(env_old)}")
+          tests = tests.replace(env_old, env_new)
+          tests += r'''
+
+test("produção semanal fica desabilitada por padrão e não toca dados", async () => {
+  const store = memoryStore();
+  let productsLoaded = false;
+  const result = await runWeeklyDraftCycle({
+    store,
+    productsLoader: async () => { productsLoaded = true; return []; },
+    env: {},
+  });
+  assert.deepEqual(result, { status: "skipped", reason: "disabled", newProductCount: 0 });
+  assert.equal(productsLoaded, false);
+  assert.equal(store.campaigns.size, 0);
+});
+
+test("weekly-test independe do flag de produção e continua sem recipients reais", async () => {
+  const store = memoryStore();
+  const products = [
+    product("a", "REF-A", "2026-08-28T12:00:00Z", 10),
+    product("b", "REF-B", "2026-08-28T11:00:00Z", 20),
+    product("c", "REF-C", "2026-08-28T10:00:00Z", 30),
+  ];
+  const result = await runWeeklyDraftCycle({
+    store,
+    testMode: true,
+    productsLoader: async () => products,
+    clickCountLoader: async () => new Map(),
+    copyGenerator: async () => copy,
+    telegramSender: async () => ({ ok: true, result: { message_id: 88 } }),
+    now: new Date("2026-08-28T15:00:00Z"),
+    env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com" },
+  });
+  assert.equal(result.status, "created");
+  if (result.status !== "created") return;
+  assert.match(String(result.campaign.editionKey), /^weekly-test:/);
+  assert.equal(result.campaign.status, "pending_approval");
+  assert.equal(store.campaigns.size, 1);
+});
+'''
+          test_path.write_text(tests, encoding="utf-8")
+          PY
       - name: Remove temporary materializer
         run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
       - name: Capture complete generated candidate diff
