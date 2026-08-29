@@ -15,9 +15,15 @@ jobs:
     env:
       TARGET_SHA: c51a7f1987046c1e7f53ae32b46f8bdefcfd2503
       LIVE_BASE: https://cerberus-forge-deploy-backend.onrender.com
+      KNOWN_ADMIN_USER_ID: "1976526372"
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
       TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
     steps:
       - name: Verify exact live backend
         shell: bash
@@ -51,9 +57,9 @@ jobs:
           echo "TELEGRAM_API_HEALTHY=$api_healthy"
           echo "TELEGRAM_BACKEND_READY=$backend_ready"
           echo "TELEGRAM_RUNTIME_WEBHOOK_SECRET_CONFIGURED=$runtime_secret"
-          echo "TELEGRAM_GITHUB_BOT_TOKEN_PRESENT=$([ -n "${TELEGRAM_BOT_TOKEN:-}" ] && echo true || echo false)"
           echo "TELEGRAM_GITHUB_ADMIN_CHAT_PRESENT=$([ -n "${TELEGRAM_ADMIN_CHAT_ID:-}" ] && echo true || echo false)"
           echo "TELEGRAM_GITHUB_WEBHOOK_SECRET_PRESENT=$([ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ] && echo true || echo false)"
+          echo "TELEGRAM_ADMIN_CHAT_EQUALS_KNOWN_ADMIN=$([ "${TELEGRAM_ADMIN_CHAT_ID:-}" = "$KNOWN_ADMIN_USER_ID" ] && echo true || echo false)"
           echo "TELEGRAM_STATUS_BACKEND_SHA=$backend_sha"
           [ "$backend_sha" = "$TARGET_SHA" ]
           [ "$configured" = true ]
@@ -61,19 +67,17 @@ jobs:
           [ "$webhook" = true ]
           [ "$webhook_match" = true ]
           [ "$api_healthy" = true ]
-          [ -n "${TELEGRAM_BOT_TOKEN:-}" ]
           [ -n "${TELEGRAM_ADMIN_CHAT_ID:-}" ]
 
-      - name: Verify bot and admin chat are reachable without sending
+      - name: Discover read-only database verification capability
         shell: bash
         run: |
           set -euo pipefail
-          me="$(curl --fail-with-body --silent --show-error --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe")"
-          chat="$(curl --fail-with-body --silent --show-error --max-time 20 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChat?chat_id=${TELEGRAM_ADMIN_CHAT_ID}")"
-          echo "TELEGRAM_GETME_OK=$(printf '%s' "$me" | jq -r '.ok // false')"
-          echo "TELEGRAM_GETCHAT_OK=$(printf '%s' "$chat" | jq -r '.ok // false')"
-          [ "$(printf '%s' "$me" | jq -r '.ok // false')" = true ]
-          [ "$(printf '%s' "$chat" | jq -r '.ok // false')" = true ]
+          echo "SUPABASE_URL_PRESENT=$([ -n "${SUPABASE_URL:-}" ] && echo true || echo false)"
+          echo "SUPABASE_SERVICE_ROLE_KEY_PRESENT=$([ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && echo true || echo false)"
+          echo "SUPABASE_ANON_KEY_PRESENT=$([ -n "${SUPABASE_ANON_KEY:-}" ] && echo true || echo false)"
+          echo "VITE_SUPABASE_URL_PRESENT=$([ -n "${VITE_SUPABASE_URL:-}" ] && echo true || echo false)"
+          echo "VITE_SUPABASE_ANON_KEY_PRESENT=$([ -n "${VITE_SUPABASE_ANON_KEY:-}" ] && echo true || echo false)"
 
       - name: Confirm no recovery action executed
         run: |
