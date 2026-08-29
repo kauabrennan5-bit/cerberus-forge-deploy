@@ -22,7 +22,9 @@ jobs:
           fetch-depth: 0
 
       - name: Validate materializer syntax
-        run: python -m py_compile .github/scripts/materialize_weekly_telegram_recovery.py
+        run: |
+          python -m py_compile .github/scripts/materialize_weekly_telegram_recovery.py
+          rm -rf .github/scripts/__pycache__
 
       - name: Materialize exact functional patch
         shell: bash
