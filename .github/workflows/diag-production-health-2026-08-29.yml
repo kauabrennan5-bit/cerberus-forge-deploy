@@ -1,0 +1,70 @@
+name: Observe Production Deploy Health
+
+on:
+  push:
+    branches:
+      - tmp-noop
+
+permissions:
+  contents: write
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: df214bfbdda31e4cb0544ee99f183872309a504d
+      HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+    steps:
+      - name: Checkout diagnostic carrier
+        uses: actions/checkout@v4
+
+      - name: Poll production health until exact merge SHA is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="$RUNNER_TEMP/production-health-report.txt"
+          : > "$REPORT"
+          echo "TARGET_SHA=$TARGET_SHA" >> "$REPORT"
+          echo "DEPLOY_TRIGGER=MAIN_MERGE_AUTO_DEPLOY_EXPECTED" >> "$REPORT"
+          matched=false
+          for attempt in $(seq 1 30); do
+            body="$RUNNER_TEMP/health.json"
+            code=$(curl -sS --max-time 15 -o "$body" -w '%{http_code}' "$HEALTH_URL" || true)
+            version=$(node -e 'const fs=require("fs"); try { const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(x.version||"")); } catch {}' "$body")
+            status=$(node -e 'const fs=require("fs"); try { const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(String(x.status||"")); } catch {}' "$body")
+            echo "ATTEMPT_${attempt}_HTTP=$code STATUS=$status VERSION=$version" >> "$REPORT"
+            if [ "$code" = "200" ] && [ "$status" = "ok" ] && [ "$version" = "$TARGET_SHA" ]; then
+              matched=true
+              cp "$body" "$RUNNER_TEMP/live-health.json"
+              break
+            fi
+            sleep 20
+          done
+          echo "HEALTH_STATUS=$([ "$matched" = true ] && echo PASS || echo FAIL)" >> "$REPORT"
+          if [ "$matched" = true ]; then
+            echo "LIVE_VERSION_SHA=$TARGET_SHA" >> "$REPORT"
+            echo "DEPLOY_STATUS=success" >> "$REPORT"
+            echo "DEPLOY_SHA=$TARGET_SHA" >> "$REPORT"
+          else
+            last_version=$(tail -1 "$REPORT" | sed -n 's/.* VERSION=//p')
+            echo "LIVE_VERSION_SHA=${last_version:-unknown}" >> "$REPORT"
+            echo "DEPLOY_STATUS=not_observed_success" >> "$REPORT"
+            echo "DEPLOY_SHA=${last_version:-unknown}" >> "$REPORT"
+          fi
+          cp "$REPORT" PRODUCTION_HEALTH_REPORT.txt
+          cat "$REPORT"
+          [ "$matched" = true ]
+
+      - name: Persist health report only
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PRODUCTION_HEALTH_REPORT.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: record production health observation [skip ci]"
+            git push origin HEAD:tmp-noop
+          fi
