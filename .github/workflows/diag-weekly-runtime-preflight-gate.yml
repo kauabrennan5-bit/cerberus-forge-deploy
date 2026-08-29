@@ -1,0 +1,50 @@
+name: Weekly Runtime Preflight Gate
+
+on:
+  push:
+    branches:
+      - diag/weekly-runtime-preflight-gate-3-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Directed weekly preflight and regressions
+        run: |
+          node --import tsx/esm --test --test-concurrency=1 \
+            tests/newsletterWeeklyRuntimePreflight.test.ts \
+            tests/newsletterWeeklyCampaign.test.ts \
+            tests/newsletterWeeklyBrevoProvider.test.ts \
+            tests/newsletterCampaign.test.ts \
+            tests/telegramReadPanel.test.ts \
+            tests/publishCommand.test.ts
+      - name: Global tests
+        run: npm test
+      - name: TypeScript
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Diff check
+        run: git diff --check 65675e87443265921dc0dc3ee58db2fea349e92b...4d7477d634c4a8982c3aa334c1cd542f78d732e1
+      - name: Gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/gitleaks-scan
+          git diff --no-ext-diff 65675e87443265921dc0dc3ee58db2fea349e92b...4d7477d634c4a8982c3aa334c1cd542f78d732e1 > /tmp/gitleaks-scan/runtime-preflight.patch
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
