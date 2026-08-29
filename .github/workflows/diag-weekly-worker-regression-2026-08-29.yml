@@ -1,0 +1,139 @@
+name: Diagnostic Weekly Worker Regression
+
+on:
+  push:
+    branches:
+      - diag/weekly-test-diagnostics-materialize-v3-2026-08-29
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 50b624d28305b4cd158d8565c64d8487bbe18138
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372,888111222,999000111"
+    steps:
+      - name: Checkout diagnostic source
+        uses: actions/checkout@v4
+        with:
+          path: source
+          fetch-depth: 1
+
+      - name: Checkout baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: base
+          fetch-depth: 1
+
+      - name: Checkout patched workspace
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          path: patched
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install baseline dependencies
+        working-directory: base
+        run: npm ci
+
+      - name: Install patched dependencies
+        working-directory: patched
+        run: npm ci
+
+      - name: Materialize diagnostics patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile source/.github/scripts/materialize_weekly_test_diagnostics.py
+          python3 -m py_compile source/.github/scripts/patch_weekly_diagnostics_legacy_messages.py
+          python3 source/.github/scripts/materialize_weekly_test_diagnostics.py patched > "$RUNNER_TEMP/materialize.log"
+          python3 source/.github/scripts/patch_weekly_diagnostics_legacy_messages.py patched > "$RUNNER_TEMP/legacy.log"
+
+      - name: Reproduce baseline and patched worker tests
+        shell: bash
+        run: |
+          set +e
+          REPORT="$RUNNER_TEMP/weekly-worker-report.txt"
+          : > "$REPORT"
+          echo "BASE_SHA=$BASE_SHA" >> "$REPORT"
+          echo "DIAG_SOURCE_SHA=$GITHUB_SHA" >> "$REPORT"
+          if [ -f base/tests/newsletterWeeklyMarketingWorker.test.ts ]; then
+            echo "USER_REPORTED_FILE_PRESENT=true" >> "$REPORT"
+          else
+            echo "USER_REPORTED_FILE_PRESENT=false" >> "$REPORT"
+          fi
+          CANDIDATE="tests/newsletterWeeklyBrevoProvider.test.ts"
+          echo "ACTUAL_PROVIDER_TEST_FILE=$CANDIDATE" >> "$REPORT"
+          grep -n "retry após create reutiliza Brevo campaign id" "base/$CANDIDATE" >> "$REPORT" 2>&1
+
+          cd base
+          node --import tsx/esm --test --test-concurrency=1 --test-name-pattern="retry após create reutiliza Brevo campaign id" "$CANDIDATE" > "$RUNNER_TEMP/base-isolated.log" 2>&1
+          BISO=$?
+          node --import tsx/esm --test --test-concurrency=1 "$CANDIDATE" > "$RUNNER_TEMP/base-file.log" 2>&1
+          BFILE=$?
+          cd ../patched
+          node --import tsx/esm --test --test-concurrency=1 --test-name-pattern="retry após create reutiliza Brevo campaign id" "$CANDIDATE" > "$RUNNER_TEMP/patched-isolated.log" 2>&1
+          PISO=$?
+          node --import tsx/esm --test --test-concurrency=1 "$CANDIDATE" > "$RUNNER_TEMP/patched-file.log" 2>&1
+          PFILE=$?
+          cd ..
+
+          echo "BASE_ISOLATED_EXIT=$BISO" >> "$REPORT"
+          echo "BASE_FILE_EXIT=$BFILE" >> "$REPORT"
+          echo "PATCHED_ISOLATED_EXIT=$PISO" >> "$REPORT"
+          echo "PATCHED_FILE_EXIT=$PFILE" >> "$REPORT"
+          echo "--- BASE_ISOLATED_TAIL ---" >> "$REPORT"
+          tail -80 "$RUNNER_TEMP/base-isolated.log" >> "$REPORT"
+          echo "--- PATCHED_ISOLATED_TAIL ---" >> "$REPORT"
+          tail -80 "$RUNNER_TEMP/patched-isolated.log" >> "$REPORT"
+          echo "--- PATCHED_FILE_TAIL ---" >> "$REPORT"
+          tail -120 "$RUNNER_TEMP/patched-file.log" >> "$REPORT"
+
+          echo "--- FUNCTIONAL_DIFF_NAMES ---" >> "$REPORT"
+          git -C patched add -N server/services/newsletterWeeklyDiagnostics.ts tests/newsletterWeeklyDiagnostics.test.ts
+          git -C patched diff --name-only | sort >> "$REPORT"
+          echo "DELIVERY_FILE_CHANGED=$(git -C patched diff --name-only | grep -c '^server/services/newsletterWeeklyDelivery.ts$')" >> "$REPORT"
+          echo "PROVIDER_FILE_CHANGED=$(git -C patched diff --name-only | grep -c '^server/services/newsletterWeeklyBrevoProvider.ts$')" >> "$REPORT"
+
+          echo "--- DELIVERY_CONTRACT_STATIC ---" >> "$REPORT"
+          grep -nE 'current\.testProviderMessageId|if \(!brevoCampaignId\)|provider\.createCampaign|provider\.sendTest|NEWSLETTER_TEST_EMAIL|current\.status' base/server/services/newsletterWeeklyDelivery.ts >> "$REPORT"
+
+          exit 0
+
+      - name: Run patched global suite and capture exact failure
+        shell: bash
+        run: |
+          set +e
+          cd patched
+          npm test > "$RUNNER_TEMP/patched-global.log" 2>&1
+          RC=$?
+          cd ..
+          REPORT="$RUNNER_TEMP/weekly-worker-report.txt"
+          echo "PATCHED_GLOBAL_EXIT=$RC" >> "$REPORT"
+          echo "--- PATCHED_GLOBAL_FAILURE_CONTEXT ---" >> "$REPORT"
+          grep -nE 'not ok|fail|AssertionError|createCalls|expected|actual|newsletterWeekly' "$RUNNER_TEMP/patched-global.log" | tail -160 >> "$REPORT" || true
+          echo "--- PATCHED_GLOBAL_TAIL ---" >> "$REPORT"
+          tail -120 "$RUNNER_TEMP/patched-global.log" >> "$REPORT"
+          exit 0
+
+      - name: Persist diagnostic report only
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/weekly-worker-report.txt" source/DIAG_WEEKLY_WORKER_REPORT.txt
+          cd source
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B diag/weekly-worker-report-2026-08-29 "$GITHUB_SHA"
+          git add DIAG_WEEKLY_WORKER_REPORT.txt
+          git commit -m "chore: record weekly worker regression diagnosis [skip ci]"
+          git push origin HEAD:diag/weekly-worker-report-2026-08-29
