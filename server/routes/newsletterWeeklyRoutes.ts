@@ -10,6 +10,7 @@ import {
   syncWeeklyBrevoProductionAudience,
   WeeklyBrevoAudienceSyncError,
 } from "../services/newsletterWeeklyBrevoAudienceSync";
+import { reconcileWeeklyBrevoCampaignStatuses } from "../services/newsletterWeeklyBrevoStatusReconcile";
 import {
   enableWeeklyProductionAfterVerifiedSync,
   isWeeklyProductionEnabled,
@@ -67,8 +68,6 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
       if (!testMode && !(await isWeeklyProductionEnabled())) {
         return res.status(200).json({ success: true, status: "skipped", reason: "disabled" });
       }
-      // runWeeklyDraftCycle mantém o gate legado; após o banco autoritativo
-      // confirmar produção, passamos apenas um clone efêmero do env para esse ciclo.
       const runtimeEnv = testMode
         ? process.env
         : { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" };
@@ -144,6 +143,24 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
       const code = error instanceof WeeklyBrevoAudienceSyncError ? error.code : "WEEKLY_AUDIENCE_SYNC_FAILED";
       console.error(`[NEWSLETTER-WEEKLY] production_audience_failed code=${code}`);
       return res.status(409).json({ success: false, code });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-production/reconcile", requireAutomation, async (_req, res) => {
+    try {
+      const result = await reconcileWeeklyBrevoCampaignStatuses();
+      console.info(
+        `[NEWSLETTER-WEEKLY] provider_status_reconciled checked=${result.checked}` +
+        ` finalized=${result.finalized} pending=${result.pending} blocked=${result.blocked} errors=${result.errors}`,
+      );
+      if (result.errors > 0) return res.status(503).json({ success: false, code: "WEEKLY_PROVIDER_STATUS_RECONCILE_FAILED", result });
+      return res.status(200).json({ success: true, result });
+    } catch (error) {
+      const code = error instanceof Error && /^[A-Z0-9_:-]{1,100}$/.test(error.message)
+        ? error.message
+        : "WEEKLY_PROVIDER_STATUS_RECONCILE_FAILED";
+      console.error(`[NEWSLETTER-WEEKLY] provider_status_reconcile_failed code=${code}`);
+      return res.status(503).json({ success: false, code });
     }
   });
 
