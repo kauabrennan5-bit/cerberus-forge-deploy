@@ -12,6 +12,7 @@ import {
 } from "../services/newsletterWeeklyBrevoAudienceSync";
 import {
   enableWeeklyProductionAfterVerifiedSync,
+  isWeeklyProductionEnabled,
   readWeeklyProductionRuntimeConfig,
 } from "../services/newsletterWeeklyProductionConfig";
 
@@ -62,7 +63,16 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
 
   app.post("/api/internal/newsletter/weekly-draft", requireAutomation, async (req, res) => {
     try {
-      const result = await runWeeklyDraftCycle({ testMode: req.body?.testMode === true });
+      const testMode = req.body?.testMode === true;
+      if (!testMode && !(await isWeeklyProductionEnabled())) {
+        return res.status(200).json({ success: true, status: "skipped", reason: "disabled" });
+      }
+      // runWeeklyDraftCycle mantém o gate legado; após o banco autoritativo
+      // confirmar produção, passamos apenas um clone efêmero do env para esse ciclo.
+      const runtimeEnv = testMode
+        ? process.env
+        : { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" };
+      const result = await runWeeklyDraftCycle({ testMode, env: runtimeEnv });
       return res.status(result.status === "created" ? 201 : 200).json({ success: true, status: result.status, reason: result.status === "skipped" ? result.reason : undefined, campaignId: result.status === "created" ? result.campaign.id : undefined });
     } catch (error) {
       console.error(`[NEWSLETTER-WEEKLY] draft_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
