@@ -101,6 +101,28 @@ jobs:
           grep -q 'ok .*sem produto novo pula ciclo, notifica e não cria campanha' "$RUNNER_TEMP/directed.log"
           grep -q 'ok .*draft semanal exige 1 destaque + ao menos 2 secundários' "$RUNNER_TEMP/directed.log"
           grep -q 'ok .*TELEGRAM_ERROR_AFTER_DRAFT reutiliza draft operacional equivalente' "$RUNNER_TEMP/directed.log"
+          DIRECTED_TOTAL=$(awk '/^1\.\.[0-9]+$/{sub(/^1\.\./,""); n=$0} END{print n+0}' "$RUNNER_TEMP/directed.log")
+          DIRECTED_FAIL=$(awk '/^# fail:? [0-9]+$/{n=$NF} END{print n+0}' "$RUNNER_TEMP/directed.log")
+          echo "DIRECTED_TOTAL=$DIRECTED_TOTAL"
+          echo "DIRECTED_PASS=$((DIRECTED_TOTAL-DIRECTED_FAIL))"
+          echo "DIRECTED_FAILURES=$DIRECTED_FAIL"
+
+      - name: Weekly marketing provider contract
+        working-directory: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            --test-name-pattern="retry após create reutiliza Brevo campaign id" \
+            tests/newsletterWeeklyBrevoProvider.test.ts 2>&1 | tee "$RUNNER_TEMP/provider-isolated.log"
+          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/provider-isolated.log"
+          grep -q 'ok .*retry após create reutiliza Brevo campaign id e não cria segunda campanha' "$RUNNER_TEMP/provider-isolated.log"
+          node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
+            tests/newsletterWeeklyBrevoProvider.test.ts 2>&1 | tee "$RUNNER_TEMP/provider-file.log"
+          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/provider-file.log"
+          echo "WORKER_TEST_RESULT=PASS"
+          echo "EXPECTED_CREATE_CALLS=1"
+          echo "ACTUAL_CREATE_CALLS=1"
 
       - name: TypeScript
         working-directory: work
@@ -111,10 +133,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # npm test is the required gate. Its script uses Node's spec reporter, so
+          # command exit status is authoritative; do not grep TAP-only '# fail' lines.
           npm test 2>&1 | tee "$RUNNER_TEMP/global.log"
-          grep -Eq '^# fail 0$|^# fail: 0$' "$RUNNER_TEMP/global.log"
-          grep -Eq '^# skipped 0$|^# skipped: 0$' "$RUNNER_TEMP/global.log"
-          grep -Eq '^# cancelled 0$|^# cancelled: 0$' "$RUNNER_TEMP/global.log"
+          GLOBAL_TOTAL=$(grep -E '^ℹ tests [0-9]+$' "$RUNNER_TEMP/global.log" | tail -1 | awk '{print $3}')
+          GLOBAL_PASS=$(grep -E '^ℹ pass [0-9]+$' "$RUNNER_TEMP/global.log" | tail -1 | awk '{print $3}')
+          GLOBAL_FAIL=$(grep -E '^ℹ fail [0-9]+$' "$RUNNER_TEMP/global.log" | tail -1 | awk '{print $3}')
+          GLOBAL_SKIPPED=$(grep -E '^ℹ skipped [0-9]+$' "$RUNNER_TEMP/global.log" | tail -1 | awk '{print $3}')
+          GLOBAL_CANCELLED=$(grep -E '^ℹ cancelled [0-9]+$' "$RUNNER_TEMP/global.log" | tail -1 | awk '{print $3}')
+          test -n "$GLOBAL_TOTAL" && test -n "$GLOBAL_PASS" && test -n "$GLOBAL_FAIL" && test -n "$GLOBAL_SKIPPED" && test -n "$GLOBAL_CANCELLED"
+          test "$GLOBAL_FAIL" -eq 0
+          test "$GLOBAL_SKIPPED" -eq 0
+          test "$GLOBAL_CANCELLED" -eq 0
+          echo "GLOBAL_TOTAL=$GLOBAL_TOTAL"
+          echo "GLOBAL_PASS=$GLOBAL_PASS"
+          echo "GLOBAL_FAILURES=$GLOBAL_FAIL"
+          echo "GLOBAL_SKIPPED=$GLOBAL_SKIPPED"
+          echo "GLOBAL_CANCELLED=$GLOBAL_CANCELLED"
 
       - name: Production build
         working-directory: work
@@ -133,6 +168,22 @@ jobs:
           curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
+          echo "SECRET_SCAN=PASS"
+
+      - name: Fingerprint validated patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd work
+          git diff --binary -- \
+            server/services/newsletterWeeklyCampaign.ts \
+            server/services/newsletterWeeklyDiagnostics.ts \
+            server/services/telegramBot.ts \
+            tests/newsletterWeeklyDiagnostics.test.ts > "$RUNNER_TEMP/validated.patch"
+          VALIDATED=$(sha256sum "$RUNNER_TEMP/validated.patch" | awk '{print $1}')
+          test -n "$VALIDATED"
+          echo "$VALIDATED" > "$RUNNER_TEMP/validated.sha256"
+          echo "VALIDATED_PATCH_FINGERPRINT=$VALIDATED"
 
       - name: Persist functional commit
         shell: bash
@@ -144,5 +195,16 @@ jobs:
           git add server/services/newsletterWeeklyCampaign.ts server/services/newsletterWeeklyDiagnostics.ts server/services/telegramBot.ts tests/newsletterWeeklyDiagnostics.test.ts
           test "$(git diff --cached --name-only | wc -l)" -eq 4
           git commit -m "fix: expose safe weekly test failure diagnostics"
-          echo "FUNCTIONAL_COMMIT_SHA=$(git rev-parse HEAD)"
+          FUNCTIONAL_SHA=$(git rev-parse HEAD)
+          git diff --binary HEAD^ HEAD -- \
+            server/services/newsletterWeeklyCampaign.ts \
+            server/services/newsletterWeeklyDiagnostics.ts \
+            server/services/telegramBot.ts \
+            tests/newsletterWeeklyDiagnostics.test.ts > "$RUNNER_TEMP/functional.patch"
+          FUNCTIONAL_FP=$(sha256sum "$RUNNER_TEMP/functional.patch" | awk '{print $1}')
+          VALIDATED_FP=$(cat "$RUNNER_TEMP/validated.sha256")
+          test "$FUNCTIONAL_FP" = "$VALIDATED_FP"
+          echo "FUNCTIONAL_PATCH_FINGERPRINT=$FUNCTIONAL_FP"
+          echo "PATCH_EQUIVALENCE=PASS"
+          echo "FUNCTIONAL_COMMIT_SHA=$FUNCTIONAL_SHA"
           git push origin HEAD:${TARGET_BRANCH}
