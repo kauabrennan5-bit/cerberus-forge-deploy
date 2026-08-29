@@ -3,6 +3,7 @@ name: Materialize Weekly Telegram Recovery
 on:
   push:
     branches:
+      - diag/weekly-test-telegram-recovery-materialize-v3-2026-08-29
       - diag/weekly-test-telegram-recovery-materialize-2026-08-29
 
 permissions:
@@ -33,6 +34,10 @@ jobs:
           cp .github/scripts/materialize_weekly_telegram_recovery.py "$RUNNER_TEMP/materialize.py"
           git fetch origin "$TARGET_BRANCH"
           git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
+          # The gate must observe exactly the functional tree. Diagnostic-only
+          # materializer/workflow files from the carrier branch must not leak
+          # into securityRegression.test.ts as untracked workspace content.
+          git clean -fd
           test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
           python "$RUNNER_TEMP/materialize.py"
           git add -N tests/newsletterWeeklyTelegramRecovery.test.ts
