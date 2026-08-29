@@ -62,7 +62,7 @@ function mockBrevo(input: {
     if (method === "POST" && parsed.pathname === `/v3/contacts/lists/${listId}/contacts/add`) {
       const body = JSON.parse(String(init?.body || "{}"));
       for (const email of body.emails || []) {
-        const contact = known.get(email) || { email };
+        const contact: Contact = known.get(email) || { email };
         contact.listIds = [...new Set([...(contact.listIds || []), listId])];
         known.set(email, contact);
         members.set(email, contact);
