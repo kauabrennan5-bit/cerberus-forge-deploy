@@ -51,14 +51,28 @@ jobs:
           PY
       - name: Remove temporary materializer
         run: rm .github/scripts/materialize_weekly_newsletter.py .github/workflows/weekly-newsletter-materialize.yml
-      - name: Capture generated candidate diff
+      - name: Capture complete generated candidate diff
         shell: bash
         run: |
           set -euo pipefail
+          git add -N .
           git diff --no-ext-diff --binary > weekly-candidate.patch
           git diff --name-only > weekly-candidate-files.txt
+          git diff --no-ext-diff --binary -- . \
+            ':(exclude).github/scripts/materialize_weekly_newsletter.py' \
+            ':(exclude).github/workflows/weekly-newsletter-materialize.yml' \
+            > weekly-functional.patch
+          git diff --name-only -- . \
+            ':(exclude).github/scripts/materialize_weekly_newsletter.py' \
+            ':(exclude).github/workflows/weekly-newsletter-materialize.yml' \
+            > weekly-functional-files.txt
+          sha256sum weekly-functional.patch | awk '{print "sha256:" $1}' > weekly-functional.sha256
           test -s weekly-candidate.patch
           test -s weekly-candidate-files.txt
+          test -s weekly-functional.patch
+          test -s weekly-functional-files.txt
+          test -s weekly-functional.sha256
+          cat weekly-functional.sha256
       - name: Upload generated candidate diff
         uses: actions/upload-artifact@v4
         with:
@@ -66,6 +80,9 @@ jobs:
           path: |
             weekly-candidate.patch
             weekly-candidate-files.txt
+            weekly-functional.patch
+            weekly-functional-files.txt
+            weekly-functional.sha256
           if-no-files-found: error
           retention-days: 7
       - run: npm ci
@@ -91,8 +108,62 @@ jobs:
         run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts
       - name: Reproduce publish functional group with synthetic allowlist
         run: node --import tsx/esm --test --test-concurrency=1 tests/publishCommand.test.ts tests/telegramBotV2Contract.test.ts
-      - name: Weekly focused tests
-        run: node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts
+      - name: Weekly focused tests with observability
+        id: focused_tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          node --import tsx/esm --test --test-concurrency=1 tests/newsletterWeeklyCampaign.test.ts tests/newsletterCampaign.test.ts 2>&1 | tee weekly-focused-test.raw
+          focused_status=${PIPESTATUS[0]}
+          set -e
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          raw = Path("weekly-focused-test.raw").read_text(encoding="utf-8", errors="replace")
+          sanitized = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[REDACTED_EMAIL]", raw)
+          Path("weekly-focused-test.log").write_text(sanitized, encoding="utf-8")
+          keys = {
+              "FOCUSED_TOTAL": r"(?m)^[#ℹ]\s+tests\s+(\d+)\s*$",
+              "FOCUSED_PASS": r"(?m)^[#ℹ]\s+pass\s+(\d+)\s*$",
+              "FOCUSED_FAILURES": r"(?m)^[#ℹ]\s+fail\s+(\d+)\s*$",
+              "FOCUSED_SKIPPED": r"(?m)^[#ℹ]\s+skipped\s+(\d+)\s*$",
+          }
+          values = {}
+          missing = []
+          for key, pattern in keys.items():
+              matches = re.findall(pattern, sanitized)
+              if not matches:
+                  missing.append(key)
+              else:
+                  values[key] = matches[-1]
+          Path("weekly-focused-summary.txt").write_text(
+              "\n".join(f"{key}={values.get(key, 'UNPARSEABLE')}" for key in keys) + "\n",
+              encoding="utf-8",
+          )
+          print(Path("weekly-focused-summary.txt").read_text(encoding="utf-8"), end="")
+          if missing:
+              print("FOCUSED_SUMMARY_PARSE_ERROR=" + ",".join(missing), file=sys.stderr)
+              sys.exit(97)
+          PY
+          rm -f weekly-focused-test.raw
+          exit "$focused_status"
+      - name: Upload focused observability
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-focused-observability-${{ github.run_id }}
+          path: |
+            weekly-focused-test.log
+            weekly-focused-summary.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Clean focused observability files
+        if: success()
+        run: rm -f weekly-focused-test.log weekly-focused-summary.txt
       - name: Full suite with observability
         id: global_tests
         shell: bash
@@ -170,7 +241,7 @@ jobs:
           retention-days: 7
       - name: Clean observability files
         if: success()
-        run: rm -f weekly-global-test.log weekly-global-summary.txt weekly-global-failures.txt weekly-candidate.patch weekly-candidate-files.txt
+        run: rm -f weekly-global-test.log weekly-global-summary.txt weekly-global-failures.txt weekly-candidate.patch weekly-candidate-files.txt weekly-functional.patch weekly-functional-files.txt weekly-functional.sha256
       - name: TypeScript diagnostics
         id: typescript
         shell: bash
