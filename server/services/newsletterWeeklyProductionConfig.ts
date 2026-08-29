@@ -106,6 +106,7 @@ export async function enableWeeklyProductionAfterVerifiedSync(
     || current.lastSyncStatus !== "ready"
     || !current.brevoListId
     || !current.contactSyncVerifiedAt
+    || current.eligibleSubscribersCount <= 0
     || current.eligibleSubscribersCount !== current.brevoMembersCount
   ) {
     throw new Error("WEEKLY_PRODUCTION_SYNC_NOT_VERIFIED");
