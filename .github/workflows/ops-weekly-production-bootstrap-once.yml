@@ -1,0 +1,81 @@
+name: Weekly Production Bootstrap Once
+
+on:
+  push:
+    branches:
+      - ops/weekly-production-bootstrap-2026-08-29
+    paths:
+      - ".github/workflows/ops-weekly-production-bootstrap-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
+      CERBERUS_AUTOMATION_TOKEN: ${{ secrets.CERBERUS_AUTOMATION_TOKEN }}
+    steps:
+      - name: Bootstrap, prove idempotency, reconcile and verify status
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${CERBERUS_HEALTH_URL:-}" ] || { echo "CERBERUS_HEALTH_URL missing"; exit 1; }
+          [ -n "${CERBERUS_AUTOMATION_TOKEN:-}" ] || { echo "CERBERUS_AUTOMATION_TOKEN missing"; exit 1; }
+          base="${CERBERUS_HEALTH_URL%/health}"
+
+          call_post() {
+            local op="$1"
+            local endpoint="$2"
+            local out="$RUNNER_TEMP/${op}.json"
+            curl --fail-with-body --silent --show-error --max-time 90 \
+              -o "$out" \
+              -H "X-Cerberus-Automation-Token: ${CERBERUS_AUTOMATION_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              -d '{}' \
+              "$base$endpoint"
+            node - "$out" "$op" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const op = process.argv[3];
+          if (body?.success !== true) {
+            console.error(`${op.toUpperCase()}_FAILED code=${body?.code || 'UNKNOWN'}`);
+            process.exit(1);
+          }
+          if (op === 'bootstrap') {
+            const p = body.production || {};
+            if (p.enabled !== true || p.listConfigured !== true || p.syncStatus !== 'ready') process.exit(2);
+            if (Number(p.eligibleSubscribers) <= 0 || Number(p.eligibleSubscribers) !== Number(p.brevoMembers)) process.exit(3);
+            console.log(`BOOTSTRAP=PASS enabled=true eligible=${p.eligibleSubscribers} members=${p.brevoMembers}`);
+          } else if (op === 'sync') {
+            const r = body.result || {};
+            if (r.state !== 'ready' || r.listConfigured !== true) process.exit(4);
+            if (Number(r.eligibleSubscribers) <= 0 || Number(r.eligibleSubscribers) !== Number(r.brevoMembers)) process.exit(5);
+            console.log(`SYNC=PASS eligible=${r.eligibleSubscribers} members=${r.brevoMembers} created=${Number(r.contactsCreated || 0)} associated=${Number(r.contactsAssociated || 0)} removed=${Number(r.contactsRemoved || 0)} suppressed=${Number(r.locallySuppressedFromBrevo || 0)} unsubscribed=${Number(r.locallyUnsubscribedFromBrevo || 0)}`);
+          } else if (op === 'reconcile') {
+            const r = body.result || {};
+            if (Number(r.errors || 0) !== 0) process.exit(6);
+            console.log(`RECONCILE=PASS checked=${Number(r.checked || 0)} finalized=${Number(r.finalized || 0)} pending=${Number(r.pending || 0)} blocked=${Number(r.blocked || 0)}`);
+          }
+          NODE
+          }
+
+          call_post bootstrap /api/internal/newsletter/weekly-production/bootstrap
+          call_post sync /api/internal/newsletter/weekly-production/sync
+          call_post reconcile /api/internal/newsletter/weekly-production/reconcile
+
+          status_file="$RUNNER_TEMP/status.json"
+          curl --fail-with-body --silent --show-error --max-time 90 \
+            -o "$status_file" \
+            -H "X-Cerberus-Automation-Token: ${CERBERUS_AUTOMATION_TOKEN}" \
+            "$base/api/internal/newsletter/weekly-production/status"
+          node - "$status_file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const p = body?.production || {};
+          if (body?.success !== true || p.enabled !== true || p.listConfigured !== true || p.syncStatus !== 'ready') process.exit(1);
+          if (Number(p.eligibleSubscribers) <= 0 || Number(p.eligibleSubscribers) !== Number(p.brevoMembers)) process.exit(2);
+          console.log(`STATUS=PASS enabled=true sync_status=ready eligible=${p.eligibleSubscribers} members=${p.brevoMembers}`);
+          NODE
