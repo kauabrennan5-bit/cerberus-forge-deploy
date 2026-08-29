@@ -18,6 +18,10 @@ import type { EmailCampaign } from "./newsletterCampaignState";
 import type { NewsletterCampaignProvider } from "./newsletterProvider";
 import type { WeeklyBrevoMarketingProvider } from "./newsletterWeeklyBrevoProvider";
 import {
+  getWeeklyMarketingTestSendError,
+  retryWeeklyMarketingTest,
+} from "./newsletterWeeklyDelivery";
+import {
   createSupabaseNewsletterCampaignStore,
   type CampaignTelegramCard,
   type NewsletterCampaignStore,
@@ -87,12 +91,11 @@ async function handleNewsletterCampaignCallbackOnce(
         env,
         productsLoader: deps.productsLoader,
         now: deps.now,
-            collectionSince: deps.collectionSince,
-    collectionUntil: deps.collectionUntil,
-    collectionSize: deps.collectionSize,
-    minimumCollectionProducts: deps.minimumCollectionProducts,
-    verifyImageAccessibility: deps.verifyImageAccessibility,
-
+        collectionSince: deps.collectionSince,
+        collectionUntil: deps.collectionUntil,
+        collectionSize: deps.collectionSize,
+        minimumCollectionProducts: deps.minimumCollectionProducts,
+        verifyImageAccessibility: deps.verifyImageAccessibility,
       });
       const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
       await deps.answerCallbackQuery(callbackId, "Campanha 2 criada para aprovação.");
@@ -154,14 +157,24 @@ async function handleNewsletterCampaignCallbackOnce(
         ? await approveCampaign(campaign, senderId, { store, env })
         : campaign;
       if (approved.editionKey?.startsWith("weekly-test:")) {
-        const tested = await sendCampaignTest(approved, senderId, {
-          store,
-          env,
-          provider: deps.provider,
-          weeklyProvider: deps.weeklyProvider,
-        });
-        await deps.answerCallbackQuery(callbackId, "Rascunho aprovado. Teste enviado somente ao destino controlado.");
-        await syncCampaignTelegramState(tested.campaign.id, deps, messageReference(chatId, messageId));
+        await deps.answerCallbackQuery(callbackId, "Aprovação registrada. Processando somente o teste controlado.");
+        try {
+          const tested = approved.testProviderMessageId?.trim()
+            ? await retryWeeklyMarketingTest(approved, senderId, {
+                store,
+                env,
+                provider: deps.weeklyProvider,
+              })
+            : await sendCampaignTest(approved, senderId, {
+                store,
+                env,
+                provider: deps.provider,
+                weeklyProvider: deps.weeklyProvider,
+              });
+          await syncCampaignTelegramState(tested.campaign.id, deps, messageReference(chatId, messageId));
+        } catch (error) {
+          await renderWeeklyTestFailureState(error, approved.id, deps, chatId, messageId);
+        }
         return true;
       }
       const confirmed = approved.generalSendConfirmedAt
@@ -177,6 +190,33 @@ async function handleNewsletterCampaignCallbackOnce(
       return true;
     }
 
+    if (data.startsWith("campaign_weekly_retry_test:")) {
+      if (
+        campaign.status !== "approved"
+        || campaign.campaignType !== "collection"
+        || !campaign.editionKey?.startsWith("weekly-test:")
+        || !campaign.testProviderMessageId?.trim()
+      ) {
+        return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      }
+      if (campaign.counts.total !== 0 || campaign.counts.success !== 0 || campaign.counts.failed !== 0) {
+        await deps.answerCallbackQuery(callbackId, "Retry bloqueado: estado de destinatários incompatível.", true);
+        return true;
+      }
+      await deps.answerCallbackQuery(callbackId, "Retry autorizado. Repetindo somente /sendTest na mesma campanha Brevo.");
+      try {
+        const tested = await retryWeeklyMarketingTest(campaign, senderId, {
+          store,
+          env,
+          provider: deps.weeklyProvider,
+        });
+        await syncCampaignTelegramState(tested.campaign.id, deps, messageReference(chatId, messageId));
+      } catch (error) {
+        await renderWeeklyTestFailureState(error, campaign.id, deps, chatId, messageId);
+      }
+      return true;
+    }
+
     if (data.startsWith("campaign_approve:")) {
       if (campaign.status !== "pending_approval") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       const approved = await approveCampaign(campaign, senderId, { store, env });
@@ -187,7 +227,21 @@ async function handleNewsletterCampaignCallbackOnce(
 
     if (data.startsWith("campaign_test:")) {
       if (campaign.status !== "approved") return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
-      const result = await sendCampaignTest(campaign, senderId, { store, env, provider: deps.provider });
+      if (campaign.editionKey?.startsWith("weekly-test:") && campaign.testProviderMessageId?.trim()) {
+        await deps.answerCallbackQuery(callbackId, "Retry autorizado. Repetindo somente /sendTest na mesma campanha Brevo.");
+        try {
+          const tested = await retryWeeklyMarketingTest(campaign, senderId, {
+            store,
+            env,
+            provider: deps.weeklyProvider,
+          });
+          await syncCampaignTelegramState(tested.campaign.id, deps, messageReference(chatId, messageId));
+        } catch (error) {
+          await renderWeeklyTestFailureState(error, campaign.id, deps, chatId, messageId);
+        }
+        return true;
+      }
+      const result = await sendCampaignTest(campaign, senderId, { store, env, provider: deps.provider, weeklyProvider: deps.weeklyProvider });
       await deps.answerCallbackQuery(callbackId, result.providerResult.status === "duplicate" ? "Teste já processado." : "Teste processado.");
       await syncCampaignTelegramState(result.campaign.id, deps, messageReference(chatId, messageId));
       if (chatId) await deps.sendTelegramMessage(chatId, renderCampaignTestConfirmation(result.campaign, env.NEWSLETTER_TEST_EMAIL, env));
@@ -322,13 +376,13 @@ export async function handleNewsletterCampaignText(
     if (!campaign) throw new Error("CAMPAIGN_NOT_FOUND");
     const updated = await updateCampaignSubjectAndPersist(campaign, text, { store, env: deps.env || process.env });
     await telegramRepo.deleteUserState(senderId);
-      if (chatId) {
-        const collectionProducts = updated.campaignType === "collection" ? await getCampaignProducts(updated, deps.productLoader) : [];
-        const product = updated.campaignType === "welcome" || updated.campaignType === "collection"
-          ? null
-          : await getCampaignProduct(updated.productId, deps.productLoader);
-        await deps.sendTelegramMessage(chatId, `✅ Assunto atualizado.\n\n${renderCampaignTelegramPreview(updated, product, collectionProducts)}`, campaignKeyboard(updated));
-      }
+    if (chatId) {
+      const collectionProducts = updated.campaignType === "collection" ? await getCampaignProducts(updated, deps.productLoader) : [];
+      const product = updated.campaignType === "welcome" || updated.campaignType === "collection"
+        ? null
+        : await getCampaignProduct(updated.productId, deps.productLoader);
+      await deps.sendTelegramMessage(chatId, `✅ Assunto atualizado.\n\n${renderCampaignTelegramPreview(updated, product, collectionProducts)}`, campaignKeyboard(updated));
+    }
   } catch (error) {
     const errorMessage = campaignErrorMessage(error);
     if (chatId) {
@@ -434,11 +488,28 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${campaign.id}` }, { text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
     case "pending_approval":
+      if (campaign.editionKey?.startsWith("weekly-test:")) {
+        return [
+          [{ text: "✅ Aprovar teste", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+        ];
+      }
       return [
         [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${campaign.id}` }],
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${campaign.id}` }, { text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
       ];
     case "approved":
+      if (campaign.editionKey?.startsWith("weekly-test:")) {
+        return campaign.testProviderMessageId?.trim()
+          ? [
+              [{ text: "🔄 Tentar envio de teste novamente", callback_data: `campaign_weekly_retry_test:${campaign.id}` }],
+              [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+            ]
+          : [
+              [{ text: "🧪 Enviar teste controlado", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+              [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+            ];
+      }
       if (campaign.generalSendConfirmedAt && campaign.generalSendConfirmedByTelegramId) {
         return [
           [{ text: "🚀 Enviar campanha geral", callback_data: `campaign_start:${campaign.id}` }],
@@ -471,7 +542,7 @@ export type CampaignTelegramSyncDeps = Pick<CampaignTelegramDeps, "editTelegramM
 export type CampaignTelegramSyncResult = {
   campaign: EmailCampaign;
   card: CampaignTelegramCard | null;
-  outcome: "updated" | "reconciliation_sent" | "missing_reference" | "unavailable";
+  outcome: "updated" | "already_synchronized" | "reconciliation_sent" | "missing_reference" | "unavailable";
   providerCalled: false;
 };
 
@@ -494,30 +565,31 @@ export async function syncCampaignTelegramState(
   try {
     const result = await deps.editTelegramMessageText(card.chatId, card.messageId, presentation.text, { inline_keyboard: presentation.keyboard });
     if (telegramOperationSucceeded(result)) {
-      const shouldPersist = !savedCard || savedCard.chatId !== card.chatId || savedCard.messageId !== card.messageId;
-      if (shouldPersist) await store.saveCampaignTelegramCard(campaignId, card.chatId, card.messageId);
-      return { campaign, card: shouldPersist ? await store.getCampaignTelegramCard(campaignId) : savedCard, outcome: "updated", providerCalled: false };
+      const persisted = await persistCardIfNeeded(store, savedCard, card);
+      return { campaign, card: persisted, outcome: "updated", providerCalled: false };
+    }
+    if (telegramMessageIsNotModified(result)) {
+      if (deps.editTelegramMessageReplyMarkup) {
+        const markupResult = await deps.editTelegramMessageReplyMarkup(card.chatId, card.messageId, { inline_keyboard: presentation.keyboard });
+        if (!telegramOperationSucceeded(markupResult) && !telegramMessageIsNotModified(markupResult)) {
+          throw new Error("TELEGRAM_REPLY_MARKUP_RECONCILIATION_FAILED");
+        }
+      }
+      const persisted = await persistCardIfNeeded(store, savedCard, card);
+      return { campaign, card: persisted, outcome: "already_synchronized", providerCalled: false };
     }
   } catch {
-    // A reconciliação tenta primeiro desativar os botões antigos e depois envia um cartão informativo.
-  }
-
-  if (deps.editTelegramMessageReplyMarkup) {
-    try {
-      await deps.editTelegramMessageReplyMarkup(card.chatId, card.messageId, { inline_keyboard: [] });
-    } catch {
-      // O cartão original pode estar inacessível; a mensagem de reconciliação abaixo continua sendo tentada.
-    }
+    // Falha de edição não remove keyboard: callbacks antigos continuam fail-closed pelo estado autoritativo.
   }
 
   const reconciliationText = [
     presentation.text,
     "",
     "⚠️ <b>CARTÃO ANTERIOR DESATUALIZADO</b>",
-    "Nenhuma ação operacional está disponível nesta reconciliação.",
+    "O estado atual foi reexibido abaixo com os controles autoritativos disponíveis.",
   ].join("\n");
   try {
-    const sent = await deps.sendTelegramMessage(card.chatId, reconciliationText, { inline_keyboard: [] });
+    const sent = await deps.sendTelegramMessage(card.chatId, reconciliationText, { inline_keyboard: presentation.keyboard });
     const newMessageId = extractTelegramMessageId(sent);
     if (telegramOperationSucceeded(sent) && newMessageId) {
       await store.saveCampaignTelegramCard(campaignId, card.chatId, newMessageId);
@@ -564,12 +636,79 @@ function telegramOperationSucceeded(result: unknown): boolean {
   return (result as { ok?: unknown }).ok === true;
 }
 
+function telegramMessageIsNotModified(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const candidate = result as { description?: unknown; failureReason?: unknown; message?: unknown };
+  const text = [candidate.description, candidate.failureReason, candidate.message]
+    .filter(value => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+  return text.includes("message is not modified");
+}
+
+async function persistCardIfNeeded(
+  store: NewsletterCampaignStore,
+  savedCard: CampaignTelegramCard | null,
+  card: CampaignTelegramCard,
+): Promise<CampaignTelegramCard | null> {
+  const shouldPersist = !savedCard || savedCard.chatId !== card.chatId || savedCard.messageId !== card.messageId;
+  if (shouldPersist) await store.saveCampaignTelegramCard(card.campaignId, card.chatId, card.messageId);
+  return shouldPersist ? store.getCampaignTelegramCard(card.campaignId) : savedCard;
+}
+
 function extractTelegramMessageId(result: unknown): number | null {
   if (!result || typeof result !== "object") return null;
   const outer = result as { result?: unknown };
   if (!outer.result || typeof outer.result !== "object") return null;
   const messageId = Number((outer.result as { message_id?: unknown }).message_id);
   return Number.isSafeInteger(messageId) && messageId > 0 ? messageId : null;
+}
+
+async function renderWeeklyTestFailureState(
+  error: unknown,
+  campaignId: string,
+  deps: CampaignTelegramDeps,
+  chatId: number | string | undefined,
+  messageId: number | undefined,
+): Promise<void> {
+  if (!chatId) return;
+  const store = deps.store || createSupabaseNewsletterCampaignStore();
+  const current = await store.getCampaign(campaignId);
+  if (!current) return;
+  const failure = getWeeklyMarketingTestSendError(error);
+  const providerDetails = failure?.providerError;
+  const safeCode = failure?.safeCode || campaignErrorMessage(error);
+  const statusLine = providerDetails?.status ? `HTTP: <code>${providerDetails.status}</code>` : null;
+  const providerCodeLine = providerDetails?.providerCode
+    ? `Provider code: <code>${escapeTelegram(providerDetails.providerCode)}</code>`
+    : null;
+  const text = [
+    "⚠️ <b>ENVIO DE TESTE NÃO CONFIRMADO</b>",
+    "",
+    `Campanha: <code>${escapeTelegram(current.id)}</code>`,
+    "Provider: <b>BREVO</b>",
+    "Operação: <b>SEND_TEST</b>",
+    `Resultado: <b>${failure?.sendTestResult === "unknown" ? "UNKNOWN" : "FAILED"}</b>`,
+    providerDetails ? `Erro: <code>${escapeTelegram(providerDetails.kind.toUpperCase())}</code>` : null,
+    statusLine,
+    `Código seguro: <code>${escapeTelegram(safeCode)}</code>`,
+    providerCodeLine,
+    "",
+    "A aprovação e a referência da Marketing Campaign foram preservadas.",
+    "Nenhum cliente real foi envolvido e nenhum sendNow foi executado.",
+  ].filter(Boolean).join("\n");
+  const keyboard = campaignKeyboard(current);
+  try {
+    const sent = await deps.sendTelegramMessage(chatId, text, { inline_keyboard: keyboard });
+    const newMessageId = extractTelegramMessageId(sent);
+    if (telegramOperationSucceeded(sent) && newMessageId) {
+      await store.saveCampaignTelegramCard(current.id, String(chatId), newMessageId);
+      return;
+    }
+  } catch {
+    // Fallback abaixo reconcilia somente Telegram e não executa provider.
+  }
+  await syncCampaignTelegramState(current.id, deps, messageReference(chatId, messageId));
 }
 
 async function handleIncompatibleCampaignCallback(
@@ -605,9 +744,9 @@ async function renderCampaignWithFallback(
       "⚠️ <b>CARTÃO DE CAMPANHA DESATUALIZADO</b>",
       `Estado autoritativo: <code>${escapeTelegram(campaign.status)}</code>`,
       "O cartão anterior não pôde ser redesenhado automaticamente.",
-      "Nenhuma ação adicional foi executada. Use a listagem de campanhas para reabrir o estado atual.",
+      "Os controles abaixo são derivados do estado autoritativo atual.",
     ].join("\n");
-    await deps.sendTelegramMessage(chatId, staleCardMessage, { inline_keyboard: [] });
+    await deps.sendTelegramMessage(chatId, staleCardMessage, { inline_keyboard: campaignKeyboard(campaign) });
     return true;
   }
 }
@@ -625,13 +764,21 @@ async function renderCampaign(
   const finalPresentation = { ...presentation, keyboard };
   if (messageId) {
     const result = await deps.editTelegramMessageText(chatId, messageId, finalPresentation.text, { inline_keyboard: finalPresentation.keyboard });
-    if (!telegramOperationSucceeded(result)) throw new Error("TELEGRAM_CARD_EDIT_FAILED");
-    await store.saveCampaignTelegramCard(campaign.id, chatId, messageId);
+    if (!telegramOperationSucceeded(result)) {
+      if (!telegramMessageIsNotModified(result)) throw new Error("TELEGRAM_CARD_EDIT_FAILED");
+      if (deps.editTelegramMessageReplyMarkup) {
+        const markupResult = await deps.editTelegramMessageReplyMarkup(chatId, messageId, { inline_keyboard: finalPresentation.keyboard });
+        if (!telegramOperationSucceeded(markupResult) && !telegramMessageIsNotModified(markupResult)) {
+          throw new Error("TELEGRAM_CARD_EDIT_FAILED");
+        }
+      }
+    }
+    await store.saveCampaignTelegramCard(campaign.id, String(chatId), messageId);
   } else {
     const result = await deps.sendTelegramMessage(chatId, finalPresentation.text, { inline_keyboard: finalPresentation.keyboard });
     if (!telegramOperationSucceeded(result)) throw new Error("TELEGRAM_CARD_SEND_FAILED");
     const sentMessageId = extractTelegramMessageId(result);
-    if (sentMessageId) await store.saveCampaignTelegramCard(campaign.id, chatId, sentMessageId);
+    if (sentMessageId) await store.saveCampaignTelegramCard(campaign.id, String(chatId), sentMessageId);
   }
   return true;
 }
@@ -658,6 +805,8 @@ function escapeTelegram(value: unknown): string {
 }
 
 function campaignErrorMessage(error: unknown): string {
+  const weeklyFailure = getWeeklyMarketingTestSendError(error);
+  if (weeklyFailure) return weeklyFailure.safeCode;
   const message = error instanceof Error ? error.message : String(error);
   const known = new Set([
     "CAMPAIGN_PRODUCT_NOT_ELIGIBLE",
@@ -690,6 +839,8 @@ function campaignErrorMessage(error: unknown): string {
     "CAMPAIGN_COLLECTION_ALREADY_EXISTS",
     "PROVIDER_PUBLIC_SENDER_REQUIRED",
     "WELCOME_PRODUCT_FORBIDDEN",
+    "WEEKLY_MARKETING_TEST_PROVIDER_REFERENCE_REQUIRED",
+    "WEEKLY_MARKETING_TEST_REAL_RECIPIENTS_FORBIDDEN",
   ]);
   if (message.startsWith("CAMPAIGN_COLLECTION_NOT_ENOUGH_PRODUCTS:")) return "CAMPAIGN_COLLECTION_NOT_ENOUGH_PRODUCTS";
   return known.has(message) ? message : "CAMPAIGN_OPERATION_FAILED";
