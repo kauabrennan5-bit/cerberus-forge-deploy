@@ -3,7 +3,6 @@ name: Materialize Weekly Telegram Recovery
 on:
   push:
     branches:
-      - diag/weekly-test-telegram-recovery-materialize-v3-2026-08-29
       - diag/weekly-test-telegram-recovery-materialize-2026-08-29
 
 permissions:
@@ -14,30 +13,33 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      TARGET_BRANCH: fix/weekly-test-telegram-recovery-2026-08-29
+      TARGET_BRANCH: fix/weekly-test-telegram-recovery-v2-2026-08-29
       EXPECTED_BASE: df214bfbdda31e4cb0544ee99f183872309a504d
     steps:
-      - name: Checkout diagnostic materializer
+      - name: Checkout diagnostic carrier
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          path: carrier
+          fetch-depth: 1
 
       - name: Validate materializer syntax
-        run: |
-          python -m py_compile .github/scripts/materialize_weekly_telegram_recovery.py
-          rm -rf .github/scripts/__pycache__
+        run: python -m py_compile carrier/.github/scripts/materialize_weekly_telegram_recovery.py
+
+      - name: Preserve materializer outside Git worktrees
+        run: cp carrier/.github/scripts/materialize_weekly_telegram_recovery.py "$RUNNER_TEMP/materialize.py"
+
+      - name: Checkout clean functional target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          path: functional
+          fetch-depth: 0
 
       - name: Materialize exact functional patch
+        working-directory: functional
         shell: bash
         run: |
           set -euo pipefail
-          cp .github/scripts/materialize_weekly_telegram_recovery.py "$RUNNER_TEMP/materialize.py"
-          git fetch origin "$TARGET_BRANCH"
-          git checkout -B "$TARGET_BRANCH" "origin/$TARGET_BRANCH"
-          # The gate must observe exactly the functional tree. Diagnostic-only
-          # materializer/workflow files from the carrier branch must not leak
-          # into securityRegression.test.ts as untracked workspace content.
-          git clean -fd
           test "$(git rev-parse HEAD)" = "$EXPECTED_BASE"
           python "$RUNNER_TEMP/materialize.py"
           git add -N tests/newsletterWeeklyTelegramRecovery.test.ts
@@ -65,11 +67,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: functional/package-lock.json
 
       - name: Install dependencies
+        working-directory: functional
         run: npm ci
 
       - name: Directed weekly Telegram recovery tests
+        working-directory: functional
         run: |
           node --import tsx/esm --test --test-concurrency=1 --test-reporter=tap \
             tests/newsletterWeeklyTelegramRecovery.test.ts \
@@ -78,18 +83,23 @@ jobs:
             tests/newsletterWeeklyBrevoProvider.test.ts
 
       - name: TypeScript and lint
+        working-directory: functional
         run: npm run lint
 
       - name: Full global suite
+        working-directory: functional
         run: npm test
 
       - name: Production build
+        working-directory: functional
         run: npm run build
 
       - name: Diff check
+        working-directory: functional
         run: git diff --check
 
       - name: Secret scan changed content
+        working-directory: functional
         shell: bash
         run: |
           set -euo pipefail
@@ -100,6 +110,7 @@ jobs:
           /tmp/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1
 
       - name: Persist functional commit only after green gate
+        working-directory: functional
         shell: bash
         run: |
           set -euo pipefail
@@ -110,6 +121,7 @@ jobs:
             server/services/telegramBot.ts \
             tests/newsletterWeeklyTelegramRecovery.test.ts
           git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 3
           git commit -m "fix: recover weekly test Telegram approval card"
           git push origin HEAD:"$TARGET_BRANCH"
           echo "FUNCTIONAL_SHA=$(git rev-parse HEAD)"
