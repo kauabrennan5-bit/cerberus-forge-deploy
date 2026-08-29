@@ -1,0 +1,94 @@
+BASE_SHA=50b624d28305b4cd158d8565c64d8487bbe18138
+DIAG_SOURCE_SHA=226f1a00c87aec02d21cf54635820cef56411320
+USER_REPORTED_FILE_PRESENT=false
+ACTUAL_PROVIDER_TEST_FILE=tests/newsletterWeeklyBrevoProvider.test.ts
+187:test("retry após create reutiliza Brevo campaign id e não cria segunda campanha", async () => {
+BASE_ISOLATED_EXIT=0
+BASE_FILE_EXIT=0
+PATCHED_ISOLATED_EXIT=0
+PATCHED_FILE_EXIT=0
+--- FUNCTIONAL_DIFF_NAMES ---
+server/services/newsletterWeeklyCampaign.ts
+server/services/newsletterWeeklyDiagnostics.ts
+server/services/telegramBot.ts
+tests/newsletterWeeklyDiagnostics.test.ts
+DELIVERY_FILE_CHANGED=0
+PROVIDER_FILE_CHANGED=0
+--- DELIVERY_CONTRACT_STATIC ---
+30:    if (current.status === "test_sent" && current.testProviderMessageId?.trim()) {
+33:    if (current.status !== "approved") throw new Error("CAMPAIGN_TEST_REQUIRES_APPROVAL");
+35:    const testEmail = normalizeNewsletterEmail(env.NEWSLETTER_TEST_EMAIL);
+37:      throw new Error("NEWSLETTER_TEST_EMAIL_MISSING");
+42:    let brevoCampaignId = current.testProviderMessageId?.trim() || "";
+43:    if (!brevoCampaignId) {
+44:      const created = await provider.createCampaign({
+57:    const sent = await provider.sendTest(brevoCampaignId, [testEmail]);
+89:    if (current.status !== "approved") throw new Error("WEEKLY_MARKETING_PRODUCTION_APPROVAL_REQUIRED");
+105:    let brevoCampaignId = current.testProviderMessageId?.trim() || "";
+106:    if (!brevoCampaignId) {
+107:      const created = await provider.createCampaign({
+DIRECTED_EXIT=0
+LINT_EXIT=0
+GLOBAL_1_EXIT=0
+--- GLOBAL_1_FAILURE_CONTEXT ---
+3327:[SHOPEE LOT] lot=shopee-mtejopig discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3336:[SHOPEE LOT] lot=shopee-mtejopik discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3347:[SHOPEE LOT] lot=shopee-mtejopin discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3370:[SHOPEE LOT] lot=shopee-mtejopip discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3375:[SHOPEE LOT] lot=shopee-mtejopiu discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3406:[SHOPEE LOT] lot=shopee-mtejopix discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3417:[SHOPEE LOT] lot=shopee-mtejopix discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3418:[SHOPEE LOT] lot=shopee-mtejopix discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3419:[SHOPEE LOT] lot=shopee-mtejopiz discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3422:[SHOPEE LOT] lot=shopee-mtejopiz discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3433:[SHOPEE LOT] lot=shopee-mtejopj4 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3438:[SHOPEE LOT] lot=shopee-mtejopj4 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3439:[SHOPEE LOT] lot=shopee-mtejopj4 discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3441:[SHOPEE LOT] lot=shopee-mtejopj7 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3505:  ✔ fails closed when the reused client throws unexpectedly (0.270173ms)
+3617:✔ curadoria editorial aceita fixture factual e remove instruções, logs e payload (1.405561ms)
+3710:ℹ tests 1757
+3712:ℹ pass 1757
+PROVIDER_FILE_AFTER_GLOBAL_1_EXIT=0
+GLOBAL_2_EXIT=0
+--- GLOBAL_2_FAILURE_CONTEXT ---
+3327:[SHOPEE LOT] lot=shopee-mtejrnbh discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3336:[SHOPEE LOT] lot=shopee-mtejrnbm discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3347:[SHOPEE LOT] lot=shopee-mtejrnbo discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3370:[SHOPEE LOT] lot=shopee-mtejrnbq discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3375:[SHOPEE LOT] lot=shopee-mtejrnbr discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3406:[SHOPEE LOT] lot=shopee-mtejrnbu discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3417:[SHOPEE LOT] lot=shopee-mtejrnbu discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3418:[SHOPEE LOT] lot=shopee-mtejrnbu discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3419:[SHOPEE LOT] lot=shopee-mtejrnbw discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3422:[SHOPEE LOT] lot=shopee-mtejrnbw discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3433:[SHOPEE LOT] lot=shopee-mtejrnc1 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3438:[SHOPEE LOT] lot=shopee-mtejrnc1 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3439:[SHOPEE LOT] lot=shopee-mtejrnc1 discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3441:[SHOPEE LOT] lot=shopee-mtejrnc4 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3505:  ✔ fails closed when the reused client throws unexpectedly (0.308344ms)
+3617:✔ curadoria editorial aceita fixture factual e remove instruções, logs e payload (2.085904ms)
+3710:ℹ tests 1757
+3712:ℹ pass 1757
+PROVIDER_FILE_AFTER_GLOBAL_2_EXIT=0
+GLOBAL_3_EXIT=0
+--- GLOBAL_3_FAILURE_CONTEXT ---
+3327:[SHOPEE LOT] lot=shopee-mtejukfo discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3336:[SHOPEE LOT] lot=shopee-mtejukfs discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3347:[SHOPEE LOT] lot=shopee-mtejukfv discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3370:[SHOPEE LOT] lot=shopee-mtejukfx discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3375:[SHOPEE LOT] lot=shopee-mtejukfz discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3406:[SHOPEE LOT] lot=shopee-mtejukg2 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3417:[SHOPEE LOT] lot=shopee-mtejukg2 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3418:[SHOPEE LOT] lot=shopee-mtejukg2 discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3419:[SHOPEE LOT] lot=shopee-mtejukg4 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3422:[SHOPEE LOT] lot=shopee-mtejukg4 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3433:[SHOPEE LOT] lot=shopee-mtejukg8 discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3438:[SHOPEE LOT] lot=shopee-mtejukg8 discovery_round=2 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3439:[SHOPEE LOT] lot=shopee-mtejukg8 discovery_round=3 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3441:[SHOPEE LOT] lot=shopee-mtejukgb discovery_round=1 stage=official_search outcome=unavailable reason=official_search_unexpected_error
+3505:  ✔ fails closed when the reused client throws unexpectedly (0.247612ms)
+3617:✔ curadoria editorial aceita fixture factual e remove instruções, logs e payload (2.117096ms)
+3710:ℹ tests 1757
+3712:ℹ pass 1757
+PROVIDER_FILE_AFTER_GLOBAL_3_EXIT=0
