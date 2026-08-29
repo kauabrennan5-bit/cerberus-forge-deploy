@@ -1,4 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
 import type express from "express";
 import * as productsRepository from "../repositories/productsRepository";
 import { runWeeklyDraftCycle, runWeeklyStaleDraftCheck } from "../services/newsletterWeeklyCampaign";
@@ -16,18 +15,12 @@ import {
   isWeeklyProductionEnabled,
   readWeeklyProductionRuntimeConfig,
 } from "../services/newsletterWeeklyProductionConfig";
-
-function tokenMatches(provided: string, expected: string): boolean {
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
-}
+import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
 
 export function registerNewsletterWeeklyRoutes(app: express.Express): void {
-  const requireAutomation = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const expected = (process.env.CERBERUS_AUTOMATION_TOKEN || "").trim();
-    const provided = String(req.headers["x-cerberus-automation-token"] || "").trim();
-    if (!expected || !tokenMatches(provided, expected)) return res.status(401).json({ success: false, code: "AUTOMATION_UNAUTHORIZED" });
+  const requireAutomation = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const auth = await authorizeWeeklyAutomationRequest({ headers: req.headers as Record<string, string | string[] | undefined> });
+    if (!auth.authorized) return res.status(401).json({ success: false, code: "AUTOMATION_UNAUTHORIZED" });
     next();
   };
 
