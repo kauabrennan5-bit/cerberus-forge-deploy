@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { syncWeeklyBrevoProductionAudience } from "../server/services/newsletterWeeklyBrevoAudienceSync";
+import {
+  syncWeeklyBrevoProductionAudience,
+  WeeklyBrevoAudienceSyncError,
+} from "../server/services/newsletterWeeklyBrevoAudienceSync";
 
 type LocalRow = { email: string; status: "subscribed" | "unsubscribed" | "suppressed"; marketingConsent: boolean };
 type Contact = { email: string; emailBlacklisted?: boolean; listIds?: number[]; listUnsubscribed?: number[] };
@@ -190,7 +193,9 @@ test("membership divergente falha fechado e invalida verificação", async () =>
       client: {} as any,
       deps: local.deps,
     }),
-    /WEEKLY_AUDIENCE_FINAL_MEMBERSHIP_MISMATCH/,
+    (error: unknown) =>
+      error instanceof WeeklyBrevoAudienceSyncError
+      && error.code === "WEEKLY_AUDIENCE_FINAL_MEMBERSHIP_MISMATCH",
   );
   assert.equal(local.readReady(), null);
   assert.equal(local.readFailed(), 1);
