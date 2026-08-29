@@ -6,6 +6,16 @@ import {
   ensureWeeklyBrevoTestRecipient,
   WeeklyBrevoTestRecipientSetupError,
 } from "../services/newsletterWeeklyBrevoTestRecipient";
+import {
+  syncWeeklyBrevoProductionAudience,
+  WeeklyBrevoAudienceSyncError,
+} from "../services/newsletterWeeklyBrevoAudienceSync";
+import { reconcileWeeklyBrevoCampaignStatuses } from "../services/newsletterWeeklyBrevoStatusReconcile";
+import {
+  enableWeeklyProductionAfterVerifiedSync,
+  isWeeklyProductionEnabled,
+  readWeeklyProductionRuntimeConfig,
+} from "../services/newsletterWeeklyProductionConfig";
 
 function tokenMatches(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -54,7 +64,14 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
 
   app.post("/api/internal/newsletter/weekly-draft", requireAutomation, async (req, res) => {
     try {
-      const result = await runWeeklyDraftCycle({ testMode: req.body?.testMode === true });
+      const testMode = req.body?.testMode === true;
+      if (!testMode && !(await isWeeklyProductionEnabled())) {
+        return res.status(200).json({ success: true, status: "skipped", reason: "disabled" });
+      }
+      const runtimeEnv = testMode
+        ? process.env
+        : { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" };
+      const result = await runWeeklyDraftCycle({ testMode, env: runtimeEnv });
       return res.status(result.status === "created" ? 201 : 200).json({ success: true, status: result.status, reason: result.status === "skipped" ? result.reason : undefined, campaignId: result.status === "created" ? result.campaign.id : undefined });
     } catch (error) {
       console.error(`[NEWSLETTER-WEEKLY] draft_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
@@ -75,6 +92,106 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
         ? error.code
         : "WEEKLY_TEST_RECIPIENT_SETUP_FAILED";
       console.error(`[NEWSLETTER-WEEKLY] test_recipient_setup_failed code=${code}`);
+      return res.status(409).json({ success: false, code });
+    }
+  });
+
+  app.get("/api/internal/newsletter/weekly-production/status", requireAutomation, async (_req, res) => {
+    try {
+      const config = await readWeeklyProductionRuntimeConfig();
+      return res.status(200).json({
+        success: true,
+        production: {
+          enabled: config?.weeklyEnabled === true,
+          listConfigured: Boolean(config?.brevoListId),
+          syncStatus: config?.lastSyncStatus || "never",
+          syncVerified: Boolean(config?.contactSyncVerifiedAt),
+          eligibleSubscribers: config?.eligibleSubscribersCount || 0,
+          brevoMembers: config?.brevoMembersCount || 0,
+          lastSyncAt: config?.lastSyncAt || null,
+        },
+      });
+    } catch {
+      return res.status(503).json({ success: false, code: "WEEKLY_PRODUCTION_STATUS_UNAVAILABLE" });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-production/sync", requireAutomation, async (_req, res) => {
+    try {
+      const result = await syncWeeklyBrevoProductionAudience();
+      console.info(
+        `[NEWSLETTER-WEEKLY] production_audience_ready provider=BREVO eligible=${result.eligibleSubscribers}` +
+        ` members=${result.brevoMembers} created=${result.contactsCreated} associated=${result.contactsAssociated}` +
+        ` removed=${result.contactsRemoved} suppressed=${result.locallySuppressedFromBrevo}` +
+        ` unsubscribed=${result.locallyUnsubscribedFromBrevo}`,
+      );
+      return res.status(200).json({
+        success: true,
+        result: {
+          state: result.state,
+          listConfigured: true,
+          eligibleSubscribers: result.eligibleSubscribers,
+          brevoMembers: result.brevoMembers,
+          contactsCreated: result.contactsCreated,
+          contactsAssociated: result.contactsAssociated,
+          contactsRemoved: result.contactsRemoved,
+          locallyUnsubscribedFromBrevo: result.locallyUnsubscribedFromBrevo,
+          locallySuppressedFromBrevo: result.locallySuppressedFromBrevo,
+        },
+      });
+    } catch (error) {
+      const code = error instanceof WeeklyBrevoAudienceSyncError ? error.code : "WEEKLY_AUDIENCE_SYNC_FAILED";
+      console.error(`[NEWSLETTER-WEEKLY] production_audience_failed code=${code}`);
+      return res.status(409).json({ success: false, code });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-production/reconcile", requireAutomation, async (_req, res) => {
+    try {
+      const result = await reconcileWeeklyBrevoCampaignStatuses();
+      console.info(
+        `[NEWSLETTER-WEEKLY] provider_status_reconciled checked=${result.checked}` +
+        ` finalized=${result.finalized} pending=${result.pending} blocked=${result.blocked} errors=${result.errors}`,
+      );
+      if (result.errors > 0) return res.status(503).json({ success: false, code: "WEEKLY_PROVIDER_STATUS_RECONCILE_FAILED", result });
+      return res.status(200).json({ success: true, result });
+    } catch (error) {
+      const code = error instanceof Error && /^[A-Z0-9_:-]{1,100}$/.test(error.message)
+        ? error.message
+        : "WEEKLY_PROVIDER_STATUS_RECONCILE_FAILED";
+      console.error(`[NEWSLETTER-WEEKLY] provider_status_reconcile_failed code=${code}`);
+      return res.status(503).json({ success: false, code });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-production/bootstrap", requireAutomation, async (_req, res) => {
+    try {
+      const result = await syncWeeklyBrevoProductionAudience();
+      if (result.eligibleSubscribers <= 0 || result.eligibleSubscribers !== result.brevoMembers) {
+        return res.status(409).json({ success: false, code: "WEEKLY_PRODUCTION_AUDIENCE_NOT_READY" });
+      }
+      const config = await enableWeeklyProductionAfterVerifiedSync();
+      console.info(
+        `[NEWSLETTER-WEEKLY] production_enabled list_configured=${Boolean(config.brevoListId)}` +
+        ` eligible=${config.eligibleSubscribersCount} members=${config.brevoMembersCount}`,
+      );
+      return res.status(200).json({
+        success: true,
+        production: {
+          enabled: config.weeklyEnabled,
+          listConfigured: Boolean(config.brevoListId),
+          syncStatus: config.lastSyncStatus,
+          eligibleSubscribers: config.eligibleSubscribersCount,
+          brevoMembers: config.brevoMembersCount,
+        },
+      });
+    } catch (error) {
+      const code = error instanceof WeeklyBrevoAudienceSyncError
+        ? error.code
+        : error instanceof Error && /^[A-Z0-9_:-]{1,100}$/.test(error.message)
+          ? error.message
+          : "WEEKLY_PRODUCTION_BOOTSTRAP_FAILED";
+      console.error(`[NEWSLETTER-WEEKLY] production_bootstrap_failed code=${code}`);
       return res.status(409).json({ success: false, code });
     }
   });

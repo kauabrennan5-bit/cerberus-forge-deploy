@@ -24,7 +24,7 @@ const readyEnv = (): NodeJS.ProcessEnv => ({
   NEWSLETTER_REPLY_TO_EMAIL: "reply@cerberusfinds.com",
 });
 
-test("weekly flag ausente e false permanecem fail-closed; somente true habilita", async () => {
+test("weekly flag ausente e false permanecem fail-closed; somente true habilita no fallback legado", async () => {
   const missing = await evaluateWeeklyRuntimePreflight({ env: { ...readyEnv(), NEWSLETTER_WEEKLY_ENABLED: undefined }, countEligibleSubscribers: async () => 4 });
   const disabled = await evaluateWeeklyRuntimePreflight({ env: readyEnv(), countEligibleSubscribers: async () => 4 });
   const enabled = await evaluateWeeklyRuntimePreflight({ env: { ...readyEnv(), NEWSLETTER_WEEKLY_ENABLED: "true" }, countEligibleSubscribers: async () => 4 });
@@ -32,6 +32,7 @@ test("weekly flag ausente e false permanecem fail-closed; somente true habilita"
   assert.equal(disabled.weeklyProductionEnabled, false);
   assert.equal(enabled.weeklyProductionEnabled, true);
   assert.equal(enabled.readyForTest, false);
+  assert.equal(enabled.productionAudienceReady, false);
 });
 
 test("NEWSLETTER_TEST_EMAIL ausente, inválido, múltiplo e válido único", () => {
@@ -45,7 +46,7 @@ test("NEWSLETTER_TEST_EMAIL ausente, inválido, múltiplo e válido único", () 
   assert.equal(single.masked, "q***@example.com");
 });
 
-test("preflight pronto é read-only e usa apenas contador injetado", async () => {
+test("preflight de teste é read-only e usa apenas contador injetado", async () => {
   let reads = 0;
   let fetchCalls = 0;
   const originalFetch = globalThis.fetch;
@@ -64,6 +65,54 @@ test("preflight pronto é read-only e usa apenas contador injetado", async () =>
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("preflight de produção só fica pronto com lista e sync exatamente iguais ao consentimento local", async () => {
+  const result = await evaluateWeeklyRuntimePreflight({
+    env: { ...readyEnv(), NEWSLETTER_WEEKLY_ENABLED: "false" },
+    countEligibleSubscribers: async () => 4,
+    productionConfigLoader: async () => ({
+      weeklyEnabled: true,
+      brevoListId: 42,
+      contactSyncVerifiedAt: "2026-08-29T22:00:00.000Z",
+      lastSyncAt: "2026-08-29T22:00:00.000Z",
+      lastSyncStatus: "ready",
+      eligibleSubscribersCount: 4,
+      brevoMembersCount: 4,
+      updatedAt: "2026-08-29T22:00:00.000Z",
+    }),
+  });
+  assert.equal(result.weeklyProductionEnabled, true);
+  assert.equal(result.productionListConfigured, true);
+  assert.equal(result.productionSyncVerified, true);
+  assert.equal(result.productionAudienceReady, true);
+  assert.equal(result.productionBrevoMembers, 4);
+  assert.equal(result.readyForTest, false);
+
+  const rendered = renderWeeklyRuntimePreflight(result);
+  assert.match(rendered, /ATIVADA E PRONTA ✅/);
+  assert.match(rendered, /Criação automática de rascunho: <b>ATIVA ✅<\/b>/);
+  assert.match(rendered, /Envio geral: <b>EXIGE APROVAÇÃO HUMANA ✅<\/b>/);
+  assert.doesNotMatch(rendered, /NÃO BLOQUEADO/);
+});
+
+test("preflight de produção detecta drift de audiência e fica bloqueado", async () => {
+  const result = await evaluateWeeklyRuntimePreflight({
+    env: readyEnv(),
+    countEligibleSubscribers: async () => 4,
+    productionConfigLoader: async () => ({
+      weeklyEnabled: true,
+      brevoListId: 42,
+      contactSyncVerifiedAt: "2026-08-29T22:00:00.000Z",
+      lastSyncAt: "2026-08-29T22:00:00.000Z",
+      lastSyncStatus: "ready",
+      eligibleSubscribersCount: 4,
+      brevoMembersCount: 3,
+      updatedAt: "2026-08-29T22:00:00.000Z",
+    }),
+  });
+  assert.equal(result.productionAudienceReady, false);
+  assert.match(renderWeeklyRuntimePreflight(result), /ATIVADA, MAS BLOQUEADA ⚠️/);
 });
 
 test("Telegram preflight não renderiza email completo nem API key", async () => {
