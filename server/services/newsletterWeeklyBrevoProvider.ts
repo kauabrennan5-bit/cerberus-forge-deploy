@@ -1,8 +1,41 @@
 import { isValidNewsletterEmail, normalizeNewsletterEmail } from "./newsletterConsent";
-import { NewsletterProviderError, type NewsletterProviderResult } from "./newsletterProvider";
+import {
+  NewsletterProviderError,
+  type NewsletterProviderFailureKind,
+  type NewsletterProviderResult,
+} from "./newsletterProvider";
 import { BREVO_NATIVE_UNSUBSCRIBE } from "./newsletterWeeklyTemplate";
 
 export type WeeklyBrevoCampaignOperation = "create" | "send_test" | "send_now";
+export type WeeklyBrevoErrorKind = "http" | "timeout" | "network" | "invalid_response";
+export type WeeklyBrevoSendTestResult = "failed" | "unknown";
+
+export type WeeklyBrevoErrorDetails = {
+  provider: "BREVO";
+  operation: WeeklyBrevoCampaignOperation;
+  kind: WeeklyBrevoErrorKind;
+  status?: number;
+  statusText?: string;
+  providerCode?: string;
+  safeMessage: string;
+  sendTestResult?: WeeklyBrevoSendTestResult;
+};
+
+export class WeeklyBrevoProviderError extends NewsletterProviderError {
+  constructor(
+    public readonly details: WeeklyBrevoErrorDetails,
+    kind: NewsletterProviderFailureKind,
+    code: string,
+    message: string,
+  ) {
+    super(kind, code, message);
+    this.name = "WeeklyBrevoProviderError";
+  }
+}
+
+export function getWeeklyBrevoErrorDetails(error: unknown): WeeklyBrevoErrorDetails | null {
+  return error instanceof WeeklyBrevoProviderError ? error.details : null;
+}
 
 export type WeeklyBrevoCampaignResult = NewsletterProviderResult & {
   brevoCampaignId: string;
@@ -98,16 +131,20 @@ export function createWeeklyBrevoMarketingProvider(
         signal: controller.signal,
       });
       const responseText = await response.text();
-      const responseBody = parseJson(responseText);
-      if (!response.ok) throw classifyBrevoHttpFailure(response.status);
+      const parsed = parseJson(responseText);
+      if (!response.ok) {
+        throw classifyBrevoHttpFailure(operation, response.status, response.statusText, parsed.body);
+      }
+
       const brevoCampaignId = operation === "create"
-        ? normalizeCampaignId(responseBody.id)
+        ? normalizeCampaignId(parsed.body.id)
         : normalizeCampaignId(existingCampaignId);
       if (!brevoCampaignId) {
-        throw new NewsletterProviderError(
-          "unknown",
-          "WEEKLY_BREVO_CAMPAIGN_ID_MISSING",
-          "Brevo não retornou uma referência de campanha válida.",
+        throw invalidResponseError(
+          operation,
+          operation === "create" && !parsed.valid
+            ? "WEEKLY_BREVO_INVALID_RESPONSE"
+            : "WEEKLY_BREVO_CAMPAIGN_ID_MISSING",
         );
       }
       return {
@@ -118,13 +155,31 @@ export function createWeeklyBrevoMarketingProvider(
         providerReference: brevoCampaignId,
       };
     } catch (error) {
-      if (error instanceof NewsletterProviderError) throw error;
+      if (error instanceof WeeklyBrevoProviderError || error instanceof NewsletterProviderError) throw error;
       if (isAbortError(error)) {
-        throw new NewsletterProviderError("timeout", "WEEKLY_BREVO_TIMEOUT", "Timeout no provider de marketing Brevo.");
+        throw new WeeklyBrevoProviderError(
+          {
+            provider: "BREVO",
+            operation,
+            kind: "timeout",
+            safeMessage: "Timeout aguardando confirmação do provider Brevo.",
+            sendTestResult: operation === "send_test" ? "unknown" : undefined,
+          },
+          "timeout",
+          "WEEKLY_BREVO_TIMEOUT",
+          "Timeout no provider de marketing Brevo.",
+        );
       }
-      throw new NewsletterProviderError(
+      throw new WeeklyBrevoProviderError(
+        {
+          provider: "BREVO",
+          operation,
+          kind: "network",
+          safeMessage: "Falha de rede ao comunicar com o provider Brevo.",
+          sendTestResult: operation === "send_test" ? "unknown" : undefined,
+        },
         "unknown",
-        "WEEKLY_BREVO_TRANSPORT_ERROR",
+        "WEEKLY_BREVO_NETWORK_ERROR",
         "Falha de transporte no provider de marketing Brevo.",
       );
     } finally {
@@ -161,7 +216,7 @@ export function createWeeklyBrevoMarketingProvider(
     },
 
     async sendTest(brevoCampaignId, emailTo) {
-      const normalizedId = requireCampaignId(brevoCampaignId);
+      const normalizedId = requireCampaignId(brevoCampaignId, "send_test");
       const recipients = emailTo.map(normalizeNewsletterEmail).filter(Boolean);
       if (recipients.length !== 1 || !isValidNewsletterEmail(recipients[0])) {
         throw new NewsletterProviderError(
@@ -179,7 +234,7 @@ export function createWeeklyBrevoMarketingProvider(
     },
 
     async sendNow(brevoCampaignId) {
-      const normalizedId = requireCampaignId(brevoCampaignId);
+      const normalizedId = requireCampaignId(brevoCampaignId, "send_now");
       return request(
         "send_now",
         `/emailCampaigns/${encodeURIComponent(normalizedId)}/sendNow`,
@@ -215,14 +270,10 @@ function normalizeListIds(values: number[] | undefined): number[] {
   return [...new Set(values.map(value => Math.trunc(Number(value))).filter(value => Number.isSafeInteger(value) && value > 0))];
 }
 
-function requireCampaignId(value: string): string {
+function requireCampaignId(value: string, operation: WeeklyBrevoCampaignOperation): string {
   const normalized = normalizeCampaignId(value);
   if (!normalized) {
-    throw new NewsletterProviderError(
-      "permanent_4xx",
-      "WEEKLY_BREVO_CAMPAIGN_ID_INVALID",
-      "ID da campanha Brevo inválido.",
-    );
+    throw invalidResponseError(operation, "WEEKLY_BREVO_CAMPAIGN_ID_INVALID");
   }
   return normalized;
 }
@@ -233,38 +284,80 @@ function normalizeCampaignId(value: unknown): string {
   return "";
 }
 
-function parseJson(value: string): Record<string, unknown> {
-  if (!value.trim()) return {};
+function parseJson(value: string): { body: Record<string, unknown>; valid: boolean } {
+  if (!value.trim()) return { body: {}, valid: true };
   try {
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
+      ? { body: parsed as Record<string, unknown>, valid: true }
+      : { body: {}, valid: false };
   } catch {
-    return {};
+    return { body: {}, valid: false };
   }
 }
 
-function classifyBrevoHttpFailure(status: number): NewsletterProviderError {
-  if (status === 408 || status === 429 || status >= 500) {
-    return new NewsletterProviderError(
-      "transient_5xx",
-      `WEEKLY_BREVO_HTTP_${status}`,
-      "Provider de marketing Brevo indisponível ou limitou a solicitação.",
-    );
-  }
-  if (status >= 400 && status < 500) {
-    return new NewsletterProviderError(
-      "permanent_4xx",
-      `WEEKLY_BREVO_HTTP_${status}`,
-      "Provider de marketing Brevo rejeitou a solicitação.",
-    );
-  }
-  return new NewsletterProviderError(
-    "unknown",
-    `WEEKLY_BREVO_HTTP_${status}`,
-    "Provider de marketing Brevo retornou resposta não classificada.",
+function classifyBrevoHttpFailure(
+  operation: WeeklyBrevoCampaignOperation,
+  status: number,
+  statusText: string,
+  responseBody: Record<string, unknown>,
+): WeeklyBrevoProviderError {
+  const baseKind: NewsletterProviderFailureKind = status === 408 || status === 429 || status >= 500
+    ? "transient_5xx"
+    : status >= 400 && status < 500
+      ? "permanent_4xx"
+      : "unknown";
+  const code = status >= 500 ? "WEEKLY_BREVO_HTTP_5XX" : `WEEKLY_BREVO_HTTP_${status}`;
+  const providerCode = extractSafeProviderCode(responseBody);
+  return new WeeklyBrevoProviderError(
+    {
+      provider: "BREVO",
+      operation,
+      kind: "http",
+      status,
+      statusText: sanitizeStatusText(statusText),
+      providerCode,
+      safeMessage: status === 429 || status >= 500
+        ? "Provider Brevo indisponível ou limitou a solicitação."
+        : "Provider Brevo rejeitou a solicitação.",
+      sendTestResult: operation === "send_test" ? "failed" : undefined,
+    },
+    baseKind,
+    code,
+    `Provider de marketing Brevo retornou HTTP ${status}.`,
   );
+}
+
+function invalidResponseError(
+  operation: WeeklyBrevoCampaignOperation,
+  code: string,
+): WeeklyBrevoProviderError {
+  return new WeeklyBrevoProviderError(
+    {
+      provider: "BREVO",
+      operation,
+      kind: "invalid_response",
+      safeMessage: "Provider Brevo retornou uma resposta que não pôde ser confirmada.",
+      sendTestResult: operation === "send_test" ? "unknown" : undefined,
+    },
+    "unknown",
+    code,
+    "Resposta inválida do provider de marketing Brevo.",
+  );
+}
+
+function extractSafeProviderCode(body: Record<string, unknown>): string | undefined {
+  for (const candidate of [body.code, body.errorCode, body.error_code]) {
+    if (typeof candidate !== "string") continue;
+    const normalized = candidate.trim();
+    if (/^[A-Za-z0-9_.:-]{1,80}$/.test(normalized)) return normalized;
+  }
+  return undefined;
+}
+
+function sanitizeStatusText(value: string): string | undefined {
+  const normalized = value.replace(/[^A-Za-z0-9 _.-]/g, "").trim().slice(0, 80);
+  return normalized || undefined;
 }
 
 function isTechnicalBrevoRelayEmail(email: string): boolean {
