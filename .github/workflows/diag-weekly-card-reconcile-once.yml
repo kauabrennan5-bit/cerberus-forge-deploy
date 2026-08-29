@@ -1,0 +1,116 @@
+name: Weekly Card Reconcile Once
+
+on:
+  push:
+    branches:
+      - diag/weekly-card-reconcile-once-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  recover-card-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      EXPECTED_SHA: c51a7f1987046c1e7f53ae32b46f8bdefcfd2503
+      LIVE_BASE: https://cerberus-forge-deploy-backend.onrender.com
+      KNOWN_ADMIN_USER_ID: "1976526372"
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      FIXED_UPDATE_ID: "2147482901"
+    steps:
+      - name: Fail closed unless exact fixed backend is live
+        shell: bash
+        run: |
+          set -euo pipefail
+          health="$(curl --fail-with-body --silent --show-error --max-time 20 "$LIVE_BASE/health")"
+          status="$(printf '%s' "$health" | jq -r '.status // empty')"
+          version="$(printf '%s' "$health" | jq -r '.version // empty')"
+          echo "HEALTH_STATUS=$status"
+          echo "LIVE_VERSION_SHA=$version"
+          [ "$status" = "ok" ]
+          [ "$version" = "$EXPECTED_SHA" ]
+
+      - name: Fail closed unless Telegram recovery path is healthy and authorized
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${TELEGRAM_ADMIN_CHAT_ID:-}" ]
+          [ "$TELEGRAM_ADMIN_CHAT_ID" = "$KNOWN_ADMIN_USER_ID" ]
+          body="$(curl --fail-with-body --silent --show-error --max-time 20 "$LIVE_BASE/api/telegram-status")"
+          configured="$(printf '%s' "$body" | jq -r '.configured // false')"
+          whitelist="$(printf '%s' "$body" | jq -r '.effectiveWhitelistConfigured // false')"
+          webhook="$(printf '%s' "$body" | jq -r '.webhookConfigured // false')"
+          webhook_match="$(printf '%s' "$body" | jq -r '.webhookMatchesExpectedUrl // false')"
+          api_healthy="$(printf '%s' "$body" | jq -r '.apiHealthy // false')"
+          backend_ready="$(printf '%s' "$body" | jq -r '.backendReady // false')"
+          secret_configured="$(printf '%s' "$body" | jq -r '.secretConfigured // false')"
+          backend_sha="$(printf '%s' "$body" | jq -r '.backendSha // empty')"
+          echo "TELEGRAM_CONFIGURED=$configured"
+          echo "TELEGRAM_WHITELIST_CONFIGURED=$whitelist"
+          echo "TELEGRAM_WEBHOOK_CONFIGURED=$webhook"
+          echo "TELEGRAM_WEBHOOK_MATCH=$webhook_match"
+          echo "TELEGRAM_API_HEALTHY=$api_healthy"
+          echo "TELEGRAM_BACKEND_READY=$backend_ready"
+          echo "TELEGRAM_WEBHOOK_SECRET_CONFIGURED=$secret_configured"
+          echo "TELEGRAM_BACKEND_SHA=$backend_sha"
+          [ "$configured" = "true" ]
+          [ "$whitelist" = "true" ]
+          [ "$webhook" = "true" ]
+          [ "$webhook_match" = "true" ]
+          [ "$api_healthy" = "true" ]
+          [ "$backend_ready" = "true" ]
+          [ "$secret_configured" = "false" ]
+          [ "$backend_sha" = "$EXPECTED_SHA" ]
+
+      - name: Execute weekly-test recovery exactly once
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -nc \
+            --argjson update_id "$FIXED_UPDATE_ID" \
+            --argjson admin_id "$TELEGRAM_ADMIN_CHAT_ID" \
+            --argjson now "$(date +%s)" \
+            '{
+              update_id: $update_id,
+              message: {
+                message_id: 2147482902,
+                date: $now,
+                chat: { id: $admin_id, type: "private" },
+                from: { id: $admin_id, is_bot: false, first_name: "Admin" },
+                text: "/weekly-test",
+                entities: [{ offset: 0, length: 12, type: "bot_command" }]
+              }
+            }')"
+          response_file="$RUNNER_TEMP/weekly-test-webhook.json"
+          code="$(curl --silent --show-error --max-time 20 \
+            -o "$response_file" -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            --data-binary "$payload" \
+            "$LIVE_BASE/api/telegram/webhook")"
+          accepted="$(jq -r '.ok // false' "$response_file" 2>/dev/null || echo false)"
+          echo "REAL_WEEKLY_TEST_WEBHOOK_HTTP=$code"
+          echo "REAL_WEEKLY_TEST_WEBHOOK_ACCEPTED=$accepted"
+          [ "$code" = "200" ]
+          [ "$accepted" = "true" ]
+          echo "REAL_WEEKLY_TEST_COMMAND_EXECUTED=true"
+          echo "REAL_NEW_BREVO_CAMPAIGN_REQUESTED_BY_THIS_WORKFLOW=false"
+          echo "BREVO_REAL_RETRY_EXECUTED=false"
+          echo "BREVO_SENDNOW_CALLED=false"
+          echo "REAL_SUBSCRIBERS_TARGETED_BY_THIS_WORKFLOW=0"
+
+      - name: Allow asynchronous Telegram handling to finish
+        run: sleep 12
+
+      - name: Verify backend stayed healthy after recovery command
+        shell: bash
+        run: |
+          set -euo pipefail
+          health="$(curl --fail-with-body --silent --show-error --max-time 20 "$LIVE_BASE/health")"
+          status="$(printf '%s' "$health" | jq -r '.status // empty')"
+          version="$(printf '%s' "$health" | jq -r '.version // empty')"
+          echo "POST_RECOVERY_HEALTH_STATUS=$status"
+          echo "POST_RECOVERY_LIVE_VERSION_SHA=$version"
+          [ "$status" = "ok" ]
+          [ "$version" = "$EXPECTED_SHA" ]
+          echo "STOP_BEFORE_RETRY_CLICK=true"
