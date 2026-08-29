@@ -14,14 +14,13 @@ jobs:
     timeout-minutes: 8
     env:
       EXPECTED_SHA: 65675e87443265921dc0dc3ee58db2fea349e92b
-      CERBERUS_HEALTH_URL: ${{ secrets.CERBERUS_HEALTH_URL }}
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
     steps:
       - name: Verify deployed health SHA
         shell: bash
         run: |
           set -euo pipefail
-          [ -n "${CERBERUS_HEALTH_URL:-}" ] || { echo 'CERBERUS_HEALTH_URL missing'; exit 1; }
           rm -f "$RUNNER_TEMP/weekly-preflight.env"
           health_ok=false
           live_sha=""
@@ -67,8 +66,8 @@ jobs:
           [ -n "$service_id" ] || { echo 'Render backend service not found' >&2; exit 1; }
 
           get_direct_value() {
-            local key="$1" code body
-            body_file="$RUNNER_TEMP/render-direct-${key}.json"
+            local key="$1" code
+            local body_file="$RUNNER_TEMP/render-direct-${key}.json"
             code="$(curl --silent --show-error --max-time 20 -o "$body_file" -w '%{http_code}' "${auth[@]}" "https://api.render.com/v1/services/${service_id}/env-vars/${key}")"
             if [ "$code" = 200 ]; then jq -r '.value // empty' "$body_file"; return 0; fi
             if [ "$code" = 404 ]; then return 0; fi
@@ -77,7 +76,6 @@ jobs:
 
           direct_flag="$(get_direct_value NEWSLETTER_WEEKLY_ENABLED)"
           direct_test_email="$(get_direct_value NEWSLETTER_TEST_EMAIL)"
-
           linked_flag_values=()
           linked_test_values=()
           groups="$(curl --fail-with-body --silent --show-error --max-time 20 "${auth[@]}" 'https://api.render.com/v1/env-groups?limit=100')"
@@ -85,24 +83,19 @@ jobs:
           for gid in "${group_ids[@]:-}"; do
             [ -n "$gid" ] || continue
             detail="$(curl --fail-with-body --silent --show-error --max-time 20 "${auth[@]}" "https://api.render.com/v1/env-groups/${gid}")"
-            if ! printf '%s' "$detail" | jq -e --arg sid "$service_id" '.. | strings | select(. == $sid)' >/dev/null 2>&1; then
-              continue
-            fi
+            if ! printf '%s' "$detail" | jq -e --arg sid "$service_id" '.. | strings | select(. == $sid)' >/dev/null 2>&1; then continue; fi
             for key in NEWSLETTER_WEEKLY_ENABLED NEWSLETTER_TEST_EMAIL; do
               file="$RUNNER_TEMP/render-group-${gid}-${key}.json"
               code="$(curl --silent --show-error --max-time 20 -o "$file" -w '%{http_code}' "${auth[@]}" "https://api.render.com/v1/env-groups/${gid}/env-vars/${key}")"
               if [ "$code" = 200 ]; then
                 value="$(jq -r '.value // empty' "$file")"
                 if [ "$key" = NEWSLETTER_WEEKLY_ENABLED ]; then linked_flag_values+=("$value"); else linked_test_values+=("$value"); fi
-              elif [ "$code" != 404 ]; then
-                echo "Render env group lookup failed: HTTP $code" >&2
-                exit 1
-              fi
+              elif [ "$code" != 404 ]; then echo "Render env group lookup failed: HTTP $code" >&2; exit 1; fi
             done
           done
 
           flag_true=false
-          if [ "$direct_flag" = true ]; then flag_true=true; fi
+          [ "$direct_flag" = true ] && flag_true=true
           for v in "${linked_flag_values[@]:-}"; do [ "$v" = true ] && flag_true=true; done
 
           test_candidates=()
