@@ -36,6 +36,7 @@ import {
 } from "./newsletterCampaignTelegram";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 import { resolvePublicSiteUrl } from "./newsletterInstitutional";
+import { runWeeklyDraftCycle } from "./newsletterWeeklyCampaign";
 import {
   isSocialNetwork,
   normalizeSocialLinkUrl,
@@ -1756,6 +1757,20 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     }
     if (commandName === "status") {
       if (chatId) await sendTelegramMessage(chatId, await telegramPanel.renderStatus());
+      return;
+    }
+    if (commandName === "weekly-test") {
+      if (!chatId) return;
+      try {
+        const outcome = await runWeeklyDraftCycle({ testMode: true });
+        if (outcome.status === "skipped" && outcome.reason === "duplicate") {
+          await sendTelegramMessage(chatId, "ℹ️ <b>WEEKLY-TEST JÁ PREPARADA</b>\n\nJá existe um rascunho operacional equivalente. Nenhuma nova campanha, recipient ou chamada Brevo foi criada.");
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 80) : "unknown";
+        console.error(`[NEWSLETTER-WEEKLY] telegram_test_command_failed reason=${reason}`);
+        await sendTelegramMessage(chatId, "⚠️ <b>WEEKLY-TEST NÃO CRIADA</b>\n\nO rascunho falhou em modo fail-closed. Nenhum envio Brevo foi iniciado.");
+      }
       return;
     }
     if (commandName === "pendentes") {

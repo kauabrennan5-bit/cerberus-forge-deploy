@@ -70,6 +70,8 @@ const KNOWN_COMMANDS = new Set([
   "redes-sociais",
   "weekly-preflight",
   "weekly_preflight",
+  "weekly-test",
+  "weekly_test",
   "discover",
   "discover-batch",
   "discover_batch",
@@ -184,6 +186,7 @@ export function renderPrimaryCommandHelp(): string {
     "📣 <b>OPERAÇÃO</b>\n" +
     "/campanhas · /redes · /cancelar\n" +
     "/weekly-preflight — runtime semanal read-only\n" +
+    "/weekly-test — criar um rascunho semanal de teste\n" +
     "/avancado — ferramentas técnicas\n\n" +
     "Os produtos exibidos vêm da mesma fonte canônica do site (Supabase)."
   );
