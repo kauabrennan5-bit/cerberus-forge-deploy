@@ -273,7 +273,7 @@ async function requireCampaign(store: NewsletterCampaignStore, campaignId: strin
 async function withWeeklyDeliveryLock<T>(campaignId: string, operation: () => Promise<T>): Promise<T> {
   const previous = weeklyDeliveryLocks.get(campaignId) || Promise.resolve();
   let release!: () => void;
-  const tail = new Promise<void>(resolve => { release = resolve(); });
+  const tail = new Promise<void>(resolve => { release = resolve; });
   weeklyDeliveryLocks.set(campaignId, tail);
   await previous;
   try {
