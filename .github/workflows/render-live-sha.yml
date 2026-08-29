@@ -1,0 +1,64 @@
+name: Render live SHA verification
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "state/watchdog-state.json"
+      - "docs/**"
+      - "**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-live-sha
+  cancel-in-progress: true
+
+jobs:
+  verify-live-sha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      EXPECTED_SHA: ${{ github.sha }}
+    steps:
+      - name: Wait for Render to serve this exact main SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/cerberus-health.json"
+
+          for attempt in $(seq 1 48); do
+            status="$(curl --silent --show-error --max-time 20 \
+              -o "$response_file" \
+              -w '%{http_code}' \
+              "$CERBERUS_HEALTH_URL" || true)"
+
+            if [ "$status" = "200" ]; then
+              live_sha="$(node - "$response_file" <<'NODE'
+          const fs = require('node:fs');
+          try {
+            const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+            process.stdout.write(typeof body?.version === 'string' ? body.version.trim() : '');
+          } catch {
+            process.stdout.write('');
+          }
+          NODE
+          )"
+              if [ "$live_sha" = "$EXPECTED_SHA" ]; then
+                echo "RENDER_LIVE_SHA_VERIFIED=true"
+                echo "LIVE_SHA=$live_sha"
+                exit 0
+              fi
+              echo "Render live SHA not current yet, attempt $attempt/48."
+            else
+              echo "Render health HTTP $status, attempt $attempt/48."
+            fi
+
+            sleep 10
+          done
+
+          echo "Render did not serve the expected main SHA within the verification window."
+          exit 1
