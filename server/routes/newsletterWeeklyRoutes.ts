@@ -2,6 +2,10 @@ import { timingSafeEqual } from "node:crypto";
 import type express from "express";
 import * as productsRepository from "../repositories/productsRepository";
 import { runWeeklyDraftCycle, runWeeklyStaleDraftCheck } from "../services/newsletterWeeklyCampaign";
+import {
+  ensureWeeklyBrevoTestRecipient,
+  WeeklyBrevoTestRecipientSetupError,
+} from "../services/newsletterWeeklyBrevoTestRecipient";
 
 function tokenMatches(provided: string, expected: string): boolean {
   const a = Buffer.from(provided);
@@ -55,6 +59,23 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
     } catch (error) {
       console.error(`[NEWSLETTER-WEEKLY] draft_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
       return res.status(500).json({ success: false, code: "WEEKLY_DRAFT_FAILED" });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-test-recipient/ensure", requireAutomation, async (_req, res) => {
+    try {
+      const result = await ensureWeeklyBrevoTestRecipient();
+      console.info(
+        `[NEWSLETTER-WEEKLY] test_recipient_ready provider=BREVO state=${result.state}` +
+        ` contact_created=${result.contactCreated} list_created=${result.listCreated} associated=${result.associated}`,
+      );
+      return res.status(200).json({ success: true, result });
+    } catch (error) {
+      const code = error instanceof WeeklyBrevoTestRecipientSetupError
+        ? error.code
+        : "WEEKLY_TEST_RECIPIENT_SETUP_FAILED";
+      console.error(`[NEWSLETTER-WEEKLY] test_recipient_setup_failed code=${code}`);
+      return res.status(409).json({ success: false, code });
     }
   });
 

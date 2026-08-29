@@ -9,6 +9,7 @@ import { BREVO_NATIVE_UNSUBSCRIBE } from "./newsletterWeeklyTemplate";
 export type WeeklyBrevoCampaignOperation = "create" | "send_test" | "send_now";
 export type WeeklyBrevoErrorKind = "http" | "timeout" | "network" | "invalid_response";
 export type WeeklyBrevoSendTestResult = "failed" | "unknown";
+export type WeeklyBrevoTestRecipientIssue = "not_found" | "without_list" | "blacklisted";
 
 export type WeeklyBrevoErrorDetails = {
   provider: "BREVO";
@@ -17,6 +18,7 @@ export type WeeklyBrevoErrorDetails = {
   status?: number;
   statusText?: string;
   providerCode?: string;
+  testRecipientIssue?: WeeklyBrevoTestRecipientIssue;
   safeMessage: string;
   sendTestResult?: WeeklyBrevoSendTestResult;
 };
@@ -309,6 +311,7 @@ function classifyBrevoHttpFailure(
       : "unknown";
   const code = status >= 500 ? "WEEKLY_BREVO_HTTP_5XX" : `WEEKLY_BREVO_HTTP_${status}`;
   const providerCode = extractSafeProviderCode(responseBody);
+  const testRecipientIssue = operation === "send_test" ? extractTestRecipientIssue(responseBody) : undefined;
   return new WeeklyBrevoProviderError(
     {
       provider: "BREVO",
@@ -317,9 +320,8 @@ function classifyBrevoHttpFailure(
       status,
       statusText: sanitizeStatusText(statusText),
       providerCode,
-      safeMessage: status === 429 || status >= 500
-        ? "Provider Brevo indisponível ou limitou a solicitação."
-        : "Provider Brevo rejeitou a solicitação.",
+      testRecipientIssue,
+      safeMessage: safeBrevoHttpMessage(status, testRecipientIssue),
       sendTestResult: operation === "send_test" ? "failed" : undefined,
     },
     baseKind,
@@ -353,6 +355,25 @@ function extractSafeProviderCode(body: Record<string, unknown>): string | undefi
     if (/^[A-Za-z0-9_.:-]{1,80}$/.test(normalized)) return normalized;
   }
   return undefined;
+}
+
+function extractTestRecipientIssue(body: Record<string, unknown>): WeeklyBrevoTestRecipientIssue | undefined {
+  if (hasNonEmptyArray(body.blackListedEmails)) return "blacklisted";
+  if (hasNonEmptyArray(body.unexistingEmails)) return "not_found";
+  if (hasNonEmptyArray(body.withoutListEmails)) return "without_list";
+  return undefined;
+}
+
+function hasNonEmptyArray(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function safeBrevoHttpMessage(status: number, issue?: WeeklyBrevoTestRecipientIssue): string {
+  if (issue === "blacklisted") return "Destinatário de teste está bloqueado na Brevo.";
+  if (issue === "not_found") return "Destinatário de teste não está cadastrado na Brevo.";
+  if (issue === "without_list") return "Destinatário de teste não está associado a uma lista Brevo.";
+  if (status === 429 || status >= 500) return "Provider Brevo indisponível ou limitou a solicitação.";
+  return "Provider Brevo rejeitou a solicitação.";
 }
 
 function sanitizeStatusText(value: string): string | undefined {
