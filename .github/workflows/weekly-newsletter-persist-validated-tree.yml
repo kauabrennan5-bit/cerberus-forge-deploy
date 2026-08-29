@@ -1,0 +1,67 @@
+name: Persist validated weekly candidate tree
+
+on:
+  push:
+    branches:
+      - diag/weekly-newsletter-ts-2026-08-28
+    paths:
+      - .github/workflows/weekly-newsletter-persist-validated-tree.yml
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  persist:
+    runs-on: ubuntu-24.04
+    env:
+      VALIDATED_RUN_ID: "33229640879"
+      VALIDATED_ARTIFACT: "weekly-functional-candidate-33229640879"
+      FEATURE_BASE_SHA: "defa6fe6bbda8eff5e7c8e80b2241a29011ace8c"
+      EXPECTED_PATCH_SHA256: "33f515631fa87bd1dc38237cd677571ea72b3654ebe4babf782d7ac8667954d1"
+      EXPECTED_TREE: "9780d40ebe3f0fbea61a814ba286ced56b559dab"
+      TARGET_REF: "refs/heads/diag/weekly-newsletter-validated-tree-2026-08-28"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact feature base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FEATURE_BASE_SHA }}
+          fetch-depth: 0
+
+      - name: Download already-validated functional artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/weekly-validated
+          gh run download "$VALIDATED_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$VALIDATED_ARTIFACT" \
+            --dir /tmp/weekly-validated
+          test -s /tmp/weekly-validated/weekly-functional.patch
+          test -s /tmp/weekly-validated/weekly-functional-fingerprint.txt
+
+      - name: Verify fingerprint and materialize exact tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_patch_sha="$(sha256sum /tmp/weekly-validated/weekly-functional.patch | awk '{print $1}')"
+          test "$actual_patch_sha" = "$EXPECTED_PATCH_SHA256"
+          grep -Fx "PATCH_SHA256=$EXPECTED_PATCH_SHA256" /tmp/weekly-validated/weekly-functional-fingerprint.txt
+          grep -Fx "FINAL_TREE=$EXPECTED_TREE" /tmp/weekly-validated/weekly-functional-fingerprint.txt
+          git apply --index --binary /tmp/weekly-validated/weekly-functional.patch
+          actual_tree="$(git write-tree)"
+          echo "EXPECTED_TREE=$EXPECTED_TREE"
+          echo "ACTUAL_TREE=$actual_tree"
+          test "$actual_tree" = "$EXPECTED_TREE"
+          git diff --cached --check "$FEATURE_BASE_SHA"
+
+      - name: Persist validated tree on disposable diagnostic ref
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          commit_sha="$(printf '%s\n' 'chore: persist validated weekly candidate tree' | git commit-tree "$EXPECTED_TREE" -p "$FEATURE_BASE_SHA")"
+          echo "DIAG_VALIDATED_TREE_COMMIT=$commit_sha"
+          git push origin "$commit_sha:$TARGET_REF"
