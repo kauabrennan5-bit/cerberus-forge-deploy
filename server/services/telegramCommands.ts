@@ -29,6 +29,7 @@ export const SECONDARY_TELEGRAM_COMMANDS: readonly TelegramCommandDefinition[] =
   { command: "menu", description: "Atalhos principais" },
   { command: "aprovados", description: "Decisões e catálogo ativo" },
   { command: "categorias", description: "Taxonomia pública e contagens" },
+  { command: "weekly-preflight", description: "Preflight semanal read-only" },
   { command: "publicar", description: "Encaminhar review com confirmação" },
   { command: "cancelar", description: "Cancelar o fluxo atual" },
   { command: "avancado", description: "Comandos técnicos" },
@@ -54,6 +55,8 @@ const ALIASES: Readonly<Record<string, string>> = Object.freeze({
   listar: "produtos",
   campaigns: "campanhas",
   "redes-sociais": "redes",
+  "weekly-preflight": "status",
+  weekly_preflight: "status",
   colecao: "campanha2",
   discover_batch: "discover-batch",
 });
@@ -66,6 +69,7 @@ const KNOWN_COMMANDS = new Set([
   "listar",
   "campaigns",
   "redes-sociais",
+  "weekly_preflight",
   "discover",
   "discover-batch",
   "discover_batch",
@@ -179,6 +183,7 @@ export function renderPrimaryCommandHelp(): string {
     "/publicar &lt;review_id&gt; — confirmação humana obrigatória\n\n" +
     "📣 <b>OPERAÇÃO</b>\n" +
     "/campanhas · /redes · /cancelar\n" +
+    "/weekly-preflight — runtime semanal read-only\n" +
     "/avancado — ferramentas técnicas\n\n" +
     "Os produtos exibidos vêm da mesma fonte canônica do site (Supabase)."
   );
