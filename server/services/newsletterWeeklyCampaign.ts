@@ -3,12 +3,22 @@ import type { Product } from "../../src/types";
 import { deriveConfidenceV2, deriveMinSampleSize, confidenceV2ToScore } from "../commercialBrain/statisticalRigor";
 import * as productsRepository from "../repositories/productsRepository";
 import { createSupabaseNewsletterCampaignStore, type NewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
-import { cancelCampaign, submitCampaignForApproval } from "./newsletterCampaignService";
+import { submitCampaignForApproval } from "./newsletterCampaignService";
 import { createCampaignDraft, type CampaignProductLink, type EmailCampaign } from "./newsletterCampaignState";
 import { getNewsletterInstitutionalOptions } from "./newsletterInstitutional";
 import { sendTelegramMessage, type TelegramDeliveryResult } from "./telegramBot";
 import { generateWeeklyNewsletterCopy, type WeeklyNewsletterCopy } from "./newsletterWeeklyCopy";
 import { renderWeeklyNewsletter } from "./newsletterWeeklyTemplate";
+
+import {
+  classifyGeminiDiagnosticReason,
+  isWeeklyDraftDiagnosticError,
+  logWeeklyDraftStage,
+  WeeklyDraftDiagnosticError,
+  type WeeklyDraftDiagnostic,
+  type WeeklyDraftDiagnosticReason,
+  type WeeklyDraftDiagnosticStage,
+} from "./newsletterWeeklyDiagnostics";
 
 export type WeeklyDraftOutcome =
   | { status: "created"; campaign: EmailCampaign; products: Product[] }
@@ -20,6 +30,7 @@ export type WeeklyDraftDeps = {
   lastSentAtLoader?: () => Promise<string | null>;
   clickCountLoader?: (productIds: string[]) => Promise<Map<string, number>>;
   copyGenerator?: (products: readonly Product[]) => Promise<WeeklyNewsletterCopy>;
+  institutionalLoader?: (env: NodeJS.ProcessEnv) => Promise<Awaited<ReturnType<typeof getNewsletterInstitutionalOptions>>>;
   telegramSender?: (chatId: string, text: string, replyMarkup?: unknown) => Promise<TelegramDeliveryResult>;
   now?: Date;
   env?: NodeJS.ProcessEnv;
@@ -106,60 +117,175 @@ async function notify(sender: WeeklyDraftDeps["telegramSender"], chatId: string,
   return (sender || sendTelegramMessage)(chatId, text, markup);
 }
 
+
 export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<WeeklyDraftOutcome> {
   const env = deps.env || process.env;
   const now = deps.now || new Date();
   const testMode = deps.testMode === true;
   const weeklyEnabled = env.NEWSLETTER_WEEKLY_ENABLED === "true";
   if (!testMode && !weeklyEnabled) return { status: "skipped", reason: "disabled", newProductCount: 0 };
-  const chatId = (env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
-  if (!chatId) throw new Error("WEEKLY_TELEGRAM_ADMIN_CHAT_MISSING");
-  const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
-  if (!publicBaseUrl) throw new Error("WEEKLY_PUBLIC_BASE_URL_MISSING");
-  const store = deps.store || createSupabaseNewsletterCampaignStore();
-  const products = await (deps.productsLoader || productsRepository.getProducts)();
-  const lastSentAt = testMode
-    ? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    : await (deps.lastSentAtLoader || loadLastSuccessfulCollectionSentAt)();
-  const cutoffMs = lastSentAt ? Date.parse(lastSentAt) : now.getTime() - 7 * 24 * 60 * 60 * 1000;
-  const fresh = products.filter(product => product.ativo === true && product.status === "published" && product.ref?.trim() && freshnessMs(product) > cutoffMs);
-  if (fresh.length === 0) {
-    await notify(deps.telegramSender, chatId, "📭 <b>Campanha semanal pulada</b>\n\nSem produto genuinamente novo desde o último envio bem-sucedido. Nenhum rascunho foi gerado e nenhum e-mail foi enviado.");
-    return { status: "skipped", reason: "no_new_products", newProductCount: 0 };
-  }
-  if (fresh.length < 3) {
-    await notify(deps.telegramSender, chatId, `📭 <b>Campanha semanal pulada</b>\n\nHá somente ${fresh.length} produto(s) novo(s) pronto(s); o formato exige 1 destaque + pelo menos 2 secundários. Nenhum e-mail foi enviado.`);
-    return { status: "skipped", reason: "insufficient_new_products", newProductCount: fresh.length };
-  }
 
-  const clickCounts = await (deps.clickCountLoader || loadProductClickCounts)(fresh.map(p => p.id));
-  const selected = rankCandidates(fresh, clickCounts).slice(0, 4);
-  const key = editionKey(selected, now, testMode);
-  const existing = await store.findOperationalCollectionByEditionKey(key);
-  if (existing) return { status: "skipped", reason: "duplicate", newProductCount: fresh.length };
+  const attemptId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  const context: Omit<WeeklyDraftDiagnostic, "stage" | "reason"> = { attemptId };
+  const fail = (
+    stage: WeeklyDraftDiagnosticStage,
+    reason: WeeklyDraftDiagnosticReason,
+    extra: Partial<WeeklyDraftDiagnostic> = {},
+  ): never => {
+    const diagnostic: WeeklyDraftDiagnostic = { ...context, ...extra, attemptId, stage, reason };
+    logWeeklyDraftStage(attemptId, stage, "FAIL", reason);
+    throw new WeeklyDraftDiagnosticError(diagnostic);
+  };
+  const startStage = (stage: WeeklyDraftDiagnosticStage) => logWeeklyDraftStage(attemptId, stage, "START");
+  const successStage = (stage: WeeklyDraftDiagnosticStage) => logWeeklyDraftStage(attemptId, stage, "SUCCESS");
 
-  const copy = await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected);
-  const institutional = await getNewsletterInstitutionalOptions(env);
-  const campaignId = crypto.randomUUID();
-  const rendered = renderWeeklyNewsletter(selected, copy, { campaignId, publicBaseUrl, socialLinks: institutional.socialLinks });
-  const links: CampaignProductLink[] = selected.map((product, index) => ({ productId: product.id, position: index + 1, layout: index === 0 ? "feature" : "grid" }));
-  const draft = createCampaignDraft(null, envActor(env), rendered, now, campaignId, "collection", links, key);
-  const persisted = await store.createCampaign(draft);
-  await store.createCampaignProducts(persisted.id, links);
-  const pending = await submitCampaignForApproval(persisted, envActor(env), { store, env, now });
-  const delivery = await notify(deps.telegramSender, chatId, telegramPreview(pending, selected, copy, clickCounts, testMode), {
-    inline_keyboard: [
-      [{ text: testMode ? "✅ Aprovar teste" : "✅ Aprovar e enviar", callback_data: `campaign_weekly_approve:${pending.id}` }],
-      [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${pending.id}` }],
-    ],
-  });
-  if (!delivery.ok) {
-    await cancelCampaign(pending, envActor(env), { store, env, now });
-    throw new Error(`WEEKLY_TELEGRAM_DELIVERY_FAILED:${delivery.failureReason || "unknown"}`);
+  try {
+    startStage("RUNTIME_CONFIG");
+    const chatId = (env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
+    if (!chatId) fail("RUNTIME_CONFIG", "TELEGRAM_ADMIN_CHAT_MISSING");
+    const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
+    if (!publicBaseUrl) fail("RUNTIME_CONFIG", "PUBLIC_URL_MISSING");
+    try {
+      const parsed = new URL(publicBaseUrl);
+      if (!/^https?:$/.test(parsed.protocol)) fail("RUNTIME_CONFIG", "PUBLIC_URL_INVALID");
+      if (env.NODE_ENV === "production" && ["localhost", "127.0.0.1", "::1"].includes(parsed.hostname)) {
+        fail("RUNTIME_CONFIG", "PUBLIC_URL_INVALID");
+      }
+    } catch (error) {
+      if (isWeeklyDraftDiagnosticError(error)) throw error;
+      fail("RUNTIME_CONFIG", "PUBLIC_URL_INVALID");
+    }
+    let actor: string;
+    try { actor = envActor(env); }
+    catch { fail("RUNTIME_CONFIG", "TELEGRAM_ACTOR_MISSING"); }
+    let store: NewsletterCampaignStore;
+    if (deps.store) store = deps.store;
+    else {
+      try { store = createSupabaseNewsletterCampaignStore(); }
+      catch { fail("RUNTIME_CONFIG", "SUPABASE_CONFIG_MISSING"); }
+    }
+    successStage("RUNTIME_CONFIG");
+
+    startStage("SUPABASE_READ");
+    let products: Product[];
+    let lastSentAt: string | null;
+    try {
+      products = await (deps.productsLoader || productsRepository.getProducts)();
+      lastSentAt = testMode
+        ? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+        : await (deps.lastSentAtLoader || loadLastSuccessfulCollectionSentAt)();
+    } catch {
+      fail("SUPABASE_READ", "SUPABASE_READ_FAILED");
+    }
+    successStage("SUPABASE_READ");
+
+    startStage("PRODUCT_SELECTION");
+    const cutoffMs = lastSentAt ? Date.parse(lastSentAt) : now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const active = products.filter(product => product.ativo === true && product.status === "published");
+    const newlyFresh = active.filter(product => freshnessMs(product) > cutoffMs);
+    const fresh = newlyFresh.filter(product => Boolean(product.ref?.trim()));
+    context.activeProductCount = active.length;
+    context.newProductCount = newlyFresh.length;
+    context.eligibleProductCount = fresh.length;
+    successStage("PRODUCT_SELECTION");
+
+    startStage("PRODUCT_ELIGIBILITY");
+    if (fresh.length === 0) {
+      logWeeklyDraftStage(attemptId, "PRODUCT_ELIGIBILITY", "FAIL", "NO_NEW_PRODUCTS");
+      await notify(deps.telegramSender, chatId, `📭 <b>Campanha semanal pulada</b>\n\nSem produto genuinamente novo.\n\nEtapa: <b>Produtos</b>\nMotivo: <code>NO_NEW_PRODUCTS</code>\nAtivos: ${active.length} · novos: ${newlyFresh.length} · elegíveis: 0\n\nNenhum rascunho foi gerado e nenhum email foi enviado.`);
+      return { status: "skipped", reason: "no_new_products", newProductCount: 0 };
+    }
+    if (fresh.length < 3) {
+      logWeeklyDraftStage(attemptId, "PRODUCT_ELIGIBILITY", "FAIL", "INSUFFICIENT_PRODUCTS");
+      await notify(deps.telegramSender, chatId, `📭 <b>Campanha semanal pulada</b>\n\nSão necessários no mínimo 3 produtos aptos.\n\nEtapa: <b>Produtos</b>\nMotivo: <code>INSUFFICIENT_PRODUCTS</code>\nAtivos: ${active.length} · novos: ${newlyFresh.length} · elegíveis: ${fresh.length}\nNecessários: 3\n\nNenhum email foi enviado.`);
+      return { status: "skipped", reason: "insufficient_new_products", newProductCount: fresh.length };
+    }
+    successStage("PRODUCT_ELIGIBILITY");
+
+    startStage("SUPABASE_READ");
+    let clickCounts: Map<string, number>;
+    try { clickCounts = await (deps.clickCountLoader || loadProductClickCounts)(fresh.map(p => p.id)); }
+    catch { fail("SUPABASE_READ", "SUPABASE_READ_FAILED"); }
+    successStage("SUPABASE_READ");
+
+    startStage("RANKING");
+    let selected: Product[];
+    try { selected = rankCandidates(fresh, clickCounts).slice(0, 4); }
+    catch { fail("RANKING", "RANKING_FAILED"); }
+    successStage("RANKING");
+
+    const key = editionKey(selected, now, testMode);
+    startStage("SUPABASE_READ");
+    let existing: EmailCampaign | null;
+    try { existing = await store.findOperationalCollectionByEditionKey(key); }
+    catch { fail("SUPABASE_READ", "SUPABASE_READ_FAILED"); }
+    successStage("SUPABASE_READ");
+    if (existing) return { status: "skipped", reason: "duplicate", newProductCount: fresh.length };
+
+    startStage("GEMINI");
+    let copy: WeeklyNewsletterCopy;
+    try { copy = await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected); }
+    catch (error) { fail("GEMINI", classifyGeminiDiagnosticReason(error)); }
+    successStage("GEMINI");
+
+    startStage("HTML_RENDER");
+    let rendered: ReturnType<typeof renderWeeklyNewsletter>;
+    let links: CampaignProductLink[];
+    let draft: EmailCampaign;
+    const campaignId = crypto.randomUUID();
+    try {
+      const institutional = deps.institutionalLoader
+        ? await deps.institutionalLoader(env)
+        : await getNewsletterInstitutionalOptions(env);
+      rendered = renderWeeklyNewsletter(selected, copy, { campaignId, publicBaseUrl, socialLinks: institutional.socialLinks });
+      links = selected.map((product, index) => ({ productId: product.id, position: index + 1, layout: index === 0 ? "feature" : "grid" }));
+      draft = createCampaignDraft(null, actor, rendered, now, campaignId, "collection", links, key);
+    } catch {
+      fail("HTML_RENDER", "HTML_RENDER_FAILED");
+    }
+    successStage("HTML_RENDER");
+
+    startStage("DRAFT_PERSIST");
+    let persisted: EmailCampaign;
+    try { persisted = await store.createCampaign(draft); }
+    catch { fail("DRAFT_PERSIST", "DRAFT_INSERT_FAILED"); }
+    context.campaignId = persisted.id;
+    context.draftCreated = true;
+    context.draftStatus = persisted.status;
+    try { await store.createCampaignProducts(persisted.id, links); }
+    catch { fail("DRAFT_PERSIST", "DRAFT_PRODUCTS_PERSIST_FAILED", { campaignId: persisted.id, draftCreated: true, draftStatus: persisted.status }); }
+    let pending: EmailCampaign;
+    try { pending = await submitCampaignForApproval(persisted, actor, { store, env, now }); }
+    catch { fail("DRAFT_PERSIST", "DRAFT_APPROVAL_PERSIST_FAILED", { campaignId: persisted.id, draftCreated: true, draftStatus: persisted.status }); }
+    context.draftStatus = pending.status;
+    successStage("DRAFT_PERSIST");
+
+    startStage("TELEGRAM_DELIVERY");
+    let delivery: TelegramDeliveryResult;
+    try {
+      delivery = await notify(deps.telegramSender, chatId, telegramPreview(pending, selected, copy, clickCounts, testMode), {
+        inline_keyboard: [
+          [{ text: testMode ? "✅ Aprovar teste" : "✅ Aprovar e enviar", callback_data: `campaign_weekly_approve:${pending.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${pending.id}` }],
+        ],
+      });
+    } catch {
+      fail("TELEGRAM_DELIVERY", "DRAFT_CREATED_TELEGRAM_DELIVERY_FAILED", { campaignId: pending.id, draftCreated: true, draftStatus: pending.status });
+    }
+    if (!delivery.ok) {
+      fail("TELEGRAM_DELIVERY", "DRAFT_CREATED_TELEGRAM_DELIVERY_FAILED", { campaignId: pending.id, draftCreated: true, draftStatus: pending.status });
+    }
+    const messageId = Number(delivery.result?.message_id);
+    if (Number.isSafeInteger(messageId) && messageId > 0) {
+      try { await store.saveCampaignTelegramCard(pending.id, chatId, messageId); }
+      catch { fail("DRAFT_PERSIST", "TELEGRAM_CARD_REFERENCE_PERSIST_FAILED", { campaignId: pending.id, draftCreated: true, draftStatus: pending.status }); }
+    }
+    successStage("TELEGRAM_DELIVERY");
+    return { status: "created", campaign: pending, products: selected };
+  } catch (error) {
+    if (isWeeklyDraftDiagnosticError(error)) throw error;
+    fail("UNKNOWN_INTERNAL", "UNKNOWN_INTERNAL");
   }
-  const messageId = Number(delivery.result?.message_id);
-  if (Number.isSafeInteger(messageId) && messageId > 0) await store.saveCampaignTelegramCard(pending.id, chatId, messageId);
-  return { status: "created", campaign: pending, products: selected };
 }
 
 export async function runWeeklyStaleDraftCheck(options: { env?: NodeJS.ProcessEnv; now?: Date; telegramSender?: WeeklyDraftDeps["telegramSender"] } = {}): Promise<number> {
