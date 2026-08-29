@@ -1,0 +1,49 @@
+name: Diagnostic Stale Guard Live
+
+on:
+  push:
+    branches:
+      - diag/stale-guard-live-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  verify-live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Verify production health and exact SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: 50b624d28305b4cd158d8565c64d8487bbe18138
+          HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            body="$(curl -fsS --max-time 20 "$HEALTH_URL" || true)"
+            if [ -n "$body" ]; then
+              printf '%s' "$body" > /tmp/health.json
+              result="$(node - <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/health.json','utf8'));
+          const health = String(body.status || body.health || '').toLowerCase();
+          const version = String(body.version || body.sha || body.commit || '');
+          process.stdout.write(`${health}|${version}`);
+          NODE
+              )" || result="|"
+              health="${result%%|*}"
+              version="${result#*|}"
+              echo "attempt=$attempt health=$health version=$version"
+              if { [ "$health" = "ok" ] || [ "$health" = "healthy" ]; } && [ "$version" = "$EXPECTED_SHA" ]; then
+                echo "HEALTH_STATUS=PASS"
+                echo "LIVE_VERSION_SHA=$version"
+                echo "DEPLOY_SHA_MATCH=true"
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "HEALTH_STATUS=FAIL"
+          echo "DEPLOY_SHA_MATCH=false"
+          exit 1
