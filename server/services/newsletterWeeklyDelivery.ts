@@ -9,6 +9,8 @@ import {
   type WeeklyBrevoMarketingProvider,
 } from "./newsletterWeeklyBrevoProvider";
 import { ensureWeeklyBrevoTestRecipient } from "./newsletterWeeklyBrevoTestRecipient";
+import { syncWeeklyBrevoProductionAudience } from "./newsletterWeeklyBrevoAudienceSync";
+import { isWeeklyProductionEnabled } from "./newsletterWeeklyProductionConfig";
 
 const weeklyDeliveryLocks = new Map<string, Promise<void>>();
 
@@ -23,6 +25,13 @@ export type WeeklyMarketingDeliveryOptions = {
    * through ensureWeeklyBrevoTestRecipient before the single /sendTest.
    */
   ensureTestRecipient?: () => Promise<unknown>;
+  /** Runtime real sincroniza a lista Brevo imediatamente antes do sendNow. */
+  productionAudienceSync?: () => Promise<{
+    listId: number;
+    eligibleSubscribers: number;
+    brevoMembers: number;
+  }>;
+  productionEnabledCheck?: () => Promise<boolean>;
 };
 
 export type WeeklyMarketingTestSuccess = {
@@ -122,9 +131,6 @@ export async function retryWeeklyMarketingTest(
     }
     const testEmail = requireWeeklyTestEmail(env);
 
-    // Runtime: self-heal do único destinatário de teste antes de qualquer sendTest.
-    // Testes que injetam provider continuam herméticos; podem injetar explicitamente
-    // ensureTestRecipient para validar esta etapa sem acessar a Brevo real.
     const ensureTestRecipient = options.ensureTestRecipient
       || (!options.provider ? () => ensureWeeklyBrevoTestRecipient({ env }) : null);
     if (ensureTestRecipient) await ensureTestRecipient();
@@ -212,14 +218,34 @@ export async function sendWeeklyMarketingNow(
       throw new Error("GENERAL_SEND_CONFIRMATION_REQUIRED");
     }
     assertWeeklyApprovalFresh(current, env, now);
-    if (env.NEWSLETTER_WEEKLY_ENABLED !== "true") {
-      throw new Error("WEEKLY_MARKETING_PRODUCTION_DISABLED");
-    }
 
-    const listId = parsePositiveInteger(env.BREVO_NEWSLETTER_LIST_ID);
-    if (!listId || env.BREVO_NEWSLETTER_CONTACT_SYNC_VERIFIED !== "true") {
-      throw new Error("WEEKLY_MARKETING_PRODUCTION_RECIPIENT_STRATEGY_UNVERIFIED");
+    const realRuntime = !options.provider;
+    const productionEnabled = options.productionEnabledCheck
+      ? await options.productionEnabledCheck()
+      : realRuntime
+        ? await isWeeklyProductionEnabled(env)
+        : env.NEWSLETTER_WEEKLY_ENABLED === "true";
+    if (!productionEnabled) throw new Error("WEEKLY_MARKETING_PRODUCTION_DISABLED");
+
+    let listId: number | null = null;
+    if (options.productionAudienceSync) {
+      const sync = await options.productionAudienceSync();
+      if (sync.eligibleSubscribers <= 0 || sync.eligibleSubscribers !== sync.brevoMembers) {
+        throw new Error("WEEKLY_MARKETING_PRODUCTION_RECIPIENT_STRATEGY_UNVERIFIED");
+      }
+      listId = parsePositiveInteger(String(sync.listId));
+    } else if (realRuntime) {
+      const sync = await syncWeeklyBrevoProductionAudience({ env });
+      if (sync.eligibleSubscribers <= 0 || sync.eligibleSubscribers !== sync.brevoMembers) {
+        throw new Error("WEEKLY_MARKETING_PRODUCTION_RECIPIENT_STRATEGY_UNVERIFIED");
+      }
+      listId = sync.listId;
+    } else {
+      // Compatibilidade hermética dos testes legados com provider injetado.
+      listId = parsePositiveInteger(env.BREVO_NEWSLETTER_LIST_ID);
+      if (env.BREVO_NEWSLETTER_CONTACT_SYNC_VERIFIED !== "true") listId = null;
     }
+    if (!listId) throw new Error("WEEKLY_MARKETING_PRODUCTION_RECIPIENT_STRATEGY_UNVERIFIED");
 
     const provider = options.provider || createConfiguredWeeklyBrevoMarketingProvider(env);
     let working = current;
