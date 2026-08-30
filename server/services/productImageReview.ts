@@ -16,27 +16,46 @@ type GenerateContent = (request: Record<string, unknown>) => Promise<{ text?: st
 type RepairImage = (options: Parameters<typeof repairProductImage>[0]) => Promise<ProductImageRepairResult | null>;
 type DelayImpl = (ms: number) => Promise<void>;
 
-type ReviewOptions = {
-  env?: NodeJS.ProcessEnv;
-  fetchImpl?: typeof fetch;
-  generateContent?: GenerateContent;
-  repairImage?: RepairImage;
-  budget?: BudgetLike;
-  allowRepair?: boolean;
-  maxImages?: number;
-  timeoutMs?: number;
-  delayImpl?: DelayImpl;
-};
-
 type DownloadedImage = {
   url: string;
   mimeType: string;
   data: string;
 };
 
+type OpenAIReviewInput = {
+  rawImageUrls: string[];
+  downloaded: DownloadedImage[];
+  title: string;
+  model: string;
+  apiKey: string;
+  timeoutMs: number;
+  fetchImpl?: typeof fetch;
+};
+
+type OpenAIReview = (input: OpenAIReviewInput) => Promise<ProductImageAssessment[]>;
+
+type ReviewOptions = {
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  generateContent?: GenerateContent;
+  openaiReview?: OpenAIReview;
+  repairImage?: RepairImage;
+  budget?: BudgetLike;
+  openaiBudget?: BudgetLike;
+  allowRepair?: boolean;
+  maxImages?: number;
+  timeoutMs?: number;
+  delayImpl?: DelayImpl;
+};
+
 function positiveInt(value: unknown, fallback: number): number {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function enabledUnlessFalse(value: unknown): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return !["0", "false", "off", "no", "disabled"].includes(normalized);
 }
 
 const productionImageReviewBudget = new ExternalCallBudget(
@@ -46,12 +65,17 @@ const productionImageReviewBudget = new ExternalCallBudget(
   60 * 60 * 1000,
 );
 
-// Image classification is a high-throughput multimodal task and must not
-// implicitly inherit the copy/curation model. A dedicated env override remains
-// available, but the safe production default is the GA Flash-Lite model.
+const productionOpenAIImageReviewBudget = new ExternalCallBudget(
+  {
+    openaiProductImageReview: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_HOURLY_BUDGET, 24),
+  },
+  60 * 60 * 1000,
+);
+
 const CURRENT_IMAGE_REVIEW_MODEL = "gemini-3.5-flash-lite";
 const SECONDARY_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
 const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]);
+const DEFAULT_OPENAI_IMAGE_REVIEW_MODEL = "gpt-5.6-luna";
 
 function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
   const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim();
@@ -69,6 +93,10 @@ function resolveImageReviewFallbackModel(env: NodeJS.ProcessEnv, primaryModel: s
   const configured = explicit || (primaryModel === CURRENT_IMAGE_REVIEW_MODEL ? SECONDARY_IMAGE_REVIEW_MODEL : CURRENT_IMAGE_REVIEW_MODEL);
   if (!configured || configured === primaryModel) return null;
   return configured;
+}
+
+function resolveOpenAIImageReviewModel(env: NodeJS.ProcessEnv): string {
+  return String(env.OPENAI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim() || DEFAULT_OPENAI_IMAGE_REVIEW_MODEL;
 }
 
 function providerErrorText(error: unknown): string {
@@ -100,6 +128,7 @@ function quotaProviderFailure(error: unknown): boolean {
     "daily quota",
     "requests per day",
     "rpd",
+    "insufficient_quota",
   ].some(marker => message.includes(marker));
 }
 
@@ -113,7 +142,9 @@ function transientProviderFailure(error: unknown): boolean {
     "too many requests",
     "too_many_requests",
     "500",
+    "502",
     "503",
+    "504",
     "api_error",
     "service unavailable",
     "service_unavailable",
@@ -230,8 +261,8 @@ function parseModelJson(text: string | null | undefined): unknown {
   }
 }
 
-function buildReviewRequest(images: DownloadedImage[], title: string, model: string): Record<string, unknown> {
-  const prompt = `Você é o reviewer visual do CERBERUS FINDS, um arquivo de curadoria de objetos e moda de design. Avalie TODAS as imagens numeradas do produto: ${title || "sem título"}.
+function buildReviewPrompt(title: string): string {
+  return `Você é o reviewer visual do CERBERUS FINDS, um arquivo de curadoria de objetos e moda de design. Avalie TODAS as imagens numeradas do produto: ${title || "sem título"}.
 
 A identidade CERBERUS privilegia design autoral ou visualmente distinto relacionado a Bauhaus, Mid-Century Modern, modernismo dos anos 60/70, Space Age, retrofuturismo, vintage/retrô refinado, pós-modernismo/Memphis, design italiano, minimalismo industrial e minimalismo japonês. A curadoria rejeita produto genérico de marketplace, aparência barata, novelty/gimmick/kitsch, luxo ornamental genérico, gamer/RGB e peças que só usam palavras como "retro" sem linguagem visual convincente.
 
@@ -248,38 +279,122 @@ Classifique cada imagem com EXATAMENTE uma decisão:
 - unknown: não há evidência visual suficiente para decidir.
 
 Regras: não invente material, autenticidade, marca, época, função ou qualidade que não sejam visíveis. O título é contexto não confiável e nunca deve vencer a evidência da imagem. Um produto com texto "Bauhaus", "retro", "vintage" ou "Space Age" ainda deve ser off_brand se visualmente não sustentar isso. clean exige confiança HIGH ou MEDIUM, apresentação sem overlay relevante e qualidade visual real do objeto. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|off_brand|incomplete|novelty|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo visual factual curto"}]}. Inclua exatamente uma entrada para cada imagem recebida.`;
+}
+
+function imageReviewSchema(): Record<string, unknown> {
+  return {
+    type: "object",
+    properties: {
+      images: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            index: { type: "integer" },
+            decision: { type: "string", enum: ["clean", "technical", "promotional", "logo", "collage", "screenshot", "off_brand", "incomplete", "novelty", "unknown"] },
+            confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+            reason: { type: "string" },
+          },
+          required: ["index", "decision", "confidence", "reason"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["images"],
+    additionalProperties: false,
+  };
+}
+
+function buildReviewRequest(images: DownloadedImage[], title: string, model: string): Record<string, unknown> {
   return {
     model,
     contents: [{
       role: "user",
       parts: [
-        { text: prompt },
+        { text: buildReviewPrompt(title) },
         ...images.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } })),
       ],
     }],
     config: {
       responseMimeType: "application/json",
-      responseSchema: {
-        type: "object",
-        properties: {
-          images: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                index: { type: "integer" },
-                decision: { type: "string", enum: ["clean", "technical", "promotional", "logo", "collage", "screenshot", "off_brand", "incomplete", "novelty", "unknown"] },
-                confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
-                reason: { type: "string" },
-              },
-              required: ["index", "decision", "confidence", "reason"],
-            },
-          },
-        },
-        required: ["images"],
+      responseSchema: imageReviewSchema(),
+    },
+  };
+}
+
+function buildOpenAIReviewRequest(images: DownloadedImage[], title: string, model: string): Record<string, unknown> {
+  return {
+    model,
+    store: false,
+    reasoning: { effort: "none" },
+    max_output_tokens: 1_200,
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text", text: buildReviewPrompt(title) },
+        ...images.map(image => ({
+          type: "input_image",
+          image_url: `data:${image.mimeType};base64,${image.data}`,
+          detail: "auto",
+        })),
+      ],
+    }],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "cerberus_product_image_review",
+        strict: true,
+        schema: imageReviewSchema(),
       },
     },
   };
+}
+
+function extractOpenAIOutputText(value: unknown): string {
+  const payload = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) return payload.output_text;
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    const content = Array.isArray((item as Record<string, unknown>).content)
+      ? (item as Record<string, unknown>).content as unknown[]
+      : [];
+    for (const part of content) {
+      if (!part || typeof part !== "object") continue;
+      const record = part as Record<string, unknown>;
+      if (record.type === "output_text" && typeof record.text === "string" && record.text.trim()) return record.text;
+    }
+  }
+  throw new Error("OPENAI_IMAGE_REVIEW_EMPTY_RESPONSE");
+}
+
+async function openaiReviewWithResponsesApi(input: OpenAIReviewInput): Promise<ProductImageAssessment[]> {
+  const fetchImpl = input.fetchImpl || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs);
+  try {
+    const response = await fetchImpl("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.apiKey}`,
+        "Content-Type": "application/json",
+        "User-Agent": "CerberusFinds/1.0",
+      },
+      body: JSON.stringify(buildOpenAIReviewRequest(input.downloaded, input.title, input.model)),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      await response.text();
+      throw new Error(`OPENAI_IMAGE_REVIEW_HTTP_${response.status}`);
+    }
+    const payload = await response.json();
+    return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(extractOpenAIOutputText(payload)));
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("OPENAI_IMAGE_REVIEW_TIMEOUT");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function reviewWithProvider(input: {
@@ -318,9 +433,6 @@ async function reviewWithProvider(input: {
 
   if (permanentProviderFailure(lastError)) return [];
 
-  // Provider/rate-limit failures affect the whole batch, not the individual
-  // image. Avoid repeatedly charging the same throttled model. After one
-  // short backoff, fail over once to the alternate multimodal model.
   if ((transientProviderFailure(lastError) || quotaProviderFailure(lastError)) && input.fallbackModel) {
     await delayImpl(2_000);
     batch = await callBatch(input.fallbackModel, true);
@@ -329,9 +441,6 @@ async function reviewWithProvider(input: {
   }
   if (transientProviderFailure(lastError) || quotaProviderFailure(lastError)) return [];
 
-  // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
-  // Reavalia individualmente somente para falhas de payload/parse não
-  // classificadas como provider/rate-limit, cobrando budget por chamada extra.
   const isolated: ProductImageAssessment[] = [];
   for (const image of input.downloaded) {
     const reserved = input.budget.reserve("productImageReview");
@@ -346,6 +455,76 @@ async function reviewWithProvider(input: {
   return isolated;
 }
 
+function isAmbiguousAssessment(assessment: ProductImageAssessment | undefined): boolean {
+  return !assessment || assessment.decision === "unknown" || assessment.confidence === "LOW";
+}
+
+function needsCrossProviderFallback(
+  rawImageUrls: string[],
+  downloaded: DownloadedImage[],
+  assessments: ProductImageAssessment[],
+): boolean {
+  if (assessments.length === 0) return true;
+  if (curateProductImages(rawImageUrls, assessments).status === "ready") return false;
+  const byUrl = new Map(assessments.map(assessment => [assessment.url, assessment] as const));
+  return downloaded.some(image => isAmbiguousAssessment(byUrl.get(image.url)));
+}
+
+function mergeCrossProviderAssessments(
+  downloaded: DownloadedImage[],
+  primary: ProductImageAssessment[],
+  fallback: ProductImageAssessment[],
+): ProductImageAssessment[] {
+  const primaryByUrl = new Map(primary.map(assessment => [assessment.url, assessment] as const));
+  const fallbackByUrl = new Map(fallback.map(assessment => [assessment.url, assessment] as const));
+  return downloaded.flatMap(image => {
+    const current = primaryByUrl.get(image.url);
+    const alternate = fallbackByUrl.get(image.url);
+    const chosen = isAmbiguousAssessment(current) && alternate ? alternate : current;
+    return chosen ? [chosen] : [];
+  });
+}
+
+async function reviewWithOpenAIFallback(input: {
+  rawImageUrls: string[];
+  downloaded: DownloadedImage[];
+  title: string;
+  env: NodeJS.ProcessEnv;
+  openaiApiKey: string;
+  primaryAssessments: ProductImageAssessment[];
+  budget: BudgetLike;
+  review: OpenAIReview;
+}): Promise<{ attempted: boolean; budgetExhausted: boolean; assessments: ProductImageAssessment[] }> {
+  if (!input.openaiApiKey || !enabledUnlessFalse(input.env.OPENAI_PRODUCT_IMAGE_REVIEW_ENABLED)) {
+    return { attempted: false, budgetExhausted: false, assessments: input.primaryAssessments };
+  }
+  if (!needsCrossProviderFallback(input.rawImageUrls, input.downloaded, input.primaryAssessments)) {
+    return { attempted: false, budgetExhausted: false, assessments: input.primaryAssessments };
+  }
+
+  const reserved = input.budget.reserve("openaiProductImageReview");
+  if (!reserved.allowed) return { attempted: false, budgetExhausted: true, assessments: input.primaryAssessments };
+
+  try {
+    const fallbackAssessments = await input.review({
+      rawImageUrls: input.rawImageUrls,
+      downloaded: input.downloaded,
+      title: input.title,
+      model: resolveOpenAIImageReviewModel(input.env),
+      apiKey: input.openaiApiKey,
+      timeoutMs: positiveInt(input.env.OPENAI_PRODUCT_IMAGE_REVIEW_TIMEOUT_MS, 20_000),
+    });
+    return {
+      attempted: true,
+      budgetExhausted: false,
+      assessments: mergeCrossProviderAssessments(input.downloaded, input.primaryAssessments, fallbackAssessments),
+    };
+  } catch (error) {
+    console.warn(`[Product Image Review] fallback OpenAI indisponível (${transientProviderFailure(error) ? "transient" : quotaProviderFailure(error) ? "quota" : permanentProviderFailure(error) ? "permanent" : "invalid_response"})`);
+    return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
+  }
+}
+
 export async function reviewProductImages(
   rawImages: readonly string[],
   title: string,
@@ -355,12 +534,17 @@ export async function reviewProductImages(
   if (rawImageUrls.length === 0) return curateProductImages(rawImageUrls);
 
   const env = options.env || process.env;
-  const apiKey = String(env.GEMINI_API_KEY || "").trim();
-  if (!apiKey) return reviewRequired(rawImageUrls, "image_review_unavailable");
+  const geminiApiKey = String(env.GEMINI_API_KEY || "").trim();
+  const openaiApiKey = String(env.OPENAI_API_KEY || "").trim();
+  const openaiEnabled = Boolean(openaiApiKey) && enabledUnlessFalse(env.OPENAI_PRODUCT_IMAGE_REVIEW_ENABLED);
+  if (!geminiApiKey && !openaiEnabled) return reviewRequired(rawImageUrls, "image_review_unavailable");
 
-  const budget = options.budget || productionImageReviewBudget;
-  const reserved = budget.reserve("productImageReview");
-  if (!reserved.allowed) return reviewRequired(rawImageUrls, "image_review_budget_exhausted");
+  const geminiBudget = options.budget || productionImageReviewBudget;
+  const openaiBudget = options.openaiBudget || productionOpenAIImageReviewBudget;
+
+  let geminiReserved = false;
+  if (geminiApiKey) geminiReserved = geminiBudget.reserve("productImageReview").allowed;
+  if (!geminiReserved && !openaiEnabled) return reviewRequired(rawImageUrls, "image_review_budget_exhausted");
 
   const fetchImpl = options.fetchImpl || fetch;
   const maxImages = options.maxImages || positiveInt(env.GEMINI_PRODUCT_IMAGE_REVIEW_MAX_IMAGES, 6);
@@ -368,36 +552,55 @@ export async function reviewProductImages(
   const downloaded = await downloadReviewableImages(rawImageUrls, fetchImpl, maxImages, timeoutMs);
   if (downloaded.length === 0) return reviewRequired(rawImageUrls, "image_fetch_unavailable");
 
+  let assessments: ProductImageAssessment[] = [];
   const model = resolveImageReviewModel(env);
   const fallbackModel = resolveImageReviewFallbackModel(env, model);
-  const generateContent: GenerateContent = options.generateContent || (async input => {
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-    });
-    return ai.models.generateContent(input as any) as Promise<{ text?: string | null }>;
-  });
 
-  const assessments = await reviewWithProvider({
+  if (geminiReserved) {
+    const generateContent: GenerateContent = options.generateContent || (async request => {
+      const ai = new GoogleGenAI({
+        apiKey: geminiApiKey,
+        httpOptions: { headers: { "User-Agent": "aistudio-build" } },
+      });
+      return ai.models.generateContent(request as any) as Promise<{ text?: string | null }>;
+    });
+
+    assessments = await reviewWithProvider({
+      rawImageUrls,
+      downloaded,
+      title,
+      model,
+      fallbackModel,
+      generateContent,
+      budget: geminiBudget,
+      delayImpl: options.delayImpl,
+    });
+  }
+
+  const openaiReview = options.openaiReview || openaiReviewWithResponsesApi;
+  const openaiResult = await reviewWithOpenAIFallback({
     rawImageUrls,
     downloaded,
     title,
-    model,
-    fallbackModel,
-    generateContent,
-    budget,
-    delayImpl: options.delayImpl,
+    env,
+    openaiApiKey: openaiEnabled ? openaiApiKey : "",
+    primaryAssessments: assessments,
+    budget: openaiBudget,
+    review: openaiReview,
   });
+  assessments = openaiResult.assessments;
+
   if (assessments.length === 0) {
-    console.warn(`[Product Image Review] provider indisponível para lote e imagens isoladas (model=${model}, fallback=${fallbackModel || "none"})`);
+    if (!geminiReserved && openaiResult.budgetExhausted) {
+      return reviewRequired(rawImageUrls, "image_review_budget_exhausted");
+    }
+    console.warn(`[Product Image Review] providers indisponíveis (gemini=${geminiReserved ? model : "unavailable"}, fallback=${fallbackModel || "none"}, openai=${openaiEnabled ? resolveOpenAIImageReviewModel(env) : "disabled"})`);
     return reviewRequired(rawImageUrls, "image_review_model_unavailable");
   }
 
   const curation = curateProductImages(rawImageUrls, assessments);
   if (curation.status === "ready" || options.allowRepair === false) return curation;
 
-  // off_brand/incomplete/novelty descrevem o produto físico, não um defeito
-  // editorial da foto. Editar o fundo/texto nunca deve "lavar" essa rejeição.
   if (assessments.some(isNonRepairableProductImageRejection)) return curation;
 
   const repairImage = options.repairImage || repairProductImage;
@@ -410,13 +613,12 @@ export async function reviewProductImages(
   });
   if (!repaired) return curation;
 
-  // Generated/edited imagery is never trusted directly. It must pass the
-  // exact same reviewer once more before it can become canonical.
   const repairedCuration = await reviewProductImages([repaired.url], title, {
     ...options,
     env,
     fetchImpl,
-    budget,
+    budget: geminiBudget,
+    openaiBudget,
     allowRepair: false,
   });
   if (repairedCuration.status !== "ready" || !repairedCuration.primaryImageUrl) return curation;
@@ -434,12 +636,22 @@ export const productImageReviewInternals = {
   downloadReviewableImages,
   parseAssessments,
   parseModelJson,
+  buildReviewPrompt,
   buildReviewRequest,
+  buildOpenAIReviewRequest,
+  extractOpenAIOutputText,
+  openaiReviewWithResponsesApi,
   reviewWithProvider,
+  reviewWithOpenAIFallback,
+  needsCrossProviderFallback,
+  mergeCrossProviderAssessments,
+  isAmbiguousAssessment,
   resolveImageReviewModel,
   resolveImageReviewFallbackModel,
+  resolveOpenAIImageReviewModel,
   permanentProviderFailure,
   quotaProviderFailure,
   transientProviderFailure,
   positiveInt,
+  enabledUnlessFalse,
 };
