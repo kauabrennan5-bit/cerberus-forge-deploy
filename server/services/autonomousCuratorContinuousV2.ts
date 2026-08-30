@@ -202,6 +202,30 @@ function revalidationPermanentFailure(reason: string): boolean {
   ].some(marker => upper.includes(marker));
 }
 
+function safeFailureScalar(value: unknown, maxLength: number): string {
+  if (typeof value !== "string" && typeof value !== "number") return "";
+  return String(value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[^a-zA-Z0-9À-ÿ _.:/()=\-]/g, "?")
+    .slice(0, maxLength);
+}
+
+function safeCategoryFailureReason(error: unknown): string {
+  if (error instanceof Error) {
+    const message = safeFailureScalar(error.message, 150);
+    return message || "CONTINUOUS_CATEGORY_FAILED";
+  }
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const code = safeFailureScalar(record.code, 36);
+    const message = safeFailureScalar(record.message, 100);
+    const detail = [code && `code=${code}`, message && `message=${message}`].filter(Boolean).join("|");
+    return detail ? `CONTINUOUS_CATEGORY_FAILED:${detail}`.slice(0, 160) : "CONTINUOUS_CATEGORY_FAILED";
+  }
+  return "CONTINUOUS_CATEGORY_FAILED";
+}
+
 function buildShopeeClient(env: NodeJS.ProcessEnv): ShopeeApiClient | null {
   const appId = String(env.SHOPEE_APP_ID || env.SHOPEE_AFFILIATE_APP_ID || "").trim();
   const secret = String(env.SHOPEE_APP_SECRET || env.SHOPEE_AFFILIATE_APP_SECRET || "").trim();
@@ -682,7 +706,7 @@ async function notify(result: ContinuousCuratorResultV2, env: NodeJS.ProcessEnv)
     "",
     result.status === "completed"
       ? "As 10 categorias estão cobertas; os próximos ciclos continuam abastecendo e melhorando a fila futura."
-      : "Categorias pendentes continuam automaticamente no próximo ciclo; os gates 1.3/88 permanecem inalterados.",
+      : "Categorias pendentes continuam automaticamente no próximo ciclo; os gates de curadoria permanecem inalterados.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
 }
@@ -800,7 +824,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       }
     } catch (error) {
       failedThisCycle += 1;
-      result.reason = error instanceof Error ? error.message.slice(0, 160) : "CONTINUOUS_CATEGORY_FAILED";
+      result.reason = safeCategoryFailureReason(error);
     }
     result.searchedPages = [...new Set(result.searchedPages)];
     categories.push(result);
@@ -921,4 +945,5 @@ export const autonomousCuratorContinuousV2Internals = {
   parseQueueNote,
   queueTarget,
   revalidationPermanentFailure,
+  safeCategoryFailureReason,
 };
