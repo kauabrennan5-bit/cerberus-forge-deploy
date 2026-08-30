@@ -2,7 +2,7 @@ export type ProductImageEditorialStatus = "clean" | "overlay_suspected" | "unrev
 
 export type ProductImageAssessment = {
   url: string;
-  decision: "clean" | "technical" | "promotional" | "logo" | "collage" | "screenshot" | "unknown";
+  decision: "clean" | "technical" | "promotional" | "logo" | "collage" | "screenshot" | "off_brand" | "incomplete" | "novelty" | "unknown";
   confidence: "HIGH" | "MEDIUM" | "LOW";
   reason: string;
 };
@@ -22,6 +22,9 @@ const REJECTED_DECISIONS = new Set<ProductImageAssessment["decision"]>([
   "logo",
   "collage",
   "screenshot",
+  "off_brand",
+  "incomplete",
+  "novelty",
 ]);
 
 function isPublicHttpsImageUrl(value: string): boolean {
@@ -100,6 +103,15 @@ export function isCommercialImageAssessment(assessment: ProductImageAssessment |
 
 export function isRejectedImageAssessment(assessment: ProductImageAssessment | undefined): boolean {
   return Boolean(assessment && REJECTED_DECISIONS.has(assessment.decision));
+}
+
+/** Rejeições que descrevem o produto, não um defeito editorial da fotografia. */
+export function isNonRepairableProductImageRejection(assessment: ProductImageAssessment | undefined): boolean {
+  return Boolean(
+    assessment
+    && assessment.confidence !== "LOW"
+    && ["off_brand", "incomplete", "novelty"].includes(assessment.decision),
+  );
 }
 
 export function orderCanonicalImageSet(curation: ProductImageCuration): string[] {
