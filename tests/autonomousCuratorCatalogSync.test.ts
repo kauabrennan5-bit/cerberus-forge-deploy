@@ -37,7 +37,7 @@ test("catalog branch promotion is restricted to a validated protected pull reque
   assert.match(workflow, /needs:\s*weekly-production-final/);
   assert.match(workflow, /contents:\s*write/);
   assert.match(workflow, /pull-requests:\s*write/);
-  assert.match(workflow, /timeout-minutes:\s*25/);
+  assert.match(workflow, /timeout-minutes:\s*40/);
   assert.match(workflow, /git merge-base --is-ancestor/);
   assert.match(workflow, /public\/data\/products\.json/);
   assert.match(workflow, /JSON\.parse/);
@@ -51,5 +51,10 @@ test("catalog branch promotion is restricted to a validated protected pull reque
   assert.match(workflow, /gh pr view/);
   assert.match(workflow, /pulls\/\$CATALOG_PR_NUMBER\/merge/);
   assert.match(workflow, /-f sha="\$GITHUB_SHA"/);
+  assert.match(workflow, /CATALOG_MERGE_SHA/);
+  assert.match(workflow, /Wait for Render to serve protected catalog merge/);
+  assert.match(workflow, /CERBERUS_HEALTH_URL/);
+  assert.match(workflow, /RENDER_CATALOG_LIVE_SHA_VERIFIED=true/);
+  assert.match(workflow, /live_sha.*CATALOG_MERGE_SHA/s);
   assert.doesNotMatch(workflow, /git push origin "\$GITHUB_SHA:refs\/heads\/main"/);
 });
