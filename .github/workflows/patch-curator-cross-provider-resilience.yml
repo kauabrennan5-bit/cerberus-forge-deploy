@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.head_commit.message != 'fix: harden cross-provider visual review fallback'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,43 +21,37 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Apply resilience patch
+      - name: Apply cross-provider resilience patch
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('server/services/productImageReview.ts')
+          path = Path("server/services/productImageReview.ts")
           text = path.read_text()
 
-          old = 'openaiProductImageReview: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_HOURLY_BUDGET, 24),'
-          new = 'openaiProductImageReview: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_HOURLY_BUDGET, 256),'
-          assert text.count(old) == 1
-          text = text.replace(old, new)
+          text = text.replace(
+              'openaiProductImageReview: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_HOURLY_BUDGET, 24),',
+              'openaiProductImageReview: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_HOURLY_BUDGET, 256),',
+              1,
+          )
+          anchor = 'const DEFAULT_OPENAI_IMAGE_REVIEW_MODEL = "gpt-5.6-luna";'
+          assert text.count(anchor) == 1
+          text = text.replace(anchor, anchor + '\nconst DEFAULT_OPENAI_IMAGE_REVIEW_FALLBACK_MODEL = "gpt-4.1-mini";', 1)
 
-          old = 'const DEFAULT_OPENAI_IMAGE_REVIEW_MODEL = "gpt-5.6-luna";'
-          new = old + '\nconst DEFAULT_OPENAI_IMAGE_REVIEW_FALLBACK_MODEL = "gpt-4.1-mini";'
-          assert text.count(old) == 1
-          text = text.replace(old, new)
-
-          old = '''function resolveOpenAIImageReviewModel(env: NodeJS.ProcessEnv): string {
+          resolver = '''function resolveOpenAIImageReviewModel(env: NodeJS.ProcessEnv): string {
             return String(env.OPENAI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim() || DEFAULT_OPENAI_IMAGE_REVIEW_MODEL;
           }
           '''
-          new = old + '''
+          assert text.count(resolver) == 1
+          text = text.replace(resolver, resolver + '''
           function resolveOpenAIImageReviewFallbackModel(env: NodeJS.ProcessEnv, primaryModel: string): string | null {
-            const explicit = String(env.OPENAI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL || "").trim();
-            const configured = explicit || DEFAULT_OPENAI_IMAGE_REVIEW_FALLBACK_MODEL;
-            if (!configured || configured === primaryModel) return null;
-            return configured;
+            const configured = String(env.OPENAI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL || "").trim() || DEFAULT_OPENAI_IMAGE_REVIEW_FALLBACK_MODEL;
+            return configured && configured !== primaryModel ? configured : null;
           }
-          '''
-          assert text.count(old) == 1
-          text = text.replace(old, new)
+          ''', 1)
 
-          reasoning = '    reasoning: { effort: "none" },\n'
-          assert text.count(reasoning) == 1
-          text = text.replace(reasoning, '')
+          text = text.replace('    reasoning: { effort: "none" },\n', '', 1)
 
           start = text.index('async function reviewWithOpenAIFallback(input: {')
           end = text.index('\nexport async function reviewProductImages', start)
@@ -87,62 +80,51 @@ jobs:
               apiKey: input.openaiApiKey,
               timeoutMs: positiveInt(input.env.OPENAI_PRODUCT_IMAGE_REVIEW_TIMEOUT_MS, 20_000),
             });
+            const merge = (fallbackAssessments: ProductImageAssessment[]) => ({
+              attempted: true,
+              budgetExhausted: false,
+              assessments: mergeCrossProviderAssessments(input.downloaded, input.primaryAssessments, fallbackAssessments),
+            });
 
             const primaryModel = resolveOpenAIImageReviewModel(input.env);
             const fallbackModel = resolveOpenAIImageReviewFallbackModel(input.env, primaryModel);
             const primaryReserved = input.budget.reserve("openaiProductImageReview");
-            if (!primaryReserved.allowed) {
-              return { attempted: false, budgetExhausted: true, assessments: input.primaryAssessments };
-            }
+            if (!primaryReserved.allowed) return { attempted: false, budgetExhausted: true, assessments: input.primaryAssessments };
 
             try {
-              const fallbackAssessments = await callModel(primaryModel);
-              return {
-                attempted: true,
-                budgetExhausted: false,
-                assessments: mergeCrossProviderAssessments(input.downloaded, input.primaryAssessments, fallbackAssessments),
-              };
+              return merge(await callModel(primaryModel));
             } catch (primaryError) {
-              if (fallbackModel) {
-                const secondaryReserved = input.budget.reserve("openaiProductImageReview");
-                if (!secondaryReserved.allowed) {
-                  return { attempted: true, budgetExhausted: true, assessments: input.primaryAssessments };
-                }
-                try {
-                  const fallbackAssessments = await callModel(fallbackModel);
-                  return {
-                    attempted: true,
-                    budgetExhausted: false,
-                    assessments: mergeCrossProviderAssessments(input.downloaded, input.primaryAssessments, fallbackAssessments),
-                  };
-                } catch (secondaryError) {
-                  console.warn(`[Product Image Review] fallback OpenAI indisponível (primary=${transientProviderFailure(primaryError) ? "transient" : quotaProviderFailure(primaryError) ? "quota" : permanentProviderFailure(primaryError) ? "permanent" : "invalid_response"}, secondary=${transientProviderFailure(secondaryError) ? "transient" : quotaProviderFailure(secondaryError) ? "quota" : permanentProviderFailure(secondaryError) ? "permanent" : "invalid_response"})`);
-                  return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
-                }
+              if (!fallbackModel) {
+                console.warn(`[Product Image Review] fallback OpenAI indisponível (${transientProviderFailure(primaryError) ? "transient" : quotaProviderFailure(primaryError) ? "quota" : permanentProviderFailure(primaryError) ? "permanent" : "invalid_response"})`);
+                return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
               }
-              console.warn(`[Product Image Review] fallback OpenAI indisponível (${transientProviderFailure(primaryError) ? "transient" : quotaProviderFailure(primaryError) ? "quota" : permanentProviderFailure(primaryError) ? "permanent" : "invalid_response"})`);
-              return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
+              const secondaryReserved = input.budget.reserve("openaiProductImageReview");
+              if (!secondaryReserved.allowed) return { attempted: true, budgetExhausted: true, assessments: input.primaryAssessments };
+              try {
+                return merge(await callModel(fallbackModel));
+              } catch (secondaryError) {
+                console.warn(`[Product Image Review] fallback OpenAI indisponível em ambos os modelos (primary=${transientProviderFailure(primaryError) ? "transient" : quotaProviderFailure(primaryError) ? "quota" : permanentProviderFailure(primaryError) ? "permanent" : "invalid_response"}, secondary=${transientProviderFailure(secondaryError) ? "transient" : quotaProviderFailure(secondaryError) ? "quota" : permanentProviderFailure(secondaryError) ? "permanent" : "invalid_response"})`);
+                return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
+              }
             }
           }
           '''
           text = text[:start] + replacement + text[end:]
 
-          old = '  resolveOpenAIImageReviewModel,\n'
-          new = old + '  resolveOpenAIImageReviewFallbackModel,\n'
-          assert text.count(old) == 1
-          text = text.replace(old, new)
+          export_anchor = '  resolveOpenAIImageReviewModel,\n'
+          assert text.count(export_anchor) == 1
+          text = text.replace(export_anchor, export_anchor + '  resolveOpenAIImageReviewFallbackModel,\n', 1)
           path.write_text(text)
 
-          test_path = Path('tests/productImageReviewOpenAI.test.ts')
-          tests = test_path.read_text()
-          old = '  assert.equal(productImageReviewInternals.resolveOpenAIImageReviewModel({ OPENAI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-openai-model" }), "custom-openai-model");\n'
-          new = old + '  assert.equal(productImageReviewInternals.resolveOpenAIImageReviewFallbackModel({}, "gpt-5.6-luna"), "gpt-4.1-mini");\n  assert.equal(productImageReviewInternals.resolveOpenAIImageReviewFallbackModel({ OPENAI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL: "custom-fallback" }, "gpt-5.6-luna"), "custom-fallback");\n'
-          assert tests.count(old) == 1
-          tests = tests.replace(old, new)
+          tests_path = Path("tests/productImageReviewOpenAI.test.ts")
+          tests = tests_path.read_text()
+          assertion_anchor = '  assert.equal(productImageReviewInternals.resolveOpenAIImageReviewModel({ OPENAI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-openai-model" }), "custom-openai-model");\n'
+          assert tests.count(assertion_anchor) == 1
+          tests = tests.replace(assertion_anchor, assertion_anchor + '  assert.equal(productImageReviewInternals.resolveOpenAIImageReviewFallbackModel({}, "gpt-5.6-luna"), "gpt-4.1-mini");\n', 1)
 
           marker = 'test("OpenAI resolve apenas decisão ambígua e não sobrescreve rejeição forte do Gemini", async () => {'
           assert tests.count(marker) == 1
-          added = '''test("OpenAI tenta modelo secundário quando o modelo primário falha", async () => {
+          added = '''test("OpenAI usa modelo secundário quando o primário não está disponível", async () => {
             const models: string[] = [];
             let reserves = 0;
             const openaiBudget = {
@@ -160,18 +142,17 @@ jobs:
               openaiReview: async input => {
                 models.push(input.model);
                 if (input.model === "gpt-5.6-luna") throw new Error("OPENAI_IMAGE_REVIEW_HTTP_404");
-                return [{ url: input.downloaded[0].url, decision: "clean", confidence: "HIGH", reason: "fallback compatível" }];
+                return [{ url: input.downloaded[0].url, decision: "clean", confidence: "HIGH", reason: "fallback visual compatível" }];
               },
             });
-
             assert.deepEqual(models, ["gpt-5.6-luna", "gpt-4.1-mini"]);
             assert.equal(reserves, 2);
             assert.equal(result.status, "ready");
           });
 
           '''
-          tests = tests.replace(marker, added + marker)
-          test_path.write_text(tests)
+          tests = tests.replace(marker, added + marker, 1)
+          tests_path.write_text(tests)
           PY
       - name: Focused image-review tests
         run: node --import tsx/esm --test --test-concurrency=1 tests/productImageReview.test.ts tests/productImageReviewOpenAI.test.ts
@@ -179,12 +160,13 @@ jobs:
         run: npx tsc --noEmit
       - name: Diff check
         run: git diff --check
-      - name: Commit tested patch
+      - name: Commit tested patch and remove staging workflow
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "kauabrennan5-bit"
           git config user.email "kauabrennan5@gmail.com"
+          git rm .github/workflows/patch-curator-cross-provider-resilience.yml
           git add server/services/productImageReview.ts tests/productImageReviewOpenAI.test.ts
           git commit -m "fix: harden cross-provider visual review fallback"
           git push origin HEAD:fix/curator-cross-provider-budget-resilience-2026-08-30
