@@ -166,7 +166,10 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
         .map(product => product.id),
     );
     let lastFailure: unknown = new Error("O Static Site ainda não forneceu a projeção esperada.");
-    const maxAttempts = 18;
+    // Protected catalog PRs may trigger a fresh Render static-site build only after
+    // the required repository gate completes, so allow up to ~3 minutes of
+    // propagation after the protected merge before declaring publication failed.
+    const maxAttempts = 36;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
