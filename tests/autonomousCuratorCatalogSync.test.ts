@@ -37,10 +37,17 @@ test("catalog branch promotion is restricted to a validated protected pull reque
   assert.match(workflow, /needs:\s*weekly-production-final/);
   assert.match(workflow, /contents:\s*write/);
   assert.match(workflow, /pull-requests:\s*write/);
+  assert.match(workflow, /timeout-minutes:\s*25/);
   assert.match(workflow, /git merge-base --is-ancestor/);
   assert.match(workflow, /public\/data\/products\.json/);
   assert.match(workflow, /JSON\.parse/);
   assert.match(workflow, /gh pr create/);
+  assert.match(workflow, /Wait for protected pull request gate/);
+  assert.match(workflow, /gh pr checks/);
+  assert.match(workflow, /--required/);
+  assert.match(workflow, /--watch/);
+  assert.match(workflow, /--fail-fast/);
+  assert.match(workflow, /weekly-production-final/);
   assert.match(workflow, /gh pr view/);
   assert.match(workflow, /pulls\/\$CATALOG_PR_NUMBER\/merge/);
   assert.match(workflow, /-f sha="\$GITHUB_SHA"/);

@@ -65,7 +65,7 @@ jobs:
       contents: write
       pull-requests: write
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,6 +117,36 @@ jobs:
 
           test -n "$pr_number"
           echo "CATALOG_PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+
+      - name: Wait for protected pull request gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          registered=false
+          for attempt in $(seq 1 24); do
+            checks_json="$(gh pr checks "$CATALOG_PR_NUMBER" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json name,state 2>/dev/null || true)"
+            if node -e 'const checks=JSON.parse(process.argv[1]||"[]"); process.exit(checks.some(check=>check.name==="weekly-production-final")?0:1)' "$checks_json"; then
+              registered=true
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$registered" != "true" ]; then
+            echo "Required weekly-production-final check did not register on catalog PR."
+            exit 1
+          fi
+
+          timeout 20m gh pr checks "$CATALOG_PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --required \
+            --watch \
+            --fail-fast \
+            --interval 10
 
       - name: Squash merge exact validated catalog head
         env:

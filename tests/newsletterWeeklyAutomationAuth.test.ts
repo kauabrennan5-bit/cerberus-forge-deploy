@@ -32,6 +32,14 @@ function jwt(overrides: Record<string, unknown> = {}): string {
   return `${signingInput}.${signature}`;
 }
 
+function corruptSignature(token: string): string {
+  const [header, payload, encodedSignature] = token.split(".");
+  const signature = Buffer.from(encodedSignature, "base64url");
+  assert.ok(signature.length > 0);
+  signature[0] ^= 0x01;
+  return `${header}.${payload}.${signature.toString("base64url")}`;
+}
+
 const jwksFetch = (async () => new Response(JSON.stringify({
   keys: [{ ...publicJwk, kid, alg: "RS256", use: "sig" }],
 }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
@@ -63,7 +71,7 @@ test("GitHub OIDC rejeita branch, workflow, audience e assinatura inválidos", a
     jwt({ ref: "refs/heads/feature" }),
     jwt({ workflow_ref: "kauabrennan5-bit/cerberus-forge-deploy/.github/workflows/unknown.yml@refs/heads/main" }),
     jwt({ aud: "wrong-audience" }),
-    `${jwt().slice(0, -2)}xx`,
+    corruptSignature(jwt()),
   ]) {
     const result = await authorizeWeeklyAutomationRequest({
       headers: { authorization: `Bearer ${token}` },
