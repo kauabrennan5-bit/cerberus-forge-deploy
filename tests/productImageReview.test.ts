@@ -24,11 +24,29 @@ function imageResponse(status = 200): Response {
 test("reviewer visual é desacoplado do modelo de copy e usa Flash-Lite de alto throughput", () => {
   assert.equal(productImageReviewInternals.resolveImageReviewModel({}), "gemini-3.5-flash-lite");
   assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_CURATOR_MODEL: "gemini-3.7-flash" }), "gemini-3.5-flash-lite");
-  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.6-flash" }), "gemini-3.5-flash-lite");
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.6-flash" }), "gemini-3.6-flash");
   assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-model" }), "custom-model");
-  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.5-flash-lite"), "gemini-3.7-flash");
+  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.5-flash-lite"), "gemini-3.6-flash");
+  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.6-flash"), "gemini-3.5-flash-lite");
   assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.7-flash"), "gemini-3.5-flash-lite");
   assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({ GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL: "gemini-3.7-flash" }, "gemini-3.7-flash"), null);
+});
+
+test("circuit breaker de indisponibilidade evita drenar o budget entre candidatos", () => {
+  const {
+    providerCooldownMs,
+    providerCircuitOpen,
+    tripProviderCircuit,
+    resetProviderCircuit,
+  } = productImageReviewInternals;
+  const env = { GEMINI_PRODUCT_IMAGE_REVIEW_PROVIDER_COOLDOWN_MS: "300000" };
+  resetProviderCircuit();
+  assert.equal(providerCooldownMs(env), 300000);
+  assert.equal(providerCircuitOpen(1_000), false);
+  tripProviderCircuit(env, 1_000);
+  assert.equal(providerCircuitOpen(300_999), true);
+  assert.equal(providerCircuitOpen(301_000), false);
+  resetProviderCircuit();
 });
 
 test("uma imagem CDN quebrada não invalida outra imagem revisável do mesmo produto", async () => {
