@@ -66,10 +66,24 @@ test("GitHub OIDC válido autoriza somente workflow main permitido", async () =>
   assert.deepEqual(result, { authorized: true, method: "github_oidc" });
 });
 
+test("GitHub OIDC autoriza o canário OpenAI exato em push de main", async () => {
+  const result = await authorizeWeeklyAutomationRequest({
+    headers: { authorization: `Bearer ${jwt({
+      workflow_ref: "kauabrennan5-bit/cerberus-forge-deploy/.github/workflows/openai-provider-canary.yml@refs/heads/main",
+      event_name: "push",
+    })}` },
+    env: {},
+    fetchImpl: jwksFetch,
+    nowMs: NOW_MS,
+  });
+  assert.deepEqual(result, { authorized: true, method: "github_oidc" });
+});
+
 test("GitHub OIDC rejeita branch, workflow, audience e assinatura inválidos", async () => {
   for (const token of [
     jwt({ ref: "refs/heads/feature" }),
     jwt({ workflow_ref: "kauabrennan5-bit/cerberus-forge-deploy/.github/workflows/unknown.yml@refs/heads/main" }),
+    jwt({ workflow_ref: "kauabrennan5-bit/cerberus-forge-deploy/.github/workflows/openai-provider-canary.yml@refs/heads/feature" }),
     jwt({ aud: "wrong-audience" }),
     corruptSignature(jwt()),
   ]) {
