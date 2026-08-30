@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reviewProductImages } from "../server/services/productImageReview";
+import { reviewProductImages, productImageReviewInternals } from "../server/services/productImageReview";
 
 const allowBudget = {
   reserve() {
@@ -20,6 +20,13 @@ function imageResponse(status = 200): Response {
     headers: { "content-type": "image/jpeg" },
   });
 }
+
+test("reviewer migra modelo legado 3.6 para o Gemini multimodal estável atual", () => {
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.6-flash" }), "gemini-3.7-flash");
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_CURATOR_MODEL: "gemini-3.6-flash" }), "gemini-3.7-flash");
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({}), "gemini-3.7-flash");
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-model" }), "custom-model");
+});
 
 test("uma imagem CDN quebrada não invalida outra imagem revisável do mesmo produto", async () => {
   const bad = "https://cdn.example.test/bad.jpg";
@@ -79,6 +86,35 @@ test("falha multimodal em lote recai para revisão isolada e preserva imagem lim
   assert.equal(result.assessments[1].decision, "promotional");
 });
 
+test("erro permanente de modelo não dispara retries isolados que drenam o budget", async () => {
+  let generationCalls = 0;
+  let reserves = 0;
+  const budget = {
+    reserve() {
+      reserves += 1;
+      return { allowed: true, used: reserves, limit: 100, resetAt: Date.now() + 60_000 };
+    },
+  };
+  const result = await reviewProductImages([
+    "https://cdn.example.test/a.jpg",
+    "https://cdn.example.test/b.jpg",
+    "https://cdn.example.test/c.jpg",
+  ], "Produto", {
+    env: { GEMINI_API_KEY: "test-key", GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.7-flash" },
+    budget,
+    allowRepair: false,
+    fetchImpl: (async () => imageResponse(200)) as typeof fetch,
+    generateContent: async () => {
+      generationCalls += 1;
+      throw new Error("404 model not found");
+    },
+  });
+  assert.equal(generationCalls, 1);
+  assert.equal(reserves, 1);
+  assert.equal(result.status, "review_required");
+  assert.equal(result.reason, "image_review_model_unavailable");
+});
+
 test("quando todas as imagens falham no CDN o motivo fica explícito e o Gemini não é chamado", async () => {
   let generationCalls = 0;
   const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Produto", {
@@ -113,7 +149,7 @@ test("exaustão do orçamento visual é distinguida de falha de imagem", async (
   assert.equal(result.reason, "image_review_budget_exhausted");
 });
 
-test("erro do modelo visual permanece fail-closed com motivo observável", async () => {
+test("erro transitório do modelo visual permanece fail-closed com motivo observável", async () => {
   const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Produto", {
     env: { GEMINI_API_KEY: "test-key" },
     budget: allowBudget,
