@@ -50,8 +50,26 @@ const productionImageReviewBudget = new ExternalCallBudget(
 // implicitly inherit the copy/curation model. A dedicated env override remains
 // available, but the safe production default is the GA Flash-Lite model.
 const CURRENT_IMAGE_REVIEW_MODEL = "gemini-3.5-flash-lite";
-const SECONDARY_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
-const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]);
+const SECONDARY_IMAGE_REVIEW_MODEL = "gemini-3.6-flash";
+const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-2.5-flash", "gemini-2.5-flash-lite"]);
+const DEFAULT_PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+let providerUnavailableUntil = 0;
+
+function providerCooldownMs(env: NodeJS.ProcessEnv): number {
+  return positiveInt(env.GEMINI_PRODUCT_IMAGE_REVIEW_PROVIDER_COOLDOWN_MS, DEFAULT_PROVIDER_COOLDOWN_MS);
+}
+
+function providerCircuitOpen(now = Date.now()): boolean {
+  return now < providerUnavailableUntil;
+}
+
+function tripProviderCircuit(env: NodeJS.ProcessEnv, now = Date.now()): void {
+  providerUnavailableUntil = Math.max(providerUnavailableUntil, now + providerCooldownMs(env));
+}
+
+function resetProviderCircuit(): void {
+  providerUnavailableUntil = 0;
+}
 
 function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
   const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim();
@@ -291,6 +309,7 @@ async function reviewWithProvider(input: {
   generateContent: GenerateContent;
   budget: BudgetLike;
   delayImpl?: DelayImpl;
+  onProviderUnavailable?: () => void;
 }): Promise<ProductImageAssessment[]> {
   const delayImpl = input.delayImpl || delay;
 
@@ -316,7 +335,10 @@ async function reviewWithProvider(input: {
   if (batch.budgetExhausted) return [];
   const lastError = batch.error;
 
-  if (permanentProviderFailure(lastError)) return [];
+  if (permanentProviderFailure(lastError)) {
+    input.onProviderUnavailable?.();
+    return [];
+  }
 
   // Provider/rate-limit failures affect the whole batch, not the individual
   // image. Avoid repeatedly charging the same throttled model. After one
@@ -325,9 +347,15 @@ async function reviewWithProvider(input: {
     await delayImpl(2_000);
     batch = await callBatch(input.fallbackModel, true);
     if (batch.assessments) return batch.assessments;
+    if (permanentProviderFailure(batch.error) || transientProviderFailure(batch.error) || quotaProviderFailure(batch.error)) {
+      input.onProviderUnavailable?.();
+    }
     return [];
   }
-  if (transientProviderFailure(lastError) || quotaProviderFailure(lastError)) return [];
+  if (transientProviderFailure(lastError) || quotaProviderFailure(lastError)) {
+    input.onProviderUnavailable?.();
+    return [];
+  }
 
   // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
   // Reavalia individualmente somente para falhas de payload/parse não
@@ -358,6 +386,14 @@ export async function reviewProductImages(
   const apiKey = String(env.GEMINI_API_KEY || "").trim();
   if (!apiKey) return reviewRequired(rawImageUrls, "image_review_unavailable");
 
+  // A provider-wide outage must fail closed without turning every candidate in
+  // the same process into another provider call. Injected test providers bypass
+  // the production circuit so deterministic tests remain isolated.
+  const useProviderCircuit = !options.generateContent;
+  if (useProviderCircuit && providerCircuitOpen()) {
+    return reviewRequired(rawImageUrls, "image_review_model_unavailable");
+  }
+
   const budget = options.budget || productionImageReviewBudget;
   const reserved = budget.reserve("productImageReview");
   if (!reserved.allowed) return reviewRequired(rawImageUrls, "image_review_budget_exhausted");
@@ -387,7 +423,9 @@ export async function reviewProductImages(
     generateContent,
     budget,
     delayImpl: options.delayImpl,
+    onProviderUnavailable: useProviderCircuit ? () => tripProviderCircuit(env) : undefined,
   });
+  if (assessments.length > 0 && useProviderCircuit) resetProviderCircuit();
   if (assessments.length === 0) {
     console.warn(`[Product Image Review] provider indisponível para lote e imagens isoladas (model=${model}, fallback=${fallbackModel || "none"})`);
     return reviewRequired(rawImageUrls, "image_review_model_unavailable");
@@ -441,5 +479,9 @@ export const productImageReviewInternals = {
   permanentProviderFailure,
   quotaProviderFailure,
   transientProviderFailure,
+  providerCooldownMs,
+  providerCircuitOpen,
+  tripProviderCircuit,
+  resetProviderCircuit,
   positiveInt,
 };
