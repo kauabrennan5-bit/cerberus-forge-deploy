@@ -8,8 +8,8 @@ import { detectMarketplace } from "./marketplace";
 import { ExternalCallBudget } from "./operationalGuards";
 import { containsRawPayloadMarkers } from "./productLifecycle";
 import { PUBLIC_PRODUCT_CATEGORIES, resolvePublicProductCategory } from "../../src/lib/productCategory";
-import { curateProductImages, type ProductImageAssessment, type ProductImageCuration } from "../../src/lib/productImageCuration";
-import { repairProductImage } from "./productImageRepair";
+import { curateProductImages, type ProductImageCuration } from "../../src/lib/productImageCuration";
+import { reviewProductImages } from "./productImageReview";
 
 export { detectMarketplace } from "./marketplace";
 
@@ -24,8 +24,13 @@ const ai = new GoogleGenAI({
     }
   }
 });
-const geminiBudget = new ExternalCallBudget(
-  { gemini: Number.parseInt(process.env.GEMINI_HOURLY_BUDGET || "20", 10) },
+function productCuratorBudgetLimit(value: unknown, fallback = 50): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const productCuratorBudget = new ExternalCallBudget(
+  { productCurator: productCuratorBudgetLimit(process.env.GEMINI_PRODUCT_CURATOR_HOURLY_BUDGET) },
   60 * 60 * 1000,
 );
 
@@ -92,65 +97,7 @@ export function sanitizeCuratorOutput(
 async function reviewScrapedImages(rawImages: string[], title: string, allowRepair = true): Promise<ProductImageCuration> {
   const rawImageUrls = curateProductImages(rawImages).rawImageUrls;
   if (testOverrideImageReview) return testOverrideImageReview(rawImageUrls, title);
-  if (rawImageUrls.length === 0) return curateProductImages(rawImageUrls);
-  if (!process.env.GEMINI_API_KEY) return curateProductImages(rawImageUrls);
-
-  const budget = geminiBudget.reserve("gemini");
-  if (!budget.allowed) return curateProductImages(rawImageUrls);
-
-  try {
-    const downloaded = await Promise.all(rawImageUrls.map(async (url) => {
-      const response = await fetch(url, { headers: { Accept: "image/avif,image/webp,image/jpeg,image/png" } });
-      const contentType = response.headers.get("content-type")?.split(";", 1)[0] || "";
-      if (!response.ok || !/^image\/(?:avif|webp|jpeg|png)$/i.test(contentType)) throw new Error("image_fetch_failed");
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length === 0 || bytes.length > 8 * 1024 * 1024) throw new Error("image_size_invalid");
-      return { mimeType: contentType, data: bytes.toString("base64") };
-    }));
-
-    const prompt = `Avalie TODAS as imagens numeradas deste produto para seleção comercial de catálogo. Produto: ${title || "sem título"}. Para cada imagem, classifique somente como clean, technical, promotional, logo, collage, screenshot ou unknown. Rejeite medidas, dimensões, setas, textos promocionais, selos, logos, marcas d'água, molduras técnicas, colagens e screenshots. clean exige apresentação clara do produto, sem overlay visível, com confiança HIGH ou MEDIUM. Não invente características. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo factual curto"}]}. Inclua exatamente uma entrada para cada imagem.`;
-    const response = await ai.models.generateContent({
-      model: process.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || process.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }, ...downloaded.map(image => ({ inlineData: image }))] }],
-      config: { responseMimeType: "application/json" },
-    });
-    const parsed = JSON.parse(response.text || "{}");
-    const modelAssessments = Array.isArray(parsed?.images) ? parsed.images : [];
-    const assessments: ProductImageAssessment[] = rawImageUrls.map((url, index) => {
-      const item = modelAssessments.find((candidate: unknown) => candidate && typeof candidate === "object" && Number((candidate as Record<string, unknown>).index) === index + 1) as Record<string, unknown> | undefined;
-      const decision = ["clean", "technical", "promotional", "logo", "collage", "screenshot", "unknown"].includes(String(item?.decision))
-        ? String(item?.decision) as ProductImageAssessment["decision"]
-        : "unknown";
-      const confidence = ["HIGH", "MEDIUM", "LOW"].includes(String(item?.confidence))
-        ? String(item?.confidence) as ProductImageAssessment["confidence"]
-        : "LOW";
-      return { url, decision, confidence, reason: typeof item?.reason === "string" ? item.reason.slice(0, 180) : "Avaliação visual insuficiente." };
-    });
-    const curation = curateProductImages(rawImageUrls, assessments);
-    if (curation.status === "ready" || !allowRepair) return curation;
-
-    const repaired = await repairProductImage({
-      rawImageUrls,
-      title,
-      assessments,
-    });
-    if (!repaired) return curation;
-
-    // Uma imagem gerada/editada nunca é auto-aprovada. Ela volta ao mesmo
-    // reviewer multimodal e só entra no catálogo se for classificada clean.
-    const repairedCuration = await reviewScrapedImages([repaired.url], title, false);
-    if (repairedCuration.status !== "ready" || !repairedCuration.primaryImageUrl) return curation;
-    return {
-      status: "ready",
-      rawImageUrls: [...rawImageUrls, repaired.url],
-      primaryImageUrl: repairedCuration.primaryImageUrl,
-      galleryImageUrls: repairedCuration.galleryImageUrls,
-      assessments: [...assessments, ...repairedCuration.assessments],
-    };
-  } catch (error: any) {
-    console.warn(`[Product Image Review] avaliação indisponível: ${error?.message || "erro desconhecido"}`);
-    return curateProductImages(rawImageUrls);
-  }
+  return reviewProductImages(rawImageUrls, title, { allowRepair });
 }
 
 /**
@@ -523,7 +470,7 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
     let curatedCategory = resolvePublicProductCategory("", { title: curatedTitle, description: "" });
 
     if (process.env.GEMINI_API_KEY) {
-      const budget = geminiBudget.reserve("gemini");
+      const budget = productCuratorBudget.reserve("productCurator");
       if (!budget.allowed) {
         console.warn(`[Product Review Extraction] Orçamento Gemini atingido (${budget.used}/${budget.limit}); mantendo dados do scraper.`);
       } else try {

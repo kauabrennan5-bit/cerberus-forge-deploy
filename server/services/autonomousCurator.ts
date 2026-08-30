@@ -238,17 +238,17 @@ async function prepareCategoryCandidate(input: {
   existingProducts: Product[];
   client: ShopeeApiClient;
   deps: AutonomousCuratorDependencies;
-}): Promise<{ candidate: CuratedCandidate | null; decision: "none" | "duplicate" | "reject" | "failed"; reason: string; rawTitle?: string | null; shopId?: string | null; itemId?: string | null; sourceUrl?: string | null }> {
+}): Promise<{ candidate: CuratedCandidate | null; decision: "none" | "duplicate" | "reject" | "failed"; reason: string; rawTitle?: string | null; shopId?: string | null; itemId?: string | null; sourceUrl?: string | null; examined: number }> {
   const search = await input.client.searchOffers({ query: input.query, limit: input.config.maxSearchCandidates });
-  if (!search.ok) return { candidate: null, decision: "failed", reason: `SHOPEE_SEARCH:${search.reason || "failed"}` };
-  if (search.items.length === 0) return { candidate: null, decision: "none", reason: "NO_OFFICIAL_CANDIDATES" };
+  if (!search.ok) return { candidate: null, decision: "failed", reason: `SHOPEE_SEARCH:${search.reason || "failed"}`, examined: 0 };
+  if (search.items.length === 0) return { candidate: null, decision: "none", reason: "NO_OFFICIAL_CANDIDATES", examined: 0 };
 
   const ranked = [...search.items]
     .filter(item => item.shopId && item.itemId && item.productLink && item.name)
     .map(item => ({ item, cheap: cheapProfileScore(input.profile, item.name || "") }))
     .filter(entry => entry.cheap > -1000)
     .sort((a, b) => b.cheap - a.cheap || String(a.item.itemId).localeCompare(String(b.item.itemId)));
-  if (ranked.length === 0) return { candidate: null, decision: "none", reason: "NO_PROFILE_CANDIDATES" };
+  if (ranked.length === 0) return { candidate: null, decision: "none", reason: "NO_PROFILE_CANDIDATES", examined: 0 };
 
   const findIdentity = input.deps.findSourceIdentity || curatorRepo.findProductSourceIdentity;
   const extractor = input.deps.extractor || extractProductForReview;
@@ -404,10 +404,11 @@ async function prepareCategoryCandidate(input: {
       shopId,
       itemId,
       sourceUrl,
+      examined,
     };
   }
 
-  return { candidate: null, decision: lastReason === "SOURCE_IDENTITY_ALREADY_PUBLISHED" ? "duplicate" : "reject", reason: lastReason };
+  return { candidate: null, decision: lastReason === "SOURCE_IDENTITY_ALREADY_PUBLISHED" ? "duplicate" : "reject", reason: lastReason, examined };
 }
 
 async function rollbackCreatedProducts(productIds: string[], deps: AutonomousCuratorDependencies): Promise<void> {
@@ -576,9 +577,24 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
       let prepared: Awaited<ReturnType<typeof prepareCategoryCandidate>> | null = null;
       let strongestPrepared: Awaited<ReturnType<typeof prepareCategoryCandidate>> | null = null;
       const decisionRank = (decision: string) => decision === "duplicate" ? 3 : decision === "reject" ? 2 : decision === "none" ? 1 : 0;
-      for (const candidateQuery of queryOrder) {
+      let enrichRemaining = config.maxEnrichPerCategory;
+      for (let queryIndex = 0; queryIndex < queryOrder.length && enrichRemaining > 0; queryIndex += 1) {
+        const candidateQuery = queryOrder[queryIndex];
         query = candidateQuery;
-        const currentPrepared = await prepareCategoryCandidate({ profile, query, runId: open.run.id, config, existingProducts, client, deps });
+        const queriesRemaining = queryOrder.length - queryIndex;
+        const maxEnrichThisQuery = queryIndex === 0
+          ? Math.min(enrichRemaining, Math.max(2, Math.ceil(config.maxEnrichPerCategory / 2)))
+          : Math.max(1, Math.ceil(enrichRemaining / queriesRemaining));
+        const currentPrepared = await prepareCategoryCandidate({
+          profile,
+          query,
+          runId: open.run.id,
+          config: { ...config, maxEnrichPerCategory: maxEnrichThisQuery },
+          existingProducts,
+          client,
+          deps,
+        });
+        enrichRemaining = Math.max(0, enrichRemaining - currentPrepared.examined);
         prepared = currentPrepared;
         if (currentPrepared.candidate) break;
         if (!strongestPrepared || decisionRank(currentPrepared.decision) > decisionRank(strongestPrepared.decision)) strongestPrepared = currentPrepared;

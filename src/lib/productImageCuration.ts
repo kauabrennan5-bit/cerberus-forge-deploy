@@ -13,7 +13,7 @@ export type ProductImageCuration = {
   primaryImageUrl?: string;
   galleryImageUrls: string[];
   assessments: ProductImageAssessment[];
-  reason?: "no_images" | "no_commercial_image" | "image_review_unavailable";
+  reason?: "no_images" | "no_commercial_image" | "image_review_unavailable" | "image_review_budget_exhausted" | "image_fetch_unavailable" | "image_review_model_unavailable";
 };
 
 const REJECTED_DECISIONS = new Set<ProductImageAssessment["decision"]>([
