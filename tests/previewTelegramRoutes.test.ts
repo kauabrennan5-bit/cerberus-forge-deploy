@@ -178,8 +178,8 @@ function installFakeAffiliateFetch(scenario: AffiliateApiScenario): void {
         headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
       });
     }
-    // Fallback para o fetch real (nada mais é esperado nos testes da rota).
-    return originalFetch(input, init);
+    // Hermeticidade: nenhum destino fora dos fakes acima pode atingir a rede.
+    throw new Error(`UNEXPECTED_EXTERNAL_FETCH:${new URL(url).hostname}`);
   }) as typeof fetch;
 }
 
@@ -248,6 +248,9 @@ test.beforeEach(() => {
   process.env.SHOPEE_APP_SECRET = "mock-app-secret";
   // Token fake: sem ele sendTelegramMessage retorna early e o card não sai.
   process.env.TELEGRAM_BOT_TOKEN = "mock-telegram-bot-token";
+  // Instala o transporte fake também para os testes de callback isolados.
+  // Cada cenário de rota pode substituí-lo novamente sem tocar a rede real.
+  installFakeAffiliateFetch({ status: "link_acquired", nodes: DEFAULT_NODES, httpStatus: 200 });
   installFakeFindExistingProduct();
   setScraperHtml({ empty: false });
   setTestImageReview(async (images) => ({

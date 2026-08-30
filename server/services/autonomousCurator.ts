@@ -10,6 +10,7 @@ import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
 import type { PendingReview } from "./telegramTypes";
 import { extractProductForReview } from "./productAutomation";
+import { resolveProductImageReviewModel } from "./productImageReview";
 import { createProductionProductPipeline, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage, sendTelegramPhoto, type TelegramDeliveryResult } from "./telegramBot";
@@ -504,7 +505,7 @@ async function publishAutoBatch(input: {
       await saveImageReview({
         productId: product.id,
         curation: candidate.imageCuration,
-        model: input.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || input.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
+        model: resolveProductImageReviewModel(input.env),
         reviewVersion: "1.0",
       });
       created.push({ candidate, productId: product.id });

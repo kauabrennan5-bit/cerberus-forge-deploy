@@ -393,6 +393,14 @@ function toCampaignRow(campaign: EmailCampaign): Record<string, unknown> {
     sent_at: campaign.sentAt,
     archived_at: campaign.archivedAt,
     archive_reason: campaign.archiveReason,
+    editorial_snapshot: campaign.editorialSnapshot,
+    editorial_fingerprint: campaign.editorialFingerprint,
+    editorial_composition_mode: campaign.editorialCompositionMode,
+    editorial_categories: campaign.editorialCategories,
+    preview_expires_at: campaign.previewExpiresAt,
+    approval_expires_at: campaign.approvalExpiresAt,
+    approval_audience_count: campaign.approvalAudienceCount,
+    approval_audience_status: campaign.approvalAudienceStatus,
     recipients_total: campaign.counts.total,
     recipients_success: campaign.counts.success,
     recipients_failed: campaign.counts.failed,
@@ -426,6 +434,24 @@ function fromCampaignRow(row: Record<string, unknown>): EmailCampaign {
     sentAt: nullableString(row.sent_at),
     archivedAt: nullableString(row.archived_at),
     archiveReason: nullableString(row.archive_reason),
+    editorialSnapshot: row.editorial_snapshot && typeof row.editorial_snapshot === "object"
+      ? row.editorial_snapshot as EmailCampaign["editorialSnapshot"]
+      : null,
+    editorialFingerprint: nullableString(row.editorial_fingerprint),
+    editorialCompositionMode: row.editorial_composition_mode === "thematic" || row.editorial_composition_mode === "diversified"
+      ? row.editorial_composition_mode
+      : null,
+    editorialCategories: Array.isArray(row.editorial_categories)
+      ? row.editorial_categories.filter((value): value is string => typeof value === "string")
+      : [],
+    previewExpiresAt: nullableString(row.preview_expires_at),
+    approvalExpiresAt: nullableString(row.approval_expires_at),
+    approvalAudienceCount: row.approval_audience_count === null || row.approval_audience_count === undefined
+      ? null
+      : numberValue(row.approval_audience_count),
+    approvalAudienceStatus: ["pending", "ready", "mismatch", "unavailable"].includes(String(row.approval_audience_status))
+      ? row.approval_audience_status as EmailCampaign["approvalAudienceStatus"]
+      : null,
     counts: {
       total: numberValue(row.recipients_total),
       success: numberValue(row.recipients_success),

@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { ProductPipeline } from "../server/services/productPipeline";
-import { normalizePromotionOffer, promotionConditionLabel } from "../server/services/promotionOffer";
+import {
+  LEGACY_PROMOTION_TTL_MS,
+  normalizePromotionOffer,
+  promotionConditionLabel,
+} from "../server/services/promotionOffer";
 import { orderCatalogProducts } from "../src/lib/catalogOrder";
 
 const confirmedOffer = {
@@ -14,7 +18,10 @@ const confirmedOffer = {
 };
 
 test("normaliza somente oferta administrativa explícita, sem alterar ou calcular preço-base", () => {
-  assert.deepEqual(normalizePromotionOffer(confirmedOffer), confirmedOffer);
+  assert.deepEqual(normalizePromotionOffer(confirmedOffer), {
+    ...confirmedOffer,
+    expiresAt: confirmedOffer.confirmedAt + LEGACY_PROMOTION_TTL_MS,
+  });
   assert.equal(normalizePromotionOffer({ ...confirmedOffer, source: "scraper" }), undefined);
   assert.equal(normalizePromotionOffer({ ...confirmedOffer, condition: "pix_sem_regra" }), undefined);
   assert.equal(normalizePromotionOffer({ ...confirmedOffer, price: 0 }), undefined);

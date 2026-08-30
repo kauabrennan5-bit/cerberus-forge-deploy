@@ -1,0 +1,56 @@
+name: Weekly Production Final Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-production-final-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  weekly-production-final:
+    name: weekly-production-final
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Targeted weekly, audience and OIDC tests
+        run: node --import tsx --test --test-concurrency=1 tests/newsletterWeekly*.test.ts
+      - name: Global tests
+        run: npm test
+      - name: TypeScript
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Migration and schema contract
+        run: node scripts/check-weekly-migrations.mjs
+      - name: Gitleaks redacted changed-content scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          mkdir -p /tmp/gitleaks-scan
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -n "$base" ] && [ "$base" != "0000000000000000000000000000000000000000" ] && git cat-file -e "$base^{commit}"; then
+            git diff --no-ext-diff "$base" HEAD > /tmp/gitleaks-scan/weekly-production.patch
+          else
+            git show --format= --no-ext-diff HEAD > /tmp/gitleaks-scan/weekly-production.patch
+          fi
+          mkdir -p /tmp/gitleaks-bin
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
+          tar --no-same-owner -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks-bin gitleaks
+          /tmp/gitleaks-bin/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1 --no-banner

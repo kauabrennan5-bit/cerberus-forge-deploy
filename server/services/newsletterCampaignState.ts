@@ -1,4 +1,5 @@
 import type { RenderedNewsletterCampaign } from "./newsletterCampaignTemplate";
+import type { WeeklyCompositionMode, WeeklyEditorialSnapshot } from "./newsletterWeeklyEditorial";
 
 export const EMAIL_CAMPAIGN_STATUSES = [
   "draft",
@@ -51,8 +52,27 @@ export type EmailCampaign = {
   sentAt: string | null;
   archivedAt?: string | null;
   archiveReason?: string | null;
+  editorialSnapshot: WeeklyEditorialSnapshot | null;
+  editorialFingerprint: string | null;
+  editorialCompositionMode: WeeklyCompositionMode | null;
+  editorialCategories: string[];
+  previewExpiresAt: string | null;
+  approvalExpiresAt: string | null;
+  approvalAudienceCount: number | null;
+  approvalAudienceStatus: "pending" | "ready" | "mismatch" | "unavailable" | null;
   counts: CampaignCounts;
 };
+
+export type CampaignEditorialMetadata = Pick<EmailCampaign,
+  | "editorialSnapshot"
+  | "editorialFingerprint"
+  | "editorialCompositionMode"
+  | "editorialCategories"
+  | "previewExpiresAt"
+  | "approvalExpiresAt"
+  | "approvalAudienceCount"
+  | "approvalAudienceStatus"
+>;
 
 export type CampaignTransition =
   | { type: "submit_for_approval"; actorTelegramId: string }
@@ -80,6 +100,7 @@ export function createCampaignDraft(
   campaignType: EmailCampaignType = "product",
   collectionProducts: CampaignProductLink[] = [],
   editionKey: string | null = null,
+  editorial: Partial<CampaignEditorialMetadata> = {},
 ): EmailCampaign {
   const actor = normalizeActor(createdByTelegramId);
   const campaignId = id || crypto.randomUUID();
@@ -133,6 +154,14 @@ export function createCampaignDraft(
     sentAt: null,
     archivedAt: null,
     archiveReason: null,
+    editorialSnapshot: editorial.editorialSnapshot || null,
+    editorialFingerprint: editorial.editorialFingerprint || null,
+    editorialCompositionMode: editorial.editorialCompositionMode || null,
+    editorialCategories: editorial.editorialCategories || [],
+    previewExpiresAt: editorial.previewExpiresAt || null,
+    approvalExpiresAt: editorial.approvalExpiresAt || null,
+    approvalAudienceCount: editorial.approvalAudienceCount ?? null,
+    approvalAudienceStatus: editorial.approvalAudienceStatus || null,
     counts: { total: 0, success: 0, failed: 0, skipped: 0 },
   };
 }

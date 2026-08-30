@@ -9,6 +9,9 @@ export interface PromotionOffer {
   benefits: string[];
   source: "admin_confirmed";
   confirmedAt: number;
+  /** Expiração absoluta em epoch milliseconds; promoções nunca são eternas. */
+  /** Obrigatório após normalização/persistência; opcional apenas ao ler legado pré-migration. */
+  expiresAt?: number;
 }
 
 import type { ProductImageCuration, ProductImageEditorialStatus } from "./lib/productImageCuration";
@@ -22,6 +25,11 @@ export interface Product {
   rawTitle?: string;
   /** Título editorial em português, aprovado pela curadoria. */
   displayTitle?: string;
+  /** Estado e prova da revisão editorial do título. */
+  displayTitleStatus?: "ready" | "unreviewed" | "review_required";
+  displayTitleReviewedAt?: string;
+  displayTitleReviewModel?: string;
+  displayTitleReviewVersion?: string;
   categoria: string;
   preco: number;
   imagens: string[];
@@ -29,6 +37,11 @@ export interface Product {
   imageEditorialStatus?: ProductImageEditorialStatus;
   /** Separação em memória da fonte raw, principal canônica e galeria revisada. */
   imageCuration?: ProductImageCuration;
+  /** Prova persistente ligada à URL principal aprovada. */
+  imageReviewedAt?: string;
+  imageReviewModel?: string;
+  imageReviewVersion?: string;
+  imageReviewFingerprint?: string;
   link: string;
   ativo: boolean;
   destaque: boolean;

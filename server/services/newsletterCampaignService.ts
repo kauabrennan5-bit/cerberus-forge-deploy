@@ -58,6 +58,8 @@ export type CampaignServiceOptions = {
   /** Probe injetável para validar acessibilidade da imagem principal sem duplicar lógica. */
   imageProbe?: ProductImageProbe;
   verifyImageAccessibility?: boolean;
+  productionAudienceSync?: () => Promise<{ listId: number; eligibleSubscribers: number; brevoMembers: number }>;
+  productionEnabledCheck?: () => Promise<boolean>;
 };
 
 export async function createCampaignForProduct(
@@ -334,6 +336,9 @@ export async function startGeneralSend(
       env: options.env || process.env,
       now,
       provider: options.weeklyProvider,
+      productsLoader: options.productsLoader,
+      productionAudienceSync: options.productionAudienceSync,
+      productionEnabledCheck: options.productionEnabledCheck,
     });
   }
   const sending = transitionCampaign(current, { type: "begin_sending", actorTelegramId }, now);
@@ -401,16 +406,25 @@ export function renderCampaignTelegramPreview(campaign: EmailCampaign, product: 
     ].join("\n");
   }
   if (campaign.campaignType === "collection") {
+    const snapshotProducts = campaign.editorialSnapshot?.products || [];
+    const productLines = snapshotProducts.length > 0
+      ? snapshotProducts.map((item, index) => `${index === 0 ? "⭐" : `${index + 1}.`} ${escapeTelegram(item.category)} · ${escapeTelegram(item.displayTitle)} · ${new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.promotion?.price || item.canonicalPrice)}\n   🖼 ${escapeTelegram(item.primaryImageUrl)}`).join("\n")
+      : collectionProducts.length > 0
+        ? collectionProducts.map((item, index) => `${index + 1}. ${escapeTelegram(item.displayTitle || "[título editorial indisponível]")}`).join("\n")
+        : "Produtos: aguardando resolução da coleção.";
     return [
-      "📧 <b>PRÉVIA DE CAMPANHA</b>",
+      campaign.editionKey?.startsWith("weekly:") ? "📨 <b>WEEKLY PRODUCTION</b>" : "📧 <b>PRÉVIA DE CAMPANHA</b>",
       "Tipo: <b>Campanha 2 · coleção semanal</b>",
       `Status: <code>${campaign.status}</code>`,
       `Assunto: <b>${escapeTelegram(campaign.subject)}</b>`,
-      `Produtos na coleção: <b>${collectionProducts.length}</b>`,
-      collectionProducts.length > 0
-        ? collectionProducts.map((item, index) => `${index + 1}. ${escapeTelegram(item.displayTitle || item.produto)}`).join("\n")
-        : "Produtos: aguardando resolução da coleção.",
-      `Destinatários elegíveis: <b>${campaign.counts.total}</b>`,
+      `Produtos na coleção: <b>${snapshotProducts.length || collectionProducts.length}</b>`,
+      `Composição: <b>${escapeTelegram(campaign.editorialCompositionMode || "não registrada")}</b>`,
+      `Categorias: <b>${escapeTelegram(campaign.editorialCategories.join(", ") || "não registradas")}</b>`,
+      productLines,
+      `Destinatários elegíveis validados: <b>${campaign.approvalAudienceCount ?? 0}</b>`,
+      `Audiência Brevo: <b>${escapeTelegram(campaign.approvalAudienceStatus || "unavailable")}</b>`,
+      campaign.approvalExpiresAt ? `Aprovação válida até: <code>${escapeTelegram(campaign.approvalExpiresAt)}</code>` : "Aprovação sem validade registrada.",
+      `Campaign ID: <code>${escapeTelegram(campaign.id)}</code>`,
       `Sucesso: <b>${campaign.counts.success}</b> · Falhas: <b>${campaign.counts.failed}</b> · Ignorados: <b>${campaign.counts.skipped}</b>`,
       "",
       "Cada produto usa imagem canônica, CTA VER OFERTA e UTM individual.",

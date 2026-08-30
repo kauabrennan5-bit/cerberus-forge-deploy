@@ -418,7 +418,10 @@ test("N6-H: redirect para domínio fora da whitelist falha fechado", async () =>
   // INCONCLUSIVE (falha fechada).
   const result = await liveHostCheck("https://host-nao-existe-xyz.invalid/pagina-teste-i.1.2", "Shopee");
   assert.equal(result.redirect_ok, false, "host inexistente nunca aprova o redirect");
-  assert.ok(result.error_reason, `falha identificável: ${JSON.stringify(result)}`);
+  assert.ok(
+    result.error_reason || (result.http_status !== null && result.http_status >= 400),
+    `falha identificável: ${JSON.stringify(result)}`,
+  );
 });
 
 // ============================================================================

@@ -7,17 +7,29 @@ import {
 } from "../server/services/newsletterWeeklyCampaign";
 import { executeWeeklyTestCommand } from "../server/services/telegramBot";
 import { isWeeklyDraftDiagnosticError } from "../server/services/newsletterWeeklyDiagnostics";
+import { IMAGE_REVIEW_VERSION, DISPLAY_TITLE_REVIEW_VERSION, imageUrlFingerprint } from "../server/services/productEditorialReview";
 
 function product(id: string): Product {
+  const image = `https://cdn.example.com/${id}.jpg`;
   return {
     id,
     ref: `REF-${id}`,
-    produto: `Produto ${id}`,
-    displayTitle: `Peça ${id}`,
+    produto: `Produto bruto ${id}`,
+    rawTitle: `Produto bruto ${id}`,
+    displayTitle: `Peça curada série ${id}xx`,
+    displayTitleStatus: "ready",
+    displayTitleReviewedAt: "2026-08-29T02:00:00Z",
+    displayTitleReviewModel: "test",
+    displayTitleReviewVersion: DISPLAY_TITLE_REVIEW_VERSION,
     categoria: "Iluminação",
     preco: 10,
-    imagens: [`https://cdn.example.com/${id}.jpg`],
+    imagens: [image],
     imageEditorialStatus: "clean",
+    imageCuration: { status: "ready", rawImageUrls: [image], primaryImageUrl: image, galleryImageUrls: [], assessments: [{ url: image, decision: "clean", confidence: "HIGH", reason: "fixture" }] },
+    imageReviewedAt: "2026-08-29T02:00:00Z",
+    imageReviewModel: "test",
+    imageReviewVersion: IMAGE_REVIEW_VERSION,
+    imageReviewFingerprint: imageUrlFingerprint(image),
     link: `https://market.example.com/${id}`,
     ativo: true,
     destaque: false,

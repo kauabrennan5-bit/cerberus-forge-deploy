@@ -4,12 +4,14 @@ import type { Product } from "../src/types";
 import { buildWeeklyCopyPrompt, sanitizeWeeklyNewsletterCopy } from "../server/services/newsletterWeeklyCopy";
 import { buildWeeklyGoUrl, renderWeeklyNewsletter, BREVO_NATIVE_UNSUBSCRIBE } from "../server/services/newsletterWeeklyTemplate";
 import { runWeeklyDraftCycle } from "../server/services/newsletterWeeklyCampaign";
+import { IMAGE_REVIEW_VERSION, DISPLAY_TITLE_REVIEW_VERSION, imageUrlFingerprint } from "../server/services/productEditorialReview";
 import "./newsletterWeeklySendTestRecoveryCases";
 
 function product(id: string, ref: string, createdAt: string, price: number, clicks = 0): Product & { clicks?: number } {
+  const image = `https://cdn.example.com/${id}.jpg`;
   return {
-    id, ref, produto: `Produto ${id}`, displayTitle: `Peça editorial ${id}`, categoria: "Iluminação", preco: price,
-    imagens: [`https://cdn.example.com/${id}.jpg`], imageEditorialStatus: "clean", link: `https://market.example.com/${id}`,
+    id, ref, produto: `Produto bruto ${id}`, rawTitle: `Produto bruto ${id}`, displayTitle: `Peça editorial série ${id}xx`, displayTitleStatus: "ready", displayTitleReviewedAt: createdAt, displayTitleReviewModel: "test-curator", displayTitleReviewVersion: DISPLAY_TITLE_REVIEW_VERSION, categoria: "Iluminação", preco: price,
+    imagens: [image], imageEditorialStatus: "clean", imageCuration: { status: "ready", rawImageUrls: [image], primaryImageUrl: image, galleryImageUrls: [], assessments: [{ url: image, decision: "clean", confidence: "HIGH", reason: "fixture" }] }, imageReviewedAt: createdAt, imageReviewModel: "test-image-review", imageReviewVersion: IMAGE_REVIEW_VERSION, imageReviewFingerprint: imageUrlFingerprint(image), link: `https://market.example.com/${id}`,
     ativo: true, destaque: false, status: "published", descricao: `Descrição factual ${id}`, createdAt, clicks,
   };
 }
@@ -91,7 +93,7 @@ test("draft semanal exige 1 destaque + ao menos 2 secundários", async () => {
     productsLoader: async () => [product("a", "REF-A", "2026-08-28T12:00:00Z", 10), product("b", "REF-B", "2026-08-28T11:00:00Z", 20)],
     lastSentAtLoader: async () => "2026-08-27T00:00:00Z",
     telegramSender: async (_chat, text) => { messages.push(text); return { ok: true, result: { message_id: 1 } }; },
-    now: new Date("2026-08-28T15:00:00Z"), env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com", NEWSLETTER_WEEKLY_ENABLED: "true" },
+    now: new Date("2026-08-28T15:00:00Z"), env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com", NEWSLETTER_WEEKLY_ENABLED: "true", NEWSLETTER_PREVIEW_SIGNING_SECRET: "test-preview-secret-at-least-24-chars" },
   });
   assert.equal(result.status, "skipped");
   assert.match(messages[0], /mínimo 3|pelo menos 2 secundários/i);
@@ -105,7 +107,7 @@ test("draft completo persiste pending_approval e nunca cria recipients antes do 
     store, productsLoader: async () => products, lastSentAtLoader: async () => "2026-08-27T00:00:00Z",
     clickCountLoader: async () => new Map([["a", 0], ["b", 4], ["c", 1], ["d", 0]]), copyGenerator: async () => copy,
     telegramSender: async (_chat, _text, m) => { markup = m; return { ok: true, result: { message_id: 77 } }; },
-    now: new Date("2026-08-28T15:00:00Z"), env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com", NEWSLETTER_WEEKLY_ENABLED: "true" },
+    now: new Date("2026-08-28T15:00:00Z"), env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123", NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus.example.com", NEWSLETTER_WEEKLY_ENABLED: "true", NEWSLETTER_PREVIEW_SIGNING_SECRET: "test-preview-secret-at-least-24-chars" },
   });
   assert.equal(result.status, "created");
   if (result.status !== "created") return;

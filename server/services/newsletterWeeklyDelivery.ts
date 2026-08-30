@@ -11,6 +11,9 @@ import {
 import { ensureWeeklyBrevoTestRecipient } from "./newsletterWeeklyBrevoTestRecipient";
 import { syncWeeklyBrevoProductionAudience } from "./newsletterWeeklyBrevoAudienceSync";
 import { isWeeklyProductionEnabled } from "./newsletterWeeklyProductionConfig";
+import * as productsRepository from "../repositories/productsRepository";
+import { assertWeeklyApprovedContentCurrent } from "./newsletterWeeklyContentPreflight";
+import type { Product } from "../../src/types";
 
 const weeklyDeliveryLocks = new Map<string, Promise<void>>();
 
@@ -32,6 +35,8 @@ export type WeeklyMarketingDeliveryOptions = {
     brevoMembers: number;
   }>;
   productionEnabledCheck?: () => Promise<boolean>;
+  /** Conteúdo canônico recarregado imediatamente antes de qualquer mutação Brevo. */
+  productsLoader?: () => Promise<Product[]>;
 };
 
 export type WeeklyMarketingTestSuccess = {
@@ -210,6 +215,7 @@ export async function sendWeeklyMarketingNow(
     const env = options.env || process.env;
     const now = options.now || new Date();
     const current = await requireCampaign(options.store, campaign.id);
+    const realRuntime = !options.provider;
     if (!current.editionKey?.startsWith("weekly:")) {
       throw new Error("WEEKLY_MARKETING_PRODUCTION_CAMPAIGN_REQUIRED");
     }
@@ -219,7 +225,15 @@ export async function sendWeeklyMarketingNow(
     }
     assertWeeklyApprovalFresh(current, env, now);
 
-    const realRuntime = !options.provider;
+    if (realRuntime || options.productsLoader) {
+      await assertWeeklyApprovedContentCurrent({
+        campaign: current,
+        productsLoader: options.productsLoader || productsRepository.getProducts,
+        store: options.store,
+        now,
+      });
+    }
+
     const productionEnabled = options.productionEnabledCheck
       ? await options.productionEnabledCheck()
       : realRuntime
@@ -233,12 +247,14 @@ export async function sendWeeklyMarketingNow(
       if (sync.eligibleSubscribers <= 0 || sync.eligibleSubscribers !== sync.brevoMembers) {
         throw new Error("WEEKLY_MARKETING_PRODUCTION_RECIPIENT_STRATEGY_UNVERIFIED");
       }
+      assertApprovedAudienceUnchanged(current, sync.eligibleSubscribers, realRuntime || current.approvalAudienceCount !== null);
       listId = parsePositiveInteger(String(sync.listId));
     } else if (realRuntime) {
       const sync = await syncWeeklyBrevoProductionAudience({ env });
       if (sync.eligibleSubscribers <= 0 || sync.eligibleSubscribers !== sync.brevoMembers) {
         throw new Error("WEEKLY_MARKETING_PRODUCTION_RECIPIENT_STRATEGY_UNVERIFIED");
       }
+      assertApprovedAudienceUnchanged(current, sync.eligibleSubscribers, true);
       listId = sync.listId;
     } else {
       // Compatibilidade hermética dos testes legados com provider injetado.
@@ -273,6 +289,18 @@ export async function sendWeeklyMarketingNow(
     );
     return options.store.updateCampaign(sending);
   });
+}
+
+function assertApprovedAudienceUnchanged(campaign: EmailCampaign, currentCount: number, enforce: boolean): void {
+  if (!enforce) return;
+  if (
+    campaign.approvalAudienceStatus !== "ready"
+    || !Number.isSafeInteger(campaign.approvalAudienceCount)
+    || (campaign.approvalAudienceCount || 0) <= 0
+    || campaign.approvalAudienceCount !== currentCount
+  ) {
+    throw new Error("WEEKLY_MARKETING_PRODUCTION_AUDIENCE_CHANGED_AFTER_APPROVAL");
+  }
 }
 
 async function requireWeeklyTestCampaign(store: NewsletterCampaignStore, campaignId: string): Promise<EmailCampaign> {
