@@ -13,6 +13,7 @@ type BudgetLike = {
 
 type GenerateContent = (request: Record<string, unknown>) => Promise<{ text?: string | null }>;
 type RepairImage = (options: Parameters<typeof repairProductImage>[0]) => Promise<ProductImageRepairResult | null>;
+type DelayImpl = (ms: number) => Promise<void>;
 
 type ReviewOptions = {
   env?: NodeJS.ProcessEnv;
@@ -23,6 +24,7 @@ type ReviewOptions = {
   allowRepair?: boolean;
   maxImages?: number;
   timeoutMs?: number;
+  delayImpl?: DelayImpl;
 };
 
 type DownloadedImage = {
@@ -44,6 +46,7 @@ const productionImageReviewBudget = new ExternalCallBudget(
 );
 
 const CURRENT_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
+const DEFAULT_IMAGE_REVIEW_FALLBACK_MODEL = "gemini-2.5-flash-lite";
 const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash"]);
 
 function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
@@ -52,9 +55,21 @@ function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
   return configured;
 }
 
+function resolveImageReviewFallbackModel(env: NodeJS.ProcessEnv, primaryModel: string): string | null {
+  const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL || DEFAULT_IMAGE_REVIEW_FALLBACK_MODEL).trim();
+  if (!configured || configured === primaryModel) return null;
+  return configured;
+}
+
+function providerErrorText(error: unknown): string {
+  return String(error instanceof Error ? error.message : error || "").toLowerCase();
+}
+
 function permanentProviderFailure(error: unknown): boolean {
-  const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+  const message = providerErrorText(error);
   return [
+    "401",
+    "403",
     "404",
     "not found",
     "model_not_found",
@@ -64,10 +79,39 @@ function permanentProviderFailure(error: unknown): boolean {
     "permission denied",
     "permission_denied",
     "unauthenticated",
+  ].some(marker => message.includes(marker));
+}
+
+function quotaProviderFailure(error: unknown): boolean {
+  const message = providerErrorText(error);
+  return [
     "quota exceeded",
+    "quota_exceeded",
+    "daily quota",
+    "requests per day",
+    "rpd",
+  ].some(marker => message.includes(marker));
+}
+
+function transientProviderFailure(error: unknown): boolean {
+  const message = providerErrorText(error);
+  return [
+    "429",
     "resource_exhausted",
     "rate limit",
     "rate_limit",
+    "too many requests",
+    "too_many_requests",
+    "500",
+    "503",
+    "api_error",
+    "service unavailable",
+    "service_unavailable",
+    "deadline exceeded",
+    "deadline_exceeded",
+    "timeout",
+    "timed out",
+    "overloaded",
   ].some(marker => message.includes(marker));
 }
 
@@ -217,33 +261,79 @@ async function reviewWithProvider(input: {
   downloaded: DownloadedImage[];
   title: string;
   model: string;
+  fallbackModel?: string | null;
   generateContent: GenerateContent;
   budget: BudgetLike;
+  delayImpl?: DelayImpl;
 }): Promise<ProductImageAssessment[]> {
-  try {
-    const response = await input.generateContent(buildReviewRequest(input.downloaded, input.title, input.model));
-    return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(response.text));
-  } catch (error) {
-    // Erros permanentes de modelo/auth/quota não melhoram ao reenviar a mesma
-    // solicitação imagem por imagem. Evita drenar o budget da categoria/dia.
-    if (permanentProviderFailure(error)) return [];
+  const delayImpl = input.delayImpl || delay;
 
-    // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
-    // Reavalia individualmente, cobrando budget por chamada extra e mantendo
-    // fail-closed para qualquer imagem que continue indisponível no provider.
-    const isolated: ProductImageAssessment[] = [];
-    for (const image of input.downloaded) {
+  const callBatch = async (model: string, reserveCall: boolean): Promise<{ assessments: ProductImageAssessment[] | null; error: unknown | null; budgetExhausted: boolean }> => {
+    if (reserveCall) {
       const reserved = input.budget.reserve("productImageReview");
-      if (!reserved.allowed) break;
-      try {
-        const response = await input.generateContent(buildReviewRequest([image], input.title, input.model));
-        isolated.push(...parseAssessments(input.rawImageUrls, [image], parseModelJson(response.text)));
-      } catch {
-        // Falha desta imagem permanece isolada. Nenhuma decisão é inventada.
-      }
+      if (!reserved.allowed) return { assessments: null, error: null, budgetExhausted: true };
     }
-    return isolated;
+    try {
+      const response = await input.generateContent(buildReviewRequest(input.downloaded, input.title, model));
+      return {
+        assessments: parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(response.text)),
+        error: null,
+        budgetExhausted: false,
+      };
+    } catch (error) {
+      return { assessments: null, error, budgetExhausted: false };
+    }
+  };
+
+  let batch = await callBatch(input.model, false);
+  if (batch.assessments) return batch.assessments;
+  if (batch.budgetExhausted) return [];
+  let lastError = batch.error;
+
+  if (permanentProviderFailure(lastError)) return [];
+
+  if (transientProviderFailure(lastError)) {
+    const backoffs = [2_000, 8_000];
+    for (const backoffMs of backoffs) {
+      const reserved = input.budget.reserve("productImageReview");
+      if (!reserved.allowed) return [];
+      await delayImpl(backoffMs);
+      try {
+        const response = await input.generateContent(buildReviewRequest(input.downloaded, input.title, input.model));
+        return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(response.text));
+      } catch (error) {
+        lastError = error;
+      }
+      if (permanentProviderFailure(lastError) || quotaProviderFailure(lastError)) break;
+      if (!transientProviderFailure(lastError)) break;
+    }
   }
+
+  if ((transientProviderFailure(lastError) || quotaProviderFailure(lastError)) && input.fallbackModel) {
+    batch = await callBatch(input.fallbackModel, true);
+    if (batch.assessments) return batch.assessments;
+    if (batch.budgetExhausted) return [];
+    lastError = batch.error;
+    if (permanentProviderFailure(lastError) || transientProviderFailure(lastError) || quotaProviderFailure(lastError)) return [];
+  } else if (transientProviderFailure(lastError) || quotaProviderFailure(lastError)) {
+    return [];
+  }
+
+  // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
+  // Reavalia individualmente somente para falhas de payload/parse não
+  // classificadas como provider/rate-limit, cobrando budget por chamada extra.
+  const isolated: ProductImageAssessment[] = [];
+  for (const image of input.downloaded) {
+    const reserved = input.budget.reserve("productImageReview");
+    if (!reserved.allowed) break;
+    try {
+      const response = await input.generateContent(buildReviewRequest([image], input.title, input.model));
+      isolated.push(...parseAssessments(input.rawImageUrls, [image], parseModelJson(response.text)));
+    } catch {
+      // Falha desta imagem permanece isolada. Nenhuma decisão é inventada.
+    }
+  }
+  return isolated;
 }
 
 export async function reviewProductImages(
@@ -269,6 +359,7 @@ export async function reviewProductImages(
   if (downloaded.length === 0) return reviewRequired(rawImageUrls, "image_fetch_unavailable");
 
   const model = resolveImageReviewModel(env);
+  const fallbackModel = resolveImageReviewFallbackModel(env, model);
   const generateContent: GenerateContent = options.generateContent || (async input => {
     const ai = new GoogleGenAI({
       apiKey,
@@ -282,11 +373,13 @@ export async function reviewProductImages(
     downloaded,
     title,
     model,
+    fallbackModel,
     generateContent,
     budget,
+    delayImpl: options.delayImpl,
   });
   if (assessments.length === 0) {
-    console.warn(`[Product Image Review] provider indisponível para lote e imagens isoladas (model=${model})`);
+    console.warn(`[Product Image Review] provider indisponível para lote e imagens isoladas (model=${model}, fallback=${fallbackModel || "none"})`);
     return reviewRequired(rawImageUrls, "image_review_model_unavailable");
   }
 
@@ -330,6 +423,9 @@ export const productImageReviewInternals = {
   buildReviewRequest,
   reviewWithProvider,
   resolveImageReviewModel,
+  resolveImageReviewFallbackModel,
   permanentProviderFailure,
+  quotaProviderFailure,
+  transientProviderFailure,
   positiveInt,
 };
