@@ -3,6 +3,7 @@ import path from "path";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import type { PendingReview, TelegramReviewStatus } from "../services/telegramTypes";
+import { bindProductSourceIdentityByReview, releaseProductSourceIdentityByReview, reserveProductSourceIdentity } from "./autonomousCuratorRepository";
 
 dotenv.config();
 
@@ -124,6 +125,39 @@ function normalizeReviewRow(row: any): PendingReview | null {
   return review;
 }
 
+async function syncAutonomousCuratorReviewIdentity(review: PendingReview): Promise<void> {
+  const meta = review.existingProduct as any;
+  if (meta?.source !== "autonomous_curator") return;
+  const shopId = String(meta.shopId || "").trim();
+  const itemId = String(meta.itemId || "").trim();
+  const runId = String(meta.autonomousCuratorRunId || "").trim();
+  if (!shopId || !itemId || !runId || !review.normalizedUrl) {
+    throw new Error("AUTONOMOUS_CURATOR_REVIEW_IDENTITY_METADATA_INVALID");
+  }
+  const status = review.status || "pending";
+  if (status === "published") {
+    const productId = review.lifecycle?.publishedProductId;
+    if (!productId) throw new Error("AUTONOMOUS_CURATOR_REVIEW_PUBLISHED_PRODUCT_MISSING");
+    await bindProductSourceIdentityByReview({ reviewId: review.id, productId });
+    return;
+  }
+  if (["rejected", "cancelled", "expired"].includes(status)) {
+    await releaseProductSourceIdentityByReview(review.id);
+    return;
+  }
+  const ttlMinutes = Math.max(5, Math.ceil(((review.expiresAt || (Date.now() + SESSION_EXPIRATION_MS)) - Date.now()) / 60_000));
+  const reservation = await reserveProductSourceIdentity({
+    marketplace: "Shopee",
+    shopId,
+    itemId,
+    sourceProductUrl: review.normalizedUrl,
+    runId,
+    reviewId: review.id,
+    ttlMinutes,
+  });
+  if (!reservation.reserved) throw new Error("AUTONOMOUS_CURATOR_REVIEW_IDENTITY_CONFLICT");
+}
+
 export async function savePendingReview(review: PendingReview): Promise<void> {
   if (testOverrideSavePendingReview) {
     await testOverrideSavePendingReview(review);
@@ -139,6 +173,8 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
     expiresAt,
     status,
   };
+
+  await syncAutonomousCuratorReviewIdentity(normReview);
 
   const reviews = readReviewsFromFile();
   reviews[normReview.id] = normReview;

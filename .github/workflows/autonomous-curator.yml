@@ -1,0 +1,154 @@
+name: Cerberus Autonomous Curator
+
+on:
+  schedule:
+    # 08:00 America/Fortaleza (UTC-3)
+    - cron: "0 11 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/autonomous-curator.yml"
+      - "server/services/autonomousCurator*.ts"
+      - "server/repositories/autonomousCuratorRepository.ts"
+      - "server/routes/autonomousCuratorRoutes.ts"
+      - "server/services/newsletterWeeklyAutomationAuth.ts"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Execution mode
+        required: true
+        default: dry_run
+        type: choice
+        options:
+          - dry_run
+          - real
+          - status
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cerberus-autonomous-curator
+  cancel-in-progress: false
+
+jobs:
+  daily-curator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      OIDC_AUDIENCE: cerberus-weekly-automation
+      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+    steps:
+      - name: Wait for exact Render SHA after deployment
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/cerberus-health.json"
+          for attempt in $(seq 1 48); do
+            status="$(curl --silent --show-error --max-time 20 -o "$response_file" -w '%{http_code}' "$CERBERUS_HEALTH_URL" || true)"
+            if [ "$status" = "200" ]; then
+              live_sha="$(node - "$response_file" <<'NODE'
+          const fs = require('node:fs');
+          try {
+            const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+            process.stdout.write(typeof body?.version === 'string' ? body.version.trim() : '');
+          } catch { process.stdout.write(''); }
+          NODE
+          )"
+              if [ "$live_sha" = "$GITHUB_SHA" ]; then
+                echo "RENDER_LIVE_SHA_VERIFIED=true"
+                break
+              fi
+            fi
+            if [ "$attempt" = "48" ]; then
+              echo "Render did not serve the expected SHA."
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Start curator and wait for audited completion
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${CERBERUS_HEALTH_URL%/health}"
+
+          get_oidc_token() {
+            local token_json token
+            token_json="$(curl --fail --silent --show-error --max-time 20 \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+            token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+            echo "::add-mask::$token" >&2
+            printf '%s' "$token"
+          }
+
+          status_file="$RUNNER_TEMP/autonomous-curator-status.json"
+          if [ "$MODE" = "status" ]; then
+            token="$(get_oidc_token)"
+            curl --fail-with-body --silent --show-error --max-time 30 \
+              -o "$status_file" -H "Authorization: Bearer ${token}" \
+              "$base/api/internal/autonomous-curator/status"
+            cat "$status_file"
+            exit 0
+          fi
+
+          dry_run=false
+          if [ "$MODE" = "dry_run" ]; then dry_run=true; fi
+          start_file="$RUNNER_TEMP/autonomous-curator-start.json"
+          token="$(get_oidc_token)"
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            -o "$start_file" \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"dryRun\":${dry_run},\"notify\":true}" \
+            "$base/api/internal/autonomous-curator/daily"
+
+          node - "$start_file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true) process.exit(1);
+          if (body?.status === 'disabled') {
+            console.log('AUTONOMOUS_CURATOR=disabled');
+            process.exit(0);
+          }
+          if (body?.accepted !== true) process.exit(1);
+          console.log(`AUTONOMOUS_CURATOR_START=${body.status || 'accepted'}`);
+          NODE
+
+          expected_date="$(TZ=America/Fortaleza date +%F)"
+          for attempt in $(seq 1 90); do
+            token="$(get_oidc_token)"
+            curl --fail-with-body --silent --show-error --max-time 30 \
+              -o "$status_file" -H "Authorization: Bearer ${token}" \
+              "$base/api/internal/autonomous-curator/status?dryRun=${dry_run}"
+
+            state="$(node - "$status_file" "$expected_date" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expected = process.argv[3];
+          const run = body?.latestRun;
+          if (!run || String(run.run_date) !== expected) {
+            process.stdout.write('waiting');
+            process.exit(0);
+          }
+          if (['completed','partial','failed','dry_run'].includes(String(run.status))) {
+            console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
+            process.exit(0);
+          }
+          process.stdout.write('waiting');
+          NODE
+          )"
+            if [[ "$state" == done:* ]]; then
+              echo "AUTONOMOUS_CURATOR_RESULT=$state"
+              if [[ "$state" == done:failed:* ]]; then exit 1; fi
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Autonomous Curator did not reach a terminal audited state in time."
+          exit 1

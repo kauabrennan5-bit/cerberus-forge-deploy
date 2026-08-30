@@ -16,8 +16,14 @@ import {
   readWeeklyProductionRuntimeConfig,
 } from "../services/newsletterWeeklyProductionConfig";
 import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
+import { registerAutonomousCuratorRoutes } from "./autonomousCuratorRoutes";
 
 export function registerNewsletterWeeklyRoutes(app: express.Express): void {
+  // O mesmo registrador central já é conectado pelo server.ts; o Autonomous
+  // Curator reutiliza a autenticação OIDC dos jobs internos sem acoplar sua
+  // lógica à newsletter.
+  registerAutonomousCuratorRoutes(app);
+
   const requireAutomation = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const auth = await authorizeWeeklyAutomationRequest({ headers: req.headers as Record<string, string | string[] | undefined> });
     if (!auth.authorized) return res.status(401).json({ success: false, code: "AUTOMATION_UNAUTHORIZED" });
