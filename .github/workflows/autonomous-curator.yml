@@ -1,4 +1,5 @@
 name: Cerberus Autonomous Curator
+# Recovery validation trigger: rerun dry-run after the final production migration.
 
 on:
   schedule:
