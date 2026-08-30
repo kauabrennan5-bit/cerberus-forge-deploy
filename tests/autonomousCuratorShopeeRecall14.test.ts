@@ -8,8 +8,8 @@ import {
 } from "../server/services/autonomousCuratorProfiles";
 import { cheapProfileScore } from "../server/services/autonomousCuratorScoring";
 
-test("profile 1.4 uses concrete Shopee-calibrated discovery anchors", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.4");
+test("profile 1.5 uses concrete Shopee-calibrated discovery anchors", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");
 
   const lighting = profileForCategory("Iluminação");
   assert.ok(lighting.queries.includes("luminaria cogumelo cromada space age"));

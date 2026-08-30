@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.4";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.5";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -41,10 +41,10 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
 }
 
 /**
- * Perfil 1.4: precision-first com recall calibrado contra busca real da Shopee.
- * Arquétipos específicos podem funcionar como sinais fortes por categoria,
- * mas palavras genéricas como "retro" ou um material isolado nunca bastam.
- * Zero por categoria continua sendo um resultado válido.
+ * Perfil 1.5: precision-first com recall ampliado nas categorias que ficaram
+ * sem cobertura em runtime. As consultas adicionais usam arquétipos concretos
+ * do mesmo repertório Cerberus; gates finais, bloqueios e preços não mudam.
+ * Zero por categoria continua possível somente após uma busca mais ampla.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
@@ -74,6 +74,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "espelho mid century", "vaso bauhaus", "castical space age cromado",
       "objeto decorativo anos 70", "escultura postmoderna retro", "relogio vintage design",
       "porta vela bauhaus", "decoracao italiana vintage",
+      "vaso murano vintage anos 70", "cinzeiro vidro murano vintage",
+      "relogio mesa space age", "castical cromado mid century",
     ],
     signatureTerms: ["organico", "orgânico", "cromado", "inox", "vidro ambar", "vidro âmbar", "ceramica", "cerâmica", "escultura", "metal", "couro", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas", "resina anjo", "gnomo", "bicicleta decorativa", "moto decorativa"],
@@ -86,6 +88,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "mesa lateral mid century", "cadeira cromada bauhaus", "banqueta space age",
       "mesa auxiliar anos 70", "criado mudo mid century", "poltrona modernista",
       "mesa lateral italiana vintage", "banqueta tubular bauhaus",
+      "mesa apoio cromada anos 70", "mesa lateral tubular cromada",
+      "banqueta cromada vintage", "criado mudo retro madeira",
     ],
     signatureTerms: ["tubular", "cromado", "inox", "curvo", "curva", "modular", "nogueira", "teca", "vidro fumê", "vidro fume", "metal", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "capa para cadeira", "rodizio", "parafuso", "puxador", "eiffel", "eames", "cadeira gamer", "cadeira plastica", "cadeira plástica"],
@@ -134,6 +138,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "oculos vintage anos 70 masculino", "cinto bauhaus masculino", "bolsa masculina mid century",
       "tenis retro masculino design", "carteira couro modernista", "bolsa ombro vintage masculina",
       "oculos space age masculino", "acessorio masculino anos 70",
+      "oculos acetato retro masculino", "cinto couro vintage masculino",
+      "mocassim retro masculino anos 70", "relogio digital retro masculino",
     ],
     signatureTerms: ["acetato", "couro", "camurca", "camurça", "metal", "cromado", "geométrico", "geometrico", "minimalista", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado", "feminina", "feminino", "mulher", "women", "strass", "pedraria"],
@@ -146,6 +152,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "radio bluetooth retro madeira vintage", "radio retro portatil bluetooth madeira", "caixa de som retro madeira bluetooth",
       "teclado mecanico vintage design", "relogio digital retro mesa", "hub usb aluminio retro design",
       "mouse transparente retro futurista", "carregador sem fio retro design",
+      "radio vintage bluetooth", "caixa som madeira vintage",
+      "relogio flip retro mesa", "telefone retro bluetooth",
     ],
     strongStyleTerms: [
       ...STRONG_STYLE_TERMS,
@@ -174,6 +182,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "blocos bauhaus madeira infantil", "brinquedo madeira mid century", "brinquedo arco iris bauhaus",
       "brinquedo geometrico anos 70", "brinquedo madeira design escandinavo", "mobile infantil modernista",
       "brinquedo montessori bauhaus", "decoracao infantil mid century",
+      "brinquedo madeira geometrico", "arco iris madeira montessori",
+      "blocos madeira cores primarias", "mobile madeira geometrico infantil",
     ],
     signatureTerms: ["geométrico", "geometrico", "formas", "cores primarias", "cores primárias", "madeira natural", "encaixe", "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte", "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem"],
