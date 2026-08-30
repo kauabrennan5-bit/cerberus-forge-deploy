@@ -21,12 +21,13 @@ function imageResponse(status = 200): Response {
   });
 }
 
-test("reviewer migra modelo legado 3.6 para o Gemini multimodal estável atual", () => {
-  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.6-flash" }), "gemini-3.7-flash");
-  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_CURATOR_MODEL: "gemini-3.6-flash" }), "gemini-3.7-flash");
-  assert.equal(productImageReviewInternals.resolveImageReviewModel({}), "gemini-3.7-flash");
+test("reviewer visual é desacoplado do modelo de copy e usa Flash-Lite de alto throughput", () => {
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({}), "gemini-3.5-flash-lite");
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_CURATOR_MODEL: "gemini-3.7-flash" }), "gemini-3.5-flash-lite");
+  assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.6-flash" }), "gemini-3.5-flash-lite");
   assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-model" }), "custom-model");
-  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.7-flash"), "gemini-2.5-flash-lite");
+  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.5-flash-lite"), "gemini-3.7-flash");
+  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.7-flash"), "gemini-3.5-flash-lite");
   assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({ GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL: "gemini-3.7-flash" }, "gemini-3.7-flash"), null);
 });
 
@@ -88,7 +89,7 @@ test("falha multimodal em lote recai para revisão isolada e preserva imagem lim
   assert.equal(result.assessments[1].decision, "promotional");
 });
 
-test("429 transitório aplica backoff limitado e fallback multimodal contabilizado no budget", async () => {
+test("429 faz um único failover multimodal após backoff e preserva budget", async () => {
   let generationCalls = 0;
   let reserves = 0;
   const models: string[] = [];
@@ -100,7 +101,7 @@ test("429 transitório aplica backoff limitado e fallback multimodal contabiliza
     },
   };
   const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Produto", {
-    env: { GEMINI_API_KEY: "test-key" },
+    env: { GEMINI_API_KEY: "test-key", GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "gemini-3.7-flash" },
     budget,
     allowRepair: false,
     delayImpl: async ms => { delays.push(ms); },
@@ -108,19 +109,19 @@ test("429 transitório aplica backoff limitado e fallback multimodal contabiliza
     generateContent: async request => {
       generationCalls += 1;
       models.push(String(request.model || ""));
-      if (generationCalls <= 3) throw new Error("429 RESOURCE_EXHAUSTED rate limit exceeded");
+      if (generationCalls === 1) throw new Error("429 RESOURCE_EXHAUSTED rate limit exceeded");
       return { text: JSON.stringify({ images: [{ index: 1, decision: "clean", confidence: "HIGH", reason: "produto limpo" }] }) };
     },
   });
-  assert.equal(generationCalls, 4);
-  assert.equal(reserves, 4);
-  assert.deepEqual(delays, [2_000, 8_000]);
-  assert.deepEqual(models, ["gemini-3.7-flash", "gemini-3.7-flash", "gemini-3.7-flash", "gemini-2.5-flash-lite"]);
+  assert.equal(generationCalls, 2);
+  assert.equal(reserves, 2);
+  assert.deepEqual(delays, [2_000]);
+  assert.deepEqual(models, ["gemini-3.7-flash", "gemini-3.5-flash-lite"]);
   assert.equal(result.status, "ready");
   assert.equal(result.primaryImageUrl, "https://cdn.example.test/a.jpg");
 });
 
-test("erro permanente de modelo não dispara retries isolados que drenam o budget", async () => {
+test("erro permanente de modelo não dispara retries nem fallback que drenam o budget", async () => {
   let generationCalls = 0;
   let reserves = 0;
   const budget = {
@@ -183,16 +184,20 @@ test("exaustão do orçamento visual é distinguida de falha de imagem", async (
   assert.equal(result.reason, "image_review_budget_exhausted");
 });
 
-test("erro transitório do modelo visual permanece fail-closed com motivo observável", async () => {
+test("erro transitório em ambos os modelos permanece fail-closed", async () => {
+  let calls = 0;
   const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Produto", {
     env: { GEMINI_API_KEY: "test-key" },
     budget: allowBudget,
     allowRepair: false,
+    delayImpl: async () => {},
     fetchImpl: (async () => imageResponse(200)) as typeof fetch,
     generateContent: async () => {
-      throw new Error("provider unavailable");
+      calls += 1;
+      throw new Error("429 provider unavailable");
     },
   });
+  assert.equal(calls, 2);
   assert.equal(result.status, "review_required");
   assert.equal(result.reason, "image_review_model_unavailable");
   assert.equal(result.primaryImageUrl, undefined);
