@@ -1,10 +1,40 @@
 import type { Express, Request, Response } from "express";
 import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
 import { runAutonomousCuratorDaily } from "../services/autonomousCurator";
+import { extractProductForReview } from "../services/productAutomation";
 import { getAutonomousCuratorConfig } from "../repositories/autonomousCuratorRepository";
 import { requireSupabase } from "../repositories/productsRepository";
 
 let activeExecution: Promise<void> | null = null;
+
+const DEFAULT_AUTONOMOUS_CURATOR_COPY_MODEL = "gemini-3.5-flash-lite";
+const SATURATED_AUTONOMOUS_CURATOR_COPY_MODELS = new Set([
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+]);
+
+function resolveAutonomousCuratorCopyModel(env: NodeJS.ProcessEnv): string {
+  const explicit = String(env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || "").trim();
+  if (explicit) return explicit;
+  const configured = String(env.GEMINI_PRODUCT_CURATOR_MODEL || "").trim();
+  if (!configured || SATURATED_AUTONOMOUS_CURATOR_COPY_MODELS.has(configured)) {
+    return DEFAULT_AUTONOMOUS_CURATOR_COPY_MODEL;
+  }
+  return configured;
+}
+
+async function extractForAutonomousCurator(rawUrl: string, rawTextOverride?: string) {
+  const previousModel = process.env.GEMINI_PRODUCT_CURATOR_MODEL;
+  process.env.GEMINI_PRODUCT_CURATOR_MODEL = resolveAutonomousCuratorCopyModel(process.env);
+  try {
+    return await extractProductForReview(rawUrl, rawTextOverride);
+  } finally {
+    if (previousModel === undefined) delete process.env.GEMINI_PRODUCT_CURATOR_MODEL;
+    else process.env.GEMINI_PRODUCT_CURATOR_MODEL = previousModel;
+  }
+}
 
 async function authorize(req: Request, res: Response): Promise<boolean> {
   const auth = await authorizeWeeklyAutomationRequest({ headers: req.headers as Record<string, string | string[] | undefined> });
@@ -31,13 +61,19 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
         return res.status(200).json({ ok: true, accepted: false, status: "disabled" });
       }
       if (wait) {
-        const result = await runAutonomousCuratorDaily({ dryRun, notify });
+        const result = await runAutonomousCuratorDaily(
+          { dryRun, notify },
+          { extractor: extractForAutonomousCurator },
+        );
         return res.status(200).json({ ok: true, accepted: true, result });
       }
       if (activeExecution) {
         return res.status(202).json({ ok: true, accepted: true, status: "already_running" });
       }
-      activeExecution = runAutonomousCuratorDaily({ dryRun, notify })
+      activeExecution = runAutonomousCuratorDaily(
+        { dryRun, notify },
+        { extractor: extractForAutonomousCurator },
+      )
         .then(result => {
           console.info(`[AUTONOMOUS-CURATOR] background_complete status=${result.status} run=${result.runId || "none"}`);
         })
@@ -90,3 +126,7 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
     }
   });
 }
+
+export const autonomousCuratorRouteInternals = {
+  resolveAutonomousCuratorCopyModel,
+};
