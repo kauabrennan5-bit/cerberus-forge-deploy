@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.1";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.2";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -14,65 +14,101 @@ const COMMON_BLOCKED = [
   "logo", "adesivo", "capa protetora", "manual", "arquivo digital",
 ] as const;
 
+/**
+ * Perfis de descoberta deliberadamente misturam consultas amplas de tipo/material
+ * com consultas de linguagem estética. A descoberta deve ter recall alto; os
+ * gates caros (imagem, copy, categoria, preço, similaridade, score e lifecycle)
+ * continuam sendo a autoridade para publicar.
+ */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   {
     category: "Iluminação",
-    queries: ["luminaria bauhaus", "abajur cogumelo", "luminaria space age", "luminaria mid century"],
-    preferredTerms: ["bauhaus", "cogumelo", "space age", "mid century", "retro", "vidro", "cromado", "opalino"],
+    queries: [
+      "abajur mesa vidro", "luminaria mesa metal", "luminaria cogumelo", "arandela moderna",
+      "luminaria pendente vidro", "luminaria retro", "luminaria mid century", "luminaria bauhaus",
+    ],
+    preferredTerms: ["bauhaus", "cogumelo", "space age", "mid century", "retro", "vidro", "metal", "cromado", "opalino", "aluminio"],
     blockedTerms: [...COMMON_BLOCKED, "rgb gamer", "fita led", "farol", "automotiva"],
   },
   {
     category: "Decoração",
-    queries: ["vaso decorativo retro", "espelho organico design", "objeto decorativo bauhaus", "escultura decorativa moderna"],
-    preferredTerms: ["retro", "bauhaus", "mid century", "vidro", "inox", "cromado", "organico", "escultura"],
+    queries: [
+      "vaso decorativo vidro", "espelho organico", "castical decorativo metal", "escultura decorativa",
+      "porta vela decorativo", "objeto decorativo retro", "relogio parede decorativo", "decoracao bauhaus",
+    ],
+    preferredTerms: ["retro", "bauhaus", "mid century", "vidro", "inox", "cromado", "organico", "escultura", "metal", "ceramica"],
     blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas"],
   },
   {
     category: "Móveis",
-    queries: ["mesa lateral retro", "cadeira design moderno", "banqueta cromada", "mesa auxiliar bauhaus"],
-    preferredTerms: ["retro", "bauhaus", "mid century", "cromado", "inox", "madeira", "curvo", "modular"],
+    queries: [
+      "mesa lateral madeira", "mesa lateral metal", "banqueta alta", "cadeira design",
+      "mesa auxiliar", "criado mudo moderno", "banqueta cromada", "movel mid century",
+    ],
+    preferredTerms: ["retro", "bauhaus", "mid century", "cromado", "inox", "madeira", "curvo", "modular", "metal", "minimalista"],
     blockedTerms: [...COMMON_BLOCKED, "capa para cadeira", "rodizio", "parafuso", "puxador"],
   },
   {
     category: "Cozinha & Mesa",
-    queries: ["bandeja inox design", "copo vidro ambar", "jarra vidro retro", "talheres inox design"],
-    preferredTerms: ["inox", "vidro", "ambar", "retro", "design", "cromado", "borossilicato"],
+    queries: [
+      "bandeja inox", "copo vidro", "jarra vidro", "talheres inox",
+      "tigela vidro", "xicaras ceramica", "porta guardanapo metal", "mesa posta design",
+    ],
+    preferredTerms: ["inox", "vidro", "ambar", "retro", "design", "cromado", "borossilicato", "ceramica", "metal"],
     blockedTerms: [...COMMON_BLOCKED, "descartavel", "100 unidades", "industrial restaurante"],
   },
   {
     category: "Organização",
-    queries: ["organizador acrilico design", "caixa organizadora metal", "porta objetos retro", "organizador mesa minimalista"],
-    preferredTerms: ["acrilico", "metal", "inox", "cromado", "minimalista", "modular", "transparente"],
+    queries: [
+      "organizador acrilico", "organizador metal", "organizador porta objetos", "organizador mesa",
+      "caixa organizadora design", "gaveteiro mesa organizador", "cabideiro organizador metal", "organizador minimalista",
+    ],
+    preferredTerms: ["acrilico", "metal", "inox", "cromado", "minimalista", "modular", "transparente", "madeira"],
     blockedTerms: [...COMMON_BLOCKED, "organizador cabos 100", "etiqueta", "saco vacuo kit"],
   },
   {
     category: "Vestuário",
-    queries: ["camiseta oversized minimalista", "jaqueta retro masculina", "camisa masculina design", "calca masculina corte reto"],
-    preferredTerms: ["oversized", "retro", "minimalista", "algodao", "corte reto", "boxy", "vintage"],
+    queries: [
+      "camiseta oversized masculina", "camisa manga curta masculina", "calca reta masculina", "jaqueta masculina leve",
+      "camisa linho masculina", "polo masculina minimalista", "bermuda masculina alfaiataria", "roupa masculina retro",
+    ],
+    preferredTerms: ["oversized", "retro", "minimalista", "algodao", "linho", "corte reto", "boxy", "vintage", "alfaiataria"],
     blockedTerms: [...COMMON_BLOCKED, "fantasia", "uniforme", "camisa time", "replica"],
   },
   {
     category: "Calçados & Acessórios",
-    queries: ["oculos retro masculino", "cinto couro minimalista", "bolsa crossbody design", "tenis retro minimalista"],
-    preferredTerms: ["retro", "minimalista", "couro", "acetato", "metal", "vintage", "design"],
+    queries: [
+      "oculos retro masculino", "cinto couro masculino", "bolsa crossbody masculina", "tenis retro masculino",
+      "carteira couro minimalista", "bone masculino minimalista", "bolsa ombro masculina", "acessorio masculino vintage",
+    ],
+    preferredTerms: ["retro", "minimalista", "couro", "acetato", "metal", "vintage", "design", "camurca"],
     blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado"],
   },
   {
     category: "Tecnologia",
-    queries: ["relogio digital retro", "caixa de som retro", "teclado retro minimalista", "luminaria relogio digital design"],
-    preferredTerms: ["retro", "minimalista", "aluminio", "transparente", "design", "digital", "compacto"],
+    queries: [
+      "relogio digital mesa", "caixa de som bluetooth", "teclado mecanico retro", "carregador sem fio design",
+      "hub usb aluminio", "suporte notebook aluminio", "mouse transparente", "tecnologia retro design",
+    ],
+    preferredTerms: ["retro", "minimalista", "aluminio", "transparente", "design", "digital", "compacto", "metal"],
     blockedTerms: [...COMMON_BLOCKED, "espiao", "camera escondida", "rastreador oculto", "gamer rgb"],
   },
   {
     category: "Beleza & Bem-estar",
-    queries: ["espelho maquiagem design", "necessaire minimalista", "porta perfume design", "organizador beleza acrilico"],
-    preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho"],
+    queries: [
+      "espelho maquiagem", "necessaire maquiagem", "porta perfume", "estojo maquiagem",
+      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "porta pincel maquiagem",
+    ],
+    preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho", "couro", "maquiagem", "perfume"],
     blockedTerms: [...COMMON_BLOCKED, "medicamento", "remedio", "hormonio", "emagrecedor", "suplemento", "clareador ingerivel"],
   },
   {
     category: "Infantil",
-    queries: ["brinquedo madeira montessori", "luminaria infantil design", "organizador infantil madeira", "brinquedo educativo madeira"],
-    preferredTerms: ["madeira", "educativo", "montessori", "design", "sensorial", "minimalista"],
+    queries: [
+      "brinquedo madeira educativo", "quebra cabeca madeira infantil", "blocos madeira infantil", "brinquedo sensorial infantil",
+      "brinquedo encaixe madeira", "brinquedo montessori", "brinquedo equilibrio madeira", "decoracao infantil madeira",
+    ],
+    preferredTerms: ["madeira", "educativo", "montessori", "design", "sensorial", "minimalista", "encaixe", "equilibrio"],
     blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte"],
   },
 ] as const;
