@@ -89,6 +89,7 @@ jobs:
             status: typeof provider.status === 'string' ? provider.status : 'unknown',
             httpStatus: Number.isInteger(provider.httpStatus) ? provider.httpStatus : null,
             errorCode: typeof provider.errorCode === 'string' ? provider.errorCode : null,
+            errorParam: typeof provider.errorParam === 'string' ? provider.errorParam : null,
           };
           console.log(`OPENAI_PROVIDER_CANARY=${JSON.stringify(summary)}`);
           if (body?.ok !== true || summary.configured !== true || summary.enabled !== true || summary.status !== 'ok') {

@@ -66,6 +66,35 @@ test("OpenAI provider canary reports quota without exposing the key", async () =
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test("OpenAI provider canary exposes only a sanitized invalid parameter", async () => {
+  const secret = "sk-test-never-return-this";
+  const fetchImpl = (async () => new Response(JSON.stringify({
+    error: {
+      code: "invalid_value",
+      type: "invalid_request_error",
+      param: "input[0].content[1].image_url",
+      message: `provider detail must stay private; secret=${secret}`,
+    },
+  }), {
+    status: 400,
+    headers: { "content-type": "application/json" },
+  })) as unknown as typeof fetch;
+
+  const result = await autonomousCuratorRouteInternals.probeAutonomousCuratorProviders({ OPENAI_API_KEY: secret }, fetchImpl);
+
+  assert.equal(result.openai.status, "request_rejected");
+  assert.equal("errorCode" in result.openai ? result.openai.errorCode : null, "invalid_value");
+  assert.equal("errorParam" in result.openai ? result.openai.errorParam : null, "input[0].content[1].image_url");
+  assert.equal(JSON.stringify(result).includes(secret), false);
+  assert.equal(JSON.stringify(result).includes("provider detail"), false);
+});
+
+test("OpenAI provider error parameter rejects unsafe diagnostic text", () => {
+  assert.equal(autonomousCuratorRouteInternals.safeProviderErrorParam("input[0].content[1].image_url"), "input[0].content[1].image_url");
+  assert.equal(autonomousCuratorRouteInternals.safeProviderErrorParam("input image_url secret=sk-test"), null);
+  assert.equal(autonomousCuratorRouteInternals.safeProviderErrorParam("../etc/passwd"), null);
+});
+
 test("OpenAI provider canary proves a structured Responses API result", async () => {
   const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
     assert.match(String(init?.headers && (init.headers as Record<string, string>).Authorization || ""), /^Bearer /);
