@@ -2,6 +2,63 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { autonomousCuratorRouteInternals } from "../server/routes/autonomousCuratorRoutes";
 
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function assertValidPng(bytes: Buffer, width: number, height: number): void {
+  assert.deepEqual(
+    [...bytes.subarray(0, 8)],
+    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    "PNG signature must be complete",
+  );
+
+  let offset = 8;
+  let sawIhdr = false;
+  let sawIdat = false;
+  let sawIend = false;
+  while (offset < bytes.length) {
+    assert.ok(offset + 12 <= bytes.length, "PNG chunk header/footer must fit in the buffer");
+    const length = bytes.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    const crcOffset = dataEnd;
+    assert.ok(crcOffset + 4 <= bytes.length, "PNG chunk payload must fit in the buffer");
+
+    const type = bytes.subarray(typeStart, dataStart).toString("ascii");
+    const expectedCrc = bytes.readUInt32BE(crcOffset);
+    const actualCrc = crc32(bytes.subarray(typeStart, dataEnd));
+    assert.equal(actualCrc, expectedCrc, `PNG ${type} CRC must be valid`);
+
+    if (type === "IHDR") {
+      assert.equal(length, 13);
+      assert.equal(bytes.readUInt32BE(dataStart), width);
+      assert.equal(bytes.readUInt32BE(dataStart + 4), height);
+      sawIhdr = true;
+    } else if (type === "IDAT") {
+      sawIdat = true;
+    } else if (type === "IEND") {
+      assert.equal(length, 0);
+      sawIend = true;
+      assert.equal(crcOffset + 4, bytes.length, "IEND must terminate the PNG");
+    }
+
+    offset = crcOffset + 4;
+  }
+
+  assert.equal(sawIhdr, true, "PNG must contain IHDR");
+  assert.equal(sawIdat, true, "PNG must contain IDAT");
+  assert.equal(sawIend, true, "PNG must contain IEND");
+}
+
 test("autonomous curator uses high-throughput copy model for saturated defaults", () => {
   assert.equal(
     autonomousCuratorRouteInternals.resolveAutonomousCuratorCopyModel({}),
@@ -118,16 +175,14 @@ test("OpenAI provider canary proves a structured Responses API result", async ()
   assert.equal("httpStatus" in result.openai ? result.openai.httpStatus : null, 200);
 });
 
-test("OpenAI provider canary sends a reviewable 256x256 PNG", async () => {
+test("OpenAI provider canary sends an integrity-valid reviewable 256x256 PNG", async () => {
   let checked = false;
   const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body || "{}"));
     const dataUrl = String(body?.input?.[0]?.content?.[1]?.image_url || "");
     assert.match(dataUrl, /^data:image\/png;base64,/);
     const bytes = Buffer.from(dataUrl.split(",", 2)[1] || "", "base64");
-    assert.equal(bytes.subarray(1, 4).toString("ascii"), "PNG");
-    assert.equal(bytes.readUInt32BE(16), 256);
-    assert.equal(bytes.readUInt32BE(20), 256);
+    assertValidPng(bytes, 256, 256);
     checked = true;
     return new Response(JSON.stringify({
       output_text: JSON.stringify({
