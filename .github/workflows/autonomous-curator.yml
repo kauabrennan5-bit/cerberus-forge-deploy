@@ -12,9 +12,17 @@ on:
     paths:
       - ".github/workflows/autonomous-curator.yml"
       - "server/services/autonomousCurator*.ts"
+      - "server/services/productAutomation.ts"
+      - "server/services/productImage*.ts"
+      - "server/services/productPipeline.ts"
+      - "server/services/scraper.ts"
+      - "server/commercial/affiliate/shopee*.ts"
+      - "server/commercial/marketplace/shopeeIdentity.ts"
       - "server/repositories/autonomousCuratorRepository.ts"
       - "server/routes/autonomousCuratorRoutes.ts"
       - "server/services/newsletterWeeklyAutomationAuth.ts"
+      - "src/lib/productImageCuration.ts"
+      - "src/lib/productCanonical.ts"
   workflow_dispatch:
     inputs:
       mode:
@@ -43,9 +51,8 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      # Temporary one-shot marker is used only for the first production validation
-      # of this feature. It is removed after the cycle is proven live.
-      MODE: ${{ github.event_name == 'schedule' && 'continuous' || github.event_name == 'push' && contains(github.event.head_commit.message, '[curator-continuous-real-once]') && 'continuous' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      # Scheduled cycles are continuous production; every ordinary push is validation-only.
+      MODE: ${{ github.event_name == 'schedule' && 'continuous' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
