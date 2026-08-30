@@ -33,8 +33,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
   {
     category: "Decoração",
     queries: [
-      "vaso decorativo vidro", "espelho organico", "bandeja decorativa metal", "castical design",
-      "porta vela vidro", "escultura decorativa", "objeto decorativo retro", "decoracao bauhaus",
+      "vaso decorativo vidro", "espelho organico", "castical decorativo metal", "escultura decorativa",
+      "porta vela decorativo", "objeto decorativo retro", "relogio parede decorativo", "decoracao bauhaus",
     ],
     preferredTerms: ["retro", "bauhaus", "mid century", "vidro", "inox", "cromado", "organico", "escultura", "metal", "ceramica"],
     blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas"],
@@ -60,8 +60,8 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
   {
     category: "Organização",
     queries: [
-      "organizador acrilico", "organizador metal", "porta objetos", "organizador mesa",
-      "caixa organizadora design", "porta revistas metal", "bandeja organizadora", "organizador minimalista",
+      "organizador acrilico", "organizador metal", "organizador porta objetos", "organizador mesa",
+      "caixa organizadora design", "gaveteiro mesa organizador", "cabideiro organizador metal", "organizador minimalista",
     ],
     preferredTerms: ["acrilico", "metal", "inox", "cromado", "minimalista", "modular", "transparente", "madeira"],
     blockedTerms: [...COMMON_BLOCKED, "organizador cabos 100", "etiqueta", "saco vacuo kit"],
@@ -96,19 +96,19 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
   {
     category: "Beleza & Bem-estar",
     queries: [
-      "espelho maquiagem", "necessaire minimalista", "porta perfume", "organizador maquiagem",
-      "escova cabelo design", "porta joias viagem", "bandeja beleza", "acessorio beleza design",
+      "espelho maquiagem", "necessaire maquiagem", "porta perfume", "estojo maquiagem",
+      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "acessorio maquiagem viagem",
     ],
-    preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho", "couro"],
+    preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho", "couro", "maquiagem", "perfume"],
     blockedTerms: [...COMMON_BLOCKED, "medicamento", "remedio", "hormonio", "emagrecedor", "suplemento", "clareador ingerivel"],
   },
   {
     category: "Infantil",
     queries: [
-      "brinquedo madeira educativo", "quebra cabeca madeira infantil", "blocos madeira infantil", "brinquedo sensorial",
-      "luminaria infantil design", "organizador infantil madeira", "brinquedo montessori", "decoracao infantil madeira",
+      "brinquedo madeira educativo", "quebra cabeca madeira infantil", "blocos madeira infantil", "brinquedo sensorial infantil",
+      "brinquedo encaixe madeira", "brinquedo montessori", "brinquedo equilibrio madeira", "decoracao infantil madeira",
     ],
-    preferredTerms: ["madeira", "educativo", "montessori", "design", "sensorial", "minimalista", "encaixe"],
+    preferredTerms: ["madeira", "educativo", "montessori", "design", "sensorial", "minimalista", "encaixe", "equilibrio"],
     blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte"],
   },
 ] as const;
