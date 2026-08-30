@@ -9,6 +9,7 @@ import { ExternalCallBudget } from "./operationalGuards";
 import { containsRawPayloadMarkers } from "./productLifecycle";
 import { PUBLIC_PRODUCT_CATEGORIES, resolvePublicProductCategory } from "../../src/lib/productCategory";
 import { curateProductImages, type ProductImageAssessment, type ProductImageCuration } from "../../src/lib/productImageCuration";
+import { repairProductImage } from "./productImageRepair";
 
 export { detectMarketplace } from "./marketplace";
 
@@ -88,7 +89,7 @@ export function sanitizeCuratorOutput(
   };
 }
 
-async function reviewScrapedImages(rawImages: string[], title: string): Promise<ProductImageCuration> {
+async function reviewScrapedImages(rawImages: string[], title: string, allowRepair = true): Promise<ProductImageCuration> {
   const rawImageUrls = curateProductImages(rawImages).rawImageUrls;
   if (testOverrideImageReview) return testOverrideImageReview(rawImageUrls, title);
   if (rawImageUrls.length === 0) return curateProductImages(rawImageUrls);
@@ -125,7 +126,27 @@ async function reviewScrapedImages(rawImages: string[], title: string): Promise<
         : "LOW";
       return { url, decision, confidence, reason: typeof item?.reason === "string" ? item.reason.slice(0, 180) : "Avaliação visual insuficiente." };
     });
-    return curateProductImages(rawImageUrls, assessments);
+    const curation = curateProductImages(rawImageUrls, assessments);
+    if (curation.status === "ready" || !allowRepair) return curation;
+
+    const repaired = await repairProductImage({
+      rawImageUrls,
+      title,
+      assessments,
+    });
+    if (!repaired) return curation;
+
+    // Uma imagem gerada/editada nunca é auto-aprovada. Ela volta ao mesmo
+    // reviewer multimodal e só entra no catálogo se for classificada clean.
+    const repairedCuration = await reviewScrapedImages([repaired.url], title, false);
+    if (repairedCuration.status !== "ready" || !repairedCuration.primaryImageUrl) return curation;
+    return {
+      status: "ready",
+      rawImageUrls: [...rawImageUrls, repaired.url],
+      primaryImageUrl: repairedCuration.primaryImageUrl,
+      galleryImageUrls: repairedCuration.galleryImageUrls,
+      assessments: [...assessments, ...repairedCuration.assessments],
+    };
   } catch (error: any) {
     console.warn(`[Product Image Review] avaliação indisponível: ${error?.message || "erro desconhecido"}`);
     return curateProductImages(rawImageUrls);
