@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.3";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.4";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -41,23 +41,27 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
 }
 
 /**
- * Perfil 1.3: descoberta estreita e precision-first. O Cerberus não tenta
- * preencher quota com itens genéricos. Zero por categoria é um resultado válido.
+ * Perfil 1.4: precision-first com recall calibrado contra busca real da Shopee.
+ * Arquétipos específicos podem funcionar como sinais fortes por categoria,
+ * mas palavras genéricas como "retro" ou um material isolado nunca bastam.
+ * Zero por categoria continua sendo um resultado válido.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
     category: "Iluminação",
     queries: [
-      "abajur bauhaus", "luminaria cogumelo space age", "abajur mid century",
-      "luminaria cromada anos 70", "luminaria italiana vintage", "arandela bauhaus",
-      "luminaria opalina space age", "abajur retro futurista",
+      "luminaria cogumelo cromada space age", "abajur cogumelo bauhaus", "abajur cogumelo anos 60",
+      "luminaria cromada anos 70", "luminaria opalina space age", "luminaria italiana vintage",
+      "arandela bauhaus", "abajur retro futurista",
+    ],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "cogumelo", "luminaria cogumelo", "luminária cogumelo", "abajur cogumelo", "lampada cogumelo", "lâmpada cogumelo", "candeeiro cogumelo",
     ],
     signatureTerms: ["cogumelo", "opalino", "opalina", "cromado", "cromada", "inox", "aluminio", "vidro fumê", "vidro fume", "globo", "retro", "vintage"],
     blockedTerms: [
       ...COMMON_BLOCKED,
       "fita led", "farol", "automotiva",
-      // Bloqueia peças de reposição/incompletas sem punir uma luminária completa
-      // cuja descrição factual apenas mencione que ela possui uma cúpula.
       "cupula luminaria", "cúpula luminária", "cupula para luminaria", "cúpula para luminária",
       "somente cupula", "somente cúpula", "sem soquete", "globo reposicao",
     ],
@@ -139,11 +143,15 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
   profile({
     category: "Tecnologia",
     queries: [
-      "radio bluetooth retro design", "caixa de som mid century", "teclado mecanico vintage design",
-      "relogio digital space age", "carregador bauhaus design", "hub usb aluminio minimalista vintage",
-      "mouse transparente retro futurista", "tecnologia anos 70 design",
+      "radio bluetooth retro madeira vintage", "radio retro portatil bluetooth madeira", "caixa de som retro madeira bluetooth",
+      "teclado mecanico vintage design", "relogio digital retro mesa", "hub usb aluminio retro design",
+      "mouse transparente retro futurista", "carregador sem fio retro design",
     ],
-    signatureTerms: ["transparente", "aluminio", "alumínio", "cromado", "digital", "analógico", "analogico", "compacto", "metal", "retro", "vintage"],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "radio retro", "rádio retrô", "radio vintage", "rádio vintage", "mouse transparente",
+    ],
+    signatureTerms: ["transparente", "madeira", "amadeirado", "aluminio", "alumínio", "cromado", "digital", "analógico", "analogico", "compacto", "metal", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "espiao", "camera escondida", "rastreador oculto", "gamer", "rgb"],
     maxAutoPrice: 700,
     maxReviewPrice: 1200,
