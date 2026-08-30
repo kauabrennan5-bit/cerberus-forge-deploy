@@ -59,6 +59,11 @@ function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
   return configured;
 }
 
+/** Modelo primário efetivamente resolvido pelo reviewer visual de produção. */
+export function resolveProductImageReviewModel(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveImageReviewModel(env);
+}
+
 function resolveImageReviewFallbackModel(env: NodeJS.ProcessEnv, primaryModel: string): string | null {
   const explicit = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL || "").trim();
   const configured = explicit || (primaryModel === CURRENT_IMAGE_REVIEW_MODEL ? SECONDARY_IMAGE_REVIEW_MODEL : CURRENT_IMAGE_REVIEW_MODEL);

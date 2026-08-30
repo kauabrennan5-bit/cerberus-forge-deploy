@@ -486,7 +486,7 @@ function getReviewImageCandidate(review: PendingReview): {
     rawImageUrls: string[];
     primaryImageUrl: string;
     galleryImageUrls: string[];
-    assessments: [];
+    assessments: NonNullable<PendingReview["imageCuration"]>["assessments"];
   };
   imageEditorialStatus: "clean" | "review_required";
 } {
@@ -500,7 +500,13 @@ function getReviewImageCandidate(review: PendingReview): {
     imagemPrincipal: primaryImageUrl,
     imagensGaleria: galleryImageUrls,
     imageCuration: ready && primaryImageUrl
-      ? { status: "ready", rawImageUrls: review.imagensOriginais ?? canonical.rawImageUrls, primaryImageUrl, galleryImageUrls, assessments: [] }
+      ? {
+          status: "ready",
+          rawImageUrls: review.imagensOriginais ?? canonical.rawImageUrls,
+          primaryImageUrl,
+          galleryImageUrls,
+          assessments: review.imageCuration?.assessments || [],
+        }
       : undefined,
     imageEditorialStatus: review.imageEditorialStatus === "clean" ? "clean" : review.imageEditorialStatus ? "review_required" : (ready ? "clean" : "review_required"),
   };
@@ -1642,6 +1648,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         benefits: review.promotionDraft.benefits,
         source: "admin_confirmed",
         confirmedAt: Date.now(),
+        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
       } as const;
       const promotionOffer = normalizePromotionOffer(confirmedPromotion);
       if (!promotionOffer) {

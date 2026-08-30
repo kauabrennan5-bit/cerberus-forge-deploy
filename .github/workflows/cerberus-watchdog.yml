@@ -3,6 +3,8 @@ name: Cerberus external watchdog
 on:
   schedule:
     - cron: "*/15 * * * *"
+    # Sexta 09:30 America/Fortaleza (12:30 UTC): diagnóstico somente leitura.
+    - cron: "30 12 * * 5"
     # Sexta 10:00 America/Fortaleza (13:00 UTC): cria somente o rascunho.
     - cron: "0 13 * * 5"
     # Sábado 10:00 America/Fortaleza: lembra rascunhos sem decisão; nunca envia.
@@ -16,13 +18,17 @@ on:
         default: health
         options:
           - health
+          - weekly-preflight
+          - weekly-editorial-backfill-dry-run
+          - weekly-editorial-backfill-execute
           - weekly-draft
           - weekly-draft-test
           - weekly-stale
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
+  actions: write
 
 concurrency:
   group: cerberus-watchdog
@@ -45,21 +51,23 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Restore watchdog transition state
+        uses: actions/cache/restore@v4
+        with:
+          path: state/watchdog-state.json
+          key: watchdog-state-${{ github.run_id }}
+          restore-keys: |
+            watchdog-state-
+
       - name: Run external health check
         run: node scripts/watchdog.mjs
 
-      - name: Persist watchdog transition state
+      - name: Persist watchdog transition state outside main
         if: always()
-        run: |
-          if ! git status --porcelain -- state/watchdog-state.json | grep -q .; then
-            echo "No watchdog state transition to commit."
-            exit 0
-          fi
-          git config user.name "cerberus-watchdog"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state/watchdog-state.json
-          git commit -m "chore(watchdog): persist health transition state"
-          git push
+        uses: actions/cache/save@v4
+        with:
+          path: state/watchdog-state.json
+          key: watchdog-state-${{ github.run_id }}
 
   weekly-draft:
     if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5' || github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test')
@@ -86,6 +94,59 @@ jobs:
             -H "Authorization: Bearer ${oidc_token}" \
             -d "$body" \
             "$base/api/internal/newsletter/weekly-draft"
+
+  weekly-preflight:
+    if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 5' || github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-preflight'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      OIDC_AUDIENCE: cerberus-weekly-automation
+    steps:
+      - name: Run read-only weekly production preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${CERBERUS_HEALTH_URL%/health}"
+          token_json="$(curl --fail --silent --show-error --max-time 20 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          oidc_token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+          echo "::add-mask::$oidc_token"
+          # 409 significa diagnóstico entregue com gates não prontos; não há mutação de campanha.
+          status="$(curl --silent --show-error --max-time 45 -o preflight.json -w '%{http_code}' \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -d '{}' \
+            "$base/api/internal/newsletter/weekly-preflight")"
+          node -e 'const fs=require("fs"); const v=JSON.parse(fs.readFileSync("preflight.json","utf8")); console.log(JSON.stringify({success:v.success,ready:v.result?.ready,eligible:v.result?.eligibleProducts,composition:v.result?.probableComposition}))'
+          test "$status" = "200" || test "$status" = "409"
+
+  weekly-editorial-backfill:
+    if: github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-editorial-backfill-dry-run' || inputs.operation == 'weekly-editorial-backfill-execute')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      OIDC_AUDIENCE: cerberus-weekly-automation
+    steps:
+      - name: Run controlled editorial backfill
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${CERBERUS_HEALTH_URL%/health}"
+          execute=false
+          if [ "${{ inputs.operation }}" = "weekly-editorial-backfill-execute" ]; then execute=true; fi
+          token_json="$(curl --fail --silent --show-error --max-time 20 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          oidc_token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+          echo "::add-mask::$oidc_token"
+          curl --fail-with-body --silent --show-error --max-time 600 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${oidc_token}" \
+            -d "{\"execute\":${execute},\"limit\":50}" \
+            "$base/api/internal/newsletter/weekly-editorial-backfill"
 
   weekly-stale:
     if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 6' || github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-stale'

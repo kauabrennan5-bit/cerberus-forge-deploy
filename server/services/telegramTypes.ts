@@ -1,5 +1,6 @@
 import type { LifecycleRecord } from "./productPipeline";
 import type { ShopeePromotionEvidence } from "./scraper";
+import type { ProductImageCuration } from "../../src/lib/productImageCuration";
 
 export type TelegramReviewStatus =
   | "pending"
@@ -29,6 +30,7 @@ export interface PendingReview {
   imagemPrincipal?: string;
   imagensGaleria?: string[];
   imageEditorialStatus?: "clean" | "review_required" | "overlay_suspected";
+  imageCuration?: ProductImageCuration;
   normalizedUrl: string;
   descricao?: string;
   status?: TelegramReviewStatus;
@@ -42,6 +44,7 @@ export interface PendingReview {
     benefits: string[];
     source: "admin_confirmed";
     confirmedAt: number;
+    expiresAt: number;
   } | null;
   promotionDraft?: {
     price: number;

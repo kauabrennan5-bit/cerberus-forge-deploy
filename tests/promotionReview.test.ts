@@ -13,6 +13,7 @@ import {
 const adminId = 1976526373;
 const originalAllowedUsers = process.env.TELEGRAM_ALLOWED_USER_IDS;
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
+const originalFetch = globalThis.fetch;
 process.env.TELEGRAM_ALLOWED_USER_IDS = String(adminId);
 process.env.TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "fake-bot-token";
 
@@ -56,6 +57,12 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
     status: "pending",
   };
   const sent: string[] = [];
+  // answerCallbackQuery também passa pelo transporte HTTP do Telegram; mantenha
+  // o teste inteiramente local mesmo quando TELEGRAM_BOT_TOKEN está definido.
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ ok: true, result: true }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
   setTestTelegramSenders(async (_chatId, text) => { sent.push(text); }, async () => {});
   setTestGetPendingReview(async (id) => id === reviewId ? review : null);
   setTestSavePendingReview(async (saved) => {
@@ -83,7 +90,13 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
       benefits: ["Compre R$200 e ganhe R$6 off", "Leve 2 e aproveite 2% de desconto"],
       source: "admin_confirmed",
       confirmedAt: review.promotionReview?.confirmedAt,
+      expiresAt: review.promotionReview?.expiresAt,
     });
+    assert.equal(
+      review.promotionReview?.expiresAt,
+      (review.promotionReview?.confirmedAt || 0) + 24 * 60 * 60 * 1000,
+      "oferta confirmada recebe validade explícita conservadora de 24h",
+    );
     assert.equal(review.promotionDraft, null, "rascunho é removido após confirmação");
     assert.ok(sent.some((text) => /OFERTA PROMOCIONAL REGISTRADA/.test(text)));
     assert.ok(sent.some((text) => /produto não foi publicado/i.test(text)));
@@ -97,5 +110,6 @@ test("revisão promocional humana registra Pix com cupom sem alterar preço-base
     else process.env.TELEGRAM_ALLOWED_USER_IDS = originalAllowedUsers;
     if (originalToken === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
     else process.env.TELEGRAM_BOT_TOKEN = originalToken;
+    globalThis.fetch = originalFetch;
   }
 });

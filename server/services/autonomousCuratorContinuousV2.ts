@@ -13,6 +13,11 @@ import { createProductionProductPipeline, type LifecycleRecord } from "./product
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
 import {
+  DISPLAY_TITLE_REVIEW_VERSION,
+  IMAGE_REVIEW_VERSION,
+  imageCurationFingerprint,
+} from "./productEditorialReview";
+import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
   type AutonomousCuratorCategoryProfile,
@@ -479,11 +484,12 @@ async function persistPausedCandidate(candidate: CuratedCandidate, now: Date, en
     image_curation: candidate.imageCuration,
     image_reviewed_at: now.toISOString(),
     image_review_model: model,
-    image_review_version: "1.2",
+    image_review_version: IMAGE_REVIEW_VERSION,
+    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
     display_title_status: "reviewed",
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
-    display_title_review_version: "1.0",
+    display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
   });
   if (error) {
     await client.from("product_source_identities").delete().eq("marketplace", "Shopee").eq("shop_id", candidate.shopId).eq("item_id", candidate.itemId).eq("product_id", productId);
@@ -569,7 +575,13 @@ async function refreshQueuedCandidate(input: {
   });
 }
 
-async function updateQueuedProduct(product: Product, candidate: CuratedCandidate, now: Date, published: boolean): Promise<void> {
+async function updateQueuedProduct(
+  product: Product,
+  candidate: CuratedCandidate,
+  now: Date,
+  published: boolean,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
   const previous = parseQueueNote(product.curatorNote);
   const meta: QueueMetadata = {
     score: candidate.score,
@@ -595,7 +607,13 @@ async function updateQueuedProduct(product: Product, candidate: CuratedCandidate
     image_editorial_status: "clean",
     image_curation: candidate.imageCuration,
     image_reviewed_at: now.toISOString(),
-    image_review_version: "1.2",
+    image_review_model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
+    image_review_version: IMAGE_REVIEW_VERSION,
+    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
+    display_title_status: "reviewed",
+    display_title_reviewed_at: now.toISOString(),
+    display_title_review_model: env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
+    display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
     ativo: published,
     status: published ? "published" : "paused",
   }).eq("id", product.id);
@@ -610,6 +628,14 @@ async function updateQueuedProduct(product: Product, candidate: CuratedCandidate
   product.descricao = candidate.description;
   product.imageCuration = candidate.imageCuration;
   product.imageEditorialStatus = "clean";
+  product.imageReviewedAt = now.toISOString();
+  product.imageReviewModel = env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite";
+  product.imageReviewVersion = IMAGE_REVIEW_VERSION;
+  product.imageReviewFingerprint = imageCurationFingerprint(candidate.imageCuration);
+  product.displayTitleStatus = "reviewed";
+  product.displayTitleReviewedAt = now.toISOString();
+  product.displayTitleReviewModel = env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite";
+  product.displayTitleReviewVersion = DISPLAY_TITLE_REVIEW_VERSION;
   product.curatorNote = queueNote(meta);
   product.ativo = published;
   product.status = published ? "published" : "paused";
@@ -767,7 +793,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
             if (revalidationPermanentFailure(refreshed.reason)) await archiveQueueProduct(queuedProduct);
             continue;
           }
-          await updateQueuedProduct(queuedProduct, refreshed.candidate, now, true);
+          await updateQueuedProduct(queuedProduct, refreshed.candidate, now, true, env);
           await curatorRepo.saveProductImageEditorialReview({
             productId: queuedProduct.id,
             curation: refreshed.candidate.imageCuration,
@@ -790,7 +816,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
           if (discovery.candidate) {
             const queued = await maybeQueueCandidate(discovery.candidate, products, now, env);
             if (queued.product) {
-              await updateQueuedProduct(queued.product, discovery.candidate, now, true);
+              await updateQueuedProduct(queued.product, discovery.candidate, now, true, env);
               pendingPublications.push({ product: queued.product, candidate: discovery.candidate });
               result.published = true;
               result.score = discovery.candidate.score;
@@ -835,7 +861,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     if (!sync.success) {
       failedThisCycle += pendingPublications.length;
       for (const item of pendingPublications) {
-        await updateQueuedProduct(item.product, item.candidate, now, false);
+        await updateQueuedProduct(item.product, item.candidate, now, false, env);
         const result = categories.find(category => category.category === item.candidate.category);
         if (result) {
           result.published = false;

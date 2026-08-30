@@ -21,6 +21,8 @@ import {
   getWeeklyMarketingTestSendError,
   retryWeeklyMarketingTest,
 } from "./newsletterWeeklyDelivery";
+import { syncWeeklyBrevoProductionAudience } from "./newsletterWeeklyBrevoAudienceSync";
+import { assertWeeklyApprovedContentCurrent } from "./newsletterWeeklyContentPreflight";
 import {
   createSupabaseNewsletterCampaignStore,
   type CampaignTelegramCard,
@@ -46,6 +48,8 @@ export type CampaignTelegramDeps = {
   collectionSize?: number;
   minimumCollectionProducts?: number;
   verifyImageAccessibility?: boolean;
+  productionAudienceSync?: () => Promise<{ listId: number; eligibleSubscribers: number; brevoMembers: number }>;
+  productionEnabledCheck?: () => Promise<boolean>;
 };
 
 export async function handleNewsletterCampaignCallback(
@@ -153,10 +157,19 @@ async function handleNewsletterCampaignCallbackOnce(
       if (campaign.status !== "pending_approval" && campaign.status !== "approved") {
         return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
       }
+      const isWeeklyTest = campaign.editionKey?.startsWith("weekly-test:");
+      if (!isWeeklyTest) {
+        await assertWeeklyApprovedContentCurrent({
+          campaign,
+          productsLoader: deps.productsLoader || productsRepository.getProducts,
+          store,
+          now: deps.now,
+        });
+      }
       const approved = campaign.status === "pending_approval"
         ? await approveCampaign(campaign, senderId, { store, env })
         : campaign;
-      if (approved.editionKey?.startsWith("weekly-test:")) {
+      if (isWeeklyTest) {
         await deps.answerCallbackQuery(callbackId, "Aprovação registrada. Processando somente o teste controlado.");
         try {
           const tested = approved.testProviderMessageId?.trim()
@@ -177,15 +190,54 @@ async function handleNewsletterCampaignCallbackOnce(
         }
         return true;
       }
-      const confirmed = approved.generalSendConfirmedAt
-        ? approved
-        : await confirmGeneralSend(approved, senderId, { store, env });
+      // Persiste pending antes da chamada externa; uma falha de sync jamais
+      // pode reutilizar a contagem ready observada no momento do draft.
+      const approvalPending = await store.updateCampaign({
+        ...approved,
+        approvalAudienceCount: null,
+        approvalAudienceStatus: "pending",
+      });
+      const audience = await (deps.productionAudienceSync || (() => syncWeeklyBrevoProductionAudience({ env })))();
+      const audienceReady = audience.eligibleSubscribers > 0 && audience.eligibleSubscribers === audience.brevoMembers;
+      const approvalReady = await store.updateCampaign({
+        ...approvalPending,
+        approvalAudienceCount: audience.eligibleSubscribers,
+        approvalAudienceStatus: audienceReady ? "ready" : "mismatch",
+      });
+      await deps.answerCallbackQuery(
+        callbackId,
+        audienceReady
+          ? `Campanha aprovada. Nenhum email foi enviado. Confirme o envio para ${audience.eligibleSubscribers} assinantes no segundo botão.`
+          : "Campanha aprovada, mas o envio segue bloqueado: audiência Brevo divergente.",
+        !audienceReady,
+      );
+      await syncCampaignTelegramState(approvalReady.id, deps, messageReference(chatId, messageId));
+      return true;
+    }
+
+    if (data.startsWith("campaign_weekly_send:")) {
+      if (
+        campaign.status !== "approved"
+        || campaign.campaignType !== "collection"
+        || !campaign.editionKey?.startsWith("weekly:")
+        || campaign.approvalAudienceStatus !== "ready"
+        || !campaign.approvalAudienceCount
+      ) {
+        return handleIncompatibleCampaignCallback(deps, callbackId, chatId, messageId, campaign);
+      }
+      const confirmed = campaign.generalSendConfirmedAt
+        ? campaign
+        : await confirmGeneralSend(campaign, senderId, { store, env, now: deps.now });
       const sending = await startGeneralSend(confirmed, senderId, {
         store,
         env,
+        now: deps.now,
         weeklyProvider: deps.weeklyProvider,
+        productsLoader: deps.productsLoader,
+        productionAudienceSync: deps.productionAudienceSync,
+        productionEnabledCheck: deps.productionEnabledCheck,
       });
-      await deps.answerCallbackQuery(callbackId, "Campanha aprovada. Envio de marketing entregue ao provider Brevo.");
+      await deps.answerCallbackQuery(callbackId, "Confirmação final registrada. Envio entregue ao provider Brevo.");
       await syncCampaignTelegramState(sending.id, deps, messageReference(chatId, messageId));
       return true;
     }
@@ -499,6 +551,12 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
           [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
         ];
       }
+      if (campaign.editionKey?.startsWith("weekly:")) {
+        return [
+          [{ text: "✅ Aprovar campanha", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+        ];
+      }
       return [
         [{ text: "✅ Aprovar prévia", callback_data: `campaign_approve:${campaign.id}` }],
         [{ text: "✏️ Editar assunto", callback_data: `campaign_subject_edit:${campaign.id}` }, { text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
@@ -514,6 +572,18 @@ export function campaignKeyboard(campaign: EmailCampaign): any[][] {
               [{ text: "🧪 Enviar teste controlado", callback_data: `campaign_weekly_approve:${campaign.id}` }],
               [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
             ];
+      }
+      if (campaign.editionKey?.startsWith("weekly:")) {
+        if (campaign.approvalAudienceStatus === "ready" && (campaign.approvalAudienceCount || 0) > 0) {
+          return [
+            [{ text: `🚀 Enviar agora para ${campaign.approvalAudienceCount} assinantes`, callback_data: `campaign_weekly_send:${campaign.id}` }],
+            [{ text: "↩️ Voltar / cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+          ];
+        }
+        return [
+          [{ text: "🔄 Revalidar audiência", callback_data: `campaign_weekly_approve:${campaign.id}` }],
+          [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${campaign.id}` }],
+        ];
       }
       if (campaign.generalSendConfirmedAt && campaign.generalSendConfirmedByTelegramId) {
         return [
@@ -826,6 +896,15 @@ function campaignErrorMessage(error: unknown): string {
   const weeklyFailure = getWeeklyMarketingTestSendError(error);
   if (weeklyFailure) return weeklyFailure.safeCode;
   const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("WEEKLY_CONTENT_CHANGED_REGENERATE_REQUIRED:")) {
+    return "Conteúdo mudou desde a aprovação. A campanha precisa ser regenerada.";
+  }
+  if (message === "WEEKLY_MARKETING_PRODUCTION_AUDIENCE_CHANGED_AFTER_APPROVAL") {
+    return "A audiência mudou desde a aprovação. Revalide a campanha antes de enviar.";
+  }
+  if (message === "WEEKLY_MARKETING_PRODUCTION_APPROVAL_EXPIRED") {
+    return "A aprovação expirou. A campanha precisa ser regenerada e aprovada novamente.";
+  }
   const known = new Set([
     "CAMPAIGN_PRODUCT_NOT_ELIGIBLE",
     "CAMPAIGN_PRODUCT_NOT_FOUND",

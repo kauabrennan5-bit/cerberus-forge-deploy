@@ -4,16 +4,21 @@ import { generateSlug } from "../../src/data/initialProducts";
 import { Product, ProductStatus, PromotionOffer } from "../../src/types";
 import { normalizePromotionOffer } from "../services/promotionOffer";
 import { resolvePublicProductCategory } from "../../src/lib/productCategory";
+import {
+  DISPLAY_TITLE_REVIEW_VERSION,
+  IMAGE_REVIEW_VERSION,
+  imageUrlFingerprint,
+  invalidateImageReview,
+  isEditorialDisplayTitle,
+  primaryImageChanged,
+} from "../services/productEditorialReview";
+import { resolveProductImageReviewModel } from "../services/productImageReview";
 
 dotenv.config();
 
 // Initialize Supabase Client prioritizing Service Role Key for server-side administrative access (bypassing RLS)
 const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_SECRET_KEY || "";
-// A migration editorial é um gate explícito. Antes de ela ser aplicada, o
-// repositório continua escrevendo somente colunas existentes em produção.
-const editorialFieldsEnabled = process.env.PRODUCT_EDITORIAL_FIELDS_ENABLED === "true";
-
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
   ? createClient(supabaseUrl, supabaseKey)
   : null;
@@ -98,12 +103,20 @@ async function saveProducts(products: Product[], syncCatalog = true): Promise<vo
       descricao: p.descricao || "",
       pagina_ponte_url: p.paginaPonteUrl || "",
       oferta_promocional: normalizePromotionOffer(p.ofertaPromocional) || null,
+      raw_title: p.rawTitle || p.produto,
+      display_title: p.displayTitle || null,
+      display_title_status: p.displayTitleStatus || "unreviewed",
+      display_title_reviewed_at: p.displayTitleReviewedAt || null,
+      display_title_review_model: p.displayTitleReviewModel || null,
+      display_title_review_version: p.displayTitleReviewVersion || null,
+      curator_note: p.curatorNote || null,
+      image_editorial_status: p.imageEditorialStatus || "unreviewed",
+      image_curation: p.imageCuration || null,
+      image_reviewed_at: p.imageReviewedAt || null,
+      image_review_model: p.imageReviewModel || null,
+      image_review_version: p.imageReviewVersion || null,
+      image_review_fingerprint: p.imageReviewFingerprint || null,
     };
-    if (editorialFieldsEnabled) {
-      productRow.raw_title = p.rawTitle || p.produto;
-      productRow.display_title = p.displayTitle || null;
-      productRow.curator_note = p.curatorNote || null;
-    }
     return productRow;
   });
 
@@ -149,6 +162,10 @@ export async function getProducts(): Promise<Product[]> {
       produto: item.produto || item.title || item.name,
       rawTitle: item.raw_title || item.rawTitle || undefined,
       displayTitle: item.display_title || item.displayTitle || undefined,
+      displayTitleStatus: item.display_title_status || "unreviewed",
+      displayTitleReviewedAt: item.display_title_reviewed_at || undefined,
+      displayTitleReviewModel: item.display_title_review_model || undefined,
+      displayTitleReviewVersion: item.display_title_review_version || undefined,
       categoria: resolvePublicProductCategory(item.categoria || item.category, {
         title: item.display_title || item.displayTitle || item.raw_title || item.produto || item.title || item.name,
         description: item.descricao || item.description,
@@ -159,6 +176,12 @@ export async function getProducts(): Promise<Product[]> {
         : typeof item.imagens === "string"
         ? JSON.parse(item.imagens)
         : [],
+      imageEditorialStatus: item.image_editorial_status || "unreviewed",
+      imageCuration: item.image_curation || undefined,
+      imageReviewedAt: item.image_reviewed_at || undefined,
+      imageReviewModel: item.image_review_model || undefined,
+      imageReviewVersion: item.image_review_version || undefined,
+      imageReviewFingerprint: item.image_review_fingerprint || undefined,
       link: item.link || item.affiliate_url,
       ativo: item.ativo !== undefined ? item.ativo : true,
       destaque: Boolean(item.destaque),
@@ -246,6 +269,8 @@ export async function createProduct(input: {
       rawTitle: input.rawTitle?.trim() || existingProduct.rawTitle,
       displayTitle: input.displayTitle?.trim() || existingProduct.displayTitle,
       curatorNote: input.curatorNote?.trim() || existingProduct.curatorNote,
+      imageEditorialStatus: input.imageEditorialStatus || existingProduct.imageEditorialStatus,
+      imageCuration: input.imageCuration || existingProduct.imageCuration,
       status: input.status || "published",
       ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional) || existingProduct.ofertaPromocional,
     }, options);
@@ -288,6 +313,8 @@ export async function createProduct(input: {
     imageCuration: input.imageCuration,
   };
 
+  applyInitialEditorialProof(newProduct);
+
   products.unshift(newProduct);
   await saveProducts(products, options.syncCatalog !== false);
   return newProduct;
@@ -310,14 +337,55 @@ export async function updateProduct(
     ...updateData,
     ...(updateData.produto ? { slug: generateSlug(updateData.produto) } : {})
   };
-  const updatedProduct: Product = {
+  let updatedProduct: Product = {
     ...mergedProduct,
     categoria: resolveProductCategoryForPersistence(mergedProduct),
   };
+  if (updateData.imagens && primaryImageChanged(products[index], updateData.imagens)) {
+    updatedProduct = invalidateImageReview(updatedProduct);
+  }
+  if (updateData.imageCuration || updateData.imageEditorialStatus || updateData.displayTitle) {
+    applyInitialEditorialProof(updatedProduct);
+  }
 
   products[index] = updatedProduct;
   await saveProducts(products, options.syncCatalog !== false);
   return updatedProduct;
+}
+
+function applyInitialEditorialProof(product: Product): void {
+  const now = new Date().toISOString();
+  const primary = product.imageCuration?.status === "ready" ? product.imageCuration.primaryImageUrl?.trim() : "";
+  const primaryAssessment = primary
+    ? product.imageCuration?.assessments.find(assessment => assessment.url === primary)
+    : undefined;
+  if (
+    product.imageEditorialStatus === "clean"
+    && primary
+    && primaryAssessment?.decision === "clean"
+    && primaryAssessment.confidence !== "LOW"
+  ) {
+    product.imageReviewedAt ||= now;
+    product.imageReviewModel ||= resolveProductImageReviewModel(process.env);
+    product.imageReviewVersion ||= IMAGE_REVIEW_VERSION;
+    product.imageReviewFingerprint = imageUrlFingerprint(primary);
+  } else if (product.imageEditorialStatus === "clean") {
+    Object.assign(product, invalidateImageReview(product));
+  }
+
+  const displayTitle = product.displayTitle?.replace(/\s+/g, " ").trim();
+  const rawTitle = product.rawTitle?.replace(/\s+/g, " ").trim();
+  if (displayTitle && displayTitle !== rawTitle && isEditorialDisplayTitle(displayTitle)) {
+    product.displayTitleStatus = "ready";
+    product.displayTitleReviewedAt ||= now;
+    product.displayTitleReviewModel ||= process.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash";
+    product.displayTitleReviewVersion ||= DISPLAY_TITLE_REVIEW_VERSION;
+  } else if (product.displayTitleStatus === "ready") {
+    product.displayTitleStatus = "review_required";
+    product.displayTitleReviewedAt = undefined;
+    product.displayTitleReviewModel = undefined;
+    product.displayTitleReviewVersion = undefined;
+  }
 }
 
 /**

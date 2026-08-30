@@ -94,7 +94,11 @@ export function sanitizeCuratorOutput(
   };
 }
 
-async function reviewScrapedImages(rawImages: string[], title: string, allowRepair = true): Promise<ProductImageCuration> {
+export async function reviewScrapedImages(
+  rawImages: string[],
+  title: string,
+  allowRepair = true,
+): Promise<ProductImageCuration> {
   const rawImageUrls = curateProductImages(rawImages).rawImageUrls;
   if (testOverrideImageReview) return testOverrideImageReview(rawImageUrls, title);
   return reviewProductImages(rawImageUrls, title, { allowRepair });

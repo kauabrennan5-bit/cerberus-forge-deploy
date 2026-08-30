@@ -17,6 +17,11 @@ import {
 } from "../services/newsletterWeeklyProductionConfig";
 import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
 import { registerAutonomousCuratorRoutes } from "./autonomousCuratorRoutes";
+import { runWeeklyProductionPreflight, renderWeeklyPreflightTelegram } from "../services/newsletterWeeklyPreflight";
+import { sendTelegramMessage } from "../services/telegramBot";
+import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
+import { verifyWeeklyPreviewSignature } from "../services/newsletterWeeklyPreview";
+import { runWeeklyEditorialBackfill } from "../services/newsletterWeeklyEditorialBackfill";
 
 export function registerNewsletterWeeklyRoutes(app: express.Express): void {
   // O mesmo registrador central já é conectado pelo server.ts; o Autonomous
@@ -29,6 +34,21 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
     if (!auth.authorized) return res.status(401).json({ success: false, code: "AUTOMATION_UNAUTHORIZED" });
     next();
   };
+
+  app.get("/api/newsletter/weekly-preview/:campaignId", async (req, res) => {
+    try {
+      const campaign = await createSupabaseNewsletterCampaignStore().getCampaign(String(req.params.campaignId || ""));
+      if (!campaign || !campaign.editionKey?.startsWith("weekly:") || !verifyWeeklyPreviewSignature(campaign, req.query.expires, req.query.signature)) {
+        return res.status(404).send("Prévia indisponível ou expirada.");
+      }
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+      return res.status(200).type("html").send(campaign.bodyHtml);
+    } catch {
+      return res.status(404).send("Prévia indisponível ou expirada.");
+    }
+  });
 
   app.get("/go/:ref", async (req, res) => {
     const ref = String(req.params.ref || "").trim();
@@ -75,6 +95,31 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
     } catch (error) {
       console.error(`[NEWSLETTER-WEEKLY] draft_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
       return res.status(500).json({ success: false, code: "WEEKLY_DRAFT_FAILED" });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-preflight", requireAutomation, async (_req, res) => {
+    try {
+      const result = await runWeeklyProductionPreflight();
+      const chatId = (process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
+      if (!chatId) return res.status(503).json({ success: false, code: "TELEGRAM_ADMIN_CHAT_MISSING", result });
+      const delivery = await sendTelegramMessage(chatId, renderWeeklyPreflightTelegram(result));
+      if (!delivery.ok) return res.status(503).json({ success: false, code: "WEEKLY_PREFLIGHT_TELEGRAM_FAILED", result });
+      return res.status(result.ready ? 200 : 409).json({ success: true, result });
+    } catch (error) {
+      console.error(`[NEWSLETTER-WEEKLY] preflight_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
+      return res.status(503).json({ success: false, code: "WEEKLY_PREFLIGHT_FAILED" });
+    }
+  });
+
+  app.post("/api/internal/newsletter/weekly-editorial-backfill", requireAutomation, async (req, res) => {
+    try {
+      const execute = req.body?.execute === true;
+      const result = await runWeeklyEditorialBackfill({ execute, limit: Number(req.body?.limit || 50) });
+      return res.status(200).json({ success: true, result });
+    } catch (error) {
+      console.error(`[NEWSLETTER-WEEKLY] editorial_backfill_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
+      return res.status(503).json({ success: false, code: "WEEKLY_EDITORIAL_BACKFILL_FAILED" });
     }
   });
 

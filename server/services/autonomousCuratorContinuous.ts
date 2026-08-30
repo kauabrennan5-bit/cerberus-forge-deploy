@@ -12,6 +12,7 @@ import { extractProductForReview } from "./productAutomation";
 import { createProductionProductPipeline, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
+import { DISPLAY_TITLE_REVIEW_VERSION, imageCurationFingerprint } from "./productEditorialReview";
 import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
@@ -473,10 +474,11 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
     image_reviewed_at: now.toISOString(),
     image_review_model: model,
     image_review_version: "1.1",
+    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
     display_title_status: "reviewed",
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: resolveCopyModel(env),
-    display_title_review_version: "1.0",
+    display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
   });
   if (error) {
     await client.from("product_source_identities").delete().eq("marketplace", "Shopee").eq("shop_id", candidate.shopId).eq("item_id", candidate.itemId).eq("product_id", productId);
@@ -676,6 +678,11 @@ async function updateQueuedProductFromCandidate(
     image_reviewed_at: now.toISOString(),
     image_review_model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "gemini-3.5-flash-lite",
     image_review_version: "1.1",
+    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
+    display_title_status: "reviewed",
+    display_title_reviewed_at: now.toISOString(),
+    display_title_review_model: resolveCopyModel(env),
+    display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
     ativo: status === "published",
     status,
   }).eq("id", productId);

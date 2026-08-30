@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Product } from "../../src/types";
-import { deriveConfidenceV2, deriveMinSampleSize, confidenceV2ToScore } from "../commercialBrain/statisticalRigor";
+import { deriveConfidenceV2, deriveMinSampleSize } from "../commercialBrain/statisticalRigor";
 import * as productsRepository from "../repositories/productsRepository";
 import { createSupabaseNewsletterCampaignStore, type NewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 import { submitCampaignForApproval } from "./newsletterCampaignService";
@@ -9,6 +9,17 @@ import { getNewsletterInstitutionalOptions } from "./newsletterInstitutional";
 import { sendTelegramMessage, type TelegramDeliveryResult } from "./telegramBot";
 import { generateWeeklyNewsletterCopy, type WeeklyNewsletterCopy } from "./newsletterWeeklyCopy";
 import { renderWeeklyNewsletter } from "./newsletterWeeklyTemplate";
+import {
+  buildWeeklyEditorialSnapshot,
+  composeWeeklyEdition,
+  evaluateWeeklyProductEligibility,
+  rankWeeklyCandidates,
+  weeklyFreshnessMs,
+  type WeeklyComposition,
+} from "./newsletterWeeklyEditorial";
+import { validPromotionAt } from "./promotionOffer";
+import { readWeeklyProductionRuntimeConfig, type WeeklyProductionRuntimeConfig } from "./newsletterWeeklyProductionConfig";
+import { buildWeeklyPreviewUrl } from "./newsletterWeeklyPreview";
 
 import {
   classifyGeminiDiagnosticReason,
@@ -29,13 +40,14 @@ export type WeeklyDraftDeps = {
   productsLoader?: () => Promise<Product[]>;
   lastSentAtLoader?: () => Promise<string | null>;
   clickCountLoader?: (productIds: string[]) => Promise<Map<string, number>>;
-  copyGenerator?: (products: readonly Product[]) => Promise<WeeklyNewsletterCopy>;
+  copyGenerator?: (products: readonly Product[], composition: WeeklyComposition) => Promise<WeeklyNewsletterCopy>;
   institutionalLoader?: (env: NodeJS.ProcessEnv) => Promise<Awaited<ReturnType<typeof getNewsletterInstitutionalOptions>>>;
   telegramSender?: (chatId: string, text: string, replyMarkup?: unknown) => Promise<TelegramDeliveryResult>;
   telegramChatId?: string | number;
   now?: Date;
   env?: NodeJS.ProcessEnv;
   testMode?: boolean;
+  audienceConfigLoader?: () => Promise<WeeklyProductionRuntimeConfig | null>;
 };
 
 function envActor(env: NodeJS.ProcessEnv): string {
@@ -48,15 +60,13 @@ function envActor(env: NodeJS.ProcessEnv): string {
   throw new Error("WEEKLY_TELEGRAM_ACTOR_MISSING");
 }
 
-function freshnessMs(product: Product): number {
-  const created = product.createdAt ? Date.parse(product.createdAt) : 0;
-  const offerConfirmed = product.ofertaPromocional?.source === "admin_confirmed" ? Number(product.ofertaPromocional.confirmedAt || 0) : 0;
-  return Math.max(Number.isFinite(created) ? created : 0, Number.isFinite(offerConfirmed) ? offerConfirmed : 0);
-}
-
-export async function loadLastSuccessfulCollectionSentAt(): Promise<string | null> {
-  const client = productsRepository.requireSupabase();
-  const { data, error } = await client.from("email_campaigns").select("sent_at").eq("campaign_type", "collection").eq("status", "sent").not("sent_at", "is", null).order("sent_at", { ascending: false }).limit(1).maybeSingle();
+export async function loadLastSuccessfulWeeklySentAt(client = productsRepository.requireSupabase()): Promise<string | null> {
+  const { data, error } = await client.from("email_campaigns").select("sent_at")
+    .eq("campaign_type", "collection")
+    .like("edition_key", "weekly:%")
+    .eq("status", "sent")
+    .not("sent_at", "is", null)
+    .order("sent_at", { ascending: false }).limit(1).maybeSingle();
   if (error) throw error;
   return data?.sent_at ? String(data.sent_at) : null;
 }
@@ -74,42 +84,60 @@ export async function loadProductClickCounts(productIds: string[]): Promise<Map<
   return counts;
 }
 
-function rankCandidates(products: Product[], clickCounts: Map<string, number>): Product[] {
-  const minSample = deriveMinSampleSize().nTotal;
-  return [...products].sort((a, b) => {
-    const aClicks = clickCounts.get(a.id) || 0;
-    const bClicks = clickCounts.get(b.id) || 0;
-    const aConfidence = deriveConfidenceV2({ recordCount: aClicks, minSampleRequired: minSample }).confidence;
-    const bConfidence = deriveConfidenceV2({ recordCount: bClicks, minSampleRequired: minSample }).confidence;
-    return confidenceV2ToScore(bConfidence) - confidenceV2ToScore(aConfidence)
-      || bClicks - aClicks
-      || freshnessMs(b) - freshnessMs(a);
-  });
-}
-
 function editionKey(products: readonly Product[], now: Date, testMode: boolean): string {
   const digest = createHash("sha256").update(products.map(p => p.id).sort().join("\n"), "utf8").digest("hex").slice(0, 20);
   return `${testMode ? "weekly-test" : "weekly"}:${now.toISOString().slice(0, 10)}:${digest}`;
 }
 
-function telegramPreview(campaign: EmailCampaign, products: readonly Product[], copy: WeeklyNewsletterCopy, clickCounts: Map<string, number>, testMode: boolean): string {
+function telegramPreview(
+  campaign: EmailCampaign,
+  products: readonly Product[],
+  copy: WeeklyNewsletterCopy,
+  clickCounts: Map<string, number>,
+  composition: WeeklyComposition,
+  testMode: boolean,
+  publicBaseUrl: string,
+  env: NodeJS.ProcessEnv,
+  audienceConfig: WeeklyProductionRuntimeConfig | null,
+): string {
   const minSample = deriveMinSampleSize().nTotal;
   const lines = products.map((product, index) => {
     const clicks = clickCounts.get(product.id) || 0;
     const confidence = deriveConfidenceV2({ recordCount: clicks, minSampleRequired: minSample });
-    const canonicalPrice = product.ofertaPromocional?.source === "admin_confirmed" && product.ofertaPromocional.price > 0 ? product.ofertaPromocional.price : product.preco;
-    return `${index === 0 ? "⭐" : "•"} ${product.displayTitle || product.produto}\n   R$ ${Number(canonicalPrice).toFixed(2).replace(".", ",")} · ${clicks} cliques · confiança ${confidence.confidence}`;
+    const canonicalPrice = validPromotionAt(product.ofertaPromocional, new Date(campaign.createdAt))?.price || product.preco;
+    return `${index === 0 ? "⭐ DESTAQUE" : "•"} ${product.displayTitle}\n   ${product.categoria} · R$ ${Number(canonicalPrice).toFixed(2).replace(".", ",")} · ${clicks} cliques · confiança ${confidence.confidence}\n   🖼 ${product.imageCuration?.primaryImageUrl}`;
   });
+  let previewLine: string | null = null;
+  try {
+    previewLine = `👁 <a href="${escapeWeeklyTelegramHtml(buildWeeklyPreviewUrl(campaign, publicBaseUrl, env))}">Ver prévia completa</a>`;
+  } catch {
+    if (!testMode) throw new Error("WEEKLY_PREVIEW_LINK_UNAVAILABLE");
+  }
+  const previewAudienceCount = testMode ? 1 : (audienceConfig?.eligibleSubscribersCount ?? 0);
+  const previewAudienceReady = testMode || Boolean(
+    audienceConfig?.lastSyncStatus === "ready"
+    && audienceConfig.brevoListId
+    && audienceConfig.eligibleSubscribersCount > 0
+    && audienceConfig.eligibleSubscribersCount === audienceConfig.brevoMembersCount
+  );
   return [
     testMode ? "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>" : "📨 <b>RASCUNHO SEMANAL CERBERUS</b>",
     "",
-    `<b>Assunto:</b> ${copy.subject}`,
-    `<b>Preview:</b> ${copy.previewText}`,
+    `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(copy.subject)}`,
+    `<b>Preview:</b> ${escapeWeeklyTelegramHtml(copy.previewText)}`,
+    `<b>Produtos:</b> ${products.length}`,
+    `<b>Composição:</b> ${composition.mode === "thematic" ? "temática" : "diversificada"}`,
+    `<b>Categorias:</b> ${composition.categories.map(escapeWeeklyTelegramHtml).join(", ")}`,
+    `<b>Audiência elegível:</b> ${previewAudienceCount}`,
+    `<b>Status Brevo:</b> ${previewAudienceReady ? "ready" : audienceConfig?.lastSyncStatus || "unavailable"}`,
+    `<b>Criada em:</b> ${campaign.createdAt}`,
+    `<b>Aprovação válida até:</b> ${campaign.approvalExpiresAt || "indisponível"}`,
     "",
     ...lines,
+    previewLine,
     "",
     "Nenhum e-mail foi enviado ainda.",
-    testMode ? "Ao aprovar, somente o destino de teste configurado receberá a campanha." : "Somente sua aprovação explícita cria os destinatários e inicia o envio pelo Brevo.",
+    testMode ? "Ao aprovar, somente o destino de teste configurado receberá a campanha." : "O primeiro clique apenas aprova a campanha e libera a confirmação final; ele não cria campanha Brevo nem envia email.",
     `<code>${campaign.id}</code>`,
   ].join("\n");
 }
@@ -257,8 +285,9 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
   const env = deps.env || process.env;
   const now = deps.now || new Date();
   const testMode = deps.testMode === true;
-  const weeklyEnabled = env.NEWSLETTER_WEEKLY_ENABLED === "true";
-  if (!testMode && !weeklyEnabled) return { status: "skipped", reason: "disabled", newProductCount: 0 };
+  if (!testMode && deps.store && !deps.audienceConfigLoader && env.NEWSLETTER_WEEKLY_ENABLED !== "true") {
+    return { status: "skipped", reason: "disabled", newProductCount: 0 };
+  }
 
   const attemptId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
   const context: Omit<WeeklyDraftDiagnostic, "stage" | "reason"> = { attemptId };
@@ -299,6 +328,30 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
       try { store = createSupabaseNewsletterCampaignStore(); }
       catch { fail("RUNTIME_CONFIG", "SUPABASE_CONFIG_MISSING"); }
     }
+    let audienceConfig: WeeklyProductionRuntimeConfig | null = null;
+    if (!testMode) {
+      if (deps.audienceConfigLoader) {
+        try { audienceConfig = await deps.audienceConfigLoader(); }
+        catch { fail("RUNTIME_CONFIG", "SUPABASE_CONFIG_MISSING"); }
+      } else if (deps.store) {
+        audienceConfig = {
+          weeklyEnabled: env.NEWSLETTER_WEEKLY_ENABLED === "true",
+          brevoListId: Number.parseInt(env.BREVO_NEWSLETTER_LIST_ID || "", 10) || null,
+          contactSyncVerifiedAt: env.BREVO_NEWSLETTER_CONTACT_SYNC_VERIFIED === "true" ? now.toISOString() : null,
+          lastSyncAt: null,
+          lastSyncStatus: env.BREVO_NEWSLETTER_CONTACT_SYNC_VERIFIED === "true" ? "ready" : "never",
+          eligibleSubscribersCount: 0,
+          brevoMembersCount: 0,
+          updatedAt: null,
+        };
+      } else {
+        try { audienceConfig = await readWeeklyProductionRuntimeConfig(); }
+        catch { fail("RUNTIME_CONFIG", "SUPABASE_CONFIG_MISSING"); }
+      }
+      if (!audienceConfig?.weeklyEnabled) {
+        return { status: "skipped", reason: "disabled", newProductCount: 0 };
+      }
+    }
     successStage("RUNTIME_CONFIG");
 
     startStage("SUPABASE_READ");
@@ -308,17 +361,19 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
       products = await (deps.productsLoader || productsRepository.getProducts)();
       lastSentAt = testMode
         ? new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
-        : await (deps.lastSentAtLoader || loadLastSuccessfulCollectionSentAt)();
+        : await (deps.lastSentAtLoader || loadLastSuccessfulWeeklySentAt)();
     } catch {
       fail("SUPABASE_READ", "SUPABASE_READ_FAILED");
     }
     successStage("SUPABASE_READ");
 
     startStage("PRODUCT_SELECTION");
-    const cutoffMs = lastSentAt ? Date.parse(lastSentAt) : now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const configuredLookback = Number.parseInt(env.NEWSLETTER_WEEKLY_INITIAL_LOOKBACK_DAYS || "7", 10);
+    const lookbackDays = Number.isSafeInteger(configuredLookback) ? Math.max(1, Math.min(30, configuredLookback)) : 7;
+    const cutoffMs = lastSentAt ? Date.parse(lastSentAt) : now.getTime() - lookbackDays * 24 * 60 * 60 * 1000;
     const active = products.filter(product => product.ativo === true && product.status === "published");
-    const newlyFresh = active.filter(product => freshnessMs(product) > cutoffMs);
-    const fresh = newlyFresh.filter(product => Boolean(product.ref?.trim()));
+    const newlyFresh = active.filter(product => weeklyFreshnessMs(product, now) > cutoffMs);
+    const fresh = newlyFresh.filter(product => evaluateWeeklyProductEligibility(product, now).eligible);
     context.activeProductCount = active.length;
     context.newProductCount = newlyFresh.length;
     context.eligibleProductCount = fresh.length;
@@ -344,8 +399,19 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     successStage("SUPABASE_READ");
 
     startStage("RANKING");
+    let composition: WeeklyComposition;
     let selected: Product[];
-    try { selected = rankCandidates(fresh, clickCounts).slice(0, 4); }
+    let editorial: ReturnType<typeof buildWeeklyEditorialSnapshot>;
+    try {
+      composition = composeWeeklyEdition(rankWeeklyCandidates(fresh, clickCounts, now), 4);
+      selected = composition.products;
+      if (selected.length < 3) {
+        await notify(deps.telegramSender, chatId, `📭 <b>Campanha semanal pulada</b>\n\nA deduplicação/composição editorial encontrou somente ${selected.length} produtos fortes.\nNecessários: 3\n\nNenhum rascunho foi criado e nenhum email foi enviado.`);
+        return { status: "skipped", reason: "insufficient_new_products", newProductCount: selected.length };
+      }
+      // Congela a composição editorial antes de qualquer chamada de copy.
+      editorial = buildWeeklyEditorialSnapshot(selected, composition, now);
+    }
     catch { fail("RANKING", "RANKING_FAILED"); }
     successStage("RANKING");
 
@@ -359,7 +425,7 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
 
     startStage("GEMINI");
     let copy: WeeklyNewsletterCopy;
-    try { copy = await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected); }
+    try { copy = await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected, composition); }
     catch (error) { fail("GEMINI", classifyGeminiDiagnosticReason(error)); }
     successStage("GEMINI");
 
@@ -372,9 +438,20 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
       const institutional = deps.institutionalLoader
         ? await deps.institutionalLoader(env)
         : await getNewsletterInstitutionalOptions(env);
-      rendered = renderWeeklyNewsletter(selected, copy, { campaignId, publicBaseUrl, socialLinks: institutional.socialLinks });
+      rendered = renderWeeklyNewsletter(selected, copy, { campaignId, publicBaseUrl, socialLinks: institutional.socialLinks, now });
       links = selected.map((product, index) => ({ productId: product.id, position: index + 1, layout: index === 0 ? "feature" : "grid" }));
-      draft = createCampaignDraft(null, actor, rendered, now, campaignId, "collection", links, key);
+      const approvalTtlHours = Math.max(1, Math.min(168, Number.parseInt(env.NEWSLETTER_WEEKLY_APPROVAL_TTL_HOURS || "24", 10) || 24));
+      const previewTtlHours = Math.max(1, Math.min(168, Number.parseInt(env.NEWSLETTER_WEEKLY_PREVIEW_TTL_HOURS || "24", 10) || 24));
+      draft = createCampaignDraft(null, actor, rendered, now, campaignId, "collection", links, key, {
+        editorialSnapshot: editorial.snapshot,
+        editorialFingerprint: editorial.fingerprint,
+        editorialCompositionMode: composition.mode,
+        editorialCategories: composition.categories,
+        previewExpiresAt: new Date(now.getTime() + previewTtlHours * 60 * 60 * 1000).toISOString(),
+        approvalExpiresAt: new Date(now.getTime() + approvalTtlHours * 60 * 60 * 1000).toISOString(),
+        approvalAudienceCount: testMode ? 1 : null,
+        approvalAudienceStatus: testMode ? "ready" : "pending",
+      });
     } catch {
       fail("HTML_RENDER", "HTML_RENDER_FAILED");
     }
@@ -398,9 +475,9 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     startStage("TELEGRAM_DELIVERY");
     let delivery: TelegramDeliveryResult;
     try {
-      delivery = await notify(deps.telegramSender, chatId, telegramPreview(pending, selected, copy, clickCounts, testMode), {
+      delivery = await notify(deps.telegramSender, chatId, telegramPreview(pending, selected, copy, clickCounts, composition, testMode, publicBaseUrl, env, audienceConfig), {
         inline_keyboard: [
-          [{ text: testMode ? "✅ Aprovar teste" : "✅ Aprovar e enviar", callback_data: `campaign_weekly_approve:${pending.id}` }],
+          [{ text: testMode ? "✅ Aprovar teste" : "✅ Aprovar campanha", callback_data: `campaign_weekly_approve:${pending.id}` }],
           [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${pending.id}` }],
         ],
       });

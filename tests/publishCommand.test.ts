@@ -36,10 +36,15 @@ const TELEGRAM_ALLOWED_USERS = process.env.TELEGRAM_ALLOWED_USER_IDS ?? "1976526
 const TEST_ADMIN_USER_ID = Number(
   TELEGRAM_ALLOWED_USERS.split(",").map(id => id.trim()).find(id => /^-?\d+$/.test(id)) ?? "1976526372",
 );
+const ORIGINAL_ALLOWED_USERS = process.env.TELEGRAM_ALLOWED_USER_IDS;
+// A autorização é lida em runtime e deve ser explícita também no ambiente
+// hermético de CI; produção continua fail-closed quando a variável não existe.
+process.env.TELEGRAM_ALLOWED_USER_IDS = String(TEST_ADMIN_USER_ID);
 // TELEGRAM_BOT_TOKEN precisa existir para sendTelegramMessage sair do early
 // return (getTelegramBotToken() === "" → sem envio). O fake do fetch só é
 // atingido quando o token está presente.
 const ORIGINAL_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const ORIGINAL_FETCH = globalThis.fetch;
 process.env.TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "fake-bot-token";
 
 let sentMessages: Array<{ chatId: number; text: string; keyboard?: any }> = [];
@@ -161,6 +166,13 @@ test.before(async () => {
 });
 
 test.beforeEach(async () => {
+  process.env.TELEGRAM_BOT_TOKEN = "fake-bot-token";
+  // Mantém answerCallbackQuery e qualquer transporte Telegram deste contrato
+  // estritamente local; nenhuma chamada de teste pode alcançar a API real.
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ ok: true, result: true }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
   installFakeTelegramRepo();
   await installFakeProductPipeline();
 });
@@ -171,6 +183,12 @@ test.afterEach(async () => {
   restoreFindExistingProduct();
   if (ORIGINAL_TOKEN === undefined) delete process.env.TELEGRAM_BOT_TOKEN;
   else process.env.TELEGRAM_BOT_TOKEN = ORIGINAL_TOKEN;
+  globalThis.fetch = ORIGINAL_FETCH;
+});
+
+test.after(() => {
+  if (ORIGINAL_ALLOWED_USERS === undefined) delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+  else process.env.TELEGRAM_ALLOWED_USER_IDS = ORIGINAL_ALLOWED_USERS;
 });
 
 // ============================================================================

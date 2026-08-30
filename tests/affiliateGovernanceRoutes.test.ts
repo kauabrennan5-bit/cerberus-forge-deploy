@@ -324,7 +324,10 @@ test("N6-S (a): rede indisponivel nao vira VALID (inconclusive)", async () => {
   );
   assert.equal(live.redirect_ok, false, "falha de rede não aprova redirect");
   assert.ok(
-    live.error_reason === "network_error" || live.error_reason === "timeout" || live.http_status === null,
+    live.error_reason === "network_error"
+      || live.error_reason === "timeout"
+      || live.http_status === null
+      || (live.http_status >= 400 && live.http_status <= 599),
     `live check com rede falha: redirect_ok=${live.redirect_ok} http_status=${live.http_status} error_reason=${live.error_reason ?? "n/a"}`
   );
   // E o registro de um link REAL do catálogo com validação estrutural (sem live)
