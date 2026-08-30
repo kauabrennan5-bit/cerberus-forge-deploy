@@ -51,6 +51,34 @@ test("uma imagem CDN quebrada não invalida outra imagem revisável do mesmo pro
   assert.equal(result.assessments[0].url, good);
 });
 
+test("falha multimodal em lote recai para revisão isolada e preserva imagem limpa válida", async () => {
+  const first = "https://cdn.example.test/first.jpg";
+  const second = "https://cdn.example.test/second.jpg";
+  let generationCalls = 0;
+  const result = await reviewProductImages([first, second], "Luminária Retrô", {
+    env: { GEMINI_API_KEY: "test-key" },
+    budget: allowBudget,
+    allowRepair: false,
+    fetchImpl: (async () => imageResponse(200)) as typeof fetch,
+    generateContent: async () => {
+      generationCalls += 1;
+      if (generationCalls === 1) throw new Error("batch rejected by provider");
+      if (generationCalls === 2) {
+        return { text: JSON.stringify({ images: [{ index: 1, decision: "clean", confidence: "HIGH", reason: "produto limpo" }] }) };
+      }
+      return { text: JSON.stringify({ images: [{ index: 1, decision: "promotional", confidence: "HIGH", reason: "texto promocional" }] }) };
+    },
+  });
+  assert.equal(generationCalls, 3);
+  assert.equal(result.status, "ready");
+  assert.equal(result.primaryImageUrl, first);
+  assert.equal(result.assessments.length, 2);
+  assert.equal(result.assessments[0].url, first);
+  assert.equal(result.assessments[0].decision, "clean");
+  assert.equal(result.assessments[1].url, second);
+  assert.equal(result.assessments[1].decision, "promotional");
+});
+
 test("quando todas as imagens falham no CDN o motivo fica explícito e o Gemini não é chamado", async () => {
   let generationCalls = 0;
   const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Produto", {

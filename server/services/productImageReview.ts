@@ -136,6 +136,84 @@ function parseAssessments(rawImageUrls: string[], downloaded: DownloadedImage[],
   }).filter(item => rawImageUrls.includes(item.url));
 }
 
+function parseModelJson(text: string | null | undefined): unknown {
+  const value = String(text || "").trim();
+  if (!value) throw new Error("IMAGE_REVIEW_EMPTY_RESPONSE");
+  try {
+    return JSON.parse(value);
+  } catch {
+    const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(value);
+    if (!fenced) throw new Error("IMAGE_REVIEW_INVALID_JSON");
+    return JSON.parse(fenced[1]);
+  }
+}
+
+function buildReviewRequest(images: DownloadedImage[], title: string, model: string): Record<string, unknown> {
+  const prompt = `Avalie TODAS as imagens numeradas deste produto para seleção comercial de catálogo. Produto: ${title || "sem título"}. Para cada imagem, classifique somente como clean, technical, promotional, logo, collage, screenshot ou unknown. Rejeite medidas, dimensões, setas, textos promocionais, selos, logos, marcas d'água, molduras técnicas, colagens e screenshots. clean exige apresentação clara do produto, sem overlay visível, com confiança HIGH ou MEDIUM. Não invente características. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo factual curto"}]}. Inclua exatamente uma entrada para cada imagem recebida.`;
+  return {
+    model,
+    contents: [{
+      role: "user",
+      parts: [
+        { text: prompt },
+        ...images.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } })),
+      ],
+    }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object",
+        properties: {
+          images: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                index: { type: "integer" },
+                decision: { type: "string", enum: ["clean", "technical", "promotional", "logo", "collage", "screenshot", "unknown"] },
+                confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
+                reason: { type: "string" },
+              },
+              required: ["index", "decision", "confidence", "reason"],
+            },
+          },
+        },
+        required: ["images"],
+      },
+    },
+  };
+}
+
+async function reviewWithProvider(input: {
+  rawImageUrls: string[];
+  downloaded: DownloadedImage[];
+  title: string;
+  model: string;
+  generateContent: GenerateContent;
+  budget: BudgetLike;
+}): Promise<ProductImageAssessment[]> {
+  try {
+    const response = await input.generateContent(buildReviewRequest(input.downloaded, input.title, input.model));
+    return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(response.text));
+  } catch {
+    // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
+    // Reavalia individualmente, cobrando budget por chamada extra e mantendo
+    // fail-closed para qualquer imagem que continue indisponível no provider.
+    const isolated: ProductImageAssessment[] = [];
+    for (const image of input.downloaded) {
+      const reserved = input.budget.reserve("productImageReview");
+      if (!reserved.allowed) break;
+      try {
+        const response = await input.generateContent(buildReviewRequest([image], input.title, input.model));
+        isolated.push(...parseAssessments(input.rawImageUrls, [image], parseModelJson(response.text)));
+      } catch {
+        // Falha desta imagem permanece isolada. Nenhuma decisão é inventada.
+      }
+    }
+    return isolated;
+  }
+}
+
 export async function reviewProductImages(
   rawImages: readonly string[],
   title: string,
@@ -158,68 +236,66 @@ export async function reviewProductImages(
   const downloaded = await downloadReviewableImages(rawImageUrls, fetchImpl, maxImages, timeoutMs);
   if (downloaded.length === 0) return reviewRequired(rawImageUrls, "image_fetch_unavailable");
 
-  try {
-    const prompt = `Avalie TODAS as imagens numeradas deste produto para seleção comercial de catálogo. Produto: ${title || "sem título"}. Para cada imagem, classifique somente como clean, technical, promotional, logo, collage, screenshot ou unknown. Rejeite medidas, dimensões, setas, textos promocionais, selos, logos, marcas d'água, molduras técnicas, colagens e screenshots. clean exige apresentação clara do produto, sem overlay visível, com confiança HIGH ou MEDIUM. Não invente características. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo factual curto"}]}. Inclua exatamente uma entrada para cada imagem recebida.`;
-    const request: Record<string, unknown> = {
-      model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
-      contents: [{
-        role: "user",
-        parts: [
-          { text: prompt },
-          ...downloaded.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } })),
-        ],
-      }],
-      config: { responseMimeType: "application/json" },
-    };
-    const generateContent: GenerateContent = options.generateContent || (async input => {
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-      });
-      return ai.models.generateContent(input as any) as Promise<{ text?: string | null }>;
+  const model = env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash";
+  const generateContent: GenerateContent = options.generateContent || (async input => {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { "User-Agent": "aistudio-build" } },
     });
-    const response = await generateContent(request);
-    const parsed = JSON.parse(response.text || "{}");
-    const assessments = parseAssessments(rawImageUrls, downloaded, parsed);
-    const curation = curateProductImages(rawImageUrls, assessments);
-    if (curation.status === "ready" || options.allowRepair === false) return curation;
+    return ai.models.generateContent(input as any) as Promise<{ text?: string | null }>;
+  });
 
-    const repairImage = options.repairImage || repairProductImage;
-    const repaired = await repairImage({
-      rawImageUrls: downloaded.map(image => image.url),
-      title,
-      assessments,
-      env,
-      fetchImpl,
-    });
-    if (!repaired) return curation;
-
-    // Generated/edited imagery is never trusted directly. It must pass the
-    // exact same reviewer once more before it can become canonical.
-    const repairedCuration = await reviewProductImages([repaired.url], title, {
-      ...options,
-      env,
-      fetchImpl,
-      budget,
-      allowRepair: false,
-    });
-    if (repairedCuration.status !== "ready" || !repairedCuration.primaryImageUrl) return curation;
-    return {
-      status: "ready",
-      rawImageUrls: [...rawImageUrls, repaired.url],
-      primaryImageUrl: repairedCuration.primaryImageUrl,
-      galleryImageUrls: repairedCuration.galleryImageUrls,
-      assessments: [...assessments, ...repairedCuration.assessments],
-    };
-  } catch (error) {
-    console.warn(`[Product Image Review] modelo indisponível: ${error instanceof Error ? error.message : "erro desconhecido"}`);
+  const assessments = await reviewWithProvider({
+    rawImageUrls,
+    downloaded,
+    title,
+    model,
+    generateContent,
+    budget,
+  });
+  if (assessments.length === 0) {
+    console.warn("[Product Image Review] provider indisponível para lote e imagens isoladas");
     return reviewRequired(rawImageUrls, "image_review_model_unavailable");
   }
+
+  const curation = curateProductImages(rawImageUrls, assessments);
+  if (curation.status === "ready" || options.allowRepair === false) return curation;
+
+  const repairImage = options.repairImage || repairProductImage;
+  const repaired = await repairImage({
+    rawImageUrls: downloaded.map(image => image.url),
+    title,
+    assessments,
+    env,
+    fetchImpl,
+  });
+  if (!repaired) return curation;
+
+  // Generated/edited imagery is never trusted directly. It must pass the
+  // exact same reviewer once more before it can become canonical.
+  const repairedCuration = await reviewProductImages([repaired.url], title, {
+    ...options,
+    env,
+    fetchImpl,
+    budget,
+    allowRepair: false,
+  });
+  if (repairedCuration.status !== "ready" || !repairedCuration.primaryImageUrl) return curation;
+  return {
+    status: "ready",
+    rawImageUrls: [...rawImageUrls, repaired.url],
+    primaryImageUrl: repairedCuration.primaryImageUrl,
+    galleryImageUrls: repairedCuration.galleryImageUrls,
+    assessments: [...assessments, ...repairedCuration.assessments],
+  };
 }
 
 export const productImageReviewInternals = {
   downloadImage,
   downloadReviewableImages,
   parseAssessments,
+  parseModelJson,
+  buildReviewRequest,
+  reviewWithProvider,
   positiveInt,
 };
