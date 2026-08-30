@@ -6,10 +6,11 @@ on:
       - "server/services/autonomousCurator*.ts"
       - "server/services/productAutomation.ts"
       - "server/services/productImage*.ts"
+      - "server/routes/autonomousCuratorRoutes.ts"
       - "server/repositories/autonomousCuratorRepository.ts"
       - "src/lib/productImageCuration.ts"
       - "src/lib/productCanonical.ts"
-      - "tests/autonomousCurator.test.ts"
+      - "tests/autonomousCurator*.test.ts"
       - "tests/productImage*.test.ts"
       - "tests/productCanonical.test.ts"
       - "supabase/migrations/*autonomous_curator*"
@@ -23,10 +24,11 @@ on:
       - "server/services/autonomousCurator*.ts"
       - "server/services/productAutomation.ts"
       - "server/services/productImage*.ts"
+      - "server/routes/autonomousCuratorRoutes.ts"
       - "server/repositories/autonomousCuratorRepository.ts"
       - "src/lib/productImageCuration.ts"
       - "src/lib/productCanonical.ts"
-      - "tests/autonomousCurator.test.ts"
+      - "tests/autonomousCurator*.test.ts"
       - "tests/productImage*.test.ts"
       - "tests/productCanonical.test.ts"
       - "supabase/migrations/*autonomous_curator*"
@@ -63,7 +65,7 @@ jobs:
       - name: Focused curator and image tests
         run: >-
           node --import tsx/esm --test --test-concurrency=1
-          tests/autonomousCurator.test.ts
+          tests/autonomousCurator*.test.ts
           tests/productImageReview.test.ts
           tests/productImageRepair.test.ts
           tests/productCanonical.test.ts
