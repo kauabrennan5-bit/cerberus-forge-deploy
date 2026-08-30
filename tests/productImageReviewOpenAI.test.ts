@@ -24,6 +24,7 @@ function imageResponse(status = 200): Response {
 test("OpenAI visual fallback usa Luna por padrão e pode ser desativado explicitamente", () => {
   assert.equal(productImageReviewInternals.resolveOpenAIImageReviewModel({}), "gpt-5.6-luna");
   assert.equal(productImageReviewInternals.resolveOpenAIImageReviewModel({ OPENAI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-openai-model" }), "custom-openai-model");
+  assert.equal(productImageReviewInternals.resolveOpenAIImageReviewFallbackModel({}, "gpt-5.6-luna"), "gpt-4.1-mini");
   assert.equal(productImageReviewInternals.enabledUnlessFalse(undefined), true);
   assert.equal(productImageReviewInternals.enabledUnlessFalse("false"), false);
 });
@@ -77,6 +78,32 @@ test("falha transitória dos dois modelos Gemini recai uma vez para OpenAI", asy
   assert.equal(openaiCalls, 1);
   assert.equal(result.status, "ready");
   assert.equal(result.primaryImageUrl, "https://cdn.example.test/a.jpg");
+});
+
+test("OpenAI usa modelo secundário quando o primário não está disponível", async () => {
+  const models: string[] = [];
+  let reserves = 0;
+  const openaiBudget = {
+    reserve() {
+      reserves += 1;
+      return { allowed: true, used: reserves, limit: 256, resetAt: Date.now() + 60_000 };
+    },
+  };
+  const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Luminária", {
+    env: { OPENAI_API_KEY: "openai-test" },
+    budget: denyBudget,
+    openaiBudget,
+    allowRepair: false,
+    fetchImpl: (async () => imageResponse()) as typeof fetch,
+    openaiReview: async input => {
+      models.push(input.model);
+      if (input.model === "gpt-5.6-luna") throw new Error("OPENAI_IMAGE_REVIEW_HTTP_404");
+      return [{ url: input.downloaded[0].url, decision: "clean", confidence: "HIGH", reason: "fallback visual compatível" }];
+    },
+  });
+  assert.deepEqual(models, ["gpt-5.6-luna", "gpt-4.1-mini"]);
+  assert.equal(reserves, 2);
+  assert.equal(result.status, "ready");
 });
 
 test("OpenAI resolve apenas decisão ambígua e não sobrescreve rejeição forte do Gemini", async () => {
