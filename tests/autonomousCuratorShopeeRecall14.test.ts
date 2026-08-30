@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeShopeeImageReference } from "../server/commercial/affiliate/shopeeApiClient";
+import { fetchProductDataFromUrl } from "../server/services/scraper";
 import {
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
   profileForCategory,
@@ -50,4 +51,37 @@ test("official full image URLs remain usable and invalid references fail closed"
   assert.equal(normalizeShopeeImageReference("x"), null);
   assert.equal(normalizeShopeeImageReference("javascript:alert(1)"), null);
   assert.equal(normalizeShopeeImageReference(null), null);
+});
+
+test("Shopee gallery parser recovers multiple hashes from normal JSON", async () => {
+  const first = "br-11134207-7r98o-mcwa1l01rv2988";
+  const second = "sg-11134201-8258u-mqvn863wq3gn92";
+  const raw = `<script>window.__PDP__={"images":["${first}","${second}"]};</script>`;
+
+  const result = await fetchProductDataFromUrl("", raw);
+  assert.deepEqual(result.images, [
+    `https://down-br.img.susercontent.com/file/${first}`,
+    `https://down-br.img.susercontent.com/file/${second}`,
+  ]);
+});
+
+test("Shopee gallery parser recovers escaped JSON hashes and removes thumbnail suffixes", async () => {
+  const first = "br-11134207-7r98o-mcwa1l01rv2988";
+  const second = "sg-11134201-8258u-mqvn863wq3gn92";
+  const raw = `<script>window.__PDP__="{\\"image_list\\":[\\"${first}_tn\\",\\"${second}_b\\"]}";</script>`;
+
+  const result = await fetchProductDataFromUrl("", raw);
+  assert.deepEqual(result.images, [
+    `https://down-br.img.susercontent.com/file/${first}`,
+    `https://down-br.img.susercontent.com/file/${second}`,
+  ]);
+});
+
+test("Shopee gallery parser ignores hash arrays under unrelated keys", async () => {
+  const first = "br-11134207-7r98o-mcwa1l01rv2988";
+  const second = "sg-11134201-8258u-mqvn863wq3gn92";
+  const raw = `<script>window.__PDP__={"recommended":["${first}","${second}"]};</script>`;
+
+  const result = await fetchProductDataFromUrl("", raw);
+  assert.deepEqual(result.images, []);
 });
