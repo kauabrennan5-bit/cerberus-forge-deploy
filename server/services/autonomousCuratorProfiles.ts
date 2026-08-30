@@ -1,116 +1,177 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.2";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.3";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
   queries: readonly string[];
+  /** Sinais fortes do universo Cerberus. Um único hit já é evidência estética relevante. */
+  strongStyleTerms: readonly string[];
+  /** Forma/material/linguagem que só contam em conjunto; nunca devem aprovar sozinhos por um único hit. */
+  signatureTerms: readonly string[];
+  /** Compatibilidade com código antigo e ranking barato. */
   preferredTerms: readonly string[];
   blockedTerms: readonly string[];
+  /** Curadoria de finds: preço acima disso nunca auto-publica. */
+  maxAutoPrice: number;
+  /** Acima disso o produto sequer entra em revisão automática. */
+  maxReviewPrice: number;
 };
 
-const COMMON_BLOCKED = [
-  "kit 50", "kit 100", "atacado", "lote", "revenda", "peça reposição", "reposicao",
-  "logo", "adesivo", "capa protetora", "manual", "arquivo digital",
+const STRONG_STYLE_TERMS = [
+  "bauhaus", "mid century", "mid-century", "space age", "space-age",
+  "anos 60", "anos 70", "sixties", "seventies", "modernista", "modernism",
+  "postmoderno", "postmodern", "memphis", "retro futurista", "retrofuturista",
+  "brutalista", "art deco", "italian design", "design italiano vintage",
 ] as const;
 
+const COMMON_BLOCKED = [
+  "kit 50", "kit 100", "atacado", "lote", "revenda", "peça reposição", "peca reposicao",
+  "logo", "adesivo", "capa protetora", "manual", "arquivo digital",
+  "kawaii", "geek", "gamer rgb", "tematico", "temática", "tematica",
+] as const;
+
+function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms" | "preferredTerms"> & { strongStyleTerms?: readonly string[] }): AutonomousCuratorCategoryProfile {
+  const strongStyleTerms = input.strongStyleTerms || STRONG_STYLE_TERMS;
+  return {
+    ...input,
+    strongStyleTerms,
+    preferredTerms: [...strongStyleTerms, ...input.signatureTerms],
+  };
+}
+
 /**
- * Perfis de descoberta deliberadamente misturam consultas amplas de tipo/material
- * com consultas de linguagem estética. A descoberta deve ter recall alto; os
- * gates caros (imagem, copy, categoria, preço, similaridade, score e lifecycle)
- * continuam sendo a autoridade para publicar.
+ * Perfil 1.3: descoberta estreita e precision-first. O Cerberus não tenta
+ * preencher quota com itens genéricos. Zero por categoria é um resultado válido.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
-  {
+  profile({
     category: "Iluminação",
     queries: [
-      "abajur mesa vidro", "luminaria mesa metal", "luminaria cogumelo", "arandela moderna",
-      "luminaria pendente vidro", "luminaria retro", "luminaria mid century", "luminaria bauhaus",
+      "abajur bauhaus", "luminaria cogumelo space age", "abajur mid century",
+      "luminaria cromada anos 70", "luminaria italiana vintage", "arandela bauhaus",
+      "luminaria opalina space age", "abajur retro futurista",
     ],
-    preferredTerms: ["bauhaus", "cogumelo", "space age", "mid century", "retro", "vidro", "metal", "cromado", "opalino", "aluminio"],
-    blockedTerms: [...COMMON_BLOCKED, "rgb gamer", "fita led", "farol", "automotiva"],
-  },
-  {
+    signatureTerms: ["cogumelo", "opalino", "opalina", "cromado", "cromada", "inox", "aluminio", "vidro fumê", "vidro fume", "globo", "retro", "vintage"],
+    blockedTerms: [
+      ...COMMON_BLOCKED,
+      "fita led", "farol", "automotiva",
+      // Bloqueia peças de reposição/incompletas sem punir uma luminária completa
+      // cuja descrição factual apenas mencione que ela possui uma cúpula.
+      "cupula luminaria", "cúpula luminária", "cupula para luminaria", "cúpula para luminária",
+      "somente cupula", "somente cúpula", "sem soquete", "globo reposicao",
+    ],
+    maxAutoPrice: 550,
+    maxReviewPrice: 800,
+  }),
+  profile({
     category: "Decoração",
     queries: [
-      "vaso decorativo vidro", "espelho organico", "castical decorativo metal", "escultura decorativa",
-      "porta vela decorativo", "objeto decorativo retro", "relogio parede decorativo", "decoracao bauhaus",
+      "espelho mid century", "vaso bauhaus", "castical space age cromado",
+      "objeto decorativo anos 70", "escultura postmoderna retro", "relogio vintage design",
+      "porta vela bauhaus", "decoracao italiana vintage",
     ],
-    preferredTerms: ["retro", "bauhaus", "mid century", "vidro", "inox", "cromado", "organico", "escultura", "metal", "ceramica"],
-    blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas"],
-  },
-  {
+    signatureTerms: ["organico", "orgânico", "cromado", "inox", "vidro ambar", "vidro âmbar", "ceramica", "cerâmica", "escultura", "metal", "couro", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas", "resina anjo", "gnomo", "bicicleta decorativa", "moto decorativa"],
+    maxAutoPrice: 350,
+    maxReviewPrice: 600,
+  }),
+  profile({
     category: "Móveis",
     queries: [
-      "mesa lateral madeira", "mesa lateral metal", "banqueta alta", "cadeira design",
-      "mesa auxiliar", "criado mudo moderno", "banqueta cromada", "movel mid century",
+      "mesa lateral mid century", "cadeira cromada bauhaus", "banqueta space age",
+      "mesa auxiliar anos 70", "criado mudo mid century", "poltrona modernista",
+      "mesa lateral italiana vintage", "banqueta tubular bauhaus",
     ],
-    preferredTerms: ["retro", "bauhaus", "mid century", "cromado", "inox", "madeira", "curvo", "modular", "metal", "minimalista"],
-    blockedTerms: [...COMMON_BLOCKED, "capa para cadeira", "rodizio", "parafuso", "puxador"],
-  },
-  {
+    signatureTerms: ["tubular", "cromado", "inox", "curvo", "curva", "modular", "nogueira", "teca", "vidro fumê", "vidro fume", "metal", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "capa para cadeira", "rodizio", "parafuso", "puxador", "eiffel", "eames", "cadeira gamer", "cadeira plastica", "cadeira plástica"],
+    maxAutoPrice: 900,
+    maxReviewPrice: 1500,
+  }),
+  profile({
     category: "Cozinha & Mesa",
     queries: [
-      "bandeja inox", "copo vidro", "jarra vidro", "talheres inox",
-      "tigela vidro", "xicaras ceramica", "porta guardanapo metal", "mesa posta design",
+      "jarra vintage vidro ambar", "bandeja inox mid century", "copo vidro anos 70",
+      "talheres vintage inox", "xicaras bauhaus", "tigela vidro retro design",
+      "porta guardanapo cromado vintage", "mesa posta mid century",
     ],
-    preferredTerms: ["inox", "vidro", "ambar", "retro", "design", "cromado", "borossilicato", "ceramica", "metal"],
-    blockedTerms: [...COMMON_BLOCKED, "descartavel", "100 unidades", "industrial restaurante"],
-  },
-  {
+    signatureTerms: ["ambar", "âmbar", "borossilicato", "inox", "cromado", "vidro fumê", "vidro fume", "ceramica", "cerâmica", "geométrico", "geometrico", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "descartavel", "100 unidades", "industrial restaurante", "strass", "natal", "papai noel"],
+    maxAutoPrice: 300,
+    maxReviewPrice: 500,
+  }),
+  profile({
     category: "Organização",
     queries: [
-      "organizador acrilico", "organizador metal", "organizador porta objetos", "organizador mesa",
-      "caixa organizadora design", "gaveteiro mesa organizador", "cabideiro organizador metal", "organizador minimalista",
+      "organizador acrilico space age", "porta objetos bauhaus", "organizador cromado anos 70",
+      "porta revistas mid century", "cabideiro vintage design", "gaveteiro bauhaus",
+      "organizador modular retro", "porta objetos italiano vintage",
     ],
-    preferredTerms: ["acrilico", "metal", "inox", "cromado", "minimalista", "modular", "transparente", "madeira"],
-    blockedTerms: [...COMMON_BLOCKED, "organizador cabos 100", "etiqueta", "saco vacuo kit"],
-  },
-  {
+    signatureTerms: ["acrilico", "acrílico", "cromado", "inox", "transparente", "modular", "tubular", "metal", "geométrico", "geometrico", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "organizador cabos 100", "etiqueta", "saco vacuo kit", "bicicleta", "motocicleta", "carro", "boneco", "porta caneta divertido"],
+    maxAutoPrice: 220,
+    maxReviewPrice: 350,
+  }),
+  profile({
     category: "Vestuário",
     queries: [
-      "camiseta oversized masculina", "camisa manga curta masculina", "calca reta masculina", "jaqueta masculina leve",
-      "camisa linho masculina", "polo masculina minimalista", "bermuda masculina alfaiataria", "roupa masculina retro",
+      "jaqueta vintage masculina anos 70", "camisa retro masculina design", "calca wide leg vintage masculina",
+      "polo knit retro masculina", "jaqueta racing vintage masculina", "camisa modernista masculina",
+      "jaqueta boxy vintage masculina", "alfaiataria masculina anos 70",
     ],
-    preferredTerms: ["oversized", "retro", "minimalista", "algodao", "linho", "corte reto", "boxy", "vintage", "alfaiataria"],
-    blockedTerms: [...COMMON_BLOCKED, "fantasia", "uniforme", "camisa time", "replica"],
-  },
-  {
+    signatureTerms: ["boxy", "wide leg", "corte reto", "tricot", "tricô", "knit", "camurca", "camurça", "veludo", "linho", "alfaiataria", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "fantasia", "uniforme", "camisa time", "replica", "feminina", "feminino", "mulher", "women"],
+    maxAutoPrice: 650,
+    maxReviewPrice: 900,
+  }),
+  profile({
     category: "Calçados & Acessórios",
     queries: [
-      "oculos retro masculino", "cinto couro masculino", "bolsa crossbody masculina", "tenis retro masculino",
-      "carteira couro minimalista", "bone masculino minimalista", "bolsa ombro masculina", "acessorio masculino vintage",
+      "oculos vintage anos 70 masculino", "cinto bauhaus masculino", "bolsa masculina mid century",
+      "tenis retro masculino design", "carteira couro modernista", "bolsa ombro vintage masculina",
+      "oculos space age masculino", "acessorio masculino anos 70",
     ],
-    preferredTerms: ["retro", "minimalista", "couro", "acetato", "metal", "vintage", "design", "camurca"],
-    blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado"],
-  },
-  {
+    signatureTerms: ["acetato", "couro", "camurca", "camurça", "metal", "cromado", "geométrico", "geometrico", "minimalista", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado", "feminina", "feminino", "mulher", "women", "strass", "pedraria"],
+    maxAutoPrice: 300,
+    maxReviewPrice: 450,
+  }),
+  profile({
     category: "Tecnologia",
     queries: [
-      "relogio digital mesa", "caixa de som bluetooth", "teclado mecanico retro", "carregador sem fio design",
-      "hub usb aluminio", "suporte notebook aluminio", "mouse transparente", "tecnologia retro design",
+      "radio bluetooth retro design", "caixa de som mid century", "teclado mecanico vintage design",
+      "relogio digital space age", "carregador bauhaus design", "hub usb aluminio minimalista vintage",
+      "mouse transparente retro futurista", "tecnologia anos 70 design",
     ],
-    preferredTerms: ["retro", "minimalista", "aluminio", "transparente", "design", "digital", "compacto", "metal"],
-    blockedTerms: [...COMMON_BLOCKED, "espiao", "camera escondida", "rastreador oculto", "gamer rgb"],
-  },
-  {
+    signatureTerms: ["transparente", "aluminio", "alumínio", "cromado", "digital", "analógico", "analogico", "compacto", "metal", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "espiao", "camera escondida", "rastreador oculto", "gamer", "rgb"],
+    maxAutoPrice: 700,
+    maxReviewPrice: 1200,
+  }),
+  profile({
     category: "Beleza & Bem-estar",
     queries: [
-      "espelho maquiagem", "necessaire maquiagem", "porta perfume", "estojo maquiagem",
-      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "porta pincel maquiagem",
+      "espelho maquiagem vintage design", "espelho maquiagem dobravel couro", "porta perfume bauhaus",
+      "necessaire retro design", "porta pincel space age", "pente madeira modernista",
+      "espelho maquiagem anos 70", "estojo maquiagem vintage minimalista",
     ],
-    preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho", "couro", "maquiagem", "perfume"],
+    signatureTerms: ["dobravel", "dobrável", "compacto", "couro", "acrilico", "acrílico", "metal", "espelho", "geométrico", "geometrico", "minimalista", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "medicamento", "remedio", "hormonio", "emagrecedor", "suplemento", "clareador ingerivel"],
-  },
-  {
+    maxAutoPrice: 300,
+    maxReviewPrice: 500,
+  }),
+  profile({
     category: "Infantil",
     queries: [
-      "brinquedo madeira educativo", "quebra cabeca madeira infantil", "blocos madeira infantil", "brinquedo sensorial infantil",
-      "brinquedo encaixe madeira", "brinquedo montessori", "brinquedo equilibrio madeira", "decoracao infantil madeira",
+      "blocos bauhaus madeira infantil", "brinquedo madeira mid century", "brinquedo arco iris bauhaus",
+      "brinquedo geometrico anos 70", "brinquedo madeira design escandinavo", "mobile infantil modernista",
+      "brinquedo montessori bauhaus", "decoracao infantil mid century",
     ],
-    preferredTerms: ["madeira", "educativo", "montessori", "design", "sensorial", "minimalista", "encaixe", "equilibrio"],
-    blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte"],
-  },
+    signatureTerms: ["geométrico", "geometrico", "formas", "cores primarias", "cores primárias", "madeira natural", "encaixe", "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage"],
+    blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte", "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem"],
+    maxAutoPrice: 300,
+    maxReviewPrice: 500,
+  }),
 ] as const;
 
 if (AUTONOMOUS_CURATOR_PROFILES.length !== PUBLIC_PRODUCT_CATEGORIES.length) {
@@ -118,13 +179,13 @@ if (AUTONOMOUS_CURATOR_PROFILES.length !== PUBLIC_PRODUCT_CATEGORIES.length) {
 }
 
 export function profileForCategory(category: PublicProductCategory): AutonomousCuratorCategoryProfile {
-  const profile = AUTONOMOUS_CURATOR_PROFILES.find(item => item.category === category);
-  if (!profile) throw new Error(`AUTONOMOUS_CURATOR_PROFILE_MISSING:${category}`);
-  return profile;
+  const found = AUTONOMOUS_CURATOR_PROFILES.find(item => item.category === category);
+  if (!found) throw new Error(`AUTONOMOUS_CURATOR_PROFILE_MISSING:${category}`);
+  return found;
 }
 
 /** Query diária determinística: retry do mesmo dia usa exatamente a mesma busca. */
-export function queryForProfile(profile: AutonomousCuratorCategoryProfile, runDate: string): string {
-  const seed = [...`${runDate}:${profile.category}`].reduce((acc, char) => (acc * 33 + char.charCodeAt(0)) >>> 0, 5381);
-  return profile.queries[seed % profile.queries.length];
+export function queryForProfile(categoryProfile: AutonomousCuratorCategoryProfile, runDate: string): string {
+  const seed = [...`${runDate}:${categoryProfile.category}`].reduce((acc, char) => (acc * 33 + char.charCodeAt(0)) >>> 0, 5381);
+  return categoryProfile.queries[seed % categoryProfile.queries.length];
 }
