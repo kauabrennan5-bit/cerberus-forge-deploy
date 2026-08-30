@@ -32,7 +32,7 @@ function score(category: Parameters<typeof profileForCategory>[0], rawTitle: str
 
 test("retro sozinho não é identidade Cerberus", () => {
   const profile = profileForCategory("Cozinha & Mesa");
-  assert.equal(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas"),  -1000);
+  assert.equal(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas"), -1000);
   const result = score(
     "Cozinha & Mesa",
     "Jarra 1,8L Vidro Transparente Luxo Grande Suco Chá Água Design Retrô Cozinha",
@@ -47,7 +47,7 @@ test("retro sozinho não é identidade Cerberus", () => {
 test("peça incompleta de luminária é bloqueada mesmo com Space Age e anos 70", () => {
   const profile = profileForCategory("Iluminação");
   const title = "Cúpula Luminária Vidro Opalino Verde Vintage Anos 70 Space Age";
-  assert.equal(hasBlockedProfileTerm(profile, title), "cupula");
+  assert.equal(hasBlockedProfileTerm(profile, title), "cupula luminaria");
   const result = score(
     "Iluminação",
     title,
@@ -56,6 +56,13 @@ test("peça incompleta de luminária é bloqueada mesmo com Space Age e anos 70"
     196,
   );
   assert.equal(result.finalScore, 0);
+});
+
+test("menção descritiva a cúpula não bloqueia uma luminária completa", () => {
+  const profile = profileForCategory("Iluminação");
+  const text = "Abajur Cogumelo Bauhaus Retrô com cúpula arredondada e acabamento cromado";
+  assert.equal(hasBlockedProfileTerm(profile, text), null);
+  assert.ok(cheapProfileScore(profile, "Abajur Cogumelo Bauhaus Retro") > 0);
 });
 
 test("organizador novelty em formato de bicicleta fica fora do perfil", () => {
