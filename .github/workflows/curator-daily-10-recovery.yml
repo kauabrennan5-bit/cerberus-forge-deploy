@@ -1,0 +1,62 @@
+name: Cerberus Curator Daily 10 Recovery
+
+# Redundant production triggers complement the primary :17 hourly curator run.
+# Together the workflows offer a bounded continuous-curation opportunity every 15 minutes.
+# The backend remains authoritative for concurrency, 24h category cooldowns, scoring,
+# editorial/image review, Shopee identity, affiliate acquisition and catalog promotion gates.
+on:
+  schedule:
+    - cron: "2,32,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cerberus-autonomous-curator
+  cancel-in-progress: false
+
+jobs:
+  trigger-recovery-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      OIDC_AUDIENCE: cerberus-weekly-automation
+    steps:
+      - name: Trigger one audited continuous recovery cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${CERBERUS_HEALTH_URL%/health}"
+
+          token_json="$(curl --fail --silent --show-error --max-time 20 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+          echo "::add-mask::$token"
+
+          response_file="$RUNNER_TEMP/autonomous-curator-recovery.json"
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            -o "$response_file" \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d '{"notify":true}' \
+            "$base/api/internal/autonomous-curator/continuous"
+
+          node - "$response_file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true || body?.accepted !== true) {
+            console.error('CURATOR_DAILY_10_RECOVERY_REJECTED');
+            process.exit(1);
+          }
+          if (body?.status === 'disabled') {
+            console.error('CURATOR_DAILY_10_RECOVERY_DISABLED');
+            process.exit(1);
+          }
+          const status = typeof body?.status === 'string' ? body.status : 'accepted';
+          const cycle = typeof body?.cycleId === 'string' ? body.cycleId : '';
+          console.log(`CURATOR_DAILY_10_RECOVERY=${status}${cycle ? ` cycle=${cycle}` : ''}`);
+          NODE
