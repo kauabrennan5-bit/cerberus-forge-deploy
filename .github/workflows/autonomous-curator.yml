@@ -1,11 +1,11 @@
 name: Cerberus Autonomous Curator
-# Production schedule: one bounded continuous-curation cycle every hour.
-# A cycle may remain partial; the next hourly cycle continues searching without lowering gates.
+# Production schedule: one bounded continuous-curation opportunity every 15 minutes.
+# A cycle may remain partial; the next scheduled cycle continues searching without lowering gates.
 
 on:
   schedule:
-    # Hourly, minute 17. Publication eligibility still enforces >=24h per category.
-    - cron: "17 * * * *"
+    # Quarter-hour recovery cadence. Publication eligibility still enforces >=24h per category.
+    - cron: "2,17,32,47 * * * *"
   push:
     branches:
       - main
