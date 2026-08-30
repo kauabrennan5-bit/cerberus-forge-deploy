@@ -264,7 +264,9 @@ async function prepareCategoryCandidate(input: {
     const sourceUrl = canonicalSourceUrl(shopId, itemId);
     const sourceIdentity = await findIdentity("Shopee", shopId, itemId);
     const existingByIdentity = exactExistingIdentity(input.existingProducts, shopId, itemId);
-    if (sourceIdentity?.productId || existingByIdentity) {
+    const reservedUntilMs = sourceIdentity?.reservedUntil ? Date.parse(sourceIdentity.reservedUntil) : 0;
+    const sourceIdentityReserved = Boolean(sourceIdentity && !sourceIdentity.productId && Number.isFinite(reservedUntilMs) && reservedUntilMs > Date.now());
+    if (sourceIdentity?.productId || sourceIdentityReserved || existingByIdentity) {
       lastReason = "SOURCE_IDENTITY_ALREADY_PUBLISHED";
       continue;
     }

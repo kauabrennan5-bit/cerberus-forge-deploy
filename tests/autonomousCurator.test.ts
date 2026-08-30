@@ -26,6 +26,7 @@ function product(overrides: Partial<Product> = {}): Product {
     imageEditorialStatus: "clean",
     link: "https://affiliate.example.com/a",
     ativo: true,
+    destaque: false,
     status: "published",
     descricao: "Abajur compacto de linguagem retrô, com cúpula arredondada e presença gráfica.",
     ...overrides,
@@ -256,6 +257,38 @@ test("warning do pipeline impede auto-publicação e cai em revisão humana", as
 
 test("identidade Shopee já publicada é descartada antes de Gemini/scraper", async () => {
   const repo = persistence({ findSourceIdentity: async () => ({ marketplace: "Shopee", shopId: "123", itemId: "456", sourceProductUrl: "https://shopee.com.br/product/123/456", productId: "existing", reservedRunId: null, reservedUntil: null }) });
+  let extractorCalls = 0;
+  const result = await runAutonomousCuratorDaily({ dryRun: true, notify: false }, {
+    env: {},
+    now: new Date("2026-08-29T12:00:00-03:00"),
+    shopeeClient: shopeeClient(),
+    getConfig: async () => config(),
+    openRun: repo.openRun as any,
+    getCategoryResult: repo.getCategoryResult as any,
+    saveCategoryResult: repo.saveCategoryResult as any,
+    finishRun: repo.finishRun as any,
+    findSourceIdentity: repo.findSourceIdentity as any,
+    productsLoader: async () => [],
+    extractor: (async () => { extractorCalls += 1; return { success: false }; }) as any,
+  });
+  assert.equal(extractorCalls, 0);
+  assert.equal(result.categories[0].decision, "duplicate");
+});
+
+
+test("identidade Shopee reservada por review ativa é descartada antes de Gemini/scraper", async () => {
+  const repo = persistence({
+    findSourceIdentity: async () => ({
+      marketplace: "Shopee",
+      shopId: "123",
+      itemId: "456",
+      sourceProductUrl: "https://shopee.com.br/product/123/456",
+      productId: null,
+      reviewId: "autocur-review-1",
+      reservedRunId: "run-existing",
+      reservedUntil: new Date(Date.now() + 60_000).toISOString(),
+    }),
+  });
   let extractorCalls = 0;
   const result = await runAutonomousCuratorDaily({ dryRun: true, notify: false }, {
     env: {},

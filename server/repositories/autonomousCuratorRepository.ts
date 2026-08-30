@@ -52,6 +52,7 @@ export type ProductSourceIdentity = {
   itemId: string;
   sourceProductUrl: string;
   productId: string | null;
+  reviewId: string | null;
   reservedRunId: string | null;
   reservedUntil: string | null;
 };
@@ -201,6 +202,7 @@ export async function findProductSourceIdentity(marketplace: string, shopId: str
     itemId: String(data.item_id),
     sourceProductUrl: String(data.source_product_url),
     productId: data.product_id ? String(data.product_id) : null,
+    reviewId: data.review_id ? String(data.review_id) : null,
     reservedRunId: data.reserved_run_id ? String(data.reserved_run_id) : null,
     reservedUntil: data.reserved_until ? String(data.reserved_until) : null,
   };
@@ -216,17 +218,21 @@ export async function reserveProductSourceIdentity(input: {
   itemId: string;
   sourceProductUrl: string;
   runId: string;
+  reviewId?: string | null;
   ttlMinutes?: number;
 }): Promise<{ reserved: boolean; identity: ProductSourceIdentity | null }> {
   const client = requireSupabase();
   const now = Date.now();
-  const reservedUntil = new Date(now + Math.max(5, Math.min(120, input.ttlMinutes ?? 30)) * 60_000).toISOString();
+  const maxTtlMinutes = input.reviewId ? 24 * 60 : 120;
+  const defaultTtlMinutes = input.reviewId ? 24 * 60 : 30;
+  const reservedUntil = new Date(now + Math.max(5, Math.min(maxTtlMinutes, input.ttlMinutes ?? defaultTtlMinutes)) * 60_000).toISOString();
   const { error } = await client.from("product_source_identities").insert({
     marketplace: input.marketplace,
     shop_id: input.shopId,
     item_id: input.itemId,
     source_product_url: input.sourceProductUrl,
     source: "autonomous_curator",
+    review_id: input.reviewId ?? null,
     reserved_run_id: input.runId,
     reserved_until: reservedUntil,
   });
@@ -239,6 +245,7 @@ export async function reserveProductSourceIdentity(input: {
         itemId: input.itemId,
         sourceProductUrl: input.sourceProductUrl,
         productId: null,
+        reviewId: input.reviewId ?? null,
         reservedRunId: input.runId,
         reservedUntil,
       },
@@ -251,16 +258,20 @@ export async function reserveProductSourceIdentity(input: {
   if (!existing) return { reserved: false, identity: null };
   if (existing.productId) return { reserved: false, identity: existing };
   const expiry = existing.reservedUntil ? Date.parse(existing.reservedUntil) : 0;
-  if (existing.reservedRunId === input.runId || (Number.isFinite(expiry) && expiry <= now)) {
+  const expired = Number.isFinite(expiry) && expiry <= now;
+  const sameReview = Boolean(input.reviewId && existing.reviewId === input.reviewId);
+  const sameRunWithoutReview = !input.reviewId && !existing.reviewId && existing.reservedRunId === input.runId;
+  if (sameReview || sameRunWithoutReview || expired) {
     const { data, error: updateError } = await client.from("product_source_identities").update({
       source_product_url: input.sourceProductUrl,
+      review_id: input.reviewId ?? null,
       reserved_run_id: input.runId,
       reserved_until: reservedUntil,
       updated_at: new Date().toISOString(),
     }).eq("marketplace", input.marketplace).eq("shop_id", input.shopId).eq("item_id", input.itemId)
       .is("product_id", null).select("*").maybeSingle();
     if (updateError) throw updateError;
-    if (data) return { reserved: true, identity: { ...existing, sourceProductUrl: input.sourceProductUrl, reservedRunId: input.runId, reservedUntil } };
+    if (data) return { reserved: true, identity: { ...existing, sourceProductUrl: input.sourceProductUrl, reviewId: input.reviewId ?? null, reservedRunId: input.runId, reservedUntil } };
   }
   return { reserved: false, identity: existing };
 }
@@ -275,6 +286,7 @@ export async function bindProductSourceIdentity(input: {
   const client = requireSupabase();
   const { error } = await client.from("product_source_identities").update({
     product_id: input.productId,
+    review_id: null,
     reserved_run_id: input.runId,
     reserved_until: null,
     updated_at: new Date().toISOString(),
@@ -292,6 +304,29 @@ export async function releaseProductSourceIdentity(input: {
   const { error } = await client.from("product_source_identities").delete()
     .eq("marketplace", input.marketplace).eq("shop_id", input.shopId).eq("item_id", input.itemId)
     .eq("reserved_run_id", input.runId).is("product_id", null);
+  if (error) throw error;
+}
+
+export async function bindProductSourceIdentityByReview(input: {
+  reviewId: string;
+  productId: string;
+}): Promise<void> {
+  const client = requireSupabase();
+  const { data, error } = await client.from("product_source_identities").update({
+    product_id: input.productId,
+    review_id: null,
+    reserved_run_id: null,
+    reserved_until: null,
+    updated_at: new Date().toISOString(),
+  }).eq("review_id", input.reviewId).is("product_id", null).select("id").maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("AUTONOMOUS_CURATOR_REVIEW_IDENTITY_MISSING");
+}
+
+export async function releaseProductSourceIdentityByReview(reviewId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.from("product_source_identities").delete()
+    .eq("review_id", reviewId).is("product_id", null);
   if (error) throw error;
 }
 
