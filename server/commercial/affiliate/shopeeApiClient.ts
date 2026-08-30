@@ -50,6 +50,28 @@ export interface ShopeeApiClientOptions {
   readonly clock?: () => number;
 }
 
+/**
+ * A busca oficial pode devolver a imagem como URL HTTPS ou como o hash do CDN
+ * da própria Shopee. Ambos são evidência oficial do mesmo nó productOfferV2.
+ * A normalização nunca aceita hosts arbitrários derivados de texto: hashes são
+ * convertidos apenas para o CDN oficial já usado pelo scraper canônico.
+ */
+export function normalizeShopeeImageReference(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (/^https:\/\//i.test(trimmed)) return trimmed;
+  if (/^http:\/\//i.test(trimmed)) return `https://${trimmed.slice("http://".length)}`;
+  if (/^\/\//.test(trimmed)) return `https:${trimmed}`;
+
+  const fileMatch = trimmed.match(/(?:^|\/file\/)([a-zA-Z0-9_-]{20,50})(?:_(?:tn|b))?$/i);
+  const rawHash = fileMatch?.[1] || (/^[a-zA-Z0-9_-]{20,50}(?:_(?:tn|b))?$/i.test(trimmed) ? trimmed : null);
+  if (!rawHash) return null;
+  const hash = rawHash.replace(/_(tn|b)$/i, "");
+  return `https://down-br.img.susercontent.com/file/${hash}`;
+}
+
 export function createShopeeApiClient(options: ShopeeApiClientOptions) {
   if (!options.appId || !options.secret) {
     throw new ShopeeClientError("SHOPEE_NOT_CONFIGURED", "credentials_missing");
@@ -440,7 +462,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
         price: parseShopeePriceString(obj.price),
         productLink: typeof obj.productLink === "string" ? obj.productLink : null,
         offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
-        imageUrl: typeof obj.imageUrl === "string" && /^https:\/\//i.test(obj.imageUrl) ? obj.imageUrl : null,
+        imageUrl: normalizeShopeeImageReference(obj.imageUrl),
       });
     }
     return { ok: true, items, httpStatus, error: null, page };
