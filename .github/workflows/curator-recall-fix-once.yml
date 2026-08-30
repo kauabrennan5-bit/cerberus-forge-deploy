@@ -35,8 +35,10 @@ jobs:
           git show 7e54715e01d3e95c675eeadb6f5b61ebf190121c:.github/workflows/curator-recall-fix-once.yml > "$RUNNER_TEMP/previous-helper.yml"
           python3 <<'EXTRACT'
           from pathlib import Path
+          import os
 
-          src = Path("${RUNNER_TEMP}/previous-helper.yml")
+          runner_temp = Path(os.environ["RUNNER_TEMP"])
+          src = runner_temp / "previous-helper.yml"
           text = src.read_text()
           marker = "          python3 <<'PY'\n"
           start = text.index(marker) + len(marker)
@@ -47,8 +49,7 @@ jobs:
               lines.append(line[10:] if line.startswith("          ") else line)
           patch = "\n".join(lines) + "\n"
           cutoff = patch.index('workflow = ".github/workflows/autonomous-curator.yml"')
-          patch = patch[:cutoff]
-          Path("${RUNNER_TEMP}/recall-patch.py").write_text(patch)
+          (runner_temp / "recall-patch.py").write_text(patch[:cutoff])
           EXTRACT
           python3 "$RUNNER_TEMP/recall-patch.py"
 
