@@ -4,6 +4,7 @@ import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAu
 import { runAutonomousCuratorDaily } from "../services/autonomousCurator";
 import { runAutonomousCuratorContinuousV2 } from "../services/autonomousCuratorContinuousV2";
 import { extractProductForReview } from "../services/productAutomation";
+import { productImageReviewInternals, resolveProductImageReviewModel } from "../services/productImageReview";
 import { getAutonomousCuratorConfig } from "../repositories/autonomousCuratorRepository";
 import { requireSupabase } from "../repositories/productsRepository";
 
@@ -18,6 +19,20 @@ const SATURATED_AUTONOMOUS_CURATOR_COPY_MODELS = new Set([
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
 ]);
+const OPENAI_PROVIDER_PROBE_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlG5i0AAAAASUVORK5CYII=";
+
+type OpenAIProviderProbeStatus =
+  | "ok"
+  | "not_configured"
+  | "disabled"
+  | "auth_error"
+  | "quota_exhausted"
+  | "rate_limited"
+  | "model_unavailable"
+  | "timeout"
+  | "provider_unavailable"
+  | "request_rejected"
+  | "invalid_response";
 
 function resolveAutonomousCuratorCopyModel(env: NodeJS.ProcessEnv): string {
   const explicit = String(env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || "").trim();
@@ -25,6 +40,106 @@ function resolveAutonomousCuratorCopyModel(env: NodeJS.ProcessEnv): string {
   const configured = String(env.GEMINI_PRODUCT_CURATOR_MODEL || "").trim();
   if (!configured || SATURATED_AUTONOMOUS_CURATOR_COPY_MODELS.has(configured)) return DEFAULT_AUTONOMOUS_CURATOR_COPY_MODEL;
   return configured;
+}
+
+function safeProviderErrorCode(value: unknown): string | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return /^[a-z0-9_.-]{1,80}$/.test(normalized) ? normalized : null;
+}
+
+function classifyOpenAIProviderProbe(httpStatus: number, errorCode: string | null): OpenAIProviderProbeStatus {
+  if (httpStatus === 401 || httpStatus === 403) return "auth_error";
+  if (httpStatus === 404) return "model_unavailable";
+  if (httpStatus === 408) return "timeout";
+  if (httpStatus === 429) {
+    return ["insufficient_quota", "quota_exceeded", "billing_hard_limit_reached"].includes(String(errorCode || ""))
+      ? "quota_exhausted"
+      : "rate_limited";
+  }
+  if (httpStatus >= 500) return "provider_unavailable";
+  return "request_rejected";
+}
+
+async function probeAutonomousCuratorProviders(
+  env: NodeJS.ProcessEnv = process.env,
+  fetchImpl: typeof fetch = fetch,
+) {
+  const geminiConfigured = Boolean(String(env.GEMINI_API_KEY || "").trim());
+  const openaiApiKey = String(env.OPENAI_API_KEY || "").trim();
+  const openaiConfigured = Boolean(openaiApiKey);
+  const openaiEnabled = openaiConfigured && productImageReviewInternals.enabledUnlessFalse(env.OPENAI_PRODUCT_IMAGE_REVIEW_ENABLED);
+  const openaiModel = productImageReviewInternals.resolveOpenAIImageReviewModel(env);
+  const openaiFallbackModel = productImageReviewInternals.resolveOpenAIImageReviewFallbackModel(env, openaiModel);
+  const base = {
+    gemini: {
+      configured: geminiConfigured,
+      model: resolveProductImageReviewModel(env),
+    },
+    openai: {
+      configured: openaiConfigured,
+      enabled: openaiEnabled,
+      model: openaiModel,
+      fallbackModel: openaiFallbackModel,
+    },
+  };
+
+  if (!openaiConfigured) return { ...base, openai: { ...base.openai, status: "not_configured" as const } };
+  if (!openaiEnabled) return { ...base, openai: { ...base.openai, status: "disabled" as const } };
+
+  const rawUrl = "probe://cerberus-openai-image-review";
+  const request = productImageReviewInternals.buildOpenAIReviewRequest([
+    { url: rawUrl, mimeType: "image/png", data: OPENAI_PROVIDER_PROBE_PNG_BASE64 },
+  ], "Cerberus provider health probe. Do not infer product facts from this diagnostic image.", openaiModel);
+  const controller = new AbortController();
+  const timeoutMs = Math.min(15_000, Math.max(3_000, productImageReviewInternals.positiveInt(env.OPENAI_PRODUCT_IMAGE_REVIEW_TIMEOUT_MS, 10_000)));
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openaiApiKey}`,
+        "Content-Type": "application/json",
+        "User-Agent": "CerberusFinds/1.0",
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    if (!response.ok) {
+      let errorCode: string | null = null;
+      try {
+        const parsed = JSON.parse(responseText) as { error?: { code?: unknown; type?: unknown } };
+        errorCode = safeProviderErrorCode(parsed?.error?.code) || safeProviderErrorCode(parsed?.error?.type);
+      } catch {
+        // HTTP status remains sufficient for a safe classification.
+      }
+      return {
+        ...base,
+        openai: {
+          ...base.openai,
+          status: classifyOpenAIProviderProbe(response.status, errorCode),
+          httpStatus: response.status,
+          errorCode,
+        },
+      };
+    }
+
+    try {
+      const payload = JSON.parse(responseText);
+      const parsed = productImageReviewInternals.parseModelJson(productImageReviewInternals.extractOpenAIOutputText(payload)) as { images?: unknown[] };
+      if (!Array.isArray(parsed.images) || parsed.images.length === 0) {
+        return { ...base, openai: { ...base.openai, status: "invalid_response" as const, httpStatus: response.status } };
+      }
+    } catch {
+      return { ...base, openai: { ...base.openai, status: "invalid_response" as const, httpStatus: response.status } };
+    }
+    return { ...base, openai: { ...base.openai, status: "ok" as const, httpStatus: response.status } };
+  } catch (error) {
+    const isTimeout = error instanceof Error && (error.name === "AbortError" || /timeout|timed out/i.test(error.message));
+    return { ...base, openai: { ...base.openai, status: isTimeout ? "timeout" as const : "provider_unavailable" as const } };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function extractForAutonomousCurator(rawUrl: string, rawTextOverride?: string) {
@@ -54,6 +169,16 @@ function alreadyRunning(res: Response) {
 }
 
 export function registerAutonomousCuratorRoutes(app: Express): void {
+  app.post("/api/internal/autonomous-curator/provider-health", async (req, res) => {
+    if (!(await authorize(req, res))) return;
+    try {
+      const providers = await probeAutonomousCuratorProviders(process.env);
+      return res.status(200).json({ ok: true, providers });
+    } catch {
+      return res.status(503).json({ ok: false, code: "AUTONOMOUS_CURATOR_PROVIDER_HEALTH_UNAVAILABLE" });
+    }
+  });
+
   app.post("/api/internal/autonomous-curator/daily", async (req, res) => {
     if (!(await authorize(req, res))) return;
     const dryRun = req.body?.dryRun === true;
@@ -164,4 +289,9 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
   });
 }
 
-export const autonomousCuratorRouteInternals = { resolveAutonomousCuratorCopyModel };
+export const autonomousCuratorRouteInternals = {
+  resolveAutonomousCuratorCopyModel,
+  safeProviderErrorCode,
+  classifyOpenAIProviderProbe,
+  probeAutonomousCuratorProviders,
+};
