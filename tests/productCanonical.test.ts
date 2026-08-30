@@ -44,7 +44,7 @@ test("blocks a product when every candidate image is technical", () => {
   const images = ["https://cdn.example.test/technical-a.jpg", "https://cdn.example.test/technical-b.jpg"];
   const curation = curateProductImages(images, images.map(url => ({ url, decision: "technical" as const, confidence: "HIGH" as const, reason: "cotas visíveis" })));
   assert.equal(curation.status, "review_required");
-  assert.equal(curation.reason, "no_commercial_image");
+  assert.equal(curation.reason, "no_commercial_image:technical_high=2");
   const result = resolveCanonicalProductImage({ imagens: images, imageCuration: curation, imageEditorialStatus: "review_required" });
   assert.equal(result.status, "incomplete");
   assert.equal(result.reason, "image_review_required");
@@ -193,7 +193,7 @@ test("main visual consumers use the shared canonical image resolver", () => {
   for (const relativePath of consumers) {
     const source = readFileSync(new URL(`../${relativePath}`, import.meta.url), "utf8");
     assert.match(source, /resolveCanonicalProductImage|assessProductReadiness/);
-    assert.doesNotMatch(source, /(?:imagens|images|finalImages)[^\\n]*\\[0\\]/);
+    assert.doesNotMatch(source, /(?:imagens|images|finalImages)[^\n]*\[0\]/);
   }
 });
 

@@ -2,10 +2,19 @@ export type ProductImageEditorialStatus = "clean" | "overlay_suspected" | "unrev
 
 export type ProductImageAssessment = {
   url: string;
-  decision: "clean" | "technical" | "promotional" | "logo" | "collage" | "screenshot" | "unknown";
+  decision: "clean" | "technical" | "promotional" | "logo" | "collage" | "screenshot" | "off_brand" | "incomplete" | "novelty" | "unknown";
   confidence: "HIGH" | "MEDIUM" | "LOW";
   reason: string;
 };
+
+export type ProductImageCurationReason =
+  | "no_images"
+  | "no_commercial_image"
+  | `no_commercial_image:${string}`
+  | "image_review_unavailable"
+  | "image_review_budget_exhausted"
+  | "image_fetch_unavailable"
+  | "image_review_model_unavailable";
 
 export type ProductImageCuration = {
   status: "ready" | "review_required";
@@ -13,7 +22,7 @@ export type ProductImageCuration = {
   primaryImageUrl?: string;
   galleryImageUrls: string[];
   assessments: ProductImageAssessment[];
-  reason?: "no_images" | "no_commercial_image" | "image_review_unavailable" | "image_review_budget_exhausted" | "image_fetch_unavailable" | "image_review_model_unavailable";
+  reason?: ProductImageCurationReason;
 };
 
 const REJECTED_DECISIONS = new Set<ProductImageAssessment["decision"]>([
@@ -22,7 +31,45 @@ const REJECTED_DECISIONS = new Set<ProductImageAssessment["decision"]>([
   "logo",
   "collage",
   "screenshot",
+  "off_brand",
+  "incomplete",
+  "novelty",
 ]);
+
+const DECISION_ORDER: readonly ProductImageAssessment["decision"][] = [
+  "clean",
+  "off_brand",
+  "incomplete",
+  "novelty",
+  "technical",
+  "promotional",
+  "logo",
+  "collage",
+  "screenshot",
+  "unknown",
+];
+const CONFIDENCE_ORDER: readonly ProductImageAssessment["confidence"][] = ["HIGH", "MEDIUM", "LOW"];
+
+/**
+ * Diagnóstico deliberadamente limitado a enums internos + contagens. Nunca
+ * persiste `reason` textual do modelo ou qualquer conteúdo do anúncio.
+ */
+export function summarizeProductImageAssessments(assessments: readonly ProductImageAssessment[]): string {
+  const counts = new Map<string, number>();
+  for (const assessment of assessments) {
+    const key = `${assessment.decision}_${assessment.confidence.toLowerCase()}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const decision of DECISION_ORDER) {
+    for (const confidence of CONFIDENCE_ORDER) {
+      const key = `${decision}_${confidence.toLowerCase()}`;
+      const count = counts.get(key) || 0;
+      if (count > 0) parts.push(`${key}=${count}`);
+    }
+  }
+  return parts.join(",");
+}
 
 function isPublicHttpsImageUrl(value: string): boolean {
   try {
@@ -74,12 +121,15 @@ export function curateProductImages(
   });
 
   if (cleanCandidates.length === 0) {
+    const diagnostic = summarizeProductImageAssessments(normalizedAssessments);
     return {
       status: "review_required",
       rawImageUrls,
       galleryImageUrls: [],
       assessments: normalizedAssessments,
-      reason: assessments.length === 0 ? "image_review_unavailable" : "no_commercial_image",
+      reason: assessments.length === 0
+        ? "image_review_unavailable"
+        : diagnostic ? `no_commercial_image:${diagnostic}` : "no_commercial_image",
     };
   }
 
@@ -100,6 +150,15 @@ export function isCommercialImageAssessment(assessment: ProductImageAssessment |
 
 export function isRejectedImageAssessment(assessment: ProductImageAssessment | undefined): boolean {
   return Boolean(assessment && REJECTED_DECISIONS.has(assessment.decision));
+}
+
+/** Rejeições que descrevem o produto, não um defeito editorial da fotografia. */
+export function isNonRepairableProductImageRejection(assessment: ProductImageAssessment | undefined): boolean {
+  return Boolean(
+    assessment
+    && assessment.confidence !== "LOW"
+    && ["off_brand", "incomplete", "novelty"].includes(assessment.decision),
+  );
 }
 
 export function orderCanonicalImageSet(curation: ProductImageCuration): string[] {
