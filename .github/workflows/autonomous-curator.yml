@@ -1,5 +1,5 @@
 name: Cerberus Autonomous Curator
-# One-time recovery retry: Tecnologia only; all already-published categories remain terminal and are skipped.
+# Production schedule: scheduled runs are REAL; pushes are validation dry-runs.
 
 on:
   schedule:
@@ -41,7 +41,7 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && contains(github.event.head_commit.message, '[curator-real-once]') && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
@@ -137,7 +137,8 @@ jobs:
             process.stdout.write('waiting');
             process.exit(0);
           }
-          if (['completed','partial','failed','dry_run'].includes(String(run.status))) {
+          const terminalStatus = ['completed','partial','failed','dry_run'].includes(String(run.status));
+          if (terminalStatus && run.completed_at) {
             console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
             process.exit(0);
           }
