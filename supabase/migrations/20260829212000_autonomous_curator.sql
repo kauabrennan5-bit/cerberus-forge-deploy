@@ -76,6 +76,7 @@ create table if not exists public.product_source_identities (
   item_id text not null,
   source_product_url text not null,
   product_id text,
+  review_id text,
   source text not null default 'autonomous_curator',
   reserved_run_id uuid references public.autonomous_curator_runs(id) on delete set null,
   reserved_until timestamptz,
@@ -87,6 +88,10 @@ create table if not exists public.product_source_identities (
 create unique index if not exists product_source_identities_product_uq
   on public.product_source_identities(product_id)
   where product_id is not null;
+
+create index if not exists product_source_identities_review_idx
+  on public.product_source_identities(review_id)
+  where review_id is not null and product_id is null;
 
 create table if not exists public.product_image_editorial_reviews (
   id uuid primary key default gen_random_uuid(),
