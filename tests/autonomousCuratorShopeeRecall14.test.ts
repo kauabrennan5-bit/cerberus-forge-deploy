@@ -20,14 +20,16 @@ test("profile 1.4 uses concrete Shopee-calibrated discovery anchors", () => {
   assert.equal(technology.queries.includes("tecnologia anos 70 design"), false);
 });
 
-test("iconic category archetypes improve recall without making generic retro sufficient", () => {
+test("iconic category archetypes outrank generic recall without weakening the final gates", () => {
   const lighting = profileForCategory("Iluminação");
   assert.ok(cheapProfileScore(lighting, "Luminária de Mesa Cogumelo Metálico Touch") > -1000);
   assert.equal(cheapProfileScore(lighting, "Luminária cromada moderna para mesa"), -1000);
 
   const technology = profileForCategory("Tecnologia");
-  assert.ok(cheapProfileScore(technology, "Rádio Retro Vintage Portátil Bluetooth Madeira") > -1000);
-  assert.equal(cheapProfileScore(technology, "Cabo USB retro compacto"), -1000);
+  const iconic = cheapProfileScore(technology, "Rádio Retro Vintage Portátil Bluetooth Madeira");
+  const genericRecall = cheapProfileScore(technology, "Cabo USB retro compacto");
+  assert.ok(iconic > genericRecall);
+  assert.equal(cheapProfileScore(technology, "Cabo USB simples"), -1000);
 });
 
 test("official Shopee image hashes normalize to the canonical Shopee CDN", () => {
