@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { reviewProductImages, productImageReviewInternals } from "../server/services/productImageReview";
-import { curateProductImages, isNonRepairableProductImageRejection } from "../src/lib/productImageCuration";
+import { curateProductImages, isNonRepairableProductImageRejection, summarizeProductImageAssessments } from "../src/lib/productImageCuration";
 
 const imageUrl = "https://cdn.example.com/product.jpg";
 const imageFetch: typeof fetch = async () => new Response(Buffer.from([1, 2, 3]), {
@@ -26,9 +26,19 @@ test("off_brand visual nunca vira imagem canônica nem entra em repair", async (
   });
 
   assert.equal(result.status, "review_required");
-  assert.equal(result.reason, "no_commercial_image");
+  assert.equal(result.reason, "no_commercial_image:off_brand_high=1");
   assert.equal(result.assessments[0]?.decision, "off_brand");
   assert.equal(repairs, 0);
+});
+
+test("diagnóstico visual persiste somente enums e contagens, nunca texto livre do modelo", () => {
+  const summary = summarizeProductImageAssessments([
+    { url: "https://cdn.example.com/a.jpg", decision: "technical", confidence: "HIGH", reason: "PROMPT SECRET must never be persisted" },
+    { url: "https://cdn.example.com/b.jpg", decision: "technical", confidence: "MEDIUM", reason: "arbitrary marketplace payload" },
+    { url: "https://cdn.example.com/c.jpg", decision: "clean", confidence: "LOW", reason: "untrusted free text" },
+  ]);
+  assert.equal(summary, "clean_low=1,technical_high=1,technical_medium=1");
+  assert.doesNotMatch(summary, /secret|marketplace payload|untrusted free text/i);
 });
 
 test("incomplete e novelty são rejeições físicas não reparáveis", () => {
