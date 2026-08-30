@@ -29,15 +29,20 @@ test("backend catalog sync no longer requires Pull Requests permission", () => {
   assert.match(writeCall, /branch,\s*\n/);
 });
 
-test("catalog branch promotion is restricted to the required gate and products.json", () => {
+test("catalog branch promotion is restricted to a validated protected pull request", () => {
   const workflow = fs.readFileSync(path.join(process.cwd(), ".github/workflows/weekly-production-final-gate.yml"), "utf-8");
 
   assert.match(workflow, /"catalog-sync\/\*\*"/);
   assert.match(workflow, /promote-catalog:/);
   assert.match(workflow, /needs:\s*weekly-production-final/);
-  assert.match(workflow, /permissions:\s*\n\s*contents:\s*write/);
+  assert.match(workflow, /contents:\s*write/);
+  assert.match(workflow, /pull-requests:\s*write/);
   assert.match(workflow, /git merge-base --is-ancestor/);
   assert.match(workflow, /public\/data\/products\.json/);
   assert.match(workflow, /JSON\.parse/);
-  assert.match(workflow, /git push origin "\$GITHUB_SHA:refs\/heads\/main"/);
+  assert.match(workflow, /gh pr create/);
+  assert.match(workflow, /gh pr view/);
+  assert.match(workflow, /pulls\/\$CATALOG_PR_NUMBER\/merge/);
+  assert.match(workflow, /-f sha="\$GITHUB_SHA"/);
+  assert.doesNotMatch(workflow, /git push origin "\$GITHUB_SHA:refs\/heads\/main"/);
 });
