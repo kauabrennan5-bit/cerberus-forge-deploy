@@ -1,5 +1,49 @@
 [
   {
+    "id": "prod-1788101587604-3c4e7061aa",
+    "ref": "AUTOQ-3C4E7061AA",
+    "slug": "jogo-de-seis-copos-long-drink-antigos-3c4e70",
+    "produto": "Jogo de Seis Copos Long Drink Antigos",
+    "displayTitle": "Jogo de Seis Copos Long Drink Antigos",
+    "preco": 99,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134201-820lp-msem2aj78vev4b",
+      "https://down-br.img.susercontent.com/file/br-11134201-820lp-msem2aj78vev4b",
+      "https://down-br.img.susercontent.com/file/br-11134201-820m5-msem2b10zdol8e"
+    ],
+    "link": "https://s.shopee.com.br/3B711EYMgc",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Conjunto vintage de seis copos long drink em vidro jateado com detalhes espatulados e borda dourada. Peça clássica que remete ao design dos anos 70 e 80, ideal para compor mesas e bares.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":98,\"profileVersion\":\"1.4\",\"queuedAt\":\"2026-08-30T14:53:07.604Z\",\"publishedAt\":\"2026-08-30T14:53:07.604Z\",\"query\":\"copo vidro anos 70\",\"shopId\":\"1205812101\",\"itemId\":\"58267105906\",\"sourceProductUrl\":\"https://shopee.com.br/product/1205812101/58267105906\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134201-820lp-msem2aj78vev4b\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-30T14:54:24.605023+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788101587604-fa8bb8000b",
+    "ref": "AUTOQ-FA8BB8000B",
+    "slug": "arandela-bauhaus-vintage-dobravel-em-tom-creme-fa8bb8",
+    "produto": "Arandela Bauhaus Vintage Dobrável em Tom Creme",
+    "displayTitle": "Arandela Bauhaus Vintage Dobrável em Tom Creme",
+    "preco": 269,
+    "imagens": [
+      "https://cf.shopee.com.br/file/cn-11134207-820l4-mpxgnnzhhvr48b",
+      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mpxgnnzhhvr48b",
+      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mp4vma0ul4hsae",
+      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mp4u044gihaa93",
+      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-moyrf9fnvrilaa"
+    ],
+    "link": "https://s.shopee.com.br/8plOHNo37q",
+    "categoria": "Iluminação",
+    "descricao": "Esta arandela de parede estilo francês possui design dobrável e iluminação LED tricolor. É ideal para uso em cabeceiras e salas de leitura com estética vintage.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":96,\"profileVersion\":\"1.4\",\"queuedAt\":\"2026-08-30T14:53:07.604Z\",\"publishedAt\":\"2026-08-30T14:53:07.604Z\",\"query\":\"arandela bauhaus\",\"shopId\":\"1773356823\",\"itemId\":\"51016477133\",\"sourceProductUrl\":\"https://shopee.com.br/product/1773356823/51016477133\",\"imageUrl\":\"https://cf.shopee.com.br/file/cn-11134207-820l4-mpxgnnzhhvr48b\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-30T14:53:36.147838+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788066309797",
     "ref": "REF-001",
     "slug": "espelho-de-maquiagem-dobravel-para-viagem",
