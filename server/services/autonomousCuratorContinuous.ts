@@ -59,11 +59,7 @@ type ContinuousCandidate = {
   lifecycle: LifecycleRecord;
 };
 
-type DiscoveryResult = {
-  candidate: ContinuousCandidate | null;
-  reason: string;
-  examined: number;
-};
+type DiscoveryResult = { candidate: ContinuousCandidate | null; reason: string; examined: number };
 
 export type ContinuousCuratorCategoryResult = {
   category: PublicProductCategory;
@@ -134,7 +130,11 @@ function resolveCopyModel(env: NodeJS.ProcessEnv): string {
   return configured;
 }
 
-async function extractWithCuratorModel(rawUrl: string, env: NodeJS.ProcessEnv, extractor: typeof extractProductForReview): Promise<Awaited<ReturnType<typeof extractProductForReview>>> {
+async function extractWithCuratorModel(
+  rawUrl: string,
+  env: NodeJS.ProcessEnv,
+  extractor: typeof extractProductForReview,
+): Promise<Awaited<ReturnType<typeof extractProductForReview>>> {
   const previous = process.env.GEMINI_PRODUCT_CURATOR_MODEL;
   process.env.GEMINI_PRODUCT_CURATOR_MODEL = resolveCopyModel(env);
   try {
@@ -209,6 +209,14 @@ function dueForPublication(lastPublishedAt: string | null, now: Date): boolean {
   return now.getTime() - timestamp >= DAY_MS;
 }
 
+function revalidationPermanentFailure(reason: string): boolean {
+  const transient = [
+    "TIMEOUT", "RATE_LIMIT", "NETWORK", "TRANSIENT", "UNAVAILABLE", "MODEL_UNAVAILABLE",
+    "IMAGE_FETCH_UNAVAILABLE", "AUTH_ERROR", "FORBIDDEN", "SHOPEE_SEARCH",
+  ];
+  return !transient.some(marker => reason.toUpperCase().includes(marker));
+}
+
 function buildShopeeClient(env: NodeJS.ProcessEnv): ShopeeApiClient | null {
   const appId = (env.SHOPEE_APP_ID || env.SHOPEE_AFFILIATE_APP_ID || "").trim();
   const secret = (env.SHOPEE_APP_SECRET || env.SHOPEE_AFFILIATE_APP_SECRET || "").trim();
@@ -228,14 +236,20 @@ async function evaluateIdentity(input: {
   env: NodeJS.ProcessEnv;
   extractor: typeof extractProductForReview;
   config: curatorRepo.AutonomousCuratorConfig;
+  allowedProductId?: string | null;
 }): Promise<{ candidate: ContinuousCandidate | null; reason: string }> {
   const { shopId, itemId } = input;
   const sourceUrl = canonicalSourceUrl(shopId, itemId);
   const sourceIdentity = await curatorRepo.findProductSourceIdentity("Shopee", shopId, itemId);
   const reservedUntil = sourceIdentity?.reservedUntil ? Date.parse(sourceIdentity.reservedUntil) : 0;
-  if (sourceIdentity?.productId || (sourceIdentity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) {
-    return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
-  }
+  const ownedByOtherProduct = Boolean(sourceIdentity?.productId && sourceIdentity.productId !== input.allowedProductId);
+  const activelyReserved = Boolean(
+    sourceIdentity
+    && !sourceIdentity.productId
+    && Number.isFinite(reservedUntil)
+    && reservedUntil > Date.now(),
+  );
+  if (ownedByOtherProduct || activelyReserved) return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
 
   const acquisition = await input.client.acquireAffiliateLink({ shopId, itemId });
   if (acquisition.status !== "link_acquired" || !acquisition.affiliateUrl || !acquisition.productLink || !acquisition.shopId || !acquisition.itemId) {
@@ -285,8 +299,7 @@ async function evaluateIdentity(input: {
     return { candidate: null, reason: `IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR:${imageCuration?.reason || "unknown"}` };
   }
 
-  const pipeline = createProductionProductPipeline();
-  const lifecycle = await pipeline.evaluate({
+  const lifecycle = await createProductionProductPipeline().evaluate({
     normalizedUrl: sourceUrl,
     link: acquisition.affiliateUrl,
     marketplace: "Shopee",
@@ -358,7 +371,6 @@ async function discoverQualifiedCandidate(input: {
   let examined = 0;
   let lastReason = "NO_QUALIFIED_CANDIDATE_THIS_CYCLE";
   const queries = rotatedQueries(input.profile, input.cycleKey);
-
   for (const query of queries) {
     if (examined >= input.config.maxEnrichPerCategory) break;
     const search = await input.client.searchOffers({ query, limit: input.config.maxSearchCandidates });
@@ -372,7 +384,6 @@ async function discoverQualifiedCandidate(input: {
       .map(item => ({ item, cheap: cheapProfileScore(input.profile, item.name || "") }))
       .filter(entry => entry.cheap > -1000)
       .sort((a, b) => b.cheap - a.cheap || String(a.item.itemId).localeCompare(String(b.item.itemId)));
-
     for (const entry of ranked) {
       if (examined >= input.config.maxEnrichPerCategory) break;
       const item = entry.item;
@@ -416,15 +427,13 @@ async function claimQueueIdentity(candidate: ContinuousCandidate, productId: str
     reserved_until: null,
   });
   if (!error) return true;
-  if ((error as any).code === "23505") return false;
+  if ((error as { code?: string }).code === "23505") return false;
   throw error;
 }
 
 async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date, env: NodeJS.ProcessEnv): Promise<Product | null> {
   const client = requireSupabase();
-  const existingIdentity = await curatorRepo.findProductSourceIdentity("Shopee", candidate.shopId, candidate.itemId);
-  if (existingIdentity) return null;
-
+  if (await curatorRepo.findProductSourceIdentity("Shopee", candidate.shopId, candidate.itemId)) return null;
   const suffix = randomUUID().replace(/-/g, "").slice(0, 10);
   const productId = `prod-${now.getTime()}-${suffix}`;
   const meta: QueueMetadata = {
@@ -436,12 +445,11 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
     itemId: candidate.itemId,
     sourceProductUrl: candidate.sourceProductUrl,
   };
-  const claimed = await claimQueueIdentity(candidate, productId);
-  if (!claimed) return null;
-
+  if (!(await claimQueueIdentity(candidate, productId))) return null;
   const slug = `${generateSlug(candidate.displayTitle)}-${suffix.slice(0, 6)}`;
   const model = env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "gemini-3.5-flash-lite";
-  const row = {
+  const curatorNote = queueNote(meta);
+  const { error } = await client.from("products").insert({
     id: productId,
     ref: `AUTOQ-${suffix.toUpperCase()}`,
     produto: candidate.displayTitle,
@@ -459,7 +467,7 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
     oferta_promocional: null,
     raw_title: candidate.rawTitle,
     display_title: candidate.displayTitle,
-    curator_note: queueNote(meta),
+    curator_note: curatorNote,
     image_editorial_status: "clean",
     image_curation: candidate.imageCuration,
     image_reviewed_at: now.toISOString(),
@@ -469,8 +477,7 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: resolveCopyModel(env),
     display_title_review_version: "1.0",
-  };
-  const { error } = await client.from("products").insert(row);
+  });
   if (error) {
     await client.from("product_source_identities").delete().eq("marketplace", "Shopee").eq("shop_id", candidate.shopId).eq("item_id", candidate.itemId).eq("product_id", productId);
     throw error;
@@ -484,7 +491,7 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
   }
   return {
     id: productId,
-    ref: row.ref,
+    ref: `AUTOQ-${suffix.toUpperCase()}`,
     produto: candidate.displayTitle,
     rawTitle: candidate.rawTitle,
     displayTitle: candidate.displayTitle,
@@ -500,7 +507,7 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
     createdBy: QUEUE_CREATED_BY,
     slug,
     descricao: candidate.description,
-    curatorNote: row.curator_note,
+    curatorNote,
     createdAt: now.toISOString(),
   };
 }
@@ -515,6 +522,11 @@ function queuedForCategory(products: readonly Product[], category: PublicProduct
     });
 }
 
+async function archiveQueueProduct(productId: string): Promise<void> {
+  const { error } = await requireSupabase().from("products").update({ ativo: false, status: "archived" }).eq("id", productId);
+  if (error) throw error;
+}
+
 async function maybeQueueCandidate(candidate: ContinuousCandidate, products: Product[], now: Date, env: NodeJS.ProcessEnv): Promise<{ queued: boolean; product: Product | null; reason: string }> {
   const categoryQueue = queuedForCategory(products, candidate.category);
   const target = queueTarget(env);
@@ -523,9 +535,7 @@ async function maybeQueueCandidate(candidate: ContinuousCandidate, products: Pro
     const weakestScore = parseQueueNote(weakest?.curatorNote)?.score || 0;
     if (candidate.score <= weakestScore) return { queued: false, product: null, reason: `QUEUE_FULL_STRONGER_OR_EQUAL:${weakestScore}` };
     if (weakest) {
-      const client = requireSupabase();
-      const { error } = await client.from("products").update({ ativo: false, status: "archived", updated_at: now.toISOString() }).eq("id", weakest.id);
-      if (error) throw error;
+      await archiveQueueProduct(weakest.id);
       weakest.status = "archived";
     }
   }
@@ -553,9 +563,6 @@ async function refreshQueuedCandidate(input: {
   if (error) throw error;
   const identity = Array.isArray(identities) ? identities[0] : null;
   if (!identity?.shop_id || !identity?.item_id) return { candidate: null, reason: "QUEUE_SOURCE_IDENTITY_MISSING" };
-
-  // Temporarily make this queued product invisible to the duplicate guard while
-  // revalidating its exact source identity. Every other product still counts.
   const others = input.existingProducts.filter(product => product.id !== input.product.id);
   const meta = parseQueueNote(input.product.curatorNote);
   return evaluateIdentity({
@@ -570,11 +577,16 @@ async function refreshQueuedCandidate(input: {
     env: input.env,
     extractor: input.extractor,
     config: input.config,
+    allowedProductId: input.product.id,
   });
 }
 
 async function lastActivePublishedAt(category: PublicProductCategory, products: readonly Product[]): Promise<string | null> {
-  const activeIds = new Set(products.filter(product => product.ativo !== false && product.status === "published").map(product => product.id));
+  const activeIds = new Set(
+    products
+      .filter(product => product.ativo !== false && product.status === "published" && product.categoria === category)
+      .map(product => product.id),
+  );
   if (activeIds.size === 0) return null;
   const client = requireSupabase();
   const { data, error } = await client.from("autonomous_curator_candidates")
@@ -583,7 +595,7 @@ async function lastActivePublishedAt(category: PublicProductCategory, products: 
     .eq("decision", "auto_published")
     .not("product_id", "is", null)
     .order("updated_at", { ascending: false })
-    .limit(50);
+    .limit(60);
   if (error) throw error;
   for (const row of data || []) {
     if (row.product_id && activeIds.has(String(row.product_id))) return String(row.updated_at);
@@ -595,12 +607,19 @@ async function markCycleStarted(runId: string, cycleId: string, now: Date): Prom
   const client = requireSupabase();
   const { data, error: readError } = await client.from("autonomous_curator_runs").select("metadata").eq("id", runId).single();
   if (readError) throw readError;
-  const metadata = data?.metadata && typeof data.metadata === "object" ? data.metadata : {};
+  const metadata = data?.metadata && typeof data.metadata === "object" ? data.metadata as Record<string, unknown> : {};
   const { error } = await client.from("autonomous_curator_runs").update({
     status: "running",
+    profile_version: AUTONOMOUS_CURATOR_PROFILE_VERSION,
     completed_at: null,
-    metadata: { ...metadata, continuous_cycle_id: cycleId, continuous_cycle_started_at: now.toISOString(), continuous_cycle_completed_at: null, profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION },
-    updated_at: now.toISOString(),
+    metadata: {
+      ...metadata,
+      profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
+      continuous: true,
+      continuous_cycle_id: cycleId,
+      continuous_cycle_started_at: now.toISOString(),
+      continuous_cycle_completed_at: null,
+    },
   }).eq("id", runId);
   if (error) throw error;
 }
@@ -623,18 +642,26 @@ async function stagePublication(runId: string, candidate: ContinuousCandidate, p
   });
 }
 
-async function updateQueuedProductFromCandidate(productId: string, candidate: ContinuousCandidate, now: Date, env: NodeJS.ProcessEnv, status: "paused" | "published"): Promise<void> {
-  const client = requireSupabase();
-  const previousMeta = queueNote({
+async function updateQueuedProductFromCandidate(
+  productId: string,
+  candidate: ContinuousCandidate,
+  now: Date,
+  env: NodeJS.ProcessEnv,
+  status: "paused" | "published",
+): Promise<void> {
+  const existing = await requireSupabase().from("products").select("created_at,curator_note").eq("id", productId).single();
+  if (existing.error) throw existing.error;
+  const previousMeta = parseQueueNote(existing.data?.curator_note);
+  const meta: QueueMetadata = {
     score: candidate.score,
     profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
-    queuedAt: now.toISOString(),
+    queuedAt: previousMeta?.queuedAt || String(existing.data?.created_at || now.toISOString()),
     query: candidate.query,
     shopId: candidate.shopId,
     itemId: candidate.itemId,
     sourceProductUrl: candidate.sourceProductUrl,
-  });
-  const { error } = await client.from("products").update({
+  };
+  const { error } = await requireSupabase().from("products").update({
     produto: candidate.displayTitle,
     categoria: candidate.category,
     preco: candidate.price,
@@ -643,7 +670,7 @@ async function updateQueuedProductFromCandidate(productId: string, candidate: Co
     descricao: candidate.description,
     raw_title: candidate.rawTitle,
     display_title: candidate.displayTitle,
-    curator_note: previousMeta,
+    curator_note: queueNote(meta),
     image_editorial_status: "clean",
     image_curation: candidate.imageCuration,
     image_reviewed_at: now.toISOString(),
@@ -652,12 +679,6 @@ async function updateQueuedProductFromCandidate(productId: string, candidate: Co
     ativo: status === "published",
     status,
   }).eq("id", productId);
-  if (error) throw error;
-}
-
-async function archiveQueueProduct(productId: string, now: Date): Promise<void> {
-  const client = requireSupabase();
-  const { error } = await client.from("products").update({ ativo: false, status: "archived", updated_at: now.toISOString() }).eq("id", productId);
   if (error) throw error;
 }
 
@@ -698,7 +719,9 @@ async function notifyResult(result: ContinuousCuratorResult, env: NodeJS.Process
     "",
     ...lines,
     "",
-    result.status === "completed" ? "As 10 categorias estão cobertas; a busca continua abastecendo e melhorando a fila futura." : "Categorias ainda sem produto seguem em busca automática no próximo ciclo horário; nenhum gate é reduzido para preencher a meta.",
+    result.status === "completed"
+      ? "As 10 categorias estão cobertas; a busca continua abastecendo e melhorando a fila futura."
+      : "Categorias ainda sem produto seguem em busca automática no próximo ciclo horário; nenhum gate é reduzido para preencher a meta.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
 }
@@ -715,7 +738,12 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
   const shopeeClient = options.shopeeClient || buildShopeeClient(env);
   if (!shopeeClient) throw new Error("AUTONOMOUS_CURATOR_SHOPEE_NOT_CONFIGURED");
   const extractor = options.extractor || extractProductForReview;
-  const open = await curatorRepo.openAutonomousCuratorRun({ runDate, dryRun: false, profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION, categoriesTotal: AUTONOMOUS_CURATOR_PROFILES.length });
+  const open = await curatorRepo.openAutonomousCuratorRun({
+    runDate,
+    dryRun: false,
+    profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
+    categoriesTotal: AUTONOMOUS_CURATOR_PROFILES.length,
+  });
   const runId = open.run.id;
   await markCycleStarted(runId, cycleId, now);
 
@@ -733,17 +761,28 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
       let score: number | null = null;
       let title: string | null = null;
       let productId: string | null = null;
-      let reason = due ? "SEARCHING_FOR_DUE_PRODUCT" : `COOLDOWN_UNTIL_${new Date(Date.parse(lastPublishedAt || now.toISOString()) + DAY_MS).toISOString()}`;
+      let reason = due
+        ? "SEARCHING_FOR_DUE_PRODUCT"
+        : `COOLDOWN_UNTIL_${new Date(Date.parse(lastPublishedAt || now.toISOString()) + DAY_MS).toISOString()}`;
       let discoveredDuringDue: ContinuousCandidate | null = null;
 
       if (due) {
-        const queue = queuedForCategory(products, profile.category);
-        for (const queuedProduct of queue) {
-          const refreshed = await refreshQueuedCandidate({ product: queuedProduct, profile, existingProducts: products, client: shopeeClient, env, extractor, config });
+        for (const queuedProduct of queuedForCategory(products, profile.category)) {
+          const refreshed = await refreshQueuedCandidate({
+            product: queuedProduct,
+            profile,
+            existingProducts: products,
+            client: shopeeClient,
+            env,
+            extractor,
+            config,
+          });
           if (!refreshed.candidate) {
-            await archiveQueueProduct(queuedProduct.id, now);
-            queuedProduct.status = "archived";
             reason = `QUEUE_REVALIDATION_REJECTED:${refreshed.reason}`;
+            if (revalidationPermanentFailure(refreshed.reason)) {
+              await archiveQueueProduct(queuedProduct.id);
+              queuedProduct.status = "archived";
+            }
             continue;
           }
           await stagePublication(runId, refreshed.candidate, queuedProduct.id);
@@ -763,7 +802,15 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
         }
 
         if (!published) {
-          const discovery = await discoverQualifiedCandidate({ profile, cycleKey: `${cycleId}:due`, existingProducts: products, client: shopeeClient, env, extractor, config });
+          const discovery = await discoverQualifiedCandidate({
+            profile,
+            cycleKey: `${cycleId}:due`,
+            existingProducts: products,
+            client: shopeeClient,
+            env,
+            extractor,
+            config,
+          });
           if (discovery.candidate) {
             discoveredDuringDue = discovery.candidate;
             const queuedResult = await maybeQueueCandidate(discovery.candidate, products, now, env);
@@ -794,11 +841,19 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
         }
       }
 
-      // Mesmo depois de cumprir a publicação, o worker continua alimentando a
-      // fila para os próximos dias. Para evitar dobrar custo no ciclo em que o
-      // produto acabou de ser descoberto, a segunda busca fica para a próxima hora.
+      // A publicação não encerra a curadoria. Em todos os ciclos seguintes,
+      // inclusive durante o cooldown de 24h, uma nova opção qualificada pode
+      // entrar na fila pausada para dias futuros.
       if (!discoveredDuringDue) {
-        const discovery = await discoverQualifiedCandidate({ profile, cycleKey: `${cycleId}:future`, existingProducts: products, client: shopeeClient, env, extractor, config });
+        const discovery = await discoverQualifiedCandidate({
+          profile,
+          cycleKey: `${cycleId}:future`,
+          existingProducts: products,
+          client: shopeeClient,
+          env,
+          extractor,
+          config,
+        });
         if (discovery.candidate) {
           const queuedResult = await maybeQueueCandidate(discovery.candidate, products, now, env);
           queued = queuedResult.queued;
@@ -873,9 +928,17 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
     const last = await lastActivePublishedAt(profile.category, products);
     if (last && !dueForPublication(last, now)) fulfilled += 1;
   }
-  const queuedProducts = products.filter(product => product.createdBy === QUEUE_CREATED_BY && product.status === "paused" && product.ativo === false && parseQueueNote(product.curatorNote)).length;
+  const queuedProducts = products.filter(
+    product => product.createdBy === QUEUE_CREATED_BY
+      && product.status === "paused"
+      && product.ativo === false
+      && Boolean(parseQueueNote(product.curatorNote)),
+  ).length;
   const publishedThisCycle = categoryResults.filter(result => result.published && result.reason === "PUBLISHED_AND_PUBLICLY_VALIDATED").length;
-  const status: ContinuousCuratorResult["status"] = cycleFailed ? (fulfilled > 0 ? "partial" : "failed") : fulfilled === AUTONOMOUS_CURATOR_PROFILES.length ? "completed" : "partial";
+  const status: ContinuousCuratorResult["status"] = cycleFailed
+    ? (fulfilled > 0 ? "partial" : "failed")
+    : fulfilled === AUTONOMOUS_CURATOR_PROFILES.length ? "completed" : "partial";
+
   await curatorRepo.finishAutonomousCuratorRun({
     runId,
     status: status === "completed" ? "completed" : status === "failed" ? "failed" : "partial",
@@ -883,7 +946,7 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
     autoPublished: fulfilled,
     reviewRequired: 0,
     rejected: AUTONOMOUS_CURATOR_PROFILES.length - fulfilled,
-    failed: cycleFailed ? categoryResults.filter(item => item.reason.includes("FAILED") || item.reason.includes("ERROR")).length : 0,
+    failed: cycleFailed ? categoryResults.filter(item => /FAILED|ERROR/.test(item.reason)).length : 0,
     metadata: {
       profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
       continuous: true,
@@ -896,7 +959,16 @@ export async function runAutonomousCuratorContinuous(options: ContinuousOptions 
     },
   });
 
-  const result: ContinuousCuratorResult = { cycleId, runId, runDate, status, publishedThisCycle, fulfilledCategories: fulfilled, queuedProducts, categories: categoryResults };
+  const result: ContinuousCuratorResult = {
+    cycleId,
+    runId,
+    runDate,
+    status,
+    publishedThisCycle,
+    fulfilledCategories: fulfilled,
+    queuedProducts,
+    categories: categoryResults,
+  };
   if (options.notify !== false) await notifyResult(result, env);
   return result;
 }
@@ -910,4 +982,5 @@ export const autonomousCuratorContinuousInternals = {
   parseQueueNote,
   rotatedQueries,
   queueTarget,
+  revalidationPermanentFailure,
 };
