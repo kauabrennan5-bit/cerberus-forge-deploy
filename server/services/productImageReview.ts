@@ -45,18 +45,22 @@ const productionImageReviewBudget = new ExternalCallBudget(
   60 * 60 * 1000,
 );
 
-const CURRENT_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
-const DEFAULT_IMAGE_REVIEW_FALLBACK_MODEL = "gemini-2.5-flash-lite";
-const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash"]);
+// Image classification is a high-throughput multimodal task and must not
+// implicitly inherit the copy/curation model. A dedicated env override remains
+// available, but the safe production default is the GA Flash-Lite model.
+const CURRENT_IMAGE_REVIEW_MODEL = "gemini-3.5-flash-lite";
+const SECONDARY_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
+const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]);
 
 function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
-  const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "").trim();
+  const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim();
   if (!configured || LEGACY_IMAGE_REVIEW_MODELS.has(configured)) return CURRENT_IMAGE_REVIEW_MODEL;
   return configured;
 }
 
 function resolveImageReviewFallbackModel(env: NodeJS.ProcessEnv, primaryModel: string): string | null {
-  const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL || DEFAULT_IMAGE_REVIEW_FALLBACK_MODEL).trim();
+  const explicit = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL || "").trim();
+  const configured = explicit || (primaryModel === CURRENT_IMAGE_REVIEW_MODEL ? SECONDARY_IMAGE_REVIEW_MODEL : CURRENT_IMAGE_REVIEW_MODEL);
   if (!configured || configured === primaryModel) return null;
   return configured;
 }
@@ -288,36 +292,20 @@ async function reviewWithProvider(input: {
   let batch = await callBatch(input.model, false);
   if (batch.assessments) return batch.assessments;
   if (batch.budgetExhausted) return [];
-  let lastError = batch.error;
+  const lastError = batch.error;
 
   if (permanentProviderFailure(lastError)) return [];
 
-  if (transientProviderFailure(lastError)) {
-    const backoffs = [2_000, 8_000];
-    for (const backoffMs of backoffs) {
-      const reserved = input.budget.reserve("productImageReview");
-      if (!reserved.allowed) return [];
-      await delayImpl(backoffMs);
-      try {
-        const response = await input.generateContent(buildReviewRequest(input.downloaded, input.title, input.model));
-        return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(response.text));
-      } catch (error) {
-        lastError = error;
-      }
-      if (permanentProviderFailure(lastError) || quotaProviderFailure(lastError)) break;
-      if (!transientProviderFailure(lastError)) break;
-    }
-  }
-
+  // Provider/rate-limit failures affect the whole batch, not the individual
+  // image. Avoid repeatedly charging the same throttled model. After one
+  // short backoff, fail over once to the alternate multimodal model.
   if ((transientProviderFailure(lastError) || quotaProviderFailure(lastError)) && input.fallbackModel) {
+    await delayImpl(2_000);
     batch = await callBatch(input.fallbackModel, true);
     if (batch.assessments) return batch.assessments;
-    if (batch.budgetExhausted) return [];
-    lastError = batch.error;
-    if (permanentProviderFailure(lastError) || transientProviderFailure(lastError) || quotaProviderFailure(lastError)) return [];
-  } else if (transientProviderFailure(lastError) || quotaProviderFailure(lastError)) {
     return [];
   }
+  if (transientProviderFailure(lastError) || quotaProviderFailure(lastError)) return [];
 
   // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
   // Reavalia individualmente somente para falhas de payload/parse não
