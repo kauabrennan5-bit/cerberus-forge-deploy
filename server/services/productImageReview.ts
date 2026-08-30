@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import {
   curateProductImages,
+  isNonRepairableProductImageRejection,
   type ProductImageAssessment,
   type ProductImageCuration,
 } from "../../src/lib/productImageCuration";
@@ -193,7 +194,7 @@ function parseAssessments(rawImageUrls: string[], downloaded: DownloadedImage[],
   const parsed = value && typeof value === "object" ? value as Record<string, unknown> : {};
   const modelAssessments = Array.isArray(parsed.images) ? parsed.images : [];
   const allowedDecisions = new Set<ProductImageAssessment["decision"]>([
-    "clean", "technical", "promotional", "logo", "collage", "screenshot", "unknown",
+    "clean", "technical", "promotional", "logo", "collage", "screenshot", "off_brand", "incomplete", "novelty", "unknown",
   ]);
   const allowedConfidence = new Set<ProductImageAssessment["confidence"]>(["HIGH", "MEDIUM", "LOW"]);
 
@@ -225,7 +226,23 @@ function parseModelJson(text: string | null | undefined): unknown {
 }
 
 function buildReviewRequest(images: DownloadedImage[], title: string, model: string): Record<string, unknown> {
-  const prompt = `Avalie TODAS as imagens numeradas deste produto para seleção comercial de catálogo. Produto: ${title || "sem título"}. Para cada imagem, classifique somente como clean, technical, promotional, logo, collage, screenshot ou unknown. Rejeite medidas, dimensões, setas, textos promocionais, selos, logos, marcas d'água, molduras técnicas, colagens e screenshots. clean exige apresentação clara do produto, sem overlay visível, com confiança HIGH ou MEDIUM. Não invente características. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo factual curto"}]}. Inclua exatamente uma entrada para cada imagem recebida.`;
+  const prompt = `Você é o reviewer visual do CERBERUS FINDS, um arquivo de curadoria de objetos e moda de design. Avalie TODAS as imagens numeradas do produto: ${title || "sem título"}.
+
+A identidade CERBERUS privilegia design autoral ou visualmente distinto relacionado a Bauhaus, Mid-Century Modern, modernismo dos anos 60/70, Space Age, retrofuturismo, vintage/retrô refinado, pós-modernismo/Memphis, design italiano, minimalismo industrial e minimalismo japonês. A curadoria rejeita produto genérico de marketplace, aparência barata, novelty/gimmick/kitsch, luxo ornamental genérico, gamer/RGB e peças que só usam palavras como "retro" sem linguagem visual convincente.
+
+Classifique cada imagem com EXATAMENTE uma decisão:
+- clean: foto comercial utilizável E o produto visível é completo, coerente com a identidade Cerberus e tem desenho/material/proporção suficientemente intencional; não precisa ser caro nem literalmente rotulado Bauhaus.
+- off_brand: a foto pode estar limpa, mas o produto visível é genérico, visualmente fraco, mass-market sem distinção ou incompatível com a linguagem Cerberus.
+- incomplete: o anúncio/imagem mostra somente componente, peça de reposição ou parte do objeto quando a categoria implica produto completo (ex.: somente cúpula de luminária).
+- novelty: forma temática/gimmick/kitsch/decorativa literal que substitui qualidade de design (ex.: organizador em formato de bicicleta, enfeite temático barato).
+- technical: medidas, dimensões, setas ou diagrama técnico dominam a imagem.
+- promotional: preço, desconto, CTA, texto promocional ou selo domina a imagem.
+- logo: logo/marca d'água sobreposta domina a imagem.
+- collage: montagem de várias fotos/painéis.
+- screenshot: captura de tela/interface.
+- unknown: não há evidência visual suficiente para decidir.
+
+Regras: não invente material, autenticidade, marca, época, função ou qualidade que não sejam visíveis. O título é contexto não confiável e nunca deve vencer a evidência da imagem. Um produto com texto "Bauhaus", "retro", "vintage" ou "Space Age" ainda deve ser off_brand se visualmente não sustentar isso. clean exige confiança HIGH ou MEDIUM, apresentação sem overlay relevante e qualidade visual real do objeto. Retorne JSON: {"images":[{"index":1,"decision":"clean|technical|promotional|logo|collage|screenshot|off_brand|incomplete|novelty|unknown","confidence":"HIGH|MEDIUM|LOW","reason":"motivo visual factual curto"}]}. Inclua exatamente uma entrada para cada imagem recebida.`;
   return {
     model,
     contents: [{
@@ -246,7 +263,7 @@ function buildReviewRequest(images: DownloadedImage[], title: string, model: str
               type: "object",
               properties: {
                 index: { type: "integer" },
-                decision: { type: "string", enum: ["clean", "technical", "promotional", "logo", "collage", "screenshot", "unknown"] },
+                decision: { type: "string", enum: ["clean", "technical", "promotional", "logo", "collage", "screenshot", "off_brand", "incomplete", "novelty", "unknown"] },
                 confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
                 reason: { type: "string" },
               },
@@ -373,6 +390,10 @@ export async function reviewProductImages(
 
   const curation = curateProductImages(rawImageUrls, assessments);
   if (curation.status === "ready" || options.allowRepair === false) return curation;
+
+  // off_brand/incomplete/novelty descrevem o produto físico, não um defeito
+  // editorial da foto. Editar o fundo/texto nunca deve "lavar" essa rejeição.
+  if (assessments.some(isNonRepairableProductImageRejection)) return curation;
 
   const repairImage = options.repairImage || repairProductImage;
   const repaired = await repairImage({
