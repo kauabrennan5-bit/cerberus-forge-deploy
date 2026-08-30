@@ -1,5 +1,5 @@
 name: Cerberus Autonomous Curator
-# Runtime validation trigger: verify dedicated high-throughput visual reviewer after PR #28.
+# One-time production validation: only a push commit explicitly marked [curator-real-once] runs REAL; every other push remains dry_run.
 
 on:
   schedule:
@@ -41,7 +41,7 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && contains(github.event.head_commit.message, '[curator-real-once]') && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
