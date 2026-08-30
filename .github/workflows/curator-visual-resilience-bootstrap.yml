@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - fix/curator-visual-review-resilience-2026-08-30
+    paths:
+      - ".github/workflows/curator-visual-resilience-bootstrap.yml"
+      - "scripts/curator-visual-resilience-patch.py"
+      - "scripts/curator-query-budget-fixup.py"
 
 permissions:
   contents: write
@@ -77,13 +81,12 @@ jobs:
       - name: Diff check
         run: git diff --check
 
-      - name: Commit validated implementation and remove bootstrap
+      - name: Commit validated implementation
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/curator-visual-resilience-bootstrap.yml scripts/curator-visual-resilience-patch.py scripts/curator-query-budget-fixup.py
-          git add -A
+          git add server/services/productImageReview.ts server/services/productAutomation.ts server/services/productImageRepair.ts server/services/autonomousCurator.ts src/lib/productImageCuration.ts tests/productImageReview.test.ts .github/workflows/autonomous-curator-gate.yml
           git commit -m "fix: make curator visual review resilient and bounded"
           git push origin HEAD:fix/curator-visual-review-resilience-2026-08-30
