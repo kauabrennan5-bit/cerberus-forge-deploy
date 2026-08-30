@@ -1,0 +1,385 @@
+name: Curator Recall 1.6 Patch Once
+
+on:
+  push:
+    branches:
+      - fix/curator-best-products-recall-2026-08-30
+    paths:
+      - ".github/workflows/curator-recall-fix-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/curator-best-products-recall-2026-08-30
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply recall 1.6 patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "server/services/autonomousCuratorProfiles.ts",
+              'export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.5";',
+              'export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.6";',
+          )
+          replace_once(
+              "server/services/autonomousCuratorProfiles.ts",
+              " * Perfil 1.5: precision-first com recall ampliado nas categorias que ficaram",
+              " * Perfil 1.6: relevance-first no discovery, mantendo os gates finais precision-first.",
+          )
+
+          old_cheap = '''export function cheapProfileScore(profile: AutonomousCuratorCategoryProfile, title: string): number {
+            const normalizedTitle = normalize(title);
+            if (!normalizedTitle) return -1000;
+            if (hasBlockedProfileTerm(profile, title)) return -1000;
+            const signals = aestheticSignals(profile, title);
+            // Precision-first: "retro" sozinho, ou um único material, não é identidade Cerberus.
+            if (signals.strong === 0 && signals.signature < 2) return -1000;
+            const queryVocabulary = new Set(profile.queries.flatMap(query => [...tokens(query)]));
+            const titleTokens = tokens(title);
+            let queryHits = 0;
+            for (const token of titleTokens) if (queryVocabulary.has(token)) queryHits += 1;
+            return signals.strong * 60 + signals.signature * 14 + queryHits * 2;
+          }'''
+          new_cheap = '''export function cheapProfileScore(profile: AutonomousCuratorCategoryProfile, title: string): number {
+            const normalizedTitle = normalize(title);
+            if (!normalizedTitle) return -1000;
+            if (hasBlockedProfileTerm(profile, title)) return -1000;
+            const signals = aestheticSignals(profile, title);
+            const queryVocabulary = new Set(profile.queries.flatMap(query => [...tokens(query)]));
+            const titleTokens = tokens(title);
+            let queryHits = 0;
+            for (const token of titleTokens) if (queryVocabulary.has(token)) queryHits += 1;
+
+            // Recall gate only: do not discard a potentially good product just because
+            // the marketplace title is terse. Final style/image/value/category gates are
+            // still authoritative after extraction. Truly unrelated titles remain out.
+            if (signals.strong === 0 && signals.signature === 0 && queryHits < 2) return -1000;
+
+            const aestheticScore = signals.strong * 60 + signals.signature * 14;
+            const vocabularyScore = Math.min(10, queryHits) * 4;
+            const recallFloor = signals.strong > 0 || signals.signature > 0 ? 8 : 0;
+            return aestheticScore + vocabularyScore + recallFloor;
+          }'''
+          replace_once("server/services/autonomousCuratorScoring.ts", old_cheap, new_cheap)
+
+          replace_once(
+              "server/services/autonomousCuratorContinuousV2.ts",
+              "const SEARCH_MAX_PAGE = 10;\nconst MAX_CYCLE_HISTORY = 48;",
+              "const SEARCH_MAX_PAGE = 10;\nconst MAX_CYCLE_HISTORY = 48;\nconst EXPLORATION_QUERY_MODULUS = 3;\nconst QUALIFIED_COMPARISON_TARGET = 4;",
+          )
+
+          old_page_fn = '''function discoveryPage(cycleNumber: number, category: string, queryIndex: number): number {
+            let hash = 0;
+            for (const char of category) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
+            return 1 + ((Math.max(1, cycleNumber) - 1 + queryIndex + (hash % SEARCH_MAX_PAGE)) % SEARCH_MAX_PAGE);
+          }'''
+          new_page_fn = '''function discoveryPage(cycleNumber: number, category: string, queryIndex: number): number {
+            let hash = 0;
+            for (const char of category) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
+            return 1 + ((Math.max(1, cycleNumber) - 1 + queryIndex + (hash % SEARCH_MAX_PAGE)) % SEARCH_MAX_PAGE);
+          }
+
+          function discoveryPages(cycleNumber: number, category: string, queryIndex: number): number[] {
+            const exploration = discoveryPage(cycleNumber, category, queryIndex);
+            if (exploration === 1) return [1];
+            const explorationSlot = (Math.max(1, cycleNumber) - 1) % EXPLORATION_QUERY_MODULUS;
+            // Page 1 is the marketplace relevance baseline on every query. Only a
+            // rotating third of queries also explores a deeper page each cycle.
+            return queryIndex % EXPLORATION_QUERY_MODULUS === explorationSlot ? [1, exploration] : [1];
+          }'''
+          replace_once("server/services/autonomousCuratorContinuousV2.ts", old_page_fn, new_page_fn)
+
+          old_pool = '''  for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
+            const query = queries[queryIndex];
+            const page = discoveryPage(input.cycleNumber, input.profile.category, queryIndex);
+            searchedPages.push(page);
+            const search = await input.client.searchOffers({ query, limit: input.config.maxSearchCandidates, page });
+            if (!search.ok) {
+              lastReason = `SHOPEE_SEARCH:${search.reason || "failed"}`;
+              if (["SHOPEE_AUTH_ERROR", "SHOPEE_FORBIDDEN"].includes(String(search.reason))) throw new Error(lastReason);
+              continue;
+            }
+            for (const item of search.items) {
+              if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
+              if (hasBlockedProfileTerm(input.profile, item.name || "")) continue;
+              const identityKey = `${item.shopId}:${item.itemId}`;
+              if (seenIdentities.has(identityKey)) continue;
+              seenIdentities.add(identityKey);
+              candidatePool.push({
+                query,
+                page,
+                item,
+                cheap: cheapProfileScore(input.profile, item.name || ""),
+              });
+            }
+          }'''
+          new_pool = '''  for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
+            const query = queries[queryIndex];
+            for (const page of discoveryPages(input.cycleNumber, input.profile.category, queryIndex)) {
+              searchedPages.push(page);
+              const search = await input.client.searchOffers({ query, limit: input.config.maxSearchCandidates, page });
+              if (!search.ok) {
+                lastReason = `SHOPEE_SEARCH:${search.reason || "failed"}`;
+                if (["SHOPEE_AUTH_ERROR", "SHOPEE_FORBIDDEN"].includes(String(search.reason))) throw new Error(lastReason);
+                continue;
+              }
+              for (const item of search.items) {
+                if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
+                if (hasBlockedProfileTerm(input.profile, item.name || "")) continue;
+                const identityKey = `${item.shopId}:${item.itemId}`;
+                if (seenIdentities.has(identityKey)) continue;
+                seenIdentities.add(identityKey);
+                const cheap = cheapProfileScore(input.profile, item.name || "");
+                if (cheap <= -1000) continue;
+                candidatePool.push({ query, page, item, cheap });
+              }
+            }
+          }'''
+          replace_once("server/services/autonomousCuratorContinuousV2.ts", old_pool, new_pool)
+
+          old_sort = '''  candidatePool.sort((a, b) =>
+            b.cheap - a.cheap
+            || String(a.item.itemId).localeCompare(String(b.item.itemId))
+            || a.query.localeCompare(b.query),
+          );'''
+          new_sort = '''  candidatePool.sort((a, b) =>
+            (b.cheap + (b.page === 1 ? 12 : 0)) - (a.cheap + (a.page === 1 ? 12 : 0))
+            || String(a.item.itemId).localeCompare(String(b.item.itemId))
+            || a.query.localeCompare(b.query),
+          );'''
+          replace_once("server/services/autonomousCuratorContinuousV2.ts", old_sort, new_sort)
+
+          old_eval = '''  for (const entry of candidatePool) {
+            if (examined >= input.budget) break;
+            const shopId = String(entry.item.shopId);
+            const itemId = String(entry.item.itemId);
+            const identity = await curatorRepo.findProductSourceIdentity("Shopee", shopId, itemId);
+            const reservedUntil = identity?.reservedUntil ? Date.parse(identity.reservedUntil) : 0;
+            if (identity?.productId || (identity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) continue;
+            examined += 1;
+            const evaluated = await evaluateIdentity({
+              profile: input.profile,
+              query: entry.query,
+              shopId,
+              itemId,
+              discoveryName: entry.item.name || "",
+              discoveryPrice: entry.item.price,
+              sourceImageUrl: entry.item.imageUrl,
+              products: input.products,
+              client: input.client,
+              env: input.env,
+              extractor: input.extractor,
+              config: input.config,
+            });
+            lastReason = evaluated.reason;
+            if (evaluated.candidate) return { candidate: evaluated.candidate, reason: evaluated.reason, examined, searchedPages };
+          }
+
+          return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_HOURLY_CYCLE`, examined, searchedPages };'''
+          new_eval = '''  const qualified: Array<{ candidate: CuratedCandidate; cheap: number; page: number }> = [];
+          for (const entry of candidatePool) {
+            if (examined >= input.budget) break;
+            const shopId = String(entry.item.shopId);
+            const itemId = String(entry.item.itemId);
+            const identity = await curatorRepo.findProductSourceIdentity("Shopee", shopId, itemId);
+            const reservedUntil = identity?.reservedUntil ? Date.parse(identity.reservedUntil) : 0;
+            if (identity?.productId || (identity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) continue;
+            examined += 1;
+            const evaluated = await evaluateIdentity({
+              profile: input.profile,
+              query: entry.query,
+              shopId,
+              itemId,
+              discoveryName: entry.item.name || "",
+              discoveryPrice: entry.item.price,
+              sourceImageUrl: entry.item.imageUrl,
+              products: input.products,
+              client: input.client,
+              env: input.env,
+              extractor: input.extractor,
+              config: input.config,
+            });
+            lastReason = evaluated.reason;
+            if (evaluated.candidate) {
+              qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page });
+              if (qualified.length >= QUALIFIED_COMPARISON_TARGET) break;
+            }
+          }
+
+          if (qualified.length > 0) {
+            qualified.sort((a, b) =>
+              b.candidate.score - a.candidate.score
+              || Number(a.page !== 1) - Number(b.page !== 1)
+              || b.cheap - a.cheap
+              || a.candidate.price - b.candidate.price,
+            );
+            return {
+              candidate: qualified[0].candidate,
+              reason: `BEST_OF_${qualified.length}_QUALIFIED_CANDIDATES`,
+              examined,
+              searchedPages,
+            };
+          }
+
+          return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_SCHEDULED_CYCLE`, examined, searchedPages };'''
+          replace_once("server/services/autonomousCuratorContinuousV2.ts", old_eval, new_eval)
+
+          replace_once(
+              "server/services/autonomousCuratorContinuousV2.ts",
+              "  discoveryPage,\n  rotateQueries,",
+              "  discoveryPage,\n  discoveryPages,\n  rotateQueries,",
+          )
+
+          replace_once(
+              "tests/autonomousCuratorContinuousV2.test.ts",
+              "  discoveryPage,\n  trustedEvidenceOverride,",
+              "  discoveryPage,\n  discoveryPages,\n  trustedEvidenceOverride,",
+          )
+          replace_once(
+              "tests/autonomousCuratorContinuousV2.test.ts",
+              '''test("cycle pagination expands through all ten official result pages", () => {
+            const pages = new Set<number>();
+            for (let cycle = 1; cycle <= 10; cycle += 1) pages.add(discoveryPage(cycle, "Tecnologia", 0));
+            assert.deepEqual([...pages].sort((a, b) => a - b), [1,2,3,4,5,6,7,8,9,10]);
+          });''',
+              '''test("cycle pagination expands through all ten official result pages", () => {
+            const pages = new Set<number>();
+            for (let cycle = 1; cycle <= 10; cycle += 1) pages.add(discoveryPage(cycle, "Tecnologia", 0));
+            assert.deepEqual([...pages].sort((a, b) => a - b), [1,2,3,4,5,6,7,8,9,10]);
+          });
+
+          test("every discovery query includes relevance page 1 while a bounded subset explores deeper pages", () => {
+            for (let cycle = 1; cycle <= 10; cycle += 1) {
+              let explorationQueries = 0;
+              for (let queryIndex = 0; queryIndex < 12; queryIndex += 1) {
+                const pages = discoveryPages(cycle, "Iluminação", queryIndex);
+                assert.equal(pages[0], 1);
+                assert.ok(pages.length === 1 || pages.length === 2);
+                if (pages.length === 2) {
+                  explorationQueries += 1;
+                  assert.ok(pages[1] >= 2 && pages[1] <= 10);
+                }
+              }
+              assert.ok(explorationQueries <= 4);
+            }
+          });''',
+          )
+          replace_once(
+              "tests/autonomousCuratorContinuousV2.test.ts",
+              "  assert.match(source, /failedThisCycle \\+= 1/);",
+              "  assert.match(source, /failedThisCycle \\+= 1/);\n  assert.match(source, /qualified\\.push/);\n  assert.match(source, /BEST_OF_\\$\\{qualified\\.length\\}_QUALIFIED_CANDIDATES/);\n  assert.doesNotMatch(source, /if \\(evaluated\\.candidate\\) return \\{ candidate: evaluated\\.candidate/);",
+          )
+
+          old_retro_test = '''test("retro sozinho não é identidade Cerberus", () => {
+            const profile = profileForCategory("Cozinha & Mesa");
+            assert.equal(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas"), -1000);
+            const result = score(
+              "Cozinha & Mesa",
+              "Jarra 1,8L Vidro Transparente Luxo Grande Suco Chá Água Design Retrô Cozinha",
+              "Jarra de Vidro Retrô para Bebidas",
+              "Jarra de vidro transparente com design retrô para água, sucos e chás.",
+              37.99,
+            );
+            assert.ok(result.styleFit < 72);
+            assert.ok(result.finalScore < 72);
+          });'''
+          new_retro_test = '''test("recall barato pode admitir título curto, mas o gate final continua rejeitando identidade fraca", () => {
+            const profile = profileForCategory("Cozinha & Mesa");
+            assert.ok(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas") > -1000);
+            const result = score(
+              "Cozinha & Mesa",
+              "Jarra 1,8L Vidro Transparente Luxo Grande Suco Chá Água Design Retrô Cozinha",
+              "Jarra de Vidro Retrô para Bebidas",
+              "Jarra de vidro transparente com design retrô para água, sucos e chás.",
+              37.99,
+            );
+            assert.ok(result.styleFit < 72);
+            assert.ok(result.finalScore < 72);
+          });'''
+          replace_once("tests/autonomousCuratorCerberusGate.test.ts", old_retro_test, new_retro_test)
+
+          replace_once("tests/autonomousCuratorShopeeRecall14.test.ts", 'test("profile 1.5 uses concrete Shopee-calibrated discovery anchors", () => {', 'test("profile 1.6 keeps concrete Shopee-calibrated discovery anchors", () => {')
+          replace_once("tests/autonomousCuratorShopeeRecall14.test.ts", 'assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");', 'assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");')
+          replace_once(
+              "tests/autonomousCuratorShopeeRecall14.test.ts",
+              '  assert.equal(cheapProfileScore(lighting, "Luminária cromada moderna para mesa"), -1000);',
+              '  assert.ok(cheapProfileScore(lighting, "Luminária cromada moderna para mesa") > -1000);\n  assert.ok(cheapProfileScore(lighting, "Luminária de Mesa Cogumelo Metálico Touch") > cheapProfileScore(lighting, "Luminária cromada moderna para mesa"));',
+          )
+          replace_once("tests/autonomousCuratorProfiles.test.ts", 'test("curator 1.5 keeps precise and unique discovery coverage per category", () => {', 'test("curator 1.6 keeps precise and unique discovery coverage per category", () => {')
+          replace_once("tests/autonomousCuratorProfiles.test.ts", 'assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");', 'assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");')
+          replace_once("tests/autonomousCuratorRecallExpansion.test.ts", 'test("profile 1.5 expands recall only where production still has empty categories", () => {', 'test("profile 1.6 preserves expanded recall for categories that were empty", () => {')
+          replace_once("tests/autonomousCuratorRecallExpansion.test.ts", 'assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");', 'assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");')
+
+          old_poll = '''            curl --fail-with-body --silent --show-error --max-time 30 \\
+              -o "$status_file" -H "Authorization: Bearer ${token}" \\
+              "$base/api/internal/autonomous-curator/status${filter}"
+
+            state="$(node - "$status_file" "$expected_date" "$MODE" "$expected_cycle" <<'NODE' '''
+          new_poll = '''            if ! curl --fail-with-body --silent --show-error --max-time 45 \\
+              -o "$status_file" -H "Authorization: Bearer ${token}" \\
+              "$base/api/internal/autonomous-curator/status${filter}"; then
+              echo "Autonomous Curator status poll transient failure; retrying."
+              sleep 15
+              continue
+            fi
+
+            state="$(node - "$status_file" "$expected_date" "$MODE" "$expected_cycle" <<'NODE' '''
+          replace_once(".github/workflows/autonomous-curator.yml", old_poll, new_poll)
+          PY
+
+      - name: Focused curator tests
+        run: >-
+          node --import tsx/esm --test --test-concurrency=1
+          tests/autonomousCurator*.test.ts
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit validated patch and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/curator-recall-fix-once.yml
+          git add server/services/autonomousCuratorProfiles.ts \
+                  server/services/autonomousCuratorScoring.ts \
+                  server/services/autonomousCuratorContinuousV2.ts \
+                  .github/workflows/autonomous-curator.yml \
+                  tests/autonomousCuratorContinuousV2.test.ts \
+                  tests/autonomousCuratorCerberusGate.test.ts \
+                  tests/autonomousCuratorShopeeRecall14.test.ts \
+                  tests/autonomousCuratorProfiles.test.ts \
+                  tests/autonomousCuratorRecallExpansion.test.ts
+          git diff --cached --check
+          git commit -m "fix: rank best curator candidates before publication"
+          git push origin HEAD:fix/curator-best-products-recall-2026-08-30
