@@ -1,5 +1,5 @@
 name: Cerberus Autonomous Curator
-# One-time recovery: only a push explicitly marked [curator-real-once] runs REAL; every other push remains dry_run.
+# One-time recovery retry: Tecnologia only; all already-published categories remain terminal and are skipped.
 
 on:
   schedule:
