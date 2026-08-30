@@ -20,6 +20,16 @@ const SATURATED_AUTONOMOUS_CURATOR_COPY_MODELS = new Set([
   "gemini-2.5-flash-lite",
 ]);
 const OPENAI_PROVIDER_PROBE_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAADQElEQVR42u3bodXqQBRGUWClBDrAkA4iKAI6oA0qoBwMJSDSwSg6wI5H4FEJJPn2Vs/9zGUONxFvXWtdQaqNESAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABwDw1RjCs0+U59p+4XXfmbAOAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABEC40f8/QNu2UQPdH+9GOqxSig0AAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAGA6GiMYRH/Yfv5x/uHf6h4vkxfAVK7+v/60DASQde8tBAG4+haCl2C3f56f0AZw9a0CAbj6MvAI5Pb7/AJwe5zCI5BL43HIBnD7nUsAbonTCcD9cEYBuBlOKgB3wnkF4DY4tQDcA2cXgBtgAgLw3ZuDAEAAfvZMQwC+bzMRgG/aZAQAAvAjZz4CAAH4+TclAbj9ZiUAiA7Az7+J2QAgAEgLwPOPudkAEBmAn3/TswFAAJAWgOcfM7QBQAAgAAgKwAuASdoAIAAQAAgAMgLwBmyeNgAIAAQAAgABgABAACAABAACAAGAAEAAIAAQwEx1j5dv1zxtABAACAAEADEBeA82SRsABAACgLgAvAaYoQ0AAoDMADwFmZ4NAMEBWALmZgOAACAzAE9BJmYDQHAAloBZpW8ADZiSRyAIDsASMB8bAIIDsARMJn0DaMBM0h+BNGAa3gHwDuBnz89/8Bw2vnsTsAHcAGcXgAacWgAacF4BaMBJBaABZxSABpxOABpwrsVqjODLXekPW1ffBrAKnEIAGvD5PQJ5HHL1BSADV98jkCcin9AGsApcfQGkr4K/l+DeCyB0Ibj6ApjcQtgf3XsvwSAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAACAAGAAEAAIAAQAAgAlqwZ+w+UUqIGero8jdQGAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgAxrautZoCNgAIAAQAAgABgABAACAAEAAIAAQAAgABgABght7JDeT3EEaMFQAAAABJRU5ErkJggg==";
+const OPENAI_QUOTA_ERROR_CODES = new Set([
+  "insufficient_quota",
+  "quota_exceeded",
+  "billing_hard_limit_reached",
+  "credit_balance_exhausted",
+  "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded",
+  "organization_usage_limit_exceeded",
+  "project_usage_limit_exceeded",
+]);
 
 type OpenAIProviderProbeStatus =
   | "ok"
@@ -57,9 +67,7 @@ function classifyOpenAIProviderProbe(httpStatus: number, errorCode: string | nul
   if (httpStatus === 404) return "model_unavailable";
   if (httpStatus === 408) return "timeout";
   if (httpStatus === 429) {
-    return ["insufficient_quota", "quota_exceeded", "billing_hard_limit_reached"].includes(String(errorCode || ""))
-      ? "quota_exhausted"
-      : "rate_limited";
+    return OPENAI_QUOTA_ERROR_CODES.has(String(errorCode || "")) ? "quota_exhausted" : "rate_limited";
   }
   if (httpStatus >= 500) return "provider_unavailable";
   return "request_rejected";

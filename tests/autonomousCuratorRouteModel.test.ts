@@ -123,6 +123,21 @@ test("OpenAI provider canary reports quota without exposing the key", async () =
   assert.equal(JSON.stringify(result).includes(secret), false);
 });
 
+test("OpenAI provider canary classifies exhausted prepaid credit as quota", async () => {
+  const fetchImpl = (async () => new Response(JSON.stringify({
+    error: { code: "credit_balance_exhausted", type: "insufficient_quota", message: "billing detail must remain private" },
+  }), {
+    status: 429,
+    headers: { "content-type": "application/json" },
+  })) as unknown as typeof fetch;
+
+  const result = await autonomousCuratorRouteInternals.probeAutonomousCuratorProviders({ OPENAI_API_KEY: "sk-test" }, fetchImpl);
+
+  assert.equal(result.openai.status, "quota_exhausted");
+  assert.equal("errorCode" in result.openai ? result.openai.errorCode : null, "credit_balance_exhausted");
+  assert.equal(JSON.stringify(result).includes("billing detail"), false);
+});
+
 test("OpenAI provider canary exposes only a sanitized invalid parameter", async () => {
   const secret = "sk-test-never-return-this";
   const fetchImpl = (async () => new Response(JSON.stringify({
