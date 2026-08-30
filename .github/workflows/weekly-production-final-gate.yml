@@ -63,13 +63,14 @@ jobs:
     needs: weekly-production-final
     permissions:
       contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Verify catalog-only fast-forward candidate
+      - name: Verify catalog-only pull request candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -77,7 +78,7 @@ jobs:
           current_main="$(git rev-parse origin/main)"
 
           if ! git merge-base --is-ancestor "$current_main" "$GITHUB_SHA"; then
-            echo "Catalog SHA is not a fast-forward descendant of current main."
+            echo "Catalog SHA is not a descendant of current main."
             exit 1
           fi
 
@@ -90,14 +91,64 @@ jobs:
           node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("public/data/products.json","utf8")); if(!Array.isArray(value)) process.exit(1);'
           echo "CATALOG_PROMOTION_SHA=$GITHUB_SHA"
 
-      - name: Fast-forward exact validated SHA to protected main
+      - name: Open or reuse protected catalog pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --base main \
+            --head "$GITHUB_REF_NAME" \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [ -z "$pr_number" ]; then
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base main \
+              --head "$GITHUB_REF_NAME" \
+              --title "chore: promote validated curator catalog" \
+              --body "Automated catalog-only promotion. The exact head SHA already passed weekly-production-final; the promotion job also verified that the diff contains only public/data/products.json and valid JSON.")"
+            pr_number="${pr_url##*/}"
+          fi
+
+          test -n "$pr_number"
+          echo "CATALOG_PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+
+      - name: Squash merge exact validated catalog head
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
           current_main="$(git rev-parse origin/main)"
           if ! git merge-base --is-ancestor "$current_main" "$GITHUB_SHA"; then
-            echo "main advanced while the catalog gate was running; refusing non-fast-forward promotion."
+            echo "main advanced while the catalog gate was running; refusing stale catalog promotion."
             exit 1
           fi
-          git push origin "$GITHUB_SHA:refs/heads/main"
+
+          pr_head="$(gh pr view "$CATALOG_PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json headRefOid \
+            --jq '.headRefOid')"
+          if [ "$pr_head" != "$GITHUB_SHA" ]; then
+            echo "Catalog PR head changed after validation."
+            exit 1
+          fi
+
+          merged="$(gh api \
+            --method PUT \
+            "repos/$GITHUB_REPOSITORY/pulls/$CATALOG_PR_NUMBER/merge" \
+            -f merge_method=squash \
+            -f sha="$GITHUB_SHA" \
+            -f commit_title="chore: promote validated curator catalog" \
+            -f commit_message="Automated catalog-only promotion after weekly-production-final passed on the exact source SHA." \
+            --jq '.merged')"
+          if [ "$merged" != "true" ]; then
+            echo "GitHub did not confirm the protected catalog merge."
+            exit 1
+          fi
