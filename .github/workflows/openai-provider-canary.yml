@@ -8,6 +8,7 @@ on:
       - "server/routes/autonomousCuratorRoutes.ts"
       - "server/services/productImageReview.ts"
       - "server/services/autonomousCuratorSemanticDiscovery.ts"
+      - "server/services/newsletterWeeklyAutomationAuth.ts"
   workflow_dispatch:
 
 permissions:
