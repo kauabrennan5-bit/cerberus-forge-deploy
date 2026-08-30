@@ -11,6 +11,10 @@ permissions:
 jobs:
   patch-test-commit:
     runs-on: ubuntu-latest
+    env:
+      # Test-only authorization fixture required by publishCommand.test.ts.
+      # Production authorization remains unchanged and fail-closed.
+      TELEGRAM_ALLOWED_USER_IDS: "1976526372"
     steps:
       - uses: actions/checkout@v4
         with:
