@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.2";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.3";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -12,13 +12,16 @@ export type AutonomousCuratorCategoryProfile = {
 const COMMON_BLOCKED = [
   "kit 50", "kit 100", "atacado", "lote", "revenda", "peça reposição", "reposicao",
   "logo", "adesivo", "capa protetora", "manual", "arquivo digital",
+  // O arquivo deve permanecer evergreen: campanhas e temas sazonais não podem
+  // ocupar a única vaga diária de uma categoria.
+  "de natal", "natalino", "papai noel", "pascoa", "halloween", "festa junina",
+  "carnaval", "dia das maes", "dia dos pais", "black friday",
 ] as const;
 
 /**
- * Perfis de descoberta deliberadamente misturam consultas amplas de tipo/material
- * com consultas de linguagem estética. A descoberta deve ter recall alto; os
- * gates caros (imagem, copy, categoria, preço, similaridade, score e lifecycle)
- * continuam sendo a autoridade para publicar.
+ * Perfis de descoberta misturam consultas amplas de tipo/material com linguagem
+ * estética. Recall alto acontece na descoberta; publicação continua dependente
+ * dos gates caros de imagem, copy, categoria, preço, similaridade, score e lifecycle.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   {
@@ -37,7 +40,7 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "porta vela decorativo", "objeto decorativo retro", "relogio parede decorativo", "decoracao bauhaus",
     ],
     preferredTerms: ["retro", "bauhaus", "mid century", "vidro", "inox", "cromado", "organico", "escultura", "metal", "ceramica"],
-    blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas"],
+    blockedTerms: [...COMMON_BLOCKED, "placa decorativa frase", "religioso", "festas", "steampunk"],
   },
   {
     category: "Móveis",
@@ -82,7 +85,7 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "carteira couro minimalista", "bone masculino minimalista", "bolsa ombro masculina", "acessorio masculino vintage",
     ],
     preferredTerms: ["retro", "minimalista", "couro", "acetato", "metal", "vintage", "design", "camurca"],
-    blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado"],
+    blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado", "country", "cowboy", "boiadeiro", "sertanejo"],
   },
   {
     category: "Tecnologia",
@@ -97,7 +100,7 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
     category: "Beleza & Bem-estar",
     queries: [
       "espelho maquiagem", "necessaire maquiagem", "porta perfume", "estojo maquiagem",
-      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "porta pincel maquiagem",
+      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "esponja maquiagem",
     ],
     preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho", "couro", "maquiagem", "perfume"],
     blockedTerms: [...COMMON_BLOCKED, "medicamento", "remedio", "hormonio", "emagrecedor", "suplemento", "clareador ingerivel"],
