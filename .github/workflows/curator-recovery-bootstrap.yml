@@ -23,7 +23,9 @@ jobs:
           cache: npm
 
       - name: Patch curator recovery behavior
-        run: python3 scripts/curator-recovery-patch.py
+        run: |
+          python3 scripts/curator-recovery-patch.py
+          python3 scripts/curator-recovery-fixup.py
 
       - name: Install dependencies
         run: npm ci
@@ -46,7 +48,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/curator-recovery-bootstrap.yml scripts/curator-recovery-patch.py
+          git rm .github/workflows/curator-recovery-bootstrap.yml scripts/curator-recovery-patch.py scripts/curator-recovery-fixup.py
           git add server/services/autonomousCurator.ts server/services/autonomousCuratorProfiles.ts server/services/productAutomation.ts server/services/productImageRepair.ts tests/autonomousCurator.test.ts tests/productImageRepair.test.ts supabase/migrations/20260830_autonomous_curator_recovery.sql public/data/products.json
           git commit -m "feat: keep autonomous curator searching until qualified candidate"
           git push origin HEAD:feat/curator-recovery-official-fallbacks
