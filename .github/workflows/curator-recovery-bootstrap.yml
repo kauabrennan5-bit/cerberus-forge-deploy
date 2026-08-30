@@ -38,7 +38,28 @@ jobs:
         run: npm run lint
 
       - name: Global tests
-        run: npm test
+        id: global_tests
+        shell: bash
+        run: |
+          set +e
+          npm test > global-tests.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          tail -n 250 global-tests.log
+          exit 0
+
+      - name: Upload global test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: curator-global-test-log
+          path: global-tests.log
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Enforce global tests
+        if: steps.global_tests.outputs.exit_code != '0'
+        run: exit 1
 
       - name: Build
         run: npm run build
