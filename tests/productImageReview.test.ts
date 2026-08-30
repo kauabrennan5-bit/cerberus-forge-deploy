@@ -26,6 +26,8 @@ test("reviewer migra modelo legado 3.6 para o Gemini multimodal estável atual",
   assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_CURATOR_MODEL: "gemini-3.6-flash" }), "gemini-3.7-flash");
   assert.equal(productImageReviewInternals.resolveImageReviewModel({}), "gemini-3.7-flash");
   assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_IMAGE_REVIEW_MODEL: "custom-model" }), "custom-model");
+  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({}, "gemini-3.7-flash"), "gemini-2.5-flash-lite");
+  assert.equal(productImageReviewInternals.resolveImageReviewFallbackModel({ GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL: "gemini-3.7-flash" }, "gemini-3.7-flash"), null);
 });
 
 test("uma imagem CDN quebrada não invalida outra imagem revisável do mesmo produto", async () => {
@@ -84,6 +86,38 @@ test("falha multimodal em lote recai para revisão isolada e preserva imagem lim
   assert.equal(result.assessments[0].decision, "clean");
   assert.equal(result.assessments[1].url, second);
   assert.equal(result.assessments[1].decision, "promotional");
+});
+
+test("429 transitório aplica backoff limitado e fallback multimodal contabilizado no budget", async () => {
+  let generationCalls = 0;
+  let reserves = 0;
+  const models: string[] = [];
+  const delays: number[] = [];
+  const budget = {
+    reserve() {
+      reserves += 1;
+      return { allowed: true, used: reserves, limit: 100, resetAt: Date.now() + 60_000 };
+    },
+  };
+  const result = await reviewProductImages(["https://cdn.example.test/a.jpg"], "Produto", {
+    env: { GEMINI_API_KEY: "test-key" },
+    budget,
+    allowRepair: false,
+    delayImpl: async ms => { delays.push(ms); },
+    fetchImpl: (async () => imageResponse(200)) as typeof fetch,
+    generateContent: async request => {
+      generationCalls += 1;
+      models.push(String(request.model || ""));
+      if (generationCalls <= 3) throw new Error("429 RESOURCE_EXHAUSTED rate limit exceeded");
+      return { text: JSON.stringify({ images: [{ index: 1, decision: "clean", confidence: "HIGH", reason: "produto limpo" }] }) };
+    },
+  });
+  assert.equal(generationCalls, 4);
+  assert.equal(reserves, 4);
+  assert.deepEqual(delays, [2_000, 8_000]);
+  assert.deepEqual(models, ["gemini-3.7-flash", "gemini-3.7-flash", "gemini-3.7-flash", "gemini-2.5-flash-lite"]);
+  assert.equal(result.status, "ready");
+  assert.equal(result.primaryImageUrl, "https://cdn.example.test/a.jpg");
 });
 
 test("erro permanente de modelo não dispara retries isolados que drenam o budget", async () => {
