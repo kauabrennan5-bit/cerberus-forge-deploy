@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.0";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.1";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;

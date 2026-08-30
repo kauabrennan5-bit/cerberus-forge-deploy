@@ -62,7 +62,9 @@ export async function repairProductImage(options: RepairOptions): Promise<Produc
     const title = String(options.title || "produto").replace(/\s+/g, " ").trim().slice(0, 160);
     const model = (env.GEMINI_PRODUCT_IMAGE_REPAIR_MODEL || "gemini-3.1-flash-image").trim();
     const ai = new GoogleGenAI({ apiKey });
-    const interaction = await ai.interactions.create({
+    const interactions = (ai as any).interactions;
+    if (!interactions?.create) return null;
+    const interaction = await interactions.create({
       model,
       input: [
         { type: "image", mime_type: mimeType, data: bytes.toString("base64") },

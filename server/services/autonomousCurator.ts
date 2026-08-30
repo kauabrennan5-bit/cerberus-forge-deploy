@@ -296,7 +296,16 @@ async function prepareCategoryCandidate(input: {
     const displayTitle = (data.displayTitle || "").trim();
     const description = (data.descricao || "").trim();
     const category = data.categoria as PublicProductCategory;
-    const price = Number(data.preco);
+    const scrapedPrice = Number(data.preco);
+    const acquisitionPrice = Number(acquisition.price);
+    const discoveryPrice = Number(item.price);
+    const price = Number.isFinite(scrapedPrice) && scrapedPrice > 0
+      ? scrapedPrice
+      : Number.isFinite(acquisitionPrice) && acquisitionPrice > 0
+        ? acquisitionPrice
+        : Number.isFinite(discoveryPrice) && discoveryPrice > 0
+          ? discoveryPrice
+          : Number.NaN;
     const imageCuration = data.imageCuration;
     const image = resolveCanonicalProductImage({
       imagens: data.imagens,
@@ -305,18 +314,25 @@ async function prepareCategoryCandidate(input: {
     });
 
     const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
-    if (blocked) return { candidate: null, decision: "reject", reason: `PROFILE_BLOCKED_TERM:${blocked}`, rawTitle, shopId, itemId, sourceUrl };
+    if (blocked) {
+      lastReason = `PROFILE_BLOCKED_TERM:${blocked}`;
+      continue;
+    }
     if (!displayTitle || displayTitle === rawTitle || description.length < 24) {
-      return { candidate: null, decision: "reject", reason: "EDITORIAL_COPY_INCOMPLETE", rawTitle, shopId, itemId, sourceUrl };
+      lastReason = "EDITORIAL_COPY_INCOMPLETE";
+      continue;
     }
     if (category !== input.profile.category) {
-      return { candidate: null, decision: "reject", reason: `CATEGORY_MISMATCH:${category || "unknown"}`, rawTitle, shopId, itemId, sourceUrl };
+      lastReason = `CATEGORY_MISMATCH:${category || "unknown"}`;
+      continue;
     }
     if (!Number.isFinite(price) || price <= 0) {
-      return { candidate: null, decision: "reject", reason: "SCRAPER_PRICE_UNVERIFIED", rawTitle, shopId, itemId, sourceUrl };
+      lastReason = "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK";
+      continue;
     }
     if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl) {
-      return { candidate: null, decision: "reject", reason: "IMAGE_REVIEW_NOT_CLEAN", rawTitle, shopId, itemId, sourceUrl };
+      lastReason = "IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR";
+      continue;
     }
 
     const lifecycle = await pipeline.evaluate({
@@ -338,7 +354,8 @@ async function prepareCategoryCandidate(input: {
       descricao: description,
     });
     if (lifecycle.validation.outcome === "FAIL" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
-      return { candidate: null, decision: "reject", reason: `PIPELINE_REJECTED:${lifecycle.validation.errors.join("|")}`, rawTitle, shopId, itemId, sourceUrl };
+      lastReason = `PIPELINE_REJECTED:${lifecycle.validation.errors.join("|")}`;
+      continue;
     }
 
     const breakdown = scoreAutonomousCandidate({
@@ -353,7 +370,12 @@ async function prepareCategoryCandidate(input: {
       existingProducts: input.existingProducts,
     });
     if (breakdown.maximumCatalogSimilarity >= 0.82) {
-      return { candidate: null, decision: "duplicate", reason: `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}`, rawTitle, shopId, itemId, sourceUrl };
+      lastReason = `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}`;
+      continue;
+    }
+    if (breakdown.finalScore < input.config.reviewThreshold) {
+      lastReason = `BELOW_REVIEW_THRESHOLD:${breakdown.finalScore}`;
+      continue;
     }
 
     return {
@@ -527,7 +549,8 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
   const getPrevious = deps.getCategoryResult || curatorRepo.getAutonomousCuratorCategoryResult;
 
   for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-    const query = queryForProfile(profile, runDate);
+    const primaryQuery = queryForProfile(profile, runDate);
+    let query = primaryQuery;
     const previous = await getPrevious(open.run.id, profile.category);
     if (!dryRun && previous && terminalDecision(previous.decision)) {
       outcomes.push({
@@ -549,7 +572,22 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
     }
 
     try {
-      const prepared = await prepareCategoryCandidate({ profile, query, runId: open.run.id, config, existingProducts, client, deps });
+      const queryOrder = [primaryQuery, ...profile.queries.filter(candidateQuery => candidateQuery !== primaryQuery)];
+      let prepared: Awaited<ReturnType<typeof prepareCategoryCandidate>> | null = null;
+      let strongestPrepared: Awaited<ReturnType<typeof prepareCategoryCandidate>> | null = null;
+      const decisionRank = (decision: string) => decision === "duplicate" ? 3 : decision === "reject" ? 2 : decision === "none" ? 1 : 0;
+      for (const candidateQuery of queryOrder) {
+        query = candidateQuery;
+        const currentPrepared = await prepareCategoryCandidate({ profile, query, runId: open.run.id, config, existingProducts, client, deps });
+        prepared = currentPrepared;
+        if (currentPrepared.candidate) break;
+        if (!strongestPrepared || decisionRank(currentPrepared.decision) > decisionRank(strongestPrepared.decision)) strongestPrepared = currentPrepared;
+        // Source-level failures affect every query; candidate-level rejections
+        // continue through the remaining deterministic alternatives.
+        if (currentPrepared.decision === "failed") break;
+      }
+      if (!prepared) throw new Error("AUTONOMOUS_CURATOR_QUERY_CYCLE_EMPTY");
+      if (!prepared.candidate && strongestPrepared && decisionRank(strongestPrepared.decision) > decisionRank(prepared.decision)) prepared = strongestPrepared;
       if (!prepared.candidate) {
         const decision = prepared.decision === "failed" ? "failed" : prepared.decision === "duplicate" ? "duplicate" : prepared.decision === "reject" ? "rejected" : "no_candidate";
         await saveResult({

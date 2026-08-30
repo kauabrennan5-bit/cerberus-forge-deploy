@@ -306,3 +306,129 @@ test("identidade Shopee reservada por review ativa é descartada antes de Gemini
   assert.equal(extractorCalls, 0);
   assert.equal(result.categories[0].decision, "duplicate");
 });
+
+
+test("usa preço oficial Shopee quando o scraper não consegue verificar preço", async () => {
+  const repo = persistence();
+  const baseExtractor = extractor();
+  const result = await runAutonomousCuratorDaily({ dryRun: true, notify: false }, {
+    env: {},
+    now: new Date("2026-08-29T12:00:00-03:00"),
+    shopeeClient: shopeeClient(),
+    getConfig: async () => config({ maxEnrichPerCategory: 2 }),
+    openRun: repo.openRun as any,
+    getCategoryResult: repo.getCategoryResult as any,
+    saveCategoryResult: repo.saveCategoryResult as any,
+    finishRun: repo.finishRun as any,
+    findSourceIdentity: repo.findSourceIdentity as any,
+    productsLoader: async () => [],
+    extractor: (async (url: string) => {
+      const extracted = await baseExtractor();
+      return { ...extracted, data: extracted.data ? { ...extracted.data, preco: null } : extracted.data };
+    }) as any,
+    pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
+  });
+  assert.equal(result.categories[0].decision, "auto");
+});
+
+test("rejeição do primeiro item não encerra a categoria e o próximo item é avaliado", async () => {
+  const repo = persistence();
+  let searchCalls = 0;
+  let extractorCalls = 0;
+  const client = {
+    async searchOffers() {
+      searchCalls += 1;
+      if (searchCalls !== 1) return { ok: true, items: [], httpStatus: 200, error: null };
+      return {
+        ok: true,
+        items: [
+          { shopId: "123", itemId: "456", name: "Abajur Cogumelo Bauhaus Retro Ruim", price: 119.9, productLink: "https://shopee.com.br/product/123/456", offerLink: "https://affiliate.example.com/123-456" },
+          { shopId: "123", itemId: "457", name: "Abajur Cogumelo Bauhaus Retro", price: 149.9, productLink: "https://shopee.com.br/product/123/457", offerLink: "https://affiliate.example.com/123-457" },
+        ],
+        httpStatus: 200,
+        error: null,
+      };
+    },
+    async acquireAffiliateLink({ itemId }: any) {
+      return {
+        status: "link_acquired",
+        affiliateUrl: `https://affiliate.example.com/123-${itemId}`,
+        productLink: `https://shopee.com.br/product/123/${itemId}`,
+        shopId: "123",
+        itemId,
+        name: itemId === "456" ? "Abajur Cogumelo Bauhaus Retro Ruim" : "Abajur Cogumelo Bauhaus Retro",
+        price: itemId === "456" ? 119.9 : 149.9,
+        raw: {},
+        error: null,
+      };
+    },
+  } as any;
+  const result = await runAutonomousCuratorDaily({ dryRun: true, notify: false }, {
+    env: {},
+    now: new Date("2026-08-29T12:00:00-03:00"),
+    shopeeClient: client,
+    getConfig: async () => config({ maxEnrichPerCategory: 2 }),
+    openRun: repo.openRun as any,
+    getCategoryResult: repo.getCategoryResult as any,
+    saveCategoryResult: repo.saveCategoryResult as any,
+    finishRun: repo.finishRun as any,
+    findSourceIdentity: repo.findSourceIdentity as any,
+    productsLoader: async () => [],
+    extractor: (async (url: string) => {
+      extractorCalls += 1;
+      if (url.endsWith("/456")) return { success: false, error: "IMAGE_REVIEW_REQUIRED:no_images" } as any;
+      return {
+        success: true,
+        data: {
+          normalizedUrl: "https://shopee.com.br/product/123/457",
+          marketplace: "Shopee",
+          rawTitle: "Abajur Cogumelo Bauhaus Retro USB Oferta",
+          displayTitle: "Abajur Cogumelo Bauhaus de Mesa",
+          produto: "Abajur Cogumelo Bauhaus Retro USB Oferta",
+          categoria: "Iluminação",
+          preco: null,
+          imagens: ["https://img.example.com/clean.jpg"],
+          imagensOriginais: ["https://img.example.com/raw.jpg"],
+          imagemPrincipal: "https://img.example.com/clean.jpg",
+          imagensGaleria: [],
+          imageCuration: cleanCuration,
+          imageEditorialStatus: "clean",
+          descricao: "Abajur compacto de linguagem retrô, com cúpula arredondada e presença gráfica.",
+          existingProduct: null,
+        },
+      } as any;
+    }) as any,
+    pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
+  });
+  assert.equal(extractorCalls, 2);
+  assert.equal(result.categories[0].decision, "auto");
+  assert.equal(result.categories[0].title, "Abajur Cogumelo Bauhaus de Mesa");
+});
+
+test("quando a primeira query não encontra itens tenta as queries alternativas da categoria", async () => {
+  const repo = persistence();
+  let searchCalls = 0;
+  const client = shopeeClient() as any;
+  const originalSearch = client.searchOffers.bind(client);
+  client.searchOffers = async (input: any) => {
+    searchCalls += 1;
+    if (searchCalls === 1) return { ok: true, items: [], httpStatus: 200, error: null };
+    return originalSearch(input);
+  };
+  const result = await runAutonomousCuratorDaily({ dryRun: true, notify: false }, {
+    env: {},
+    now: new Date("2026-08-29T12:00:00-03:00"),
+    shopeeClient: client,
+    getConfig: async () => config({ maxEnrichPerCategory: 2 }),
+    openRun: repo.openRun as any,
+    getCategoryResult: repo.getCategoryResult as any,
+    saveCategoryResult: repo.saveCategoryResult as any,
+    finishRun: repo.finishRun as any,
+    findSourceIdentity: repo.findSourceIdentity as any,
+    productsLoader: async () => [],
+    extractor: extractor() as any,
+    pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
+  });
+  assert.ok(searchCalls >= 2);
+  assert.equal(result.categories[0].decision, "auto");
+});
