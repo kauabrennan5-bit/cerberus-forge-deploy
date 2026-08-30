@@ -58,7 +58,7 @@ function resolveModel(env: NodeJS.ProcessEnv): string {
 
 const productionBudget = new ExternalCallBudget(
   {
-    openaiAutonomousDiscovery: positiveInt(process.env.OPENAI_AUTONOMOUS_DISCOVERY_HOURLY_BUDGET, 48, 240),
+    openaiAutonomousDiscovery: positiveInt(process.env.OPENAI_AUTONOMOUS_DISCOVERY_HOURLY_BUDGET, 72, 240),
   },
   60 * 60 * 1000,
 );
@@ -156,7 +156,8 @@ function sanitizeQuery(value: unknown): string | null {
 }
 
 function expansionCacheKey(profile: AutonomousCuratorCategoryProfile, existingQueries: readonly string[]): string {
-  return `${profile.category}|${existingQueries.join("|")}`;
+  const normalized = existingQueries.map(query => query.toLowerCase().trim()).filter(Boolean).sort();
+  return `${profile.category}|${normalized.join("|")}`;
 }
 
 export async function expandAutonomousCuratorQueries(
@@ -368,6 +369,7 @@ export const autonomousCuratorSemanticDiscoveryInternals = {
   extractOutputText,
   parseJson,
   sanitizeQuery,
+  expansionCacheKey,
   semanticRankingSchema,
   validImageUrl,
   normalizeDecision,
