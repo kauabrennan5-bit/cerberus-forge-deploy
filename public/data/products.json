@@ -1,1 +1,64 @@
-[{"id":"prod-1788066309797","ref":"REF-001","slug":"espelho-de-maquiagem-dobravel-para-viagem","produto":"Espelho de Maquiagem Dobrável para Viagem","displayTitle":"Espelho de Maquiagem Dobrável para Viagem","preco":180.32,"imagens":["https://down-br.img.susercontent.com/file/sg-11134201-825aq-mqegoj5850y6f6","https://down-br.img.susercontent.com/file/sg-11134201-825ad-mqegq68a6m8121"],"link":"https://s.shopee.com.br/3VjrB66XH0","categoria":"Beleza & Bem-estar","descricao":"Este espelho de maquiagem dobrável possui design compacto com acabamento em couro e ângulo ajustável. Ideal para transportar em viagens, oferece praticidade nos cuidados diários.","paginaPonteUrl":"","createdAt":"2026-08-30T05:05:09.847888+00:00","ativo":true,"status":"published"}]
+[
+  {
+    "id": "prod-1788111188280-23bbefa374",
+    "ref": "AUTOQ-23BBEFA374",
+    "slug": "balde-de-gelo-e-copo-anos-70-23bbef",
+    "produto": "Balde de Gelo e Copo Anos 70",
+    "displayTitle": "Balde de Gelo e Copo Anos 70",
+    "preco": 190,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-lzgvzfqbxd7peb",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lzgvzfqbxd7peb",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lzgvzfuhg20x1a",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lzgvzfuhhgldee",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lzgvzfuhiv5t9c",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lzgvzfuhk9q93f"
+    ],
+    "link": "https://s.shopee.com.br/3g3Hc9WSfn",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Conjunto composto por balde de gelo e copo de vidro com estética marcante dos anos setenta. Peça ideal para compor a decoração de bares e mesas em reuniões.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":95,\"profileVersion\":\"1.4\",\"queuedAt\":\"2026-08-30T17:33:08.280Z\",\"publishedAt\":\"2026-08-30T17:33:08.280Z\",\"query\":\"copo vidro anos 70\",\"shopId\":\"410767676\",\"itemId\":\"23897732211\",\"sourceProductUrl\":\"https://shopee.com.br/product/410767676/23897732211\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-7r98o-lzgvzfqbxd7peb\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-30T17:37:28.218682+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788111188280-8564b3ddfe",
+    "ref": "AUTOQ-8564B3DDFE",
+    "slug": "arandela-decorativa-acrilica-estilo-bauhaus-8564b3",
+    "produto": "Arandela Decorativa Acrílica Estilo Bauhaus",
+    "displayTitle": "Arandela Decorativa Acrílica Estilo Bauhaus",
+    "preco": 199,
+    "imagens": [
+      "https://cf.shopee.com.br/file/cn-11134207-7r98o-lwz48rq0dkpv2d"
+    ],
+    "link": "https://s.shopee.com.br/1LfNPqBYa6",
+    "categoria": "Iluminação",
+    "descricao": "Luminária de parede em acrílico com design inspirado na estética medieval e Bauhaus. Ideal para compor a atmosfera decorativa de salas de estar e ambientes internos.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":95,\"profileVersion\":\"1.4\",\"queuedAt\":\"2026-08-30T17:33:08.280Z\",\"publishedAt\":\"2026-08-30T17:33:08.280Z\",\"query\":\"arandela bauhaus\",\"shopId\":\"902676434\",\"itemId\":\"44516333674\",\"sourceProductUrl\":\"https://shopee.com.br/product/902676434/44516333674\",\"imageUrl\":\"https://cf.shopee.com.br/file/cn-11134207-7r98o-lwz48rq0dkpv2d\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-30T17:33:35.388412+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788066309797",
+    "ref": "REF-001",
+    "slug": "espelho-de-maquiagem-dobravel-para-viagem",
+    "produto": "Espelho de Maquiagem Dobrável para Viagem",
+    "displayTitle": "Espelho de Maquiagem Dobrável para Viagem",
+    "preco": 180.32,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-825aq-mqegoj5850y6f6",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825ad-mqegq68a6m8121"
+    ],
+    "link": "https://s.shopee.com.br/3VjrB66XH0",
+    "categoria": "Beleza & Bem-estar",
+    "descricao": "Este espelho de maquiagem dobrável possui design compacto com acabamento em couro e ângulo ajustável. Ideal para transportar em viagens, oferece praticidade nos cuidados diários.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-30T05:05:09.847888+00:00",
+    "ativo": true,
+    "status": "published"
+  }
+]
