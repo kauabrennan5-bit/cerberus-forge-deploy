@@ -188,8 +188,6 @@ function discoveryPages(cycleNumber: number, category: string, queryIndex: numbe
   const exploration = discoveryPage(cycleNumber, category, queryIndex);
   if (exploration === 1) return [1];
   const explorationSlot = (Math.max(1, cycleNumber) - 1) % EXPLORATION_QUERY_MODULUS;
-  // Relevance page 1 is mandatory. A rotating third of queries can also
-  // inspect one deeper page when the page-1 pool is still too small.
   return queryIndex % EXPLORATION_QUERY_MODULUS === explorationSlot ? [1, exploration] : [1];
 }
 
@@ -376,11 +374,7 @@ async function evaluateIdentity(input: {
   };
 }
 
-function semanticEntryScore(
-  cheap: number,
-  page: number,
-  decision: SemanticDiscoveryDecision | undefined,
-): number {
+function semanticEntryScore(cheap: number, page: number, decision: SemanticDiscoveryDecision | undefined): number {
   const lexical = cheap > -1000 ? Math.min(240, Math.max(0, cheap)) : 0;
   const semantic = decision?.worthEnriching ? decision.fitScore * 3 + decision.categoryFit : 0;
   const confidence = decision?.confidence === "HIGH" ? 18 : decision?.confidence === "MEDIUM" ? 8 : 0;
@@ -431,26 +425,23 @@ async function discoverQualifiedCandidate(input: {
       if (seenIdentities.has(identityKey)) continue;
       seenIdentities.add(identityKey);
       const cheap = cheapProfileScore(input.profile, item.name || "");
-      // Keep lexically invisible candidates in the cheap pool. They can only
-      // advance when Semantic Discovery explicitly rescues a real Shopee ID.
       candidatePool.push({ query, page, item, cheap });
     }
   };
 
-  // First pass mirrors the user's marketplace experience: every query gets
-  // the first relevance page before any deep-page exploration is considered.
   for (const query of queries) await collectPage(query, 1);
 
-  // Deep exploration is a fallback, not the baseline. The raw pool is used
-  // here because Semantic Discovery can recover candidates the lexical lane
-  // would previously have discarded before enrichment.
+  // Preserve the legacy recall fallback exactly: deep-page exploration is
+  // driven by lexical survivors. A large semantic-rescue pool may never hide
+  // the fact that the original lexical path is undersupplied or OpenAI is off.
   const recallTarget = Math.max(24, input.budget * 2);
-  if (candidatePool.length < recallTarget) {
+  const lexicalRecallCount = () => candidatePool.filter(entry => entry.cheap > -1000).length;
+  if (lexicalRecallCount() < recallTarget) {
     for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
       const pages = discoveryPages(input.cycleNumber, input.profile.category, queryIndex);
       if (pages.length < 2) continue;
       await collectPage(queries[queryIndex], pages[1]);
-      if (candidatePool.length >= recallTarget) break;
+      if (lexicalRecallCount() >= recallTarget) break;
     }
   }
 
@@ -739,13 +730,7 @@ async function refreshQueuedCandidate(input: {
   });
 }
 
-async function updateQueuedProduct(
-  product: Product,
-  candidate: CuratedCandidate,
-  now: Date,
-  published: boolean,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
+async function updateQueuedProduct(product: Product, candidate: CuratedCandidate, now: Date, published: boolean, env: NodeJS.ProcessEnv): Promise<void> {
   const previous = parseQueueNote(product.curatorNote);
   const meta: QueueMetadata = {
     score: candidate.score,
