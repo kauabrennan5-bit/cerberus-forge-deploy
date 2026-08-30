@@ -4,7 +4,9 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches:
+      - main
+      - "catalog-sync/**"
   workflow_dispatch:
 
 permissions:
@@ -54,3 +56,48 @@ jobs:
           curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o /tmp/gitleaks.tar.gz
           tar --no-same-owner -xzf /tmp/gitleaks.tar.gz -C /tmp/gitleaks-bin gitleaks
           /tmp/gitleaks-bin/gitleaks detect --no-git --source /tmp/gitleaks-scan --redact --exit-code 1 --no-banner
+
+  promote-catalog:
+    name: promote-catalog
+    if: ${{ startsWith(github.ref, 'refs/heads/catalog-sync/') }}
+    needs: weekly-production-final
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify catalog-only fast-forward candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          current_main="$(git rev-parse origin/main)"
+
+          if ! git merge-base --is-ancestor "$current_main" "$GITHUB_SHA"; then
+            echo "Catalog SHA is not a fast-forward descendant of current main."
+            exit 1
+          fi
+
+          mapfile -t changed < <(git diff --name-only "$current_main" "$GITHUB_SHA")
+          if [ "${#changed[@]}" -ne 1 ] || [ "${changed[0]}" != "public/data/products.json" ]; then
+            printf 'Catalog promotion rejected; changed files: %s\n' "${changed[*]:-<none>}"
+            exit 1
+          fi
+
+          node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync("public/data/products.json","utf8")); if(!Array.isArray(value)) process.exit(1);'
+          echo "CATALOG_PROMOTION_SHA=$GITHUB_SHA"
+
+      - name: Fast-forward exact validated SHA to protected main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          current_main="$(git rev-parse origin/main)"
+          if ! git merge-base --is-ancestor "$current_main" "$GITHUB_SHA"; then
+            echo "main advanced while the catalog gate was running; refusing non-fast-forward promotion."
+            exit 1
+          fi
+          git push origin "$GITHUB_SHA:refs/heads/main"
