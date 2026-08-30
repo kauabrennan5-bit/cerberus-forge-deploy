@@ -28,6 +28,12 @@ import {
   scoreAutonomousCandidate,
   type AutonomousCuratorScoreBreakdown,
 } from "./autonomousCuratorScoring";
+import {
+  expandAutonomousCuratorQueries,
+  rankAutonomousCuratorCandidates,
+  type SemanticDiscoveryCandidate,
+  type SemanticDiscoveryDecision,
+} from "./autonomousCuratorSemanticDiscovery";
 
 const QUEUE_CREATED_BY = "autonomous_curator_queue";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
@@ -182,8 +188,6 @@ function discoveryPages(cycleNumber: number, category: string, queryIndex: numbe
   const exploration = discoveryPage(cycleNumber, category, queryIndex);
   if (exploration === 1) return [1];
   const explorationSlot = (Math.max(1, cycleNumber) - 1) % EXPLORATION_QUERY_MODULUS;
-  // Relevance page 1 is mandatory. A rotating third of queries can also
-  // inspect one deeper page when the page-1 pool is still too small.
   return queryIndex % EXPLORATION_QUERY_MODULUS === explorationSlot ? [1, exploration] : [1];
 }
 
@@ -370,6 +374,13 @@ async function evaluateIdentity(input: {
   };
 }
 
+function semanticEntryScore(cheap: number, page: number, decision: SemanticDiscoveryDecision | undefined): number {
+  const lexical = cheap > -1000 ? Math.min(240, Math.max(0, cheap)) : 0;
+  const semantic = decision?.worthEnriching ? decision.fitScore * 3 + decision.categoryFit : 0;
+  const confidence = decision?.confidence === "HIGH" ? 18 : decision?.confidence === "MEDIUM" ? 8 : 0;
+  return lexical + semantic + confidence + (page === 1 ? 12 : 0);
+}
+
 async function discoverQualifiedCandidate(input: {
   profile: AutonomousCuratorCategoryProfile;
   cycleNumber: number;
@@ -382,10 +393,17 @@ async function discoverQualifiedCandidate(input: {
 }): Promise<DiscoveryResult> {
   let examined = 0;
   let lastReason = "NO_QUALIFIED_CANDIDATE_THIS_CYCLE";
+  let shopeeReturned = 0;
+  let blockedCount = 0;
+  let visualRejected = 0;
+  let scoreRejected = 0;
   const searchedPages: number[] = [];
-  const queries = rotateQueries(input.profile, input.cycleNumber);
+  const baseQueries = rotateQueries(input.profile, input.cycleNumber);
+  const expandedQueries = await expandAutonomousCuratorQueries(input.profile, baseQueries, { env: input.env });
+  const queries = [...new Set([...baseQueries, ...expandedQueries].map(query => query.trim()).filter(Boolean))];
   type SearchOfferItem = Awaited<ReturnType<ShopeeApiClient["searchOffers"]>>["items"][number];
-  const candidatePool: Array<{ query: string; page: number; item: SearchOfferItem; cheap: number }> = [];
+  type PoolEntry = { query: string; page: number; item: SearchOfferItem; cheap: number };
+  const candidatePool: PoolEntry[] = [];
   const seenIdentities = new Set<string>();
 
   const collectPage = async (query: string, page: number): Promise<void> => {
@@ -396,45 +414,104 @@ async function discoverQualifiedCandidate(input: {
       if (["SHOPEE_AUTH_ERROR", "SHOPEE_FORBIDDEN"].includes(String(search.reason))) throw new Error(lastReason);
       return;
     }
+    shopeeReturned += search.items.length;
     for (const item of search.items) {
       if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
-      if (hasBlockedProfileTerm(input.profile, item.name || "")) continue;
+      if (hasBlockedProfileTerm(input.profile, item.name || "")) {
+        blockedCount += 1;
+        continue;
+      }
       const identityKey = `${item.shopId}:${item.itemId}`;
       if (seenIdentities.has(identityKey)) continue;
       seenIdentities.add(identityKey);
       const cheap = cheapProfileScore(input.profile, item.name || "");
-      if (cheap <= -1000) continue;
       candidatePool.push({ query, page, item, cheap });
     }
   };
 
-  // First pass mirrors the user's marketplace experience: every query gets
-  // the first relevance page before any deep-page exploration is considered.
   for (const query of queries) await collectPage(query, 1);
 
-  // Deep exploration is a fallback, not the baseline. Only expand when the
-  // relevance pool is too small to feed the configured enrichment budget.
+  // Preserve the legacy recall fallback exactly: deep-page exploration is
+  // driven by lexical survivors. A large semantic-rescue pool may never hide
+  // the fact that the original lexical path is undersupplied or OpenAI is off.
   const recallTarget = Math.max(24, input.budget * 2);
-  if (candidatePool.length < recallTarget) {
+  const lexicalRecallCount = () => candidatePool.filter(entry => entry.cheap > -1000).length;
+  if (lexicalRecallCount() < recallTarget) {
     for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
       const pages = discoveryPages(input.cycleNumber, input.profile.category, queryIndex);
       if (pages.length < 2) continue;
       await collectPage(queries[queryIndex], pages[1]);
-      if (candidatePool.length >= recallTarget) break;
+      if (lexicalRecallCount() >= recallTarget) break;
     }
   }
 
-  candidatePool.sort((a, b) =>
-    (b.cheap + (b.page === 1 ? 12 : 0)) - (a.cheap + (a.page === 1 ? 12 : 0))
-    || String(a.item.itemId).localeCompare(String(b.item.itemId))
-    || a.query.localeCompare(b.query),
-  );
+  const lexicalEntries = candidatePool
+    .filter(entry => entry.cheap > -1000)
+    .sort((a, b) =>
+      (b.cheap + (b.page === 1 ? 12 : 0)) - (a.cheap + (a.page === 1 ? 12 : 0))
+      || String(a.item.itemId).localeCompare(String(b.item.itemId))
+      || a.query.localeCompare(b.query),
+    );
+  const rescueEntries = candidatePool.filter(entry => entry.cheap <= -1000);
+  const semanticEntryLimit = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_MAX_CANDIDATES, 48, 80);
+  const semanticLexicalTarget = Math.min(Math.ceil(semanticEntryLimit / 2), lexicalEntries.length);
+  const semanticEntries: PoolEntry[] = lexicalEntries.slice(0, semanticLexicalTarget);
+  const rescueByQuery = new Map<string, PoolEntry[]>();
+  for (const entry of rescueEntries) {
+    const bucket = rescueByQuery.get(entry.query) || [];
+    bucket.push(entry);
+    rescueByQuery.set(entry.query, bucket);
+  }
+  const rescueBuckets = [...rescueByQuery.values()].map(bucket => bucket.sort((a, b) => Number(a.page !== 1) - Number(b.page !== 1)));
+  while (semanticEntries.length < semanticEntryLimit && rescueBuckets.some(bucket => bucket.length > 0)) {
+    for (const bucket of rescueBuckets) {
+      const next = bucket.shift();
+      if (next) semanticEntries.push(next);
+      if (semanticEntries.length >= semanticEntryLimit) break;
+    }
+  }
 
-  const qualified: Array<{ candidate: CuratedCandidate; cheap: number; page: number }> = [];
-  for (const entry of candidatePool) {
+  const semanticCandidates: SemanticDiscoveryCandidate[] = semanticEntries.map(entry => ({
+    identityKey: `${entry.item.shopId}:${entry.item.itemId}`,
+    name: entry.item.name || "",
+    query: entry.query,
+    page: entry.page,
+    price: entry.item.price,
+    imageUrl: entry.item.imageUrl,
+    lexicalScore: entry.cheap,
+  }));
+  const semantic = await rankAutonomousCuratorCandidates(input.profile, semanticCandidates, { env: input.env });
+  const semanticByIdentity = new Map(semantic.decisions.map(decision => [decision.identityKey, decision] as const));
+  const rescueThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_RESCUE_THRESHOLD, 68, 100);
+  const categoryThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100);
+  const rankedPool = candidatePool.filter(entry => {
+    if (entry.cheap > -1000) return true;
+    if (semantic.status !== "ok") return false;
+    const decision = semanticByIdentity.get(`${entry.item.shopId}:${entry.item.itemId}`);
+    return Boolean(decision?.worthEnriching && decision.fitScore >= rescueThreshold && decision.categoryFit >= categoryThreshold);
+  });
+  const semanticRescued = rankedPool.filter(entry => entry.cheap <= -1000).length;
+
+  rankedPool.sort((a, b) => {
+    const aDecision = semanticByIdentity.get(`${a.item.shopId}:${a.item.itemId}`);
+    const bDecision = semanticByIdentity.get(`${b.item.shopId}:${b.item.itemId}`);
+    return semanticEntryScore(b.cheap, b.page, bDecision) - semanticEntryScore(a.cheap, a.page, aDecision)
+      || String(a.item.itemId).localeCompare(String(b.item.itemId))
+      || a.query.localeCompare(b.query);
+  });
+
+  const logMetrics = (qualifiedCount: number) => {
+    console.info(
+      `[Autonomous Curator Discovery] category=${input.profile.category} shopee_returned=${shopeeReturned} blocked=${blockedCount} lexical_pass=${lexicalEntries.length} semantic_status=${semantic.status} semantic_rescued=${semanticRescued} enriched=${examined} visual_rejected=${visualRejected} score_rejected=${scoreRejected} qualified=${qualifiedCount} expanded_queries=${expandedQueries.length}`,
+    );
+  };
+
+  const qualified: Array<{ candidate: CuratedCandidate; cheap: number; page: number; semantic?: SemanticDiscoveryDecision }> = [];
+  for (const entry of rankedPool) {
     if (examined >= input.budget) break;
     const shopId = String(entry.item.shopId);
     const itemId = String(entry.item.itemId);
+    const identityKey = `${shopId}:${itemId}`;
     const identity = await curatorRepo.findProductSourceIdentity("Shopee", shopId, itemId);
     const reservedUntil = identity?.reservedUntil ? Date.parse(identity.reservedUntil) : 0;
     if (identity?.productId || (identity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) continue;
@@ -454,8 +531,24 @@ async function discoverQualifiedCandidate(input: {
       config: input.config,
     });
     lastReason = evaluated.reason;
+    if (evaluated.reason.startsWith("IMAGE_REVIEW_") || evaluated.reason.startsWith("EXTRACTION_IMAGE_REVIEW_")) visualRejected += 1;
+    if (evaluated.reason.startsWith("BELOW_AUTO_PUBLISH_THRESHOLD") || evaluated.reason.startsWith("CATALOG_SIMILARITY")) scoreRejected += 1;
     if (evaluated.candidate) {
-      qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page });
+      const semanticDecision = semanticByIdentity.get(identityKey);
+      if (semanticDecision) {
+        const auditedBreakdown = evaluated.candidate.breakdown as AutonomousCuratorScoreBreakdown & { semanticDiscovery?: Record<string, unknown> };
+        auditedBreakdown.semanticDiscovery = {
+          provider: "openai",
+          model: semantic.model,
+          fitScore: semanticDecision.fitScore,
+          categoryFit: semanticDecision.categoryFit,
+          confidence: semanticDecision.confidence,
+          rescuedFromLexicalGate: entry.cheap <= -1000,
+          signals: semanticDecision.signals,
+          reason: semanticDecision.reason,
+        };
+      }
+      qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page, semantic: semanticDecision });
       if (qualified.length >= QUALIFIED_COMPARISON_TARGET) break;
     }
   }
@@ -463,10 +556,12 @@ async function discoverQualifiedCandidate(input: {
   if (qualified.length > 0) {
     qualified.sort((a, b) =>
       b.candidate.score - a.candidate.score
+      || (b.semantic?.fitScore || 0) - (a.semantic?.fitScore || 0)
       || Number(a.page !== 1) - Number(b.page !== 1)
       || b.cheap - a.cheap
       || a.candidate.price - b.candidate.price,
     );
+    logMetrics(qualified.length);
     return {
       candidate: qualified[0].candidate,
       reason: `BEST_OF_${qualified.length}_QUALIFIED_CANDIDATES`,
@@ -475,6 +570,7 @@ async function discoverQualifiedCandidate(input: {
     };
   }
 
+  logMetrics(0);
   return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_SCHEDULED_CYCLE`, examined, searchedPages };
 }
 
@@ -634,13 +730,7 @@ async function refreshQueuedCandidate(input: {
   });
 }
 
-async function updateQueuedProduct(
-  product: Product,
-  candidate: CuratedCandidate,
-  now: Date,
-  published: boolean,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
+async function updateQueuedProduct(product: Product, candidate: CuratedCandidate, now: Date, published: boolean, env: NodeJS.ProcessEnv): Promise<void> {
   const previous = parseQueueNote(product.curatorNote);
   const meta: QueueMetadata = {
     score: candidate.score,
@@ -1032,4 +1122,5 @@ export const autonomousCuratorContinuousV2Internals = {
   queueTarget,
   revalidationPermanentFailure,
   safeCategoryFailureReason,
+  semanticEntryScore,
 };
