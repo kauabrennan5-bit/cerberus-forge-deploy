@@ -133,8 +133,13 @@ function canonicalSourceUrl(shopId: string, itemId: string): string {
   return `https://shopee.com.br/product/${shopId}/${itemId}`;
 }
 
-function terminalDecision(decision: string): boolean {
-  return ["auto_published", "review_required", "rejected", "duplicate", "no_candidate", "dry_run_auto", "dry_run_review"].includes(decision);
+/**
+ * Uma categoria só consome a vaga diária quando existe publicação real ou review
+ * humana pendente. Rejeições/sem-candidato/duplicatas são tentativas, não sucesso,
+ * e podem ser revisitadas pelos recovery runs do mesmo dia.
+ */
+function fulfilledDecision(decision: string): boolean {
+  return ["auto_published", "review_required"].includes(decision);
 }
 
 function extractorTimeoutMs(env: NodeJS.ProcessEnv): number {
@@ -569,9 +574,6 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
     profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
     categoriesTotal: AUTONOMOUS_CURATOR_PROFILES.length,
   });
-  if (!dryRun && open.resumed && open.run.status === "completed") {
-    return { status: "already_completed", runId: open.run.id, runDate, dryRun: false, resumed: true, categories: [], autoPublished: 0, reviewRequired: 0, rejected: 0, failed: 0 };
-  }
 
   const productsLoader = deps.productsLoader || productsRepository.getProducts;
   const existingProducts = await productsLoader();
@@ -584,11 +586,11 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
     const primaryQuery = queryForProfile(profile, runDate);
     let query = primaryQuery;
     const previous = await getPrevious(open.run.id, profile.category);
-    if (!dryRun && previous && terminalDecision(previous.decision)) {
+    if (!dryRun && previous && fulfilledDecision(previous.decision)) {
       outcomes.push({
         category: profile.category,
         query,
-        decision: previous.decision === "auto_published" ? "auto" : previous.decision === "review_required" ? "review" : previous.decision === "failed" ? "failed" : previous.decision === "duplicate" ? "duplicate" : "reject",
+        decision: previous.decision === "auto_published" ? "auto" : "review",
         reason: previous.reason || previous.decision,
         score: previous.score ?? null,
         title: previous.displayTitle || previous.rawTitle || null,
@@ -612,10 +614,9 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
       for (let queryIndex = 0; queryIndex < queryOrder.length && enrichRemaining > 0; queryIndex += 1) {
         const candidateQuery = queryOrder[queryIndex];
         query = candidateQuery;
-        const queriesRemaining = queryOrder.length - queryIndex;
-        const maxEnrichThisQuery = queryIndex === 0
-          ? Math.min(enrichRemaining, Math.max(2, Math.ceil(config.maxEnrichPerCategory / 2)))
-          : Math.max(1, Math.ceil(enrichRemaining / queriesRemaining));
+        // Diversidade primeiro: uma tentativa cara por tipo de busca antes de
+        // gastar outra chamada no mesmo recorte do marketplace.
+        const maxEnrichThisQuery = 1;
         const currentPrepared = await prepareCategoryCandidate({
           profile,
           query,
@@ -821,6 +822,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
 }
 
 export const autonomousCuratorInternals = {
+  fulfilledDecision,
   extractorTimeoutMs,
   withTimeout,
 };
