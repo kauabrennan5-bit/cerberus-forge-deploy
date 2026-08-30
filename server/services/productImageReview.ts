@@ -77,6 +77,20 @@ const SECONDARY_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
 const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]);
 const DEFAULT_OPENAI_IMAGE_REVIEW_MODEL = "gpt-5.6-luna";
 const DEFAULT_OPENAI_IMAGE_REVIEW_FALLBACK_MODEL = "gpt-4.1-mini";
+const OPENAI_QUOTA_ERROR_MARKERS = [
+  "quota exceeded",
+  "quota_exceeded",
+  "daily quota",
+  "requests per day",
+  "rpd",
+  "insufficient_quota",
+  "billing_hard_limit_reached",
+  "credit_balance_exhausted",
+  "organization_spend_limit_exceeded",
+  "project_spend_limit_exceeded",
+  "organization_usage_limit_exceeded",
+  "project_usage_limit_exceeded",
+];
 
 function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
   const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim();
@@ -109,6 +123,11 @@ function providerErrorText(error: unknown): string {
   return String(error instanceof Error ? error.message : error || "").toLowerCase();
 }
 
+function safeOpenAIErrorCode(value: unknown): string | null {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return /^[a-z0-9_.-]{1,80}$/.test(normalized) ? normalized : null;
+}
+
 function permanentProviderFailure(error: unknown): boolean {
   const message = providerErrorText(error);
   return [
@@ -128,14 +147,7 @@ function permanentProviderFailure(error: unknown): boolean {
 
 function quotaProviderFailure(error: unknown): boolean {
   const message = providerErrorText(error);
-  return [
-    "quota exceeded",
-    "quota_exceeded",
-    "daily quota",
-    "requests per day",
-    "rpd",
-    "insufficient_quota",
-  ].some(marker => message.includes(marker));
+  return OPENAI_QUOTA_ERROR_MARKERS.some(marker => message.includes(marker));
 }
 
 function transientProviderFailure(error: unknown): boolean {
@@ -160,6 +172,24 @@ function transientProviderFailure(error: unknown): boolean {
     "timed out",
     "overloaded",
   ].some(marker => message.includes(marker));
+}
+
+function openAIFallbackModelWorthTrying(error: unknown): boolean {
+  if (quotaProviderFailure(error)) return false;
+  const message = providerErrorText(error);
+  return ![
+    "http_401",
+    "http_403",
+    "api key not valid",
+    "api_key_invalid",
+    "permission denied",
+    "permission_denied",
+    "unauthenticated",
+  ].some(marker => message.includes(marker));
+}
+
+function isOpenAISupportedImage(image: DownloadedImage): boolean {
+  return /^image\/(?:png|jpeg|webp|gif)$/.test(image.mimeType);
 }
 
 function reviewRequired(
@@ -191,7 +221,7 @@ async function downloadImage(
     try {
       const response = await fetchImpl(url, {
         headers: {
-          Accept: "image/avif,image/webp,image/jpeg,image/png",
+          Accept: "image/webp,image/jpeg,image/png,image/avif",
           "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7",
           "User-Agent": "Mozilla/5.0 (compatible; CerberusFinds/1.0; +https://cerberusfinds.com)",
         },
@@ -389,8 +419,16 @@ async function openaiReviewWithResponsesApi(input: OpenAIReviewInput): Promise<P
       signal: controller.signal,
     });
     if (!response.ok) {
-      await response.text();
-      throw new Error(`OPENAI_IMAGE_REVIEW_HTTP_${response.status}`);
+      const responseText = await response.text();
+      let errorCode: string | null = null;
+      try {
+        const parsed = JSON.parse(responseText) as { error?: { code?: unknown; type?: unknown } };
+        errorCode = safeOpenAIErrorCode(parsed?.error?.code) || safeOpenAIErrorCode(parsed?.error?.type);
+      } catch {
+        // HTTP status alone remains safe and sufficient for fallback classification.
+      }
+      const codeSuffix = errorCode ? `_${errorCode.toUpperCase()}` : "";
+      throw new Error(`OPENAI_IMAGE_REVIEW_HTTP_${response.status}${codeSuffix}`);
     }
     const payload = await response.json();
     return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(extractOpenAIOutputText(payload)));
@@ -503,13 +541,17 @@ async function reviewWithOpenAIFallback(input: {
   if (!input.openaiApiKey || !enabledUnlessFalse(input.env.OPENAI_PRODUCT_IMAGE_REVIEW_ENABLED)) {
     return { attempted: false, budgetExhausted: false, assessments: input.primaryAssessments };
   }
-  if (!needsCrossProviderFallback(input.rawImageUrls, input.downloaded, input.primaryAssessments)) {
+  const openaiDownloaded = input.downloaded.filter(isOpenAISupportedImage);
+  if (openaiDownloaded.length === 0) {
+    return { attempted: false, budgetExhausted: false, assessments: input.primaryAssessments };
+  }
+  if (!needsCrossProviderFallback(input.rawImageUrls, openaiDownloaded, input.primaryAssessments)) {
     return { attempted: false, budgetExhausted: false, assessments: input.primaryAssessments };
   }
 
   const callModel = async (model: string): Promise<ProductImageAssessment[]> => input.review({
     rawImageUrls: input.rawImageUrls,
-    downloaded: input.downloaded,
+    downloaded: openaiDownloaded,
     title: input.title,
     model,
     apiKey: input.openaiApiKey,
@@ -529,8 +571,15 @@ async function reviewWithOpenAIFallback(input: {
   try {
     return merge(await callModel(primaryModel));
   } catch (primaryError) {
-    if (!fallbackModel) {
-      console.warn(`[Product Image Review] fallback OpenAI indisponível (${transientProviderFailure(primaryError) ? "transient" : quotaProviderFailure(primaryError) ? "quota" : permanentProviderFailure(primaryError) ? "permanent" : "invalid_response"})`);
+    const primaryFailure = quotaProviderFailure(primaryError)
+      ? "quota"
+      : transientProviderFailure(primaryError)
+        ? "transient"
+        : permanentProviderFailure(primaryError)
+          ? "permanent"
+          : "invalid_response";
+    if (!fallbackModel || !openAIFallbackModelWorthTrying(primaryError)) {
+      console.warn(`[Product Image Review] fallback OpenAI indisponível (${primaryFailure})`);
       return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
     }
     const secondaryReserved = input.budget.reserve("openaiProductImageReview");
@@ -538,7 +587,7 @@ async function reviewWithOpenAIFallback(input: {
     try {
       return merge(await callModel(fallbackModel));
     } catch (secondaryError) {
-      console.warn(`[Product Image Review] fallback OpenAI indisponível em ambos os modelos (primary=${transientProviderFailure(primaryError) ? "transient" : quotaProviderFailure(primaryError) ? "quota" : permanentProviderFailure(primaryError) ? "permanent" : "invalid_response"}, secondary=${transientProviderFailure(secondaryError) ? "transient" : quotaProviderFailure(secondaryError) ? "quota" : permanentProviderFailure(secondaryError) ? "permanent" : "invalid_response"})`);
+      console.warn(`[Product Image Review] fallback OpenAI indisponível em ambos os modelos (primary=${primaryFailure}, secondary=${quotaProviderFailure(secondaryError) ? "quota" : transientProviderFailure(secondaryError) ? "transient" : permanentProviderFailure(secondaryError) ? "permanent" : "invalid_response"})`);
       return { attempted: true, budgetExhausted: false, assessments: input.primaryAssessments };
     }
   }
@@ -665,6 +714,9 @@ export const productImageReviewInternals = {
   needsCrossProviderFallback,
   mergeCrossProviderAssessments,
   isAmbiguousAssessment,
+  isOpenAISupportedImage,
+  safeOpenAIErrorCode,
+  openAIFallbackModelWorthTrying,
   resolveImageReviewModel,
   resolveImageReviewFallbackModel,
   resolveOpenAIImageReviewModel,
