@@ -218,6 +218,7 @@ async function persistHumanReview(candidate: CuratedCandidate, runId: string, en
     username: "autonomous_curator",
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    // Produto canônico de fallback já é editorial; rawTitle fica separado para auditoria.
     produto: candidate.displayTitle,
     rawTitle: candidate.rawTitle,
     displayTitle: candidate.displayTitle,
@@ -369,6 +370,7 @@ async function prepareCategoryCandidate(input: {
       normalizedUrl: sourceUrl,
       link: acquisition.affiliateUrl,
       marketplace: "Shopee",
+      // Nunca deixar o título bruto virar fallback público.
       produto: displayTitle,
       rawTitle,
       displayTitle,
@@ -502,7 +504,7 @@ async function publishAutoBatch(input: {
       await saveImageReview({
         productId: product.id,
         curation: candidate.imageCuration,
-        model: input.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "gemini-3.5-flash-lite",
+        model: input.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || input.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
         reviewVersion: "1.0",
       });
       created.push({ candidate, productId: product.id });
@@ -627,6 +629,8 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
         prepared = currentPrepared;
         if (currentPrepared.candidate) break;
         if (!strongestPrepared || decisionRank(currentPrepared.decision) > decisionRank(strongestPrepared.decision)) strongestPrepared = currentPrepared;
+        // Source-level failures affect every query; candidate-level rejections
+        // continue through the remaining deterministic alternatives.
         if (currentPrepared.decision === "failed") break;
       }
       if (!prepared) throw new Error("AUTONOMOUS_CURATOR_QUERY_CYCLE_EMPTY");
