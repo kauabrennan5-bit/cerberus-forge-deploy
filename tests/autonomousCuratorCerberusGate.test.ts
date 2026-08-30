@@ -1,27 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { ProductImageCuration } from "../src/lib/productImageCuration";
 import { profileForCategory } from "../server/services/autonomousCuratorProfiles";
 import { cheapProfileScore, hasBlockedProfileTerm, scoreAutonomousCandidate } from "../server/services/autonomousCuratorScoring";
 
-const cleanCuration = {
-  status: "ready" as const,
+const cleanCuration: ProductImageCuration = {
+  status: "ready",
   rawImageUrls: ["https://img.example.com/raw.jpg"],
   primaryImageUrl: "https://img.example.com/clean.jpg",
   galleryImageUrls: [],
   assessments: [{
     url: "https://img.example.com/clean.jpg",
-    decision: "clean" as const,
-    confidence: "HIGH" as const,
+    decision: "clean",
+    confidence: "HIGH",
     reason: "Produto isolado, visualmente Cerberus e sem overlay.",
   }],
 };
 
-const lowConfidenceCuration = {
+const lowConfidenceCuration: ProductImageCuration = {
   ...cleanCuration,
   assessments: [{
     url: "https://img.example.com/clean.jpg",
-    decision: "clean" as const,
-    confidence: "LOW" as const,
+    decision: "clean",
+    confidence: "LOW",
     reason: "Evidência visual insuficiente.",
   }],
 };
@@ -32,7 +33,7 @@ function score(
   displayTitle: string,
   description: string,
   price: number,
-  imageCuration = cleanCuration,
+  imageCuration: ProductImageCuration = cleanCuration,
 ) {
   return scoreAutonomousCandidate({
     profile: profileForCategory(category),
