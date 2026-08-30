@@ -41,7 +41,7 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'real' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
