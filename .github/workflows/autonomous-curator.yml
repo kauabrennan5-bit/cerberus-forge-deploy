@@ -1,10 +1,11 @@
 name: Cerberus Autonomous Curator
-# Production schedule: scheduled runs are REAL; pushes are validation dry-runs.
+# Production schedule: one bounded continuous-curation cycle every hour.
+# A cycle may remain partial; the next hourly cycle continues searching without lowering gates.
 
 on:
   schedule:
-    # 08:00 America/Fortaleza (UTC-3)
-    - cron: "0 11 * * *"
+    # Hourly, minute 17. Publication eligibility still enforces >=24h per category.
+    - cron: "17 * * * *"
   push:
     branches:
       - main
@@ -23,7 +24,8 @@ on:
         type: choice
         options:
           - dry_run
-          - real
+          - continuous
+          - real_legacy
           - status
 
 permissions:
@@ -37,11 +39,13 @@ concurrency:
 jobs:
   daily-curator:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      # Temporary one-shot marker is used only for the first production validation
+      # of this feature. It is removed after the cycle is proven live.
+      MODE: ${{ github.event_name == 'schedule' && 'continuous' || github.event_name == 'push' && contains(github.event.head_commit.message, '[curator-continuous-real-once]') && 'continuous' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
@@ -49,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           response_file="$RUNNER_TEMP/cerberus-health.json"
-          for attempt in $(seq 1 48); do
+          for attempt in $(seq 1 60); do
             status="$(curl --silent --show-error --max-time 20 -o "$response_file" -w '%{http_code}' "$CERBERUS_HEALTH_URL" || true)"
             if [ "$status" = "200" ]; then
               live_sha="$(node - "$response_file" <<'NODE'
@@ -65,7 +69,7 @@ jobs:
                 break
               fi
             fi
-            if [ "$attempt" = "48" ]; then
+            if [ "$attempt" = "60" ]; then
               echo "Render did not serve the expected SHA."
               exit 1
             fi
@@ -98,18 +102,45 @@ jobs:
             exit 0
           fi
 
-          dry_run=false
-          if [ "$MODE" = "dry_run" ]; then dry_run=true; fi
           start_file="$RUNNER_TEMP/autonomous-curator-start.json"
           token="$(get_oidc_token)"
-          curl --fail-with-body --silent --show-error --max-time 30 \
-            -o "$start_file" \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            -d "{\"dryRun\":${dry_run},\"notify\":true}" \
-            "$base/api/internal/autonomous-curator/daily"
-
-          node - "$start_file" <<'NODE'
+          expected_cycle=""
+          dry_run=false
+          if [ "$MODE" = "continuous" ]; then
+            curl --fail-with-body --silent --show-error --max-time 30 \
+              -o "$start_file" \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Content-Type: application/json' \
+              -d '{"notify":true}' \
+              "$base/api/internal/autonomous-curator/continuous"
+            expected_cycle="$(node - "$start_file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true || body?.accepted !== true) process.exit(1);
+          if (body?.status === 'disabled') process.exit(0);
+          if (body?.status === 'already_running') {
+            if (typeof body.cycleId === 'string') process.stdout.write(body.cycleId);
+            process.exit(0);
+          }
+          if (typeof body.cycleId !== 'string' || !body.cycleId) process.exit(1);
+          process.stdout.write(body.cycleId);
+          NODE
+          )"
+            if [ -z "$expected_cycle" ]; then
+              echo "AUTONOMOUS_CURATOR=disabled"
+              exit 0
+            fi
+            echo "AUTONOMOUS_CURATOR_START=continuous"
+            echo "AUTONOMOUS_CURATOR_CYCLE=$expected_cycle"
+          else
+            if [ "$MODE" = "dry_run" ]; then dry_run=true; fi
+            curl --fail-with-body --silent --show-error --max-time 30 \
+              -o "$start_file" \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Content-Type: application/json' \
+              -d "{\"dryRun\":${dry_run},\"notify\":true}" \
+              "$base/api/internal/autonomous-curator/daily"
+            node - "$start_file" <<'NODE'
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           if (body?.ok !== true) process.exit(1);
@@ -120,24 +151,42 @@ jobs:
           if (body?.accepted !== true) process.exit(1);
           console.log(`AUTONOMOUS_CURATOR_START=${body.status || 'accepted'}`);
           NODE
+          fi
 
           expected_date="$(TZ=America/Fortaleza date +%F)"
-          for attempt in $(seq 1 90); do
+          for attempt in $(seq 1 180); do
             token="$(get_oidc_token)"
+            filter="?dryRun=${dry_run}"
+            if [ "$MODE" = "continuous" ]; then filter='?dryRun=false'; fi
             curl --fail-with-body --silent --show-error --max-time 30 \
               -o "$status_file" -H "Authorization: Bearer ${token}" \
-              "$base/api/internal/autonomous-curator/status?dryRun=${dry_run}"
+              "$base/api/internal/autonomous-curator/status${filter}"
 
-            state="$(node - "$status_file" "$expected_date" <<'NODE'
+            state="$(node - "$status_file" "$expected_date" "$MODE" "$expected_cycle" <<'NODE'
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const expected = process.argv[3];
+          const expectedDate = process.argv[3];
+          const mode = process.argv[4];
+          const expectedCycle = process.argv[5];
           const run = body?.latestRun;
-          if (!run || String(run.run_date) !== expected) {
+          if (!run || String(run.run_date) !== expectedDate) {
             process.stdout.write('waiting');
             process.exit(0);
           }
           const terminalStatus = ['completed','partial','failed','dry_run'].includes(String(run.status));
+          if (mode === 'continuous') {
+            const metadata = run.metadata && typeof run.metadata === 'object' ? run.metadata : {};
+            if (String(metadata.continuous_cycle_id || '') !== expectedCycle) {
+              process.stdout.write('waiting');
+              process.exit(0);
+            }
+            if (terminalStatus && run.completed_at && metadata.continuous_cycle_completed_at) {
+              console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}:queue=${body.queueCount || 0}`);
+              process.exit(0);
+            }
+            process.stdout.write('waiting');
+            process.exit(0);
+          }
           if (terminalStatus && run.completed_at) {
             console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
             process.exit(0);
