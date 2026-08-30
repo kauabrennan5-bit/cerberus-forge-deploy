@@ -14,8 +14,8 @@ const expandedCategories = [
   "Infantil",
 ] as const;
 
-test("profile 1.5 expands recall only where production still has empty categories", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");
+test("profile 1.6 preserves expanded recall for categories that were empty", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");
   for (const category of expandedCategories) {
     const profile = profileForCategory(category);
     assert.ok(profile.queries.length >= 12, `${category} must expose at least twelve discovery queries`);

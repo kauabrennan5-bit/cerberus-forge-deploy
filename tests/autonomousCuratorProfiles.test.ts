@@ -3,12 +3,12 @@ import assert from "node:assert/strict";
 import { AUTONOMOUS_CURATOR_PROFILES, AUTONOMOUS_CURATOR_PROFILE_VERSION } from "../server/services/autonomousCuratorProfiles";
 import { inferPublicProductCategory } from "../src/lib/productCategory";
 
-test("curator 1.5 keeps precise and unique discovery coverage per category", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");
+test("curator 1.6 combines broad marketplace recall with precise category coverage", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");
   assert.equal(AUTONOMOUS_CURATOR_PROFILES.length, 10);
 
   for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-    assert.ok(profile.queries.length >= 8, `${profile.category} precisa de pelo menos 8 consultas de descoberta`);
+    assert.ok(profile.queries.length >= 12, `${profile.category} precisa de pelo menos 12 consultas de descoberta`);
     assert.equal(new Set(profile.queries).size, profile.queries.length, `${profile.category} possui consultas duplicadas`);
     assert.ok(profile.strongStyleTerms.length >= 8, `${profile.category} precisa de vocabulário estético forte`);
     assert.ok(profile.signatureTerms.length >= 8, `${profile.category} precisa de sinais de forma/material`);

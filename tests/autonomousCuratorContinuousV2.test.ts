@@ -9,6 +9,7 @@ const {
   DAY_MS,
   dueForPublication,
   discoveryPage,
+  discoveryPages,
   trustedEvidenceOverride,
   similarityUniverse,
   queueNote,
@@ -53,6 +54,30 @@ test("cycle pagination expands through all ten official result pages", () => {
   const pages = new Set<number>();
   for (let cycle = 1; cycle <= 10; cycle += 1) pages.add(discoveryPage(cycle, "Tecnologia", 0));
   assert.deepEqual([...pages].sort((a, b) => a - b), [1,2,3,4,5,6,7,8,9,10]);
+});
+
+test("every query starts from relevance page 1 and deep exploration remains bounded", () => {
+  for (let cycle = 1; cycle <= 10; cycle += 1) {
+    let deep = 0;
+    for (let queryIndex = 0; queryIndex < 12; queryIndex += 1) {
+      const pages = discoveryPages(cycle, "Iluminação", queryIndex);
+      assert.equal(pages[0], 1);
+      assert.ok(pages.length === 1 || pages.length === 2);
+      if (pages.length === 2) {
+        deep += 1;
+        assert.ok(pages[1] >= 2 && pages[1] <= 10);
+      }
+    }
+    assert.ok(deep <= 4);
+  }
+});
+
+test("continuous discovery compares qualified finalists instead of publishing the first passing item", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+  assert.match(source, /qualified\.push/);
+  assert.match(source, /BEST_OF_\$\{qualified\.length\}_QUALIFIED_CANDIDATES/);
+  assert.doesNotMatch(source, /if \(evaluated\.candidate\) return \{ candidate: evaluated\.candidate/);
+  assert.match(source, /for \(const query of queries\) await collectPage\(query, 1\)/);
 });
 
 test("official image evidence is injected only as data and still goes through canonical image review", () => {

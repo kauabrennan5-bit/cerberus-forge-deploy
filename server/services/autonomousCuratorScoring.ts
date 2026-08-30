@@ -79,13 +79,21 @@ export function cheapProfileScore(profile: AutonomousCuratorCategoryProfile, tit
   if (!normalizedTitle) return -1000;
   if (hasBlockedProfileTerm(profile, title)) return -1000;
   const signals = aestheticSignals(profile, title);
-  // Precision-first: "retro" sozinho, ou um único material, não é identidade Cerberus.
-  if (signals.strong === 0 && signals.signature < 2) return -1000;
   const queryVocabulary = new Set(profile.queries.flatMap(query => [...tokens(query)]));
   const titleTokens = tokens(title);
   let queryHits = 0;
   for (const token of titleTokens) if (queryVocabulary.has(token)) queryHits += 1;
-  return signals.strong * 60 + signals.signature * 14 + queryHits * 2;
+
+  // This is a recall/ranking gate, not the final editorial gate. Marketplace
+  // titles are often terse, so one useful aesthetic/material signal can enter
+  // enrichment. Final style, image, category, value and threshold gates remain
+  // authoritative after extraction.
+  if (signals.strong === 0 && signals.signature === 0 && queryHits < 2) return -1000;
+
+  const aestheticScore = signals.strong * 60 + signals.signature * 14;
+  const vocabularyScore = Math.min(10, queryHits) * 4;
+  const recallFloor = signals.strong > 0 || signals.signature > 0 ? 8 : 0;
+  return aestheticScore + vocabularyScore + recallFloor;
 }
 
 function styleFit(profile: AutonomousCuratorCategoryProfile, text: string): { score: number; strong: number; signature: number } {
