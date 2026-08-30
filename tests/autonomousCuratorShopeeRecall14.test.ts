@@ -8,12 +8,14 @@ import {
 } from "../server/services/autonomousCuratorProfiles";
 import { cheapProfileScore } from "../server/services/autonomousCuratorScoring";
 
-test("profile 1.5 uses concrete Shopee-calibrated discovery anchors", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.5");
+test("profile 1.6 uses broad plus concrete Shopee-calibrated discovery anchors", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");
 
   const lighting = profileForCategory("Iluminação");
   assert.ok(lighting.queries.includes("luminaria cogumelo cromada space age"));
   assert.ok(lighting.queries.includes("abajur cogumelo bauhaus"));
+  assert.ok(lighting.queries.includes("luminaria bauhaus"));
+  assert.ok(lighting.queries.includes("abajur cogumelo"));
 
   const technology = profileForCategory("Tecnologia");
   assert.ok(technology.queries.includes("radio bluetooth retro madeira vintage"));
@@ -24,7 +26,8 @@ test("profile 1.5 uses concrete Shopee-calibrated discovery anchors", () => {
 test("iconic category archetypes outrank generic recall without weakening the final gates", () => {
   const lighting = profileForCategory("Iluminação");
   assert.ok(cheapProfileScore(lighting, "Luminária de Mesa Cogumelo Metálico Touch") > -1000);
-  assert.equal(cheapProfileScore(lighting, "Luminária cromada moderna para mesa"), -1000);
+  assert.ok(cheapProfileScore(lighting, "Luminária cromada moderna para mesa") > -1000);
+  assert.ok(cheapProfileScore(lighting, "Luminária de Mesa Cogumelo Metálico Touch") > cheapProfileScore(lighting, "Luminária cromada moderna para mesa"));
 
   const technology = profileForCategory("Tecnologia");
   const iconic = cheapProfileScore(technology, "Rádio Retro Vintage Portátil Bluetooth Madeira");

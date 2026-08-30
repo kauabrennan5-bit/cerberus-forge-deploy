@@ -34,6 +34,8 @@ const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEARCH_MAX_PAGE = 10;
 const MAX_CYCLE_HISTORY = 48;
+const EXPLORATION_QUERY_MODULUS = 3;
+const QUALIFIED_COMPARISON_TARGET = 4;
 
 type QueueMetadata = {
   score: number;
@@ -174,6 +176,15 @@ function discoveryPage(cycleNumber: number, category: string, queryIndex: number
   let hash = 0;
   for (const char of category) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) >>> 0;
   return 1 + ((Math.max(1, cycleNumber) - 1 + queryIndex + (hash % SEARCH_MAX_PAGE)) % SEARCH_MAX_PAGE);
+}
+
+function discoveryPages(cycleNumber: number, category: string, queryIndex: number): number[] {
+  const exploration = discoveryPage(cycleNumber, category, queryIndex);
+  if (exploration === 1) return [1];
+  const explorationSlot = (Math.max(1, cycleNumber) - 1) % EXPLORATION_QUERY_MODULUS;
+  // Relevance page 1 is mandatory. A rotating third of queries can also
+  // inspect one deeper page when the page-1 pool is still too small.
+  return queryIndex % EXPLORATION_QUERY_MODULUS === explorationSlot ? [1, exploration] : [1];
 }
 
 function rotateQueries(profile: AutonomousCuratorCategoryProfile, cycleNumber: number): string[] {
@@ -377,18 +388,13 @@ async function discoverQualifiedCandidate(input: {
   const candidatePool: Array<{ query: string; page: number; item: SearchOfferItem; cheap: number }> = [];
   const seenIdentities = new Set<string>();
 
-  // Recall first: collect a broad, cheap pool across every rotated query/page.
-  // Expensive affiliate/extraction/image/editorial evaluation happens only after
-  // the global pool is deduplicated and ranked by Cerberus style signals.
-  for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
-    const query = queries[queryIndex];
-    const page = discoveryPage(input.cycleNumber, input.profile.category, queryIndex);
+  const collectPage = async (query: string, page: number): Promise<void> => {
     searchedPages.push(page);
     const search = await input.client.searchOffers({ query, limit: input.config.maxSearchCandidates, page });
     if (!search.ok) {
       lastReason = `SHOPEE_SEARCH:${search.reason || "failed"}`;
       if (["SHOPEE_AUTH_ERROR", "SHOPEE_FORBIDDEN"].includes(String(search.reason))) throw new Error(lastReason);
-      continue;
+      return;
     }
     for (const item of search.items) {
       if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
@@ -396,21 +402,35 @@ async function discoverQualifiedCandidate(input: {
       const identityKey = `${item.shopId}:${item.itemId}`;
       if (seenIdentities.has(identityKey)) continue;
       seenIdentities.add(identityKey);
-      candidatePool.push({
-        query,
-        page,
-        item,
-        cheap: cheapProfileScore(input.profile, item.name || ""),
-      });
+      const cheap = cheapProfileScore(input.profile, item.name || "");
+      if (cheap <= -1000) continue;
+      candidatePool.push({ query, page, item, cheap });
+    }
+  };
+
+  // First pass mirrors the user's marketplace experience: every query gets
+  // the first relevance page before any deep-page exploration is considered.
+  for (const query of queries) await collectPage(query, 1);
+
+  // Deep exploration is a fallback, not the baseline. Only expand when the
+  // relevance pool is too small to feed the configured enrichment budget.
+  const recallTarget = Math.max(24, input.budget * 2);
+  if (candidatePool.length < recallTarget) {
+    for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
+      const pages = discoveryPages(input.cycleNumber, input.profile.category, queryIndex);
+      if (pages.length < 2) continue;
+      await collectPage(queries[queryIndex], pages[1]);
+      if (candidatePool.length >= recallTarget) break;
     }
   }
 
   candidatePool.sort((a, b) =>
-    b.cheap - a.cheap
+    (b.cheap + (b.page === 1 ? 12 : 0)) - (a.cheap + (a.page === 1 ? 12 : 0))
     || String(a.item.itemId).localeCompare(String(b.item.itemId))
     || a.query.localeCompare(b.query),
   );
 
+  const qualified: Array<{ candidate: CuratedCandidate; cheap: number; page: number }> = [];
   for (const entry of candidatePool) {
     if (examined >= input.budget) break;
     const shopId = String(entry.item.shopId);
@@ -434,10 +454,28 @@ async function discoverQualifiedCandidate(input: {
       config: input.config,
     });
     lastReason = evaluated.reason;
-    if (evaluated.candidate) return { candidate: evaluated.candidate, reason: evaluated.reason, examined, searchedPages };
+    if (evaluated.candidate) {
+      qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page });
+      if (qualified.length >= QUALIFIED_COMPARISON_TARGET) break;
+    }
   }
 
-  return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_HOURLY_CYCLE`, examined, searchedPages };
+  if (qualified.length > 0) {
+    qualified.sort((a, b) =>
+      b.candidate.score - a.candidate.score
+      || Number(a.page !== 1) - Number(b.page !== 1)
+      || b.cheap - a.cheap
+      || a.candidate.price - b.candidate.price,
+    );
+    return {
+      candidate: qualified[0].candidate,
+      reason: `BEST_OF_${qualified.length}_QUALIFIED_CANDIDATES`,
+      examined,
+      searchedPages,
+    };
+  }
+
+  return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_SCHEDULED_CYCLE`, examined, searchedPages };
 }
 
 function queuedForCategory(products: readonly Product[], category: PublicProductCategory): Product[] {
@@ -985,6 +1023,7 @@ export const autonomousCuratorContinuousV2Internals = {
   QUEUE_NOTE_PREFIX,
   dueForPublication,
   discoveryPage,
+  discoveryPages,
   rotateQueries,
   trustedEvidenceOverride,
   similarityUniverse,

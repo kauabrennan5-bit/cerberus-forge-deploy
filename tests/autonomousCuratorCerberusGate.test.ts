@@ -30,9 +30,9 @@ function score(category: Parameters<typeof profileForCategory>[0], rawTitle: str
   });
 }
 
-test("retro sozinho não é identidade Cerberus", () => {
+test("recall barato pode admitir título curto sem enfraquecer o gate final", () => {
   const profile = profileForCategory("Cozinha & Mesa");
-  assert.equal(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas"), -1000);
+  assert.ok(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas") > -1000);
   const result = score(
     "Cozinha & Mesa",
     "Jarra 1,8L Vidro Transparente Luxo Grande Suco Chá Água Design Retrô Cozinha",

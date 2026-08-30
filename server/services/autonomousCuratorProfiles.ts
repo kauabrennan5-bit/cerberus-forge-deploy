@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.5";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.6";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -31,17 +31,31 @@ const COMMON_BLOCKED = [
   "kawaii", "geek", "gamer rgb", "tematico", "temática", "tematica",
 ] as const;
 
+const BROAD_RECALL_QUERIES: Partial<Record<PublicProductCategory, readonly string[]>> = {
+  "Iluminação": ["luminaria bauhaus", "abajur cogumelo", "luminaria retro", "abajur vintage"],
+  "Decoração": ["decoracao bauhaus", "decoracao vintage", "vaso vintage", "espelho retro"],
+  "Móveis": ["moveis vintage", "mesa lateral vintage", "cadeira cromada", "mesa apoio retro"],
+  "Cozinha & Mesa": ["cozinha vintage", "copo vintage", "jarra vintage", "bandeja cromada"],
+  "Organização": ["organizador vintage", "cabideiro retro", "porta revista vintage", "organizador acrilico"],
+  "Vestuário": ["roupa masculina vintage", "jaqueta retro masculina", "camisa vintage masculina", "calca vintage masculina"],
+  "Calçados & Acessórios": ["oculos retro masculino", "cinto vintage masculino", "bolsa vintage masculina", "mocassim retro masculino"],
+  "Tecnologia": ["radio retro", "caixa som retro", "relogio retro mesa", "teclado vintage"],
+  "Beleza & Bem-estar": ["espelho maquiagem retro", "necessaire vintage", "porta perfume vintage", "espelho maquiagem"],
+  "Infantil": ["brinquedo madeira", "blocos madeira", "brinquedo geometrico", "mobile infantil"],
+};
+
 function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms" | "preferredTerms"> & { strongStyleTerms?: readonly string[] }): AutonomousCuratorCategoryProfile {
   const strongStyleTerms = input.strongStyleTerms || STRONG_STYLE_TERMS;
   return {
     ...input,
+    queries: [...(BROAD_RECALL_QUERIES[input.category] || []), ...input.queries],
     strongStyleTerms,
     preferredTerms: [...strongStyleTerms, ...input.signatureTerms],
   };
 }
 
 /**
- * Perfil 1.5: precision-first com recall ampliado nas categorias que ficaram
+ * Perfil 1.6: precision-first com recall ampliado nas categorias que ficaram
  * sem cobertura em runtime. As consultas adicionais usam arquétipos concretos
  * do mesmo repertório Cerberus; gates finais, bloqueios e preços não mudam.
  * Zero por categoria continua possível somente após uma busca mais ampla.

@@ -167,9 +167,13 @@ jobs:
             token="$(get_oidc_token)"
             filter="?dryRun=${dry_run}"
             if [ "$MODE" = "continuous" ]; then filter='?dryRun=false'; fi
-            curl --fail-with-body --silent --show-error --max-time 30 \
+            if ! curl --fail-with-body --silent --show-error --max-time 45 \
               -o "$status_file" -H "Authorization: Bearer ${token}" \
-              "$base/api/internal/autonomous-curator/status${filter}"
+              "$base/api/internal/autonomous-curator/status${filter}"; then
+              echo "Autonomous Curator status poll transient failure; retrying."
+              sleep 15
+              continue
+            fi
 
             state="$(node - "$status_file" "$expected_date" "$MODE" "$expected_cycle" <<'NODE'
           const fs = require('node:fs');
