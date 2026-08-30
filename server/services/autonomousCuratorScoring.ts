@@ -7,8 +7,11 @@ export type AutonomousCuratorScoreBreakdown = {
   styleFit: number;
   novelty: number;
   imageQuality: number;
+  valueFit: number;
   categoryFit: number;
   completeness: number;
+  strongStyleHits: number;
+  signatureHits: number;
   maximumCatalogSimilarity: number;
   finalScore: number;
 };
@@ -39,6 +42,19 @@ function tokens(value: string): Set<string> {
   return new Set(normalize(value).split(" ").filter(token => token.length >= 3));
 }
 
+function includesTerm(normalizedText: string, term: string): boolean {
+  const normalizedTerm = normalize(term);
+  if (!normalizedTerm) return false;
+  return ` ${normalizedText} `.includes(` ${normalizedTerm} `) || normalizedText.includes(normalizedTerm);
+}
+
+function aestheticSignals(profile: AutonomousCuratorCategoryProfile, text: string): { strong: number; signature: number } {
+  const normalizedText = normalize(text);
+  const strong = new Set(profile.strongStyleTerms.filter(term => includesTerm(normalizedText, term))).size;
+  const signature = new Set(profile.signatureTerms.filter(term => includesTerm(normalizedText, term))).size;
+  return { strong, signature };
+}
+
 export function tokenJaccard(a: string, b: string): number {
   const left = tokens(a);
   const right = tokens(b);
@@ -53,27 +69,38 @@ export function hasBlockedProfileTerm(profile: AutonomousCuratorCategoryProfile,
   const haystack = ` ${normalize(text)} `;
   for (const term of profile.blockedTerms) {
     const needle = normalize(term);
-    if (needle && haystack.includes(` ${needle} `)) return term;
+    if (needle && (haystack.includes(` ${needle} `) || haystack.includes(` ${needle}`))) return term;
   }
   return null;
 }
 
 export function cheapProfileScore(profile: AutonomousCuratorCategoryProfile, title: string): number {
   const normalizedTitle = normalize(title);
-  if (!normalizedTitle) return 0;
+  if (!normalizedTitle) return -1000;
   if (hasBlockedProfileTerm(profile, title)) return -1000;
-  const hits = profile.preferredTerms.filter(term => normalizedTitle.includes(normalize(term))).length;
+  const signals = aestheticSignals(profile, title);
+  // Precision-first: "retro" sozinho, ou um único material, não é identidade Cerberus.
+  if (signals.strong === 0 && signals.signature < 2) return -1000;
   const queryVocabulary = new Set(profile.queries.flatMap(query => [...tokens(query)]));
   const titleTokens = tokens(title);
   let queryHits = 0;
   for (const token of titleTokens) if (queryVocabulary.has(token)) queryHits += 1;
-  return hits * 20 + queryHits * 5;
+  return signals.strong * 60 + signals.signature * 14 + queryHits * 2;
 }
 
-function styleFit(profile: AutonomousCuratorCategoryProfile, text: string): number {
-  const normalizedText = normalize(text);
-  const uniqueHits = new Set(profile.preferredTerms.filter(term => normalizedText.includes(normalize(term))));
-  return Math.min(100, 70 + uniqueHits.size * 15);
+function styleFit(profile: AutonomousCuratorCategoryProfile, text: string): { score: number; strong: number; signature: number } {
+  const signals = aestheticSignals(profile, text);
+  let score = 0;
+  if (signals.strong >= 2) score = 100;
+  else if (signals.strong === 1 && signals.signature >= 2) score = 98;
+  else if (signals.strong === 1 && signals.signature === 1) score = 94;
+  else if (signals.strong === 1) score = 86;
+  else if (signals.signature >= 5) score = 82;
+  else if (signals.signature === 4) score = 75;
+  else if (signals.signature === 3) score = 68;
+  else if (signals.signature === 2) score = 55;
+  else if (signals.signature === 1) score = 30;
+  return { score, strong: signals.strong, signature: signals.signature };
 }
 
 function imageQuality(curation: ProductImageCuration): number {
@@ -84,6 +111,13 @@ function imageQuality(curation: ProductImageCuration): number {
   const average = confidence.reduce((sum, score) => sum + score, 0) / confidence.length;
   const coverageBonus = Math.min(8, Math.max(0, clean.length - 1) * 2);
   return Math.min(100, Math.round(average + coverageBonus));
+}
+
+function valueFit(profile: AutonomousCuratorCategoryProfile, price: number): number {
+  if (!Number.isFinite(price) || price <= 0) return 0;
+  if (price <= profile.maxAutoPrice) return 100;
+  if (price <= profile.maxReviewPrice) return 65;
+  return 0;
 }
 
 export function maximumCatalogSimilarity(displayTitle: string, category: string, existingProducts: readonly Product[]): number {
@@ -105,8 +139,11 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
       styleFit: 0,
       novelty: 0,
       imageQuality: 0,
+      valueFit: 0,
       categoryFit: 0,
       completeness: 0,
+      strongStyleHits: 0,
+      signatureHits: 0,
       maximumCatalogSimilarity: 1,
       finalScore: 0,
     };
@@ -116,6 +153,7 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
   const novelty = Math.max(0, Math.min(100, Math.round((1 - similarity) * 100)));
   const style = styleFit(input.profile, `${input.rawTitle} ${input.displayTitle} ${input.description}`);
   const image = imageQuality(input.imageCuration);
+  const value = valueFit(input.profile, input.price);
   const categoryFit = input.category === input.profile.category ? 100 : 0;
   const complete = input.displayTitle.trim().length >= 4
     && input.description.trim().length >= 24
@@ -123,22 +161,33 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     && input.imageCuration.status === "ready" && Boolean(input.imageCuration.primaryImageUrl)
     ? 100 : 0;
   const pipeline = Math.max(0, Math.min(100, Math.round(input.pipelineScore)));
-  const finalScore = Math.round(
-    pipeline * 0.25
-    + style * 0.20
-    + novelty * 0.20
-    + image * 0.20
-    + categoryFit * 0.10
+
+  let finalScore = Math.round(
+    pipeline * 0.15
+    + style.score * 0.35
+    + novelty * 0.15
+    + image * 0.15
+    + value * 0.10
+    + categoryFit * 0.05
     + complete * 0.05,
   );
 
+  // Gates Cerberus são absolutos: score técnico perfeito não compensa produto
+  // genérico, fora do nicho ou sem valor percebido compatível com um "find".
+  if (style.score < 72 || value === 0 || categoryFit === 0 || complete === 0 || image === 0) {
+    finalScore = Math.min(finalScore, 71);
+  }
+
   return {
     pipelineQuality: pipeline,
-    styleFit: style,
+    styleFit: style.score,
     novelty,
     imageQuality: image,
+    valueFit: value,
     categoryFit,
     completeness: complete,
+    strongStyleHits: style.strong,
+    signatureHits: style.signature,
     maximumCatalogSimilarity: Number(similarity.toFixed(4)),
     finalScore,
   };
