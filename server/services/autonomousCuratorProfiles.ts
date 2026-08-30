@@ -97,7 +97,7 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
     category: "Beleza & Bem-estar",
     queries: [
       "espelho maquiagem", "necessaire maquiagem", "porta perfume", "estojo maquiagem",
-      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "acessorio maquiagem viagem",
+      "escova cabelo design", "pincel maquiagem design", "pente cabelo madeira", "porta pincel maquiagem",
     ],
     preferredTerms: ["vidro", "acrilico", "minimalista", "retro", "design", "metal", "espelho", "couro", "maquiagem", "perfume"],
     blockedTerms: [...COMMON_BLOCKED, "medicamento", "remedio", "hormonio", "emagrecedor", "suplemento", "clareador ingerivel"],
