@@ -17,8 +17,8 @@ const REPO_NAME = "cerberus-forge-deploy";
 const FILE_PATH = "public/data/products.json";
 const BASE_BRANCH = "main";
 const CATALOG_BRANCH_PREFIX = "catalog-sync/";
-const DEFAULT_PR_TIMEOUT_MS = 20 * 60_000;
-const DEFAULT_PR_POLL_MS = 10_000;
+const DEFAULT_PROMOTION_TIMEOUT_MS = 20 * 60_000;
+const DEFAULT_PROMOTION_POLL_MS = 10_000;
 
 export interface GitHubCatalogSyncResult {
   success: boolean;
@@ -46,10 +46,10 @@ function githubDiagnostic(operationId: string, error: unknown): OperationalDiagn
     code: isAuthFailure ? "GITHUB_AUTH_ERROR" : "GITHUB_SYNC_ERROR",
     message: isAuthFailure
       ? "A autenticação do GitHub recusou a sincronização do catálogo."
-      : "O GitHub não confirmou a gravação versionada de products.json.",
+      : "O GitHub não confirmou a promoção protegida de products.json.",
     likelyCause: isAuthFailure
-      ? "Token ausente, expirado, inválido ou sem permissão Contents/Pull Requests para promover o catálogo no repositório Cerberus."
-      : "Falha de rede, conflito de arquivo, gate obrigatório não concluído, branch indisponível ou erro da API do GitHub.",
+      ? "Token ausente, expirado, inválido ou sem permissão Contents para gravar a branch de catálogo no repositório Cerberus."
+      : "Falha de rede, conflito com main, gate weekly-production-final não concluído, branch indisponível ou erro da API do GitHub.",
     impact: "A projeção pública não pode ser considerada publicada no commit atual.",
     recoverability: "ADMIN_APPROVAL",
     retryable: !isAuthFailure,
@@ -81,10 +81,6 @@ function decodeGitHubContent(data: unknown): string | null {
   return file.content;
 }
 
-function isRetryableMergeStatus(status: number | undefined): boolean {
-  return status === 405 || status === 409 || status === 422;
-}
-
 async function getBranchSha(octokit: Octokit, branch: string): Promise<string | null> {
   try {
     const { data } = await octokit.git.getRef({ owner: REPO_OWNER, repo: REPO_NAME, ref: `heads/${branch}` });
@@ -97,22 +93,9 @@ async function getBranchSha(octokit: Octokit, branch: string): Promise<string | 
 
 async function ensureCatalogBranch(octokit: Octokit, branch: string, baseSha: string): Promise<void> {
   const existingSha = await getBranchSha(octokit, branch);
-  if (!existingSha) {
-    await octokit.git.createRef({ owner: REPO_OWNER, repo: REPO_NAME, ref: `refs/heads/${branch}`, sha: baseSha });
-    return;
+  if (existingSha) {
+    await octokit.git.deleteRef({ owner: REPO_OWNER, repo: REPO_NAME, ref: `heads/${branch}` });
   }
-
-  const { data: openPrs } = await octokit.pulls.list({
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    state: "open",
-    head: `${REPO_OWNER}:${branch}`,
-    base: BASE_BRANCH,
-    per_page: 10,
-  });
-  if (openPrs.length > 0) return;
-
-  await octokit.git.deleteRef({ owner: REPO_OWNER, repo: REPO_NAME, ref: `heads/${branch}` });
   await octokit.git.createRef({ owner: REPO_OWNER, repo: REPO_NAME, ref: `refs/heads/${branch}`, sha: baseSha });
 }
 
@@ -146,85 +129,50 @@ async function updateCatalogBranch(octokit: Octokit, branch: string, content: st
   return { contentSha: response.data.content?.sha };
 }
 
-async function getOrCreateCatalogPr(octokit: Octokit, branch: string, message: string): Promise<number> {
-  const { data: openPrs } = await octokit.pulls.list({
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    state: "open",
-    head: `${REPO_OWNER}:${branch}`,
-    base: BASE_BRANCH,
-    per_page: 10,
-  });
-  if (openPrs[0]) return openPrs[0].number;
-
-  const created = await octokit.pulls.create({
-    owner: REPO_OWNER,
-    repo: REPO_NAME,
-    title: message,
-    head: branch,
-    base: BASE_BRANCH,
-    body: [
-      "Automated Cerberus catalog projection sync.",
-      "",
-      "This PR exists because `main` is protected. It must pass the repository-required checks before the catalog projection can be promoted.",
-    ].join("\n"),
-    maintainer_can_modify: true,
-  });
-  return created.data.number;
-}
-
-async function waitForProtectedMerge(octokit: Octokit, pullNumber: number, message: string): Promise<string> {
-  const timeoutMs = positiveMs(process.env.GITHUB_CATALOG_PR_TIMEOUT_MS, DEFAULT_PR_TIMEOUT_MS, 60_000, 35 * 60_000);
-  const pollMs = positiveMs(process.env.GITHUB_CATALOG_PR_POLL_MS, DEFAULT_PR_POLL_MS, 3_000, 30_000);
+async function waitForProtectedPromotion(
+  octokit: Octokit,
+  content: string,
+): Promise<{ commitSha: string; contentSha?: string }> {
+  const timeoutMs = positiveMs(
+    process.env.GITHUB_CATALOG_PROMOTION_TIMEOUT_MS || process.env.GITHUB_CATALOG_PR_TIMEOUT_MS,
+    DEFAULT_PROMOTION_TIMEOUT_MS,
+    60_000,
+    35 * 60_000,
+  );
+  const pollMs = positiveMs(
+    process.env.GITHUB_CATALOG_PROMOTION_POLL_MS || process.env.GITHUB_CATALOG_PR_POLL_MS,
+    DEFAULT_PROMOTION_POLL_MS,
+    3_000,
+    30_000,
+  );
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const { data: current } = await octokit.pulls.get({ owner: REPO_OWNER, repo: REPO_NAME, pull_number: pullNumber });
-    if (current.merged) {
-      if (!current.merge_commit_sha) throw new Error("CATALOG_PR_MERGED_WITHOUT_COMMIT_SHA");
-      return current.merge_commit_sha;
-    }
-    if (current.state === "closed") throw new Error("CATALOG_PR_CLOSED_WITHOUT_MERGE");
+    const commitSha = await getBranchSha(octokit, BASE_BRANCH);
+    if (!commitSha) throw new Error("GITHUB_MAIN_REF_MISSING");
 
-    const headSha = current.head.sha;
-    if (current.mergeable_state === "dirty") throw new Error("CATALOG_PR_HAS_MERGE_CONFLICTS");
-    if (current.mergeable_state === "behind") {
-      try {
-        await octokit.pulls.updateBranch({
-          owner: REPO_OWNER,
-          repo: REPO_NAME,
-          pull_number: pullNumber,
-          expected_head_sha: headSha,
-        });
-      } catch (error: any) {
-        if (!isRetryableMergeStatus(error?.status)) throw error;
-      }
-      await sleep(pollMs);
-      continue;
-    }
-
-    try {
-      const merged = await octokit.pulls.merge({
-        owner: REPO_OWNER,
-        repo: REPO_NAME,
-        pull_number: pullNumber,
-        sha: headSha,
-        merge_method: "squash",
-        commit_title: `${message} [bot]`,
-      });
-      if (merged.data.merged && merged.data.sha) return merged.data.sha;
-    } catch (error: any) {
-      if (!isRetryableMergeStatus(error?.status)) throw error;
+    const { data } = await octokit.repos.getContent({
+      owner: REPO_OWNER,
+      repo: REPO_NAME,
+      path: FILE_PATH,
+      ref: BASE_BRANCH,
+    });
+    if (!Array.isArray(data) && decodeGitHubContent(data) === content) {
+      return { commitSha, contentSha: data.sha };
     }
     await sleep(pollMs);
   }
-  throw new Error("CATALOG_PR_GATE_TIMEOUT");
+
+  throw new Error("CATALOG_PROTECTED_PROMOTION_TIMEOUT");
 }
 
 /**
- * Sincroniza a projeção local usando branch + PR protegido. `main` nunca recebe
- * escrita direta: o retorno só é sucesso depois que os checks obrigatórios
- * permitem um squash merge travado pelo SHA exato do head do PR.
+ * Sincroniza a projeção local usando uma branch de catálogo content-addressed.
+ * O backend nunca escreve diretamente em `main` e não precisa de permissão de
+ * Pull Requests: a branch dispara o gate `weekly-production-final`, e o próprio
+ * GitHub Actions promove exatamente o SHA validado para `main` apenas se a
+ * proteção aceitar o fast-forward. O retorno só é sucesso quando `main` contém
+ * exatamente o conteúdo exportado.
  */
 export async function syncCatalogToGitHub(
   message = "update: catalog products.json",
@@ -245,7 +193,7 @@ export async function syncCatalogToGitHub(
         code: "GITHUB_AUTH_ERROR",
         message: "GITHUB_TOKEN não está configurado no processo do backend.",
         likelyCause: "A credencial de sincronização não foi configurada ou não foi carregada após reinício.",
-        impact: "Nenhum PR protegido do catálogo pode ser criado no GitHub.",
+        impact: "Nenhuma branch protegida de catálogo pode ser criada no GitHub.",
         recoverability: "ADMIN_APPROVAL",
         retryable: false,
       }),
@@ -292,8 +240,7 @@ export async function syncCatalogToGitHub(
     const branch = catalogBranchName(content);
     await ensureCatalogBranch(octokit, branch, baseSha);
     const updated = await updateCatalogBranch(octokit, branch, content, message);
-    const pullNumber = await getOrCreateCatalogPr(octokit, branch, message);
-    const commitSha = await waitForProtectedMerge(octokit, pullNumber, message);
+    const promoted = await waitForProtectedPromotion(octokit, content);
 
     try {
       await octokit.git.deleteRef({ owner: REPO_OWNER, repo: REPO_NAME, ref: `heads/${branch}` });
@@ -301,12 +248,12 @@ export async function syncCatalogToGitHub(
       console.warn(`[GitHub Sync] operation=${operationId} branch_cleanup_failed reason=${sanitizeOperationalText(cleanupError)}`);
     }
 
-    console.info(`[GitHub Sync] operation=${operationId} protected_merge=${commitSha.slice(0, 7)} pr=${pullNumber} file=${FILE_PATH}`);
+    console.info(`[GitHub Sync] operation=${operationId} protected_promotion=${promoted.commitSha.slice(0, 7)} file=${FILE_PATH}`);
     return {
       success: true,
       operationId,
-      commitSha,
-      contentSha: updated.contentSha,
+      commitSha: promoted.commitSha,
+      contentSha: promoted.contentSha || updated.contentSha,
     };
   } catch (error) {
     const diagnostic = githubDiagnostic(operationId, error);
@@ -318,5 +265,4 @@ export async function syncCatalogToGitHub(
 export const githubCatalogSyncInternals = {
   catalogBranchName,
   decodeGitHubContent,
-  isRetryableMergeStatus,
 };
