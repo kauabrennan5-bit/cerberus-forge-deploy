@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Recover and apply recall 1.6 code patch
+      - name: Recover and apply validated recall 1.6 code patch
         shell: bash
         run: |
           set -euo pipefail
@@ -38,49 +38,17 @@ jobs:
           import os
 
           runner_temp = Path(os.environ["RUNNER_TEMP"])
-          src = runner_temp / "previous-helper.yml"
-          text = src.read_text()
+          text = (runner_temp / "previous-helper.yml").read_text()
           marker = "          python3 <<'PY'\n"
           start = text.index(marker) + len(marker)
           end = text.index("\n          PY", start)
           body = text[start:end]
-          lines = []
-          for line in body.splitlines():
-              lines.append(line[10:] if line.startswith("          ") else line)
+          lines = [line[10:] if line.startswith("          ") else line for line in body.splitlines()]
           patch = "\n".join(lines) + "\n"
           cutoff = patch.index('workflow = ".github/workflows/autonomous-curator.yml"')
           (runner_temp / "recall-patch.py").write_text(patch[:cutoff])
           EXTRACT
           python3 "$RUNNER_TEMP/recall-patch.py"
-
-      - name: Make status polling tolerant to transient backend timeouts
-        shell: bash
-        run: |
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path(".github/workflows/autonomous-curator.yml")
-          lines = path.read_text().splitlines()
-          matches = [i for i, line in enumerate(lines) if 'autonomous-curator/status${filter}' in line]
-          if len(matches) != 1:
-              raise SystemExit(f"expected one filtered status call, found {len(matches)}")
-          i = matches[0]
-          curl_i = i - 2
-          if curl_i < 0 or "curl --fail-with-body" not in lines[curl_i] or 'status_file' not in lines[i - 1]:
-              raise SystemExit("filtered status call shape changed unexpectedly")
-          indent = lines[curl_i][:len(lines[curl_i]) - len(lines[curl_i].lstrip())]
-          replacement = [
-              indent + 'if ! curl --fail-with-body --silent --show-error --max-time 45 \\',
-              indent + '  -o "$status_file" -H "Authorization: Bearer ${token}" \\',
-              indent + '  "$base/api/internal/autonomous-curator/status${filter}"; then',
-              indent + '  echo "Autonomous Curator status poll transient failure; retrying."',
-              indent + '  sleep 15',
-              indent + '  continue',
-              indent + 'fi',
-          ]
-          lines[curl_i:i + 1] = replacement
-          path.write_text("\n".join(lines) + "\n")
-          PY
 
       - name: Focused curator tests
         run: >-
@@ -93,17 +61,15 @@ jobs:
       - name: Diff check
         run: git diff --check
 
-      - name: Commit validated patch and remove one-shot workflow
+      - name: Commit and push validated non-workflow patch
         shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/curator-recall-fix-once.yml
           git add server/services/autonomousCuratorProfiles.ts \
                   server/services/autonomousCuratorScoring.ts \
                   server/services/autonomousCuratorContinuousV2.ts \
-                  .github/workflows/autonomous-curator.yml \
                   tests/autonomousCuratorContinuousV2.test.ts \
                   tests/autonomousCuratorCerberusGate.test.ts \
                   tests/autonomousCuratorShopeeRecall14.test.ts \
