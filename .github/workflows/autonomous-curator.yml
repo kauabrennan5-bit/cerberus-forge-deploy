@@ -1,10 +1,11 @@
 name: Cerberus Autonomous Curator
-# One-time recovery: only a push explicitly marked [curator-real-once] runs REAL; every other push remains dry_run.
+# Scheduled recovery windows retry only categories that have not consumed their daily slot; ordinary pushes remain dry_run.
 
 on:
   schedule:
-    # 08:00 America/Fortaleza (UTC-3)
-    - cron: "0 11 * * *"
+    # 08:00, 12:00, 16:00 e 20:00 America/Fortaleza (UTC-3).
+    # Runs posteriores reutilizam a mesma auditoria diária e pulam categorias já publicadas/em review.
+    - cron: "0 11,15,19,23 * * *"
   push:
     branches:
       - main
@@ -41,7 +42,7 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && contains(github.event.head_commit.message, '[curator-real-once]') && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      MODE: ${{ github.event_name == 'schedule' && 'real' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
