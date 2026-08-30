@@ -43,6 +43,34 @@ const productionImageReviewBudget = new ExternalCallBudget(
   60 * 60 * 1000,
 );
 
+const CURRENT_IMAGE_REVIEW_MODEL = "gemini-3.7-flash";
+const LEGACY_IMAGE_REVIEW_MODELS = new Set(["gemini-3.6-flash", "gemini-2.5-flash"]);
+
+function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
+  const configured = String(env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "").trim();
+  if (!configured || LEGACY_IMAGE_REVIEW_MODELS.has(configured)) return CURRENT_IMAGE_REVIEW_MODEL;
+  return configured;
+}
+
+function permanentProviderFailure(error: unknown): boolean {
+  const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+  return [
+    "404",
+    "not found",
+    "model_not_found",
+    "model not found",
+    "api key not valid",
+    "api_key_invalid",
+    "permission denied",
+    "permission_denied",
+    "unauthenticated",
+    "quota exceeded",
+    "resource_exhausted",
+    "rate limit",
+    "rate_limit",
+  ].some(marker => message.includes(marker));
+}
+
 function reviewRequired(
   rawImageUrls: string[],
   reason: NonNullable<ProductImageCuration["reason"]>,
@@ -195,7 +223,11 @@ async function reviewWithProvider(input: {
   try {
     const response = await input.generateContent(buildReviewRequest(input.downloaded, input.title, input.model));
     return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(response.text));
-  } catch {
+  } catch (error) {
+    // Erros permanentes de modelo/auth/quota não melhoram ao reenviar a mesma
+    // solicitação imagem por imagem. Evita drenar o budget da categoria/dia.
+    if (permanentProviderFailure(error)) return [];
+
     // Um payload multimodal ruim não pode derrubar todas as imagens válidas.
     // Reavalia individualmente, cobrando budget por chamada extra e mantendo
     // fail-closed para qualquer imagem que continue indisponível no provider.
@@ -236,7 +268,7 @@ export async function reviewProductImages(
   const downloaded = await downloadReviewableImages(rawImageUrls, fetchImpl, maxImages, timeoutMs);
   if (downloaded.length === 0) return reviewRequired(rawImageUrls, "image_fetch_unavailable");
 
-  const model = env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash";
+  const model = resolveImageReviewModel(env);
   const generateContent: GenerateContent = options.generateContent || (async input => {
     const ai = new GoogleGenAI({
       apiKey,
@@ -254,7 +286,7 @@ export async function reviewProductImages(
     budget,
   });
   if (assessments.length === 0) {
-    console.warn("[Product Image Review] provider indisponível para lote e imagens isoladas");
+    console.warn(`[Product Image Review] provider indisponível para lote e imagens isoladas (model=${model})`);
     return reviewRequired(rawImageUrls, "image_review_model_unavailable");
   }
 
@@ -297,5 +329,7 @@ export const productImageReviewInternals = {
   parseModelJson,
   buildReviewRequest,
   reviewWithProvider,
+  resolveImageReviewModel,
+  permanentProviderFailure,
   positiveInt,
 };
