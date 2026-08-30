@@ -1,0 +1,51 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { normalizeShopeeImageReference } from "../server/commercial/affiliate/shopeeApiClient";
+import {
+  AUTONOMOUS_CURATOR_PROFILE_VERSION,
+  profileForCategory,
+} from "../server/services/autonomousCuratorProfiles";
+import { cheapProfileScore } from "../server/services/autonomousCuratorScoring";
+
+test("profile 1.4 uses concrete Shopee-calibrated discovery anchors", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.4");
+
+  const lighting = profileForCategory("Iluminação");
+  assert.ok(lighting.queries.includes("luminaria cogumelo cromada space age"));
+  assert.ok(lighting.queries.includes("abajur cogumelo bauhaus"));
+
+  const technology = profileForCategory("Tecnologia");
+  assert.ok(technology.queries.includes("radio bluetooth retro madeira vintage"));
+  assert.ok(technology.queries.includes("radio retro portatil bluetooth madeira"));
+  assert.equal(technology.queries.includes("tecnologia anos 70 design"), false);
+});
+
+test("iconic category archetypes improve recall without making generic retro sufficient", () => {
+  const lighting = profileForCategory("Iluminação");
+  assert.ok(cheapProfileScore(lighting, "Luminária de Mesa Cogumelo Metálico Touch") > -1000);
+  assert.equal(cheapProfileScore(lighting, "Luminária cromada moderna para mesa"), -1000);
+
+  const technology = profileForCategory("Tecnologia");
+  assert.ok(cheapProfileScore(technology, "Rádio Retro Vintage Portátil Bluetooth Madeira") > -1000);
+  assert.equal(cheapProfileScore(technology, "Cabo USB retro compacto"), -1000);
+});
+
+test("official Shopee image hashes normalize to the canonical Shopee CDN", () => {
+  const hash = "br-11134207-7r98o-mcwa1l01rv2988";
+  assert.equal(
+    normalizeShopeeImageReference(hash),
+    `https://down-br.img.susercontent.com/file/${hash}`,
+  );
+  assert.equal(
+    normalizeShopeeImageReference(`${hash}_tn`),
+    `https://down-br.img.susercontent.com/file/${hash}`,
+  );
+});
+
+test("official full image URLs remain usable and invalid references fail closed", () => {
+  const url = "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mcwa1l01rv2988";
+  assert.equal(normalizeShopeeImageReference(url), url);
+  assert.equal(normalizeShopeeImageReference("x"), null);
+  assert.equal(normalizeShopeeImageReference("javascript:alert(1)"), null);
+  assert.equal(normalizeShopeeImageReference(null), null);
+});
