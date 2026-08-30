@@ -47,6 +47,11 @@ function safeProviderErrorCode(value: unknown): string | null {
   return /^[a-z0-9_.-]{1,80}$/.test(normalized) ? normalized : null;
 }
 
+function safeProviderErrorParam(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  return /^[a-zA-Z0-9_.\[\]-]{1,120}$/.test(normalized) ? normalized : null;
+}
+
 function classifyOpenAIProviderProbe(httpStatus: number, errorCode: string | null): OpenAIProviderProbeStatus {
   if (httpStatus === 401 || httpStatus === 403) return "auth_error";
   if (httpStatus === 404) return "model_unavailable";
@@ -107,9 +112,11 @@ async function probeAutonomousCuratorProviders(
     const responseText = await response.text();
     if (!response.ok) {
       let errorCode: string | null = null;
+      let errorParam: string | null = null;
       try {
-        const parsed = JSON.parse(responseText) as { error?: { code?: unknown; type?: unknown } };
+        const parsed = JSON.parse(responseText) as { error?: { code?: unknown; type?: unknown; param?: unknown } };
         errorCode = safeProviderErrorCode(parsed?.error?.code) || safeProviderErrorCode(parsed?.error?.type);
+        errorParam = safeProviderErrorParam(parsed?.error?.param);
       } catch {
         // HTTP status remains sufficient for a safe classification.
       }
@@ -120,6 +127,7 @@ async function probeAutonomousCuratorProviders(
           status: classifyOpenAIProviderProbe(response.status, errorCode),
           httpStatus: response.status,
           errorCode,
+          errorParam,
         },
       };
     }
@@ -292,6 +300,7 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
 export const autonomousCuratorRouteInternals = {
   resolveAutonomousCuratorCopyModel,
   safeProviderErrorCode,
+  safeProviderErrorParam,
   classifyOpenAIProviderProbe,
   probeAutonomousCuratorProviders,
 };
