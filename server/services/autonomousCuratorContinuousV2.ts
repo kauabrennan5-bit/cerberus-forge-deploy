@@ -373,8 +373,14 @@ async function discoverQualifiedCandidate(input: {
   let lastReason = "NO_QUALIFIED_CANDIDATE_THIS_CYCLE";
   const searchedPages: number[] = [];
   const queries = rotateQueries(input.profile, input.cycleNumber);
+  type SearchOfferItem = Awaited<ReturnType<ShopeeApiClient["searchOffers"]>>["items"][number];
+  const candidatePool: Array<{ query: string; page: number; item: SearchOfferItem; cheap: number }> = [];
+  const seenIdentities = new Set<string>();
 
-  for (let queryIndex = 0; queryIndex < queries.length && examined < input.budget; queryIndex += 1) {
+  // Recall first: collect a broad, cheap pool across every rotated query/page.
+  // Expensive affiliate/extraction/image/editorial evaluation happens only after
+  // the global pool is deduplicated and ranked by Cerberus style signals.
+  for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
     const query = queries[queryIndex];
     const page = discoveryPage(input.cycleNumber, input.profile.category, queryIndex);
     searchedPages.push(page);
@@ -384,38 +390,53 @@ async function discoverQualifiedCandidate(input: {
       if (["SHOPEE_AUTH_ERROR", "SHOPEE_FORBIDDEN"].includes(String(search.reason))) throw new Error(lastReason);
       continue;
     }
-    const ranked = [...search.items]
-      .filter(item => item.shopId && item.itemId && item.productLink && item.name)
-      .filter(item => !hasBlockedProfileTerm(input.profile, item.name || ""))
-      .map(item => ({ item, cheap: cheapProfileScore(input.profile, item.name || "") }))
-      .sort((a, b) => b.cheap - a.cheap || String(a.item.itemId).localeCompare(String(b.item.itemId)));
-
-    for (const entry of ranked) {
-      if (examined >= input.budget) break;
-      const shopId = String(entry.item.shopId);
-      const itemId = String(entry.item.itemId);
-      const identity = await curatorRepo.findProductSourceIdentity("Shopee", shopId, itemId);
-      const reservedUntil = identity?.reservedUntil ? Date.parse(identity.reservedUntil) : 0;
-      if (identity?.productId || (identity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) continue;
-      examined += 1;
-      const evaluated = await evaluateIdentity({
-        profile: input.profile,
+    for (const item of search.items) {
+      if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
+      if (hasBlockedProfileTerm(input.profile, item.name || "")) continue;
+      const identityKey = `${item.shopId}:${item.itemId}`;
+      if (seenIdentities.has(identityKey)) continue;
+      seenIdentities.add(identityKey);
+      candidatePool.push({
         query,
-        shopId,
-        itemId,
-        discoveryName: entry.item.name || "",
-        discoveryPrice: entry.item.price,
-        sourceImageUrl: entry.item.imageUrl,
-        products: input.products,
-        client: input.client,
-        env: input.env,
-        extractor: input.extractor,
-        config: input.config,
+        page,
+        item,
+        cheap: cheapProfileScore(input.profile, item.name || ""),
       });
-      lastReason = evaluated.reason;
-      if (evaluated.candidate) return { candidate: evaluated.candidate, reason: evaluated.reason, examined, searchedPages };
     }
   }
+
+  candidatePool.sort((a, b) =>
+    b.cheap - a.cheap
+    || String(a.item.itemId).localeCompare(String(b.item.itemId))
+    || a.query.localeCompare(b.query),
+  );
+
+  for (const entry of candidatePool) {
+    if (examined >= input.budget) break;
+    const shopId = String(entry.item.shopId);
+    const itemId = String(entry.item.itemId);
+    const identity = await curatorRepo.findProductSourceIdentity("Shopee", shopId, itemId);
+    const reservedUntil = identity?.reservedUntil ? Date.parse(identity.reservedUntil) : 0;
+    if (identity?.productId || (identity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) continue;
+    examined += 1;
+    const evaluated = await evaluateIdentity({
+      profile: input.profile,
+      query: entry.query,
+      shopId,
+      itemId,
+      discoveryName: entry.item.name || "",
+      discoveryPrice: entry.item.price,
+      sourceImageUrl: entry.item.imageUrl,
+      products: input.products,
+      client: input.client,
+      env: input.env,
+      extractor: input.extractor,
+      config: input.config,
+    });
+    lastReason = evaluated.reason;
+    if (evaluated.candidate) return { candidate: evaluated.candidate, reason: evaluated.reason, examined, searchedPages };
+  }
+
   return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_HOURLY_CYCLE`, examined, searchedPages };
 }
 
