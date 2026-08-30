@@ -138,7 +138,8 @@ jobs:
             process.stdout.write('waiting');
             process.exit(0);
           }
-          if (['completed','partial','failed','dry_run'].includes(String(run.status))) {
+          const terminalStatus = ['completed','partial','failed','dry_run'].includes(String(run.status));
+          if (terminalStatus && run.completed_at) {
             console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
             process.exit(0);
           }
