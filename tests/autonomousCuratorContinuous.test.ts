@@ -76,9 +76,9 @@ test("queued product can revalidate its own bound Shopee identity but not anothe
   assert.match(source, /allowedProductId: input\.product\.id/);
 });
 
-test("production workflow is hourly and scheduled executions use continuous mode", async () => {
+test("production workflow runs quarter-hour continuous recovery cycles", async () => {
   const workflow = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
-  assert.match(workflow, /cron: "17 \* \* \* \*"/);
+  assert.match(workflow, /cron: "2,17,32,47 \* \* \* \*"/);
   assert.match(workflow, /github\.event_name == 'schedule' && 'continuous'/);
   assert.match(workflow, /api\/internal\/autonomous-curator\/continuous/);
   assert.match(workflow, /continuous_cycle_id/);
