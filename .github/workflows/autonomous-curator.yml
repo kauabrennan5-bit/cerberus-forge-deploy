@@ -1,5 +1,5 @@
 name: Cerberus Autonomous Curator
-# Runtime validation trigger: verify isolated image-review fallback after PR #24.
+# Runtime validation trigger: verify Gemini 3.7 image review and protected visual budget.
 
 on:
   schedule:
