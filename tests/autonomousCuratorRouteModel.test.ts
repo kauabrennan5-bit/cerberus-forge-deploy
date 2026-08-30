@@ -117,3 +117,26 @@ test("OpenAI provider canary proves a structured Responses API result", async ()
   assert.equal(result.openai.model, "gpt-5.6-luna");
   assert.equal("httpStatus" in result.openai ? result.openai.httpStatus : null, 200);
 });
+
+test("OpenAI provider canary sends a reviewable 256x256 PNG", async () => {
+  let checked = false;
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body || "{}"));
+    const dataUrl = String(body?.input?.[0]?.content?.[1]?.image_url || "");
+    assert.match(dataUrl, /^data:image\/png;base64,/);
+    const bytes = Buffer.from(dataUrl.split(",", 2)[1] || "", "base64");
+    assert.equal(bytes.subarray(1, 4).toString("ascii"), "PNG");
+    assert.equal(bytes.readUInt32BE(16), 256);
+    assert.equal(bytes.readUInt32BE(20), 256);
+    checked = true;
+    return new Response(JSON.stringify({
+      output_text: JSON.stringify({
+        images: [{ index: 1, decision: "unknown", confidence: "LOW", reason: "provider probe" }],
+      }),
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
+
+  const result = await autonomousCuratorRouteInternals.probeAutonomousCuratorProviders({ OPENAI_API_KEY: "sk-test" }, fetchImpl);
+  assert.equal(result.openai.status, "ok");
+  assert.equal(checked, true);
+});
