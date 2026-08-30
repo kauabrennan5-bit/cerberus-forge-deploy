@@ -53,7 +53,14 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "luminaria opalina space age", "abajur retro futurista",
     ],
     signatureTerms: ["cogumelo", "opalino", "opalina", "cromado", "cromada", "inox", "aluminio", "vidro fumê", "vidro fume", "globo", "retro", "vintage"],
-    blockedTerms: [...COMMON_BLOCKED, "fita led", "farol", "automotiva", "cupula", "cúpula", "somente cupula", "somente cúpula", "sem soquete", "globo reposicao"],
+    blockedTerms: [
+      ...COMMON_BLOCKED,
+      "fita led", "farol", "automotiva",
+      // Bloqueia peças de reposição/incompletas sem punir uma luminária completa
+      // cuja descrição factual apenas mencione que ela possui uma cúpula.
+      "cupula luminaria", "cúpula luminária", "cupula para luminaria", "cúpula para luminária",
+      "somente cupula", "somente cúpula", "sem soquete", "globo reposicao",
+    ],
     maxAutoPrice: 550,
     maxReviewPrice: 800,
   }),
