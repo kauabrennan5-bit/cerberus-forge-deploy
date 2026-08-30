@@ -1,5 +1,5 @@
 name: Cerberus Autonomous Curator
-# Runtime validation trigger: verify bounded Gemini backoff and multimodal fallback after PR #27.
+# Runtime validation trigger: verify dedicated high-throughput visual reviewer after PR #28.
 
 on:
   schedule:
