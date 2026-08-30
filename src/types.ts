@@ -26,7 +26,7 @@ export interface Product {
   /** Título editorial em português, aprovado pela curadoria. */
   displayTitle?: string;
   /** Estado e prova da revisão editorial do título. */
-  displayTitleStatus?: "ready" | "unreviewed" | "review_required";
+  displayTitleStatus?: "ready" | "reviewed" | "unreviewed" | "review_required";
   displayTitleReviewedAt?: string;
   displayTitleReviewModel?: string;
   displayTitleReviewVersion?: string;

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { Product } from "../src/types";
 import { composeWeeklyEdition, buildWeeklyEditorialSnapshot, compareWeeklyEditorialSnapshot, evaluateWeeklyProductEligibility, rankWeeklyCandidates, weeklyFreshnessMs } from "../server/services/newsletterWeeklyEditorial";
 import { DISPLAY_TITLE_REVIEW_VERSION, IMAGE_REVIEW_VERSION, imageUrlFingerprint, isImageReviewCurrent } from "../server/services/productEditorialReview";
@@ -78,6 +79,20 @@ test("display_title ausente ou raw marketplace fallback é proibido", () => {
   assert.equal(evaluateWeeklyProductEligibility(missing, NOW).eligible, false);
   assert.equal(evaluateWeeklyProductEligibility(raw, NOW).eligible, false);
   assert.equal(evaluateWeeklyProductEligibility(verbatim, NOW).eligible, false);
+
+  const curatorReviewed = product("curator-reviewed", "Iluminação", { displayTitleStatus: "reviewed" });
+  assert.equal(evaluateWeeklyProductEligibility(curatorReviewed, NOW).eligible, true, "reviewed/1.0 é prova editorial canônica");
+});
+
+test("curador contínuo persiste fingerprint e renova provas ao trocar conteúdo", () => {
+  const v1 = readFileSync(new URL("../server/services/autonomousCuratorContinuous.ts", import.meta.url), "utf8");
+  const v2 = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+  for (const source of [v1, v2]) {
+    assert.match(source, /image_review_fingerprint:\s*imageCurationFingerprint\(candidate\.imageCuration\)/);
+    assert.match(source, /display_title_reviewed_at:\s*now\.toISOString\(\)/);
+    assert.match(source, /display_title_review_version:\s*DISPLAY_TITLE_REVIEW_VERSION/);
+  }
+  assert.match(v2, /image_review_version:\s*IMAGE_REVIEW_VERSION/);
 });
 
 test("backfill legado persiste prova Gemini e falha fechado sem usar raw_title", async () => {

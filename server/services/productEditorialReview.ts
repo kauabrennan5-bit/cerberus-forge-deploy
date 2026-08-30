@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import type { Product } from "../../src/types";
 import { isCommercialImageAssessment } from "../../src/lib/productImageCuration";
 
-export const IMAGE_REVIEW_VERSION = "weekly-image-review-v1";
-export const DISPLAY_TITLE_REVIEW_VERSION = "weekly-display-title-v1";
+// Alinhados aos contratos canônicos emitidos pelo Autonomous Curator V2.
+// Versões antigas permanecem persistidas para auditoria, mas não passam o gate weekly.
+export const IMAGE_REVIEW_VERSION = "1.2";
+export const DISPLAY_TITLE_REVIEW_VERSION = "1.0";
 
 const FORBIDDEN_TITLE_PATTERNS = [
   /\b(shopee|mercado\s*livre|amazon|aliexpress|temu)\b/i,
@@ -18,6 +20,12 @@ export function imageUrlFingerprint(url: string): string {
   return `sha256:${createHash("sha256").update(url.trim(), "utf8").digest("hex")}`;
 }
 
+export function imageCurationFingerprint(curation: Product["imageCuration"]): string {
+  const primary = curation?.status === "ready" ? curation.primaryImageUrl?.trim() : "";
+  if (!primary) throw new Error("PRODUCT_IMAGE_REVIEW_PRIMARY_MISSING");
+  return imageUrlFingerprint(primary);
+}
+
 export function isEditorialDisplayTitle(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -29,7 +37,7 @@ export function isEditorialDisplayTitle(value: unknown): value is string {
 export function isDisplayTitleReviewCurrent(product: Product): boolean {
   const normalizedDisplay = product.displayTitle?.replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR") || "";
   const normalizedRaw = (product.rawTitle || product.produto || "").replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR");
-  return product.displayTitleStatus === "ready"
+  return (product.displayTitleStatus === "ready" || product.displayTitleStatus === "reviewed")
     && isEditorialDisplayTitle(product.displayTitle)
     && normalizedDisplay !== normalizedRaw
     && Boolean(product.displayTitleReviewedAt)
