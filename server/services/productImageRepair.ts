@@ -2,8 +2,19 @@ import { createHash } from "node:crypto";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 import type { ProductImageAssessment } from "../../src/lib/productImageCuration";
+import { ExternalCallBudget } from "./operationalGuards";
 
 export type ProductImageRepairResult = { url: string; sourceUrl: string; model: string };
+
+function positiveRepairBudget(value: unknown, fallback = 24): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const imageRepairBudget = new ExternalCallBudget(
+  { imageRepair: positiveRepairBudget(process.env.GEMINI_PRODUCT_IMAGE_REPAIR_HOURLY_BUDGET) },
+  60 * 60 * 1000,
+);
 
 type RepairOptions = {
   rawImageUrls: readonly string[];
@@ -47,13 +58,21 @@ export async function repairProductImage(options: RepairOptions): Promise<Produc
   const supabaseUrl = (env.SUPABASE_URL || "").trim();
   const serviceRole = (env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
   if (!apiKey || !supabaseUrl || !serviceRole) return null;
+  if (!imageRepairBudget.reserve("imageRepair").allowed) return null;
 
   const sourceUrl = chooseRepairSource(options.rawImageUrls, options.assessments);
   if (!sourceUrl) return null;
   const fetchImpl = options.fetchImpl || fetch;
 
   try {
-    const response = await fetchImpl(sourceUrl, { headers: { Accept: "image/avif,image/webp,image/jpeg,image/png" } });
+    const response = await fetchImpl(sourceUrl, {
+      headers: {
+        Accept: "image/avif,image/webp,image/jpeg,image/png",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7",
+        "User-Agent": "Mozilla/5.0 (compatible; CerberusFinds/1.0; +https://cerberusfinds.com)",
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
     const mimeType = response.headers.get("content-type")?.split(";", 1)[0] || "";
     if (!response.ok || !/^image\/(?:avif|webp|jpeg|png)$/i.test(mimeType)) return null;
     const bytes = Buffer.from(await response.arrayBuffer());
