@@ -111,6 +111,14 @@ create table if not exists public.product_image_editorial_reviews (
 create index if not exists product_image_editorial_reviews_product_idx
   on public.product_image_editorial_reviews(product_id, reviewed_at desc);
 
+-- Dados operacionais e de auditoria são exclusivamente backend/service-role.
+-- Sem políticas públicas, RLS bloqueia anon/authenticated de forma fail-closed.
+alter table public.autonomous_curator_config enable row level security;
+alter table public.autonomous_curator_runs enable row level security;
+alter table public.autonomous_curator_candidates enable row level security;
+alter table public.product_source_identities enable row level security;
+alter table public.product_image_editorial_reviews enable row level security;
+
 comment on table public.autonomous_curator_config is 'Configuração fail-closed do motor diário de curadoria Shopee.';
 comment on table public.autonomous_curator_runs is 'Auditoria de execuções diárias do Autonomous Curator.';
 comment on table public.autonomous_curator_candidates is 'Resultado final por categoria em cada execução diária.';
