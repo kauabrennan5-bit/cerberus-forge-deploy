@@ -56,7 +56,7 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
     ],
     strongStyleTerms: [
       ...STRONG_STYLE_TERMS,
-      "luminaria cogumelo", "luminária cogumelo", "abajur cogumelo", "lampada cogumelo", "lâmpada cogumelo", "candeeiro cogumelo",
+      "cogumelo", "luminaria cogumelo", "luminária cogumelo", "abajur cogumelo", "lampada cogumelo", "lâmpada cogumelo", "candeeiro cogumelo",
     ],
     signatureTerms: ["cogumelo", "opalino", "opalina", "cromado", "cromada", "inox", "aluminio", "vidro fumê", "vidro fume", "globo", "retro", "vintage"],
     blockedTerms: [
