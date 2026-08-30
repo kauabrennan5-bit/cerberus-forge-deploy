@@ -73,7 +73,10 @@ export function cheapProfileScore(profile: AutonomousCuratorCategoryProfile, tit
 function styleFit(profile: AutonomousCuratorCategoryProfile, text: string): number {
   const normalizedText = normalize(text);
   const uniqueHits = new Set(profile.preferredTerms.filter(term => normalizedText.includes(normalize(term))));
-  return Math.min(100, 70 + uniqueHits.size * 15);
+  // Sem evidência explícita do vocabulário estético/material da categoria, o
+  // produto pode ir para revisão, mas não deve alcançar auto-publicação apenas
+  // porque os demais gates são perfeitos. Um hit real já torna o fit forte.
+  return Math.min(100, 35 + uniqueHits.size * 25);
 }
 
 function imageQuality(curation: ProductImageCuration): number {
