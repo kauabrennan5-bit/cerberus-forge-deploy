@@ -98,6 +98,34 @@ function diagnosticForFailure(
   });
 }
 
+function recordCatalogSyncFailure(
+  operationId: string,
+  operationStartedAt: string,
+  diagnostic: OperationalDiagnostic | undefined,
+  productId?: string,
+): void {
+  const errorCode = diagnostic?.code || "UNKNOWN_OPERATION_ERROR";
+  void persistOperationalOperation({
+    operationId,
+    operationType: "CATALOG_SYNC",
+    status: "FAILED",
+    actor: "system",
+    correlationId: operationId,
+    attempt: 1,
+    createdAt: operationStartedAt,
+    startedAt: operationStartedAt,
+    completedAt: new Date().toISOString(),
+    resultCode: "CATALOG_SYNC_FAILED",
+    errorCode,
+    metadata: {
+      productId: productId || undefined,
+      stage: diagnostic?.stage,
+      dependency: diagnostic?.dependency,
+    },
+    schemaVersion: "1.0",
+  }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
+}
+
 /**
  * Pipeline canônico: public.products → products.json local → GitHub/main → Static Site público.
  * Uma operação só retorna sucesso após identidade e contagem compatíveis no catálogo público.
@@ -130,6 +158,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       supabaseCount = canonicalProducts.length;
     } catch (error) {
       const diagnostic = diagnosticForFailure(operationId, "SUPABASE_READ", "Supabase", error);
+      recordCatalogSyncFailure(operationId, operationStartedAt, diagnostic, productId);
       return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, diagnostic, error: diagnostic.code };
     }
 
@@ -137,6 +166,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       jsonCount = await exportStaticProductsJson();
     } catch (error) {
       const diagnostic = diagnosticForFailure(operationId, "CATALOG_EXPORT", "Exportador", error);
+      recordCatalogSyncFailure(operationId, operationStartedAt, diagnostic, productId);
       return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, diagnostic, error: diagnostic.code };
     }
 
@@ -145,6 +175,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       { operationId },
     );
     if (!github.success) {
+      recordCatalogSyncFailure(operationId, operationStartedAt, github.diagnostic, productId);
       return {
         success: false,
         operationId,
@@ -234,6 +265,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
 
     const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", lastFailure);
     console.warn(`[Catalog Sync] operation=${operationId} code=${diagnostic.code} cause=${sanitizeOperationalText(lastFailure)}`);
+    recordCatalogSyncFailure(operationId, operationStartedAt, diagnostic, productId);
     return {
       success: false,
       operationId,
