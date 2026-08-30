@@ -137,6 +137,24 @@ function terminalDecision(decision: string): boolean {
   return ["auto_published", "review_required", "rejected", "duplicate", "no_candidate", "dry_run_auto", "dry_run_review"].includes(decision);
 }
 
+function extractorTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const parsed = Number.parseInt(String(env.AUTONOMOUS_CURATOR_EXTRACTOR_TIMEOUT_MS || ""), 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return 45_000;
+  return Math.max(5_000, Math.min(120_000, parsed));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, reason: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(reason)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function sourceIdentityMatches(url: string, shopId: string, itemId: string): boolean {
   const identity = extractShopeeIdentity(url);
   return identity.shopId === shopId && identity.itemId === itemId;
@@ -200,7 +218,6 @@ async function persistHumanReview(candidate: CuratedCandidate, runId: string, en
     username: "autonomous_curator",
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-    // Produto canônico de fallback já é editorial; rawTitle fica separado para auditoria.
     produto: candidate.displayTitle,
     rawTitle: candidate.rawTitle,
     displayTitle: candidate.displayTitle,
@@ -282,7 +299,20 @@ async function prepareCategoryCandidate(input: {
       continue;
     }
 
-    const extracted = await extractor(acquisition.productLink);
+    let extracted: Awaited<ReturnType<typeof extractProductForReview>>;
+    try {
+      extracted = await withTimeout(
+        extractor(acquisition.productLink),
+        extractorTimeoutMs(input.deps.env || process.env),
+        "AUTONOMOUS_CURATOR_EXTRACTOR_TIMEOUT",
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === "AUTONOMOUS_CURATOR_EXTRACTOR_TIMEOUT") {
+        lastReason = "EXTRACTION_TIMEOUT";
+        continue;
+      }
+      throw error;
+    }
     if (!extracted.success || !extracted.data) {
       lastReason = `EXTRACTION_${extracted.error || "failed"}`;
       continue;
@@ -339,7 +369,6 @@ async function prepareCategoryCandidate(input: {
       normalizedUrl: sourceUrl,
       link: acquisition.affiliateUrl,
       marketplace: "Shopee",
-      // Nunca deixar o título bruto virar fallback público.
       produto: displayTitle,
       rawTitle,
       displayTitle,
@@ -473,7 +502,7 @@ async function publishAutoBatch(input: {
       await saveImageReview({
         productId: product.id,
         curation: candidate.imageCuration,
-        model: input.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || input.env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.6-flash",
+        model: input.env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "gemini-3.5-flash-lite",
         reviewVersion: "1.0",
       });
       created.push({ candidate, productId: product.id });
@@ -598,8 +627,6 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
         prepared = currentPrepared;
         if (currentPrepared.candidate) break;
         if (!strongestPrepared || decisionRank(currentPrepared.decision) > decisionRank(strongestPrepared.decision)) strongestPrepared = currentPrepared;
-        // Source-level failures affect every query; candidate-level rejections
-        // continue through the remaining deterministic alternatives.
         if (currentPrepared.decision === "failed") break;
       }
       if (!prepared) throw new Error("AUTONOMOUS_CURATOR_QUERY_CYCLE_EMPTY");
@@ -788,3 +815,8 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
   }
   return result;
 }
+
+export const autonomousCuratorInternals = {
+  extractorTimeoutMs,
+  withTimeout,
+};
