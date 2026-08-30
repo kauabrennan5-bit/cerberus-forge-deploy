@@ -8,6 +8,7 @@ const EXPECTED_REF = "refs/heads/main";
 const ALLOWED_WORKFLOW_REFS = new Set([
   `${EXPECTED_REPOSITORY}/.github/workflows/cerberus-watchdog.yml@${EXPECTED_REF}`,
   `${EXPECTED_REPOSITORY}/.github/workflows/weekly-production-audience-sync.yml@${EXPECTED_REF}`,
+  `${EXPECTED_REPOSITORY}/.github/workflows/autonomous-curator.yml@${EXPECTED_REF}`,
 ]);
 const ALLOWED_EVENTS = new Set(["schedule", "workflow_dispatch", "push"]);
 
