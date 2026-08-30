@@ -446,11 +446,13 @@ function parseOpenGraph(content: string): { title: string | null; price: number 
 function extractShopeeCdnImages(content: string): string[] {
   const images: string[] = [];
 
-  // 1. Extrai matriz de hashes da galeria oficial do produto em blocos JSON ("images", "image_list", "imageList", "image_ids")
-  const jsonImagesMatches = content.matchAll(/(?:\"images\"|\"image_list\"|\"imageList\"|\"image_ids\")\s*:\s*\[([^\]]+)\]/gi);
+  // 1. A Shopee serializa a galeria tanto como JSON normal quanto como JSON
+  // escapado dentro de strings/script state. Aceitamos apenas as quatro chaves
+  // conhecidas e apenas hashes do CDN; nenhum host arbitrário é derivado daqui.
+  const jsonImagesMatches = content.matchAll(/(?:\\?"(?:images|image_list|imageList|image_ids)\\?")\s*:\s*\[([^\]]+)\]/gi);
   for (const m of jsonImagesMatches) {
     if (m[1]) {
-      const hashes = m[1].matchAll(/"([a-zA-Z0-9_\-]{20,50})"/g);
+      const hashes = m[1].matchAll(/(?:\\?")([a-zA-Z0-9_\-]{20,50})(?:\\?")/g);
       const blockImages: string[] = [];
       for (const h of hashes) {
         if (h[1]) {
