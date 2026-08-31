@@ -451,7 +451,14 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
       const institutional = deps.institutionalLoader
         ? await deps.institutionalLoader(env)
         : await getNewsletterInstitutionalOptions(env);
-      rendered = renderWeeklyNewsletter(selected, copy, { campaignId, publicBaseUrl, socialLinks: institutional.socialLinks, now });
+      rendered = renderWeeklyNewsletter(selected, copy, {
+        campaignId,
+        publicBaseUrl,
+        socialLinks: institutional.socialLinks,
+        privacyUrl: institutional.privacyUrl,
+        termsUrl: institutional.termsUrl,
+        now,
+      });
       links = selected.map((product, index) => ({ productId: product.id, position: index + 1, layout: index === 0 ? "feature" : "grid" }));
       const approvalTtlHours = Math.max(1, Math.min(168, Number.parseInt(env.NEWSLETTER_WEEKLY_APPROVAL_TTL_HOURS || "24", 10) || 24));
       const previewTtlHours = Math.max(1, Math.min(168, Number.parseInt(env.NEWSLETTER_WEEKLY_PREVIEW_TTL_HOURS || "24", 10) || 24));

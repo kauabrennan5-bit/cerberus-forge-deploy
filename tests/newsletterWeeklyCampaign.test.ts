@@ -51,16 +51,89 @@ test("copy rejeita preço ou disponibilidade inventados", () => {
 
 test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe nativo Brevo", () => {
   const products = [product("a", "REF-A", "2026-08-28T12:00:00Z", 10), product("b", "REF-B", "2026-08-28T11:00:00Z", 20), product("c", "REF-C", "2026-08-28T10:00:00Z", 30)];
-  const rendered = renderWeeklyNewsletter(products, copy, { campaignId: "camp-1", publicBaseUrl: "https://cerberus.example.com", socialLinks: [] });
+  const rendered = renderWeeklyNewsletter(products, copy, {
+    campaignId: "camp-1",
+    publicBaseUrl: "https://cerberus.example.com",
+    privacyUrl: "https://cerberus.example.com/privacidade",
+    termsUrl: "https://cerberus.example.com/termos",
+    socialLinks: [{ label: "Instagram", url: "https://instagram.com/cerberusfinds", iconUrl: "https://cerberus.example.com/instagram.png" }],
+  });
   assert.match(rendered.html, /<table\b/i);
-  assert.match(rendered.html, /bgcolor="#0a0a0a"/i);
+  assert.match(rendered.html, /bgcolor="#0B0908"/);
+  assert.match(rendered.html, /bgcolor="#181512"/);
+  assert.match(rendered.html, /#3A342E/);
+  assert.match(rendered.html, /#E8E1D3/);
   assert.match(rendered.html, /#c0392b/i);
+  assert.match(rendered.html, /editorial-masthead editorial-masthead-b/);
+  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="64" height="44"/);
+  assert.doesNotMatch(rendered.html, /email-masthead-logo[^>]+(?:width|height):156px/i);
+  assert.doesNotMatch(rendered.html, /email-masthead-brand-mark[^>]+(?:width|height):170px/i);
+  assert.match(rendered.html, /CERBERUS FINDS/);
+  assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
+  assert.match(rendered.html, /EDIÇÃO/);
+  assert.match(rendered.html, />03<\/font>/);
+  assert.match(rendered.html, /OBJETOS PARA OLHAR DE NOVO\./);
+  assert.match(rendered.html, /Olha o que encontramos/i);
+  assert.match(rendered.html, /Peças com presença, escolhidas para sair do óbvio\./);
+  assert.match(rendered.html, /email-collection-feature/);
+  assert.match(rendered.html, /email-collection-grid-table/);
+  assert.match(rendered.html, /CONTINUE DESCOBRINDO/i);
+  assert.match(rendered.html, /Política de privacidade/);
+  assert.match(rendered.html, /Termos e condições/);
+  assert.match(rendered.html, /Encontre a Cerberus Finds/);
   assert.match(rendered.html, /R\$\s*10,00/);
   assert.match(rendered.html, /\/go\/REF-A/);
   assert.doesNotMatch(rendered.html, /market\.example\.com/);
+  assert.doesNotMatch(rendered.html, /Produto bruto/);
   assert.match(rendered.html, new RegExp(BREVO_NATIVE_UNSUBSCRIBE.replace(/[{}]/g, "\\$&")));
-  assert.match(rendered.html, /<a\b[^>]*href=["']\{\{\s*unsubscribe\s*\}\}["'][^>]*>[^<]*Cancelar inscrição[^<]*<\/a>/i);
+  assert.match(rendered.html, /<a\b[^>]*href=["']\{\{\s*unsubscribe\s*\}\}["'][^>]*>[\s\S]*?Cancelar inscrição[\s\S]*?<\/a>/i);
   assert.doesNotMatch(rendered.html, /display\s*:\s*(flex|grid)/i);
+});
+
+test("template semanal ignora promoção expirada e preserva o preço-base canônico", () => {
+  const now = new Date("2026-08-28T15:00:00Z");
+  const products = [
+    product("a", "REF-A", "2026-08-28T12:00:00Z", 79.99),
+    product("b", "REF-B", "2026-08-28T11:00:00Z", 20),
+    product("c", "REF-C", "2026-08-28T10:00:00Z", 30),
+  ];
+  products[0].ofertaPromocional = {
+    price: 1.99,
+    condition: "pix",
+    benefits: [],
+    source: "admin_confirmed",
+    confirmedAt: now.getTime() - 48 * 60 * 60 * 1000,
+    expiresAt: now.getTime() - 24 * 60 * 60 * 1000,
+  };
+
+  const rendered = renderWeeklyNewsletter(products, copy, {
+    campaignId: "camp-expired-promotion",
+    publicBaseUrl: "https://cerberus.example.com",
+    now,
+  });
+
+  assert.match(rendered.html, /R\$\s*79,99/);
+  assert.doesNotMatch(rendered.html, /R\$\s*1,99/);
+});
+
+test("quatro produtos usam a sequência responsiva da referência sem inventar um quinto card", () => {
+  const products = [
+    product("a", "REF-A", "2026-08-28T12:00:00Z", 10),
+    product("b", "REF-B", "2026-08-28T11:00:00Z", 20),
+    product("c", "REF-C", "2026-08-28T10:00:00Z", 30),
+    product("d", "REF-D", "2026-08-28T09:00:00Z", 40),
+  ];
+  const rendered = renderWeeklyNewsletter(products, copy, {
+    campaignId: "camp-four-products",
+    publicBaseUrl: "https://cerberus.example.com",
+  });
+
+  assert.match(rendered.html, /email-collection-feature/);
+  assert.match(rendered.html, /email-collection-grid-table/);
+  assert.match(rendered.html, /email-collection-horizontal-table/);
+  assert.match(rendered.html, /Seu próximo achado/i);
+  assert.match(rendered.html, />04<\/font>/);
+  assert.equal((rendered.html.match(/VER OFERTA/g) || []).length, 4);
 });
 
 test("URL semanal sempre usa redirect mascarado e campaign_id", () => {
