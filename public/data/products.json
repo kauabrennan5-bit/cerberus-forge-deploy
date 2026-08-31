@@ -1,5 +1,41 @@
 [
   {
+    "id": "prod-1788219849993-f1bc11884e",
+    "ref": "AUTOQ-F1BC11884E",
+    "slug": "kit-de-organizadores-acrilicos-modulares-f1bc11",
+    "produto": "Kit de Organizadores Acrílicos Modulares",
+    "displayTitle": "Kit de Organizadores Acrílicos Modulares",
+    "preco": 29.9,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-81z1k-mfslf1kjohz9d7"
+    ],
+    "link": "https://s.shopee.com.br/AAGngZO07m",
+    "categoria": "Organização",
+    "descricao": "Conjunto com dez organizadores modulares em acrílico fumê para otimização de espaços. A peça apresenta design versátil e transparente para uso multiuso em gavetas e bancadas.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T23:49:43.776776+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788219849993-ea48272071",
+    "ref": "AUTOQ-EA48272071",
+    "slug": "abajur-de-mesa-cogumelo-bauhaus-ea4827",
+    "produto": "Abajur de Mesa Cogumelo Bauhaus",
+    "displayTitle": "Abajur de Mesa Cogumelo Bauhaus",
+    "preco": 325,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134224-8259h-mrqz2etnrjt0f2"
+    ],
+    "link": "https://s.shopee.com.br/6VNTTygjqz",
+    "categoria": "Iluminação",
+    "descricao": "Este abajur de mesa possui cúpula de vidro em formato de cogumelo com design inspirado no estilo Bauhaus. Ele conta com iluminação LED em três cores e controle por toque para uso decorativo.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T23:45:14.714302+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788211884791-90e54ca0be",
     "ref": "AUTOQ-90E54CA0BE",
     "slug": "organizador-de-cassetes-modular-90e54c",
