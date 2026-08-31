@@ -20,9 +20,16 @@ function canonicalShopeeUrl(rawUrl: string): string {
   return rawUrl.trim();
 }
 
+function normalizedTitle(value: unknown): string {
+  return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase("pt-BR");
+}
+
 function incompleteEditorialData(data: ExtractedReviewData | undefined): boolean {
   if (!data) return true;
-  return !isEditorialDisplayTitle(data.displayTitle)
+  const displayTitle = String(data.displayTitle || "").trim();
+  const rawTitle = String(data.rawTitle || data.produto || "").trim();
+  return !isEditorialDisplayTitle(displayTitle)
+    || (Boolean(rawTitle) && normalizedTitle(displayTitle) === normalizedTitle(rawTitle))
     || String(data.descricao || "").trim().length < 24
     || !String(data.categoria || "").trim();
 }
@@ -130,6 +137,7 @@ export async function recoverFailedAutonomousExtraction(
 
 export const autonomousCuratorRecoveryInternals = {
   canonicalShopeeUrl,
+  normalizedTitle,
   incompleteEditorialData,
   safeRecoveryReason,
 };
