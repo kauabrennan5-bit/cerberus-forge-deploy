@@ -2,7 +2,6 @@ import type { Product } from "../../src/types";
 import type { ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
 import { requireSupabase } from "../repositories/productsRepository";
 import {
-  getProductObservations,
   recordAvailabilityObservation,
   type ObservedAvailability,
   type ObservationConfidence,
@@ -30,6 +29,11 @@ type SourceIdentity = {
   shopId: string;
   itemId: string;
   sourceProductUrl: string;
+};
+
+type LatestAvailability = {
+  observedAt: string;
+  observedAvailability: ObservedAvailability;
 };
 
 function intervalMinutes(env: NodeJS.ProcessEnv): number {
@@ -61,6 +65,22 @@ async function findIdentity(productId: string): Promise<SourceIdentity | null> {
     shopId: String(data.shop_id),
     itemId: String(data.item_id),
     sourceProductUrl: String(data.source_product_url),
+  };
+}
+
+async function latestAvailability(productId: string): Promise<LatestAvailability | null> {
+  const { data, error } = await requireSupabase()
+    .from("product_availability_observed")
+    .select("observed_at,observed_availability")
+    .eq("product_id", productId)
+    .order("observed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.observed_at || !data?.observed_availability) return null;
+  return {
+    observedAt: String(data.observed_at),
+    observedAvailability: String(data.observed_availability).toUpperCase() as ObservedAvailability,
   };
 }
 
@@ -122,8 +142,7 @@ export async function auditPublishedProductHealth(input: {
 
   for (const product of input.products.filter(activePublished)) {
     try {
-      const observations = await getProductObservations(product.id, 1);
-      const latest = observations.ok ? observations.value?.availabilities[0] : undefined;
+      const latest = await latestAvailability(product.id);
       if (latest && isFresh(latest.observedAt, now, intervalMs)) {
         result.skippedRecentIds.push(product.id);
         if (latest.observedAvailability === "UNAVAILABLE") result.unavailableIds.push(product.id);
