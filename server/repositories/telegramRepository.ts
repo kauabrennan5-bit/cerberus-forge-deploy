@@ -120,6 +120,18 @@ function isExpiredReview(review: PendingReview, now = Date.now()): boolean {
   return review.status === "expired" || ((review.status === undefined || review.status === "pending") && now >= reviewExpiresAt(review));
 }
 
+/**
+ * Reviews expiradas continuam legíveis para auditoria e para que o Telegram
+ * consiga comunicar "review expirada", mas nenhuma mutação posterior pode
+ * reativá-las. A única escrita permitida depois do TTL é a transição para
+ * status=expired em si.
+ */
+export function isReviewMutationAllowed(review: PendingReview, now = Date.now()): boolean {
+  const expiresAt = reviewExpiresAt(review);
+  if (now < expiresAt) return true;
+  return review.status === "expired";
+}
+
 function normalizeReviewRow(row: any): PendingReview | null {
   if (!row?.data || typeof row.data !== "object") return null;
   const review = { ...row.data } as PendingReview;
@@ -178,6 +190,10 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
     status,
   };
 
+  if (!isReviewMutationAllowed(normReview)) {
+    throw new Error("TELEGRAM_REVIEW_EXPIRED_IMMUTABLE");
+  }
+
   await syncAutonomousCuratorReviewIdentity(normReview);
 
   const reviews = readReviewsFromFile();
@@ -209,8 +225,7 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
 
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
   if (testOverrideGetPendingReview) {
-    const overridden = await testOverrideGetPendingReview(reviewId);
-    return overridden && !isExpiredReview(overridden) ? overridden : null;
+    return await testOverrideGetPendingReview(reviewId);
   }
   let review: PendingReview | null = null;
 
@@ -246,10 +261,8 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
     await savePendingReview(review);
   }
 
-  // Expired reviews remain available to audit listings, but direct callback
-  // lookup is non-actionable. Returning null here makes every old Telegram
-  // callback fail closed before publication/edit/cancel handlers can mutate it.
-  if (review.status === "expired") return null;
+  // A review expirada permanece consultável para auditoria e para mensagens
+  // específicas de expiração, mas savePendingReview impede reativação/mutação.
   return review;
 }
 
