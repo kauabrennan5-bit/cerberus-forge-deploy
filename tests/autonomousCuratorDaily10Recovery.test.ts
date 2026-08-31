@@ -17,6 +17,14 @@ test("primary curator owns all quarter-hour production triggers", async () => {
   assert.match(primary, /-d '\{\"notify\":true\}'/);
 });
 
+test("continuous workflow waits for the category-balance coordinator instead of stopping at base completion", async () => {
+  const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
+  assert.match(primary, /body\?\.running === true/);
+  assert.match(primary, /body\.activeCycleId/);
+  assert.match(primary, /String\(body\.activeCycleId \|\| ''\) === expectedCycle/);
+  assert.match(primary, /base engine records a terminal run before the category-balance/);
+});
+
 test("obsolete recovery workflow is removed so scheduled cycles cannot duplicate", async () => {
   await assert.rejects(
     access(new URL("../.github/workflows/curator-daily-10-recovery.yml", import.meta.url)),
