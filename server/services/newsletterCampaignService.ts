@@ -318,6 +318,9 @@ export async function confirmGeneralSend(
 ): Promise<EmailCampaign> {
   const store = options.store || createSupabaseNewsletterCampaignStore();
   const current = await readCurrentCampaign(store, campaign.id);
+  if (current.editionKey?.startsWith("weekly-test:")) {
+    throw new Error("WEEKLY_MARKETING_TEST_GENERAL_SEND_FORBIDDEN");
+  }
   const confirmed = transitionCampaign(current, { type: "confirm_general_send", actorTelegramId }, options.now || new Date());
   return store.updateCampaign(confirmed);
 }
@@ -330,6 +333,9 @@ export async function startGeneralSend(
   const store = options.store || createSupabaseNewsletterCampaignStore();
   const now = options.now || new Date();
   const current = await readCurrentCampaign(store, campaign.id);
+  if (current.editionKey?.startsWith("weekly-test:")) {
+    throw new Error("WEEKLY_MARKETING_TEST_GENERAL_SEND_FORBIDDEN");
+  }
   if (current.editionKey?.startsWith("weekly:")) {
     return sendWeeklyMarketingNow(current, actorTelegramId, {
       store,

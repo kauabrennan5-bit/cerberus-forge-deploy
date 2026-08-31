@@ -23,6 +23,7 @@ on:
           - weekly-editorial-backfill-execute
           - weekly-draft
           - weekly-draft-test
+          - weekly-design-test
           - weekly-stale
 
 permissions:
@@ -70,7 +71,7 @@ jobs:
           key: watchdog-state-${{ github.run_id }}
 
   weekly-draft:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5' || github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test')
+    if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5' || github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test' || inputs.operation == 'weekly-design-test')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
@@ -84,6 +85,7 @@ jobs:
           base="${CERBERUS_HEALTH_URL%/health}"
           body='{}'
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "weekly-draft-test" ]; then body='{"testMode":true}'; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "weekly-design-test" ]; then body='{"testMode":true,"designTestMode":true}'; fi
           token_json="$(curl --fail --silent --show-error --max-time 20 \
             -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"

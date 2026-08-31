@@ -83,15 +83,16 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
 
   app.post("/api/internal/newsletter/weekly-draft", requireAutomation, async (req, res) => {
     try {
-      const testMode = req.body?.testMode === true;
+      const designTestMode = req.body?.designTestMode === true;
+      const testMode = req.body?.testMode === true || designTestMode;
       if (!testMode && !(await isWeeklyProductionEnabled())) {
         return res.status(200).json({ success: true, status: "skipped", reason: "disabled" });
       }
       const runtimeEnv = testMode
         ? process.env
         : { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" };
-      const result = await runWeeklyDraftCycle({ testMode, env: runtimeEnv });
-      return res.status(result.status === "created" ? 201 : 200).json({ success: true, status: result.status, reason: result.status === "skipped" ? result.reason : undefined, campaignId: result.status === "created" ? result.campaign.id : undefined });
+      const result = await runWeeklyDraftCycle({ testMode, designTestMode, env: runtimeEnv });
+      return res.status(result.status === "created" ? 201 : 200).json({ success: true, status: result.status, mode: designTestMode ? "design-test" : testMode ? "test" : "production", reason: result.status === "skipped" ? result.reason : undefined, campaignId: result.status === "created" ? result.campaign.id : undefined });
     } catch (error) {
       console.error(`[NEWSLETTER-WEEKLY] draft_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
       return res.status(500).json({ success: false, code: "WEEKLY_DRAFT_FAILED" });

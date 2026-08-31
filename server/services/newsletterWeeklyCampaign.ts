@@ -20,6 +20,7 @@ import {
 import { validPromotionAt } from "./promotionOffer";
 import { readWeeklyProductionRuntimeConfig, type WeeklyProductionRuntimeConfig } from "./newsletterWeeklyProductionConfig";
 import { buildWeeklyPreviewUrl } from "./newsletterWeeklyPreview";
+import { buildWeeklyDesignTestCopy, selectWeeklyDesignTestProducts } from "./newsletterWeeklyDesignTest";
 
 import {
   classifyGeminiDiagnosticReason,
@@ -47,6 +48,7 @@ export type WeeklyDraftDeps = {
   now?: Date;
   env?: NodeJS.ProcessEnv;
   testMode?: boolean;
+  designTestMode?: boolean;
   audienceConfigLoader?: () => Promise<WeeklyProductionRuntimeConfig | null>;
 };
 
@@ -84,9 +86,10 @@ export async function loadProductClickCounts(productIds: string[]): Promise<Map<
   return counts;
 }
 
-function editionKey(products: readonly Product[], now: Date, testMode: boolean): string {
+function editionKey(products: readonly Product[], now: Date, testMode: boolean, designTestMode: boolean): string {
   const digest = createHash("sha256").update(products.map(p => p.id).sort().join("\n"), "utf8").digest("hex").slice(0, 20);
-  return `${testMode ? "weekly-test" : "weekly"}:${now.toISOString().slice(0, 10)}:${digest}`;
+  const prefix = designTestMode ? "weekly-test:design" : testMode ? "weekly-test" : "weekly";
+  return `${prefix}:${now.toISOString().slice(0, 10)}:${digest}`;
 }
 
 function telegramPreview(
@@ -96,6 +99,7 @@ function telegramPreview(
   clickCounts: Map<string, number>,
   composition: WeeklyComposition,
   testMode: boolean,
+  designTestMode: boolean,
   publicBaseUrl: string,
   env: NodeJS.ProcessEnv,
   audienceConfig: WeeklyProductionRuntimeConfig | null,
@@ -121,7 +125,9 @@ function telegramPreview(
     && audienceConfig.eligibleSubscribersCount === audienceConfig.brevoMembersCount
   );
   return [
-    testMode ? "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>" : "📨 <b>RASCUNHO SEMANAL CERBERUS</b>",
+    designTestMode
+      ? "🧪 <b>TESTE DE DESIGN — 3 CARDS ISOLADOS</b>"
+      : testMode ? "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>" : "📨 <b>RASCUNHO SEMANAL CERBERUS</b>",
     "",
     `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(copy.subject)}`,
     `<b>Preview:</b> ${escapeWeeklyTelegramHtml(copy.previewText)}`,
@@ -284,7 +290,8 @@ export async function redeliverLatestWeeklyTestDraftCard(
 export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<WeeklyDraftOutcome> {
   const env = deps.env || process.env;
   const now = deps.now || new Date();
-  const testMode = deps.testMode === true;
+  const designTestMode = deps.designTestMode === true;
+  const testMode = deps.testMode === true || designTestMode;
   if (!testMode && deps.store && !deps.audienceConfigLoader && env.NEWSLETTER_WEEKLY_ENABLED !== "true") {
     return { status: "skipped", reason: "disabled", newProductCount: 0 };
   }
@@ -373,10 +380,12 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     const cutoffMs = lastSentAt ? Date.parse(lastSentAt) : now.getTime() - lookbackDays * 24 * 60 * 60 * 1000;
     const active = products.filter(product => product.ativo === true && product.status === "published");
     const newlyFresh = active.filter(product => weeklyFreshnessMs(product, now) > cutoffMs);
-    const fresh = newlyFresh.filter(product => evaluateWeeklyProductEligibility(product, now).eligible);
+    const strictlyEligible = newlyFresh.filter(product => evaluateWeeklyProductEligibility(product, now).eligible);
+    const designSelection = designTestMode ? selectWeeklyDesignTestProducts(active, now) : null;
+    const fresh = designSelection?.products || strictlyEligible;
     context.activeProductCount = active.length;
     context.newProductCount = newlyFresh.length;
-    context.eligibleProductCount = fresh.length;
+    context.eligibleProductCount = strictlyEligible.length;
     successStage("PRODUCT_SELECTION");
 
     startStage("PRODUCT_ELIGIBILITY");
@@ -403,8 +412,8 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     let selected: Product[];
     let editorial: ReturnType<typeof buildWeeklyEditorialSnapshot>;
     try {
-      composition = composeWeeklyEdition(rankWeeklyCandidates(fresh, clickCounts, now), 4);
-      selected = composition.products;
+      composition = designSelection?.composition || composeWeeklyEdition(rankWeeklyCandidates(fresh, clickCounts, now), 4);
+      selected = designSelection?.products || composition.products;
       if (selected.length < 3) {
         await notify(deps.telegramSender, chatId, `📭 <b>Campanha semanal pulada</b>\n\nA deduplicação/composição editorial encontrou somente ${selected.length} produtos fortes.\nNecessários: 3\n\nNenhum rascunho foi criado e nenhum email foi enviado.`);
         return { status: "skipped", reason: "insufficient_new_products", newProductCount: selected.length };
@@ -415,7 +424,7 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     catch { fail("RANKING", "RANKING_FAILED"); }
     successStage("RANKING");
 
-    const key = editionKey(selected, now, testMode);
+    const key = editionKey(selected, now, testMode, designTestMode);
     startStage("SUPABASE_READ");
     let existing: EmailCampaign | null;
     try { existing = await store.findOperationalCollectionByEditionKey(key); }
@@ -425,7 +434,11 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
 
     startStage("GEMINI");
     let copy: WeeklyNewsletterCopy;
-    try { copy = await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected, composition); }
+    try {
+      copy = designTestMode
+        ? buildWeeklyDesignTestCopy(selected)
+        : await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected, composition);
+    }
     catch (error) { fail("GEMINI", classifyGeminiDiagnosticReason(error)); }
     successStage("GEMINI");
 
@@ -475,9 +488,9 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     startStage("TELEGRAM_DELIVERY");
     let delivery: TelegramDeliveryResult;
     try {
-      delivery = await notify(deps.telegramSender, chatId, telegramPreview(pending, selected, copy, clickCounts, composition, testMode, publicBaseUrl, env, audienceConfig), {
+      delivery = await notify(deps.telegramSender, chatId, telegramPreview(pending, selected, copy, clickCounts, composition, testMode, designTestMode, publicBaseUrl, env, audienceConfig), {
         inline_keyboard: [
-          [{ text: testMode ? "✅ Aprovar teste" : "✅ Aprovar campanha", callback_data: `campaign_weekly_approve:${pending.id}` }],
+          [{ text: designTestMode ? "✅ Aprovar e enviar teste de design" : testMode ? "✅ Aprovar teste" : "✅ Aprovar campanha", callback_data: `campaign_weekly_approve:${pending.id}` }],
           [{ text: "❌ Cancelar", callback_data: `campaign_cancel:${pending.id}` }],
         ],
       });
