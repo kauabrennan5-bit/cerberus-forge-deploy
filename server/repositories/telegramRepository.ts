@@ -190,13 +190,14 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
     status,
   };
 
-  if (!isReviewMutationAllowed(normReview)) {
+  const reviews = readReviewsFromFile();
+  const previous = reviews[normReview.id];
+  if (previous?.status === "expired" && normReview.status !== "expired") {
     throw new Error("TELEGRAM_REVIEW_EXPIRED_IMMUTABLE");
   }
 
   await syncAutonomousCuratorReviewIdentity(normReview);
 
-  const reviews = readReviewsFromFile();
   reviews[normReview.id] = normReview;
   writeReviewsToFile(reviews);
 
@@ -300,7 +301,7 @@ export async function getLatestPendingReviewForUser(
         }
       }
     } catch {
-      // Fallback para arquivo local.
+      // Fallback local quando Supabase estiver indisponível.
     }
   }
 
