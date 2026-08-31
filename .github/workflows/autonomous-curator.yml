@@ -4,7 +4,7 @@ name: Cerberus Autonomous Curator
 
 on:
   schedule:
-    # Quarter-hour recovery cadence. Publication eligibility still enforces >=24h per category.
+    # Quarter-hour recovery cadence. Normal publication eligibility enforces >=24h per category; inventory floor may override it.
     - cron: "2,17,32,47 * * * *"
   push:
     branches:
@@ -53,8 +53,8 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      # Scheduled cycles are continuous production; every ordinary push is validation-only.
-      MODE: ${{ github.event_name == 'schedule' && 'continuous' || github.event_name == 'push' && 'dry_run' || inputs.mode }}
+      # Curator pushes wait for the exact deployed SHA, then run one bounded live cycle so the inventory floor self-heals immediately.
+      MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'push') && 'continuous' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
