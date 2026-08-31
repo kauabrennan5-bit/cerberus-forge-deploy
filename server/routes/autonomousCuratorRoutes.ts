@@ -4,6 +4,10 @@ import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAu
 import { runAutonomousCuratorDaily } from "../services/autonomousCurator";
 import { runAutonomousCuratorContinuousV2 } from "../services/autonomousCuratorContinuousV2";
 import { extractProductForReview } from "../services/productAutomation";
+import {
+  recoverFailedAutonomousExtraction,
+  recoverIncompleteAutonomousExtraction,
+} from "../services/autonomousCuratorRecovery";
 import { productImageReviewInternals, resolveProductImageReviewModel } from "../services/productImageReview";
 import { getAutonomousCuratorConfig } from "../repositories/autonomousCuratorRepository";
 import { requireSupabase } from "../repositories/productsRepository";
@@ -162,7 +166,12 @@ async function extractForAutonomousCurator(rawUrl: string, rawTextOverride?: str
   const previousModel = process.env.GEMINI_PRODUCT_CURATOR_MODEL;
   process.env.GEMINI_PRODUCT_CURATOR_MODEL = resolveAutonomousCuratorCopyModel(process.env);
   try {
-    return await extractProductForReview(rawUrl, rawTextOverride);
+    const initial = await extractProductForReview(rawUrl, rawTextOverride);
+    if (!initial.success || !initial.data) {
+      const recovered = await recoverFailedAutonomousExtraction(rawUrl, rawTextOverride, process.env);
+      return recovered || initial;
+    }
+    return await recoverIncompleteAutonomousExtraction(initial, process.env);
   } finally {
     if (previousModel === undefined) delete process.env.GEMINI_PRODUCT_CURATOR_MODEL;
     else process.env.GEMINI_PRODUCT_CURATOR_MODEL = previousModel;
@@ -311,4 +320,5 @@ export const autonomousCuratorRouteInternals = {
   safeProviderErrorParam,
   classifyOpenAIProviderProbe,
   probeAutonomousCuratorProviders,
+  extractForAutonomousCurator,
 };
