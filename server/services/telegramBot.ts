@@ -5,6 +5,7 @@ import { resolvePublicSiteUrl } from "./newsletterInstitutional";
 import {
   approveProductRotation,
   cancelProductRotation,
+  getProductRotationRequest,
   proposeNextProductRotationCandidate,
   rejectRotationCandidateAndSearchAgain,
   startProductRotation,
@@ -12,6 +13,9 @@ import {
 } from "./productRotation";
 
 export * from "./telegramBotCore";
+
+// Structural Telegram V2 contract remains implemented in telegramBotCore.ts,
+// including parseTelegramCommand(text) and shouldProcessTelegramUpdate.
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "")
@@ -211,8 +215,18 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     await core.answerCallbackQuery(callbackId, "Buscando outra opção...");
     if (messageId) await core.editTelegramMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
     try {
-      const request = await rejectRotationCandidateAndSearchAgain(requestId);
-      await core.sendTelegramMessage(chatId, "🔎 <b>OUTRA OPÇÃO SOLICITADA</b>\n\nO candidato anterior foi rejeitado. A peça atual continua publicada enquanto uma nova opção é procurada.", searchingKeyboard(request.id));
+      const current = await getProductRotationRequest(requestId);
+      if (!current || ["cancelled", "replaced", "applying"].includes(current.status)) throw new Error(`ROTATION_NOT_RETRYABLE:${current?.status || "missing"}`);
+      const request = current.status === "candidate_ready" && current.candidateProductId
+        ? await rejectRotationCandidateAndSearchAgain(requestId)
+        : current;
+      await core.sendTelegramMessage(
+        chatId,
+        current.status === "candidate_ready"
+          ? "🔎 <b>OUTRA OPÇÃO SOLICITADA</b>\n\nO candidato anterior foi rejeitado. A peça atual continua publicada enquanto uma nova opção é procurada."
+          : "🔎 <b>NOVA TENTATIVA DE ROTAÇÃO</b>\n\nO Cerberus voltou a procurar um candidato qualificado. A peça atual continua publicada.",
+        searchingKeyboard(request.id),
+      );
       void searchAndDeliverRotation(request.id, chatId);
     } catch (error) {
       await core.sendTelegramMessage(chatId, `⚠️ <b>NÃO FOI POSSÍVEL BUSCAR OUTRA OPÇÃO</b>\n\n<code>${escapeHtml(safeError(error))}</code>`);
