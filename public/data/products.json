@@ -1,5 +1,44 @@
 [
   {
+    "id": "prod-1788211884791-90e54ca0be",
+    "ref": "AUTOQ-90E54CA0BE",
+    "slug": "organizador-de-cassetes-modular-90e54c",
+    "produto": "Organizador de Cassetes Modular",
+    "displayTitle": "Organizador de Cassetes Modular",
+    "preco": 36.51,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/br-11134207-820l6-msaivmpoaxhh6a"
+    ],
+    "link": "https://s.shopee.com.br/3g3I6pCF9x",
+    "categoria": "Organização",
+    "descricao": "Organizador preto com oito divisórias e tiras internas coloridas para acomodar cassetes. A estrutura compacta tem formato modular e linguagem visual utilitária com referência retrô.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T21:37:18.008549+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788211884791-9c61d70e4a",
+    "ref": "AUTOQ-9C61D70E4A",
+    "slug": "copo-de-vidro-dourado-9c61d7",
+    "produto": "Copo de Vidro Dourado",
+    "displayTitle": "Copo de Vidro Dourado",
+    "preco": 25,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-m2qzh0f08nbn08",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f08nbn08",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f078r717",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f05u6r59"
+    ],
+    "link": "https://s.shopee.com.br/2gAkQJaGhV",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Copo cilíndrico de vidro transparente, com filete dourado na borda, brasão e inscrição decorativa. A base espessa apresenta relevo circular aparente, reforçando o caráter vintage da peça.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T21:36:01.647802+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788210150661-9d319211f1",
     "ref": "AUTOQ-9D319211F1",
     "slug": "cadeira-branca-tubular-cromada-9d3192",
