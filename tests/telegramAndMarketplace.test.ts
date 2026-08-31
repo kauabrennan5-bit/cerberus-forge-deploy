@@ -7,6 +7,12 @@ import { sanitizeCuratorOutput } from "../server/services/productAutomation";
 import { containsRawPayloadMarkers, normalizeCandidate, validateCandidate } from "../server/services/productLifecycle";
 import { buildProductListView, resolveTelegramReviewCategory } from "../server/services/telegramBot";
 
+function readTelegramBotSource(): string {
+  const core = readFileSync(new URL("../server/services/telegramBotCore.ts", import.meta.url), "utf8");
+  const extension = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  return `${core}\n${extension}`;
+}
+
 test("detectMarketplace reconhece Shopee diretamente", () => {
   assert.equal(detectMarketplace("https://shopee.com.br/produto-i.123.456"), "Shopee");
   assert.equal(detectMarketplace("https://shope.ee/abc123xyz"), "Shopee");
@@ -119,7 +125,7 @@ test("products_list em página posterior preserva edição e navegação com mes
 });
 
 test("/listar direto envia mensagem nova e não cria fakeCb nem depende de message_id", () => {
-  const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  const source = readTelegramBotSource();
   const directStart = source.indexOf('if (commandName === "produtos" &&');
   const directEnd = source.indexOf('if (commandName === "ajuda")', directStart);
   const directHandler = source.slice(directStart, directEnd);
@@ -138,7 +144,9 @@ test("Telegram, automação e lifecycle usam somente o detector canônico", () =
   ];
 
   for (const relativePath of files) {
-    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    const source = relativePath.endsWith("telegramBot.ts")
+      ? readTelegramBotSource()
+      : readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.match(source, /from "\.\/marketplace"/);
     assert.doesNotMatch(source, /function detectMarketplace/);
   }
@@ -146,7 +154,7 @@ test("Telegram, automação e lifecycle usam somente o detector canônico", () =
 
 
 test("revisão do Telegram usa a extração editorial compartilhada e não publica rawContent como descricao", () => {
-  const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  const source = readTelegramBotSource();
 
   assert.match(source, /extractProductForReview as extractProductForReviewShared/);
   assert.match(source, /return extractProductForReviewShared\(url\)/);
@@ -173,7 +181,7 @@ test("Telegram resolve edição de categoria somente para a taxonomia pública",
 });
 
 test("Telegram não aceita mais categoria livre no caminho de review/publicação", () => {
-  const source = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  const source = readTelegramBotSource();
   assert.match(source, /PUBLIC_PRODUCT_CATEGORIES/);
   assert.match(source, /resolveTelegramReviewCategory\(targetReview, category\)/);
   assert.match(source, /PUBLIC_CATEGORY_REVIEW_REQUIRED/);
