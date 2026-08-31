@@ -1,0 +1,112 @@
+name: Temporary Curator Inventory Floor Patch
+
+on:
+  push:
+    branches:
+      - fix/curator-inventory-floor-2026-08-30
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/curator-inventory-floor-2026-08-30
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply bounded inventory floor
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          service_path = Path('server/services/autonomousCuratorContinuousV2.ts')
+          text = service_path.read_text()
+
+          old = '''const QUALIFIED_COMPARISON_TARGET = 4;'''
+          new = '''const QUALIFIED_COMPARISON_TARGET = 4;\nconst DEFAULT_LIVE_CATALOG_TARGET = 10;'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''function queueTarget(env: NodeJS.ProcessEnv): number {\n  return positiveInt(env.AUTONOMOUS_CURATOR_QUEUE_TARGET_PER_CATEGORY, 7, 30);\n}\n'''
+          new = '''function queueTarget(env: NodeJS.ProcessEnv): number {\n  return positiveInt(env.AUTONOMOUS_CURATOR_QUEUE_TARGET_PER_CATEGORY, 7, 30);\n}\n\nfunction liveCatalogTarget(env: NodeJS.ProcessEnv): number {\n  return positiveInt(env.AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET, DEFAULT_LIVE_CATALOG_TARGET, 100);\n}\n\nfunction activePublishedCount(products: readonly Product[]): number {\n  return products.filter(product => product.status === "published" && product.ativo !== false).length;\n}\n\nfunction inventoryDeficit(products: readonly Product[], env: NodeJS.ProcessEnv): number {\n  return Math.max(0, liveCatalogTarget(env) - activePublishedCount(products));\n}\n\nfunction dueForCycle(lastPublishedAt: string | null, now: Date, emergencyMode: boolean, emergencyRemaining: number): boolean {\n  if (emergencyMode) return emergencyRemaining > 0;\n  return dueForPublication(lastPublishedAt, now);\n}\n'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''  let products = await productsRepository.getProducts();\n  const categories: ContinuousCuratorCategoryResultV2[] = [];\n  const pendingPublications: Array<{ product: Product; candidate: CuratedCandidate }> = [];\n  let failedThisCycle = 0;\n'''
+          new = '''  let products = await productsRepository.getProducts();\n  const liveCatalogTargetCount = liveCatalogTarget(env);\n  const liveCatalogCountBefore = activePublishedCount(products);\n  const inventoryDeficitBefore = Math.max(0, liveCatalogTargetCount - liveCatalogCountBefore);\n  const emergencyMode = inventoryDeficitBefore > 0;\n  let emergencyRefillRemaining = inventoryDeficitBefore;\n  const categories: ContinuousCuratorCategoryResultV2[] = [];\n  const pendingPublications: Array<{ product: Product; candidate: CuratedCandidate }> = [];\n  let failedThisCycle = 0;\n'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''      const last = await lastPublishedAt(profile.category, products);\n      result.due = dueForPublication(last, now);\n      result.reason = result.due\n        ? "SEARCHING_FOR_DUE_PRODUCT"\n        : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;\n      let budgetRemaining = config.maxEnrichPerCategory;\n'''
+          new = '''      const last = await lastPublishedAt(profile.category, products);\n      const editorialDue = dueForPublication(last, now);\n      result.due = dueForCycle(last, now, emergencyMode, emergencyRefillRemaining);\n      result.reason = emergencyMode\n        ? result.due\n          ? `EMERGENCY_REFILL_DEFICIT_${emergencyRefillRemaining}`\n          : "INVENTORY_FLOOR_RESTORED_DEFER_EDITORIAL_CADENCE"\n        : editorialDue\n          ? "SEARCHING_FOR_DUE_PRODUCT"\n          : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;\n      let budgetRemaining = config.maxEnrichPerCategory;\n'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''          pendingPublications.push({ product: queuedProduct, candidate: refreshed.candidate });\n          result.published = true;'''
+          new = '''          pendingPublications.push({ product: queuedProduct, candidate: refreshed.candidate });\n          if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);\n          result.published = true;'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''              pendingPublications.push({ product: queued.product, candidate: discovery.candidate });\n              result.published = true;'''
+          new = '''              pendingPublications.push({ product: queued.product, candidate: discovery.candidate });\n              if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);\n              result.published = true;'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''  products = await productsRepository.getProducts();\n  let fulfilledCategories = 0;'''
+          new = '''  products = await productsRepository.getProducts();\n  const liveCatalogCountAfter = activePublishedCount(products);\n  const inventoryDeficitAfter = Math.max(0, liveCatalogTargetCount - liveCatalogCountAfter);\n  let fulfilledCategories = 0;'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''  const status: ContinuousCuratorResultV2["status"] = fulfilledCategories === AUTONOMOUS_CURATOR_PROFILES.length && failedThisCycle === 0\n    ? "completed"\n    : failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial";'''
+          new = '''  const status: ContinuousCuratorResultV2["status"] = inventoryDeficitAfter > 0\n    ? failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial"\n    : fulfilledCategories === AUTONOMOUS_CURATOR_PROFILES.length && failedThisCycle === 0\n      ? "completed"\n      : failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial";'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''      queue_target_per_category: queueTarget(env),\n      continuous_cycles: continuousCycles,'''
+          new = '''      queue_target_per_category: queueTarget(env),\n      live_catalog_target: liveCatalogTargetCount,\n      live_catalog_count_before: liveCatalogCountBefore,\n      live_catalog_count_after: liveCatalogCountAfter,\n      inventory_deficit_before: inventoryDeficitBefore,\n      inventory_deficit_after: inventoryDeficitAfter,\n      emergency_refill: emergencyMode,\n      continuous_cycles: continuousCycles,'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+
+          old = '''  queueTarget,\n  revalidationPermanentFailure,'''
+          new = '''  queueTarget,\n  liveCatalogTarget,\n  activePublishedCount,\n  inventoryDeficit,\n  dueForCycle,\n  revalidationPermanentFailure,'''
+          assert text.count(old) == 1
+          text = text.replace(old, new)
+          service_path.write_text(text)
+
+          test_path = Path('tests/autonomousCuratorContinuousV2.test.ts')
+          tests = test_path.read_text()
+          old = '''  parseQueueNote,\n} = autonomousCuratorContinuousV2Internals;'''
+          new = '''  parseQueueNote,\n  liveCatalogTarget,\n  activePublishedCount,\n  inventoryDeficit,\n  dueForCycle,\n} = autonomousCuratorContinuousV2Internals;'''
+          assert tests.count(old) == 1
+          tests = tests.replace(old, new)
+          tests += '''\n\ntest("live catalog floor defaults to ten and is bounded", () => {\n  assert.equal(liveCatalogTarget({} as NodeJS.ProcessEnv), 10);\n  assert.equal(liveCatalogTarget({ AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: "14" } as NodeJS.ProcessEnv), 14);\n  assert.equal(liveCatalogTarget({ AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: "999" } as NodeJS.ProcessEnv), 100);\n});\n\ntest("inventory deficit counts only active published products", () => {\n  const product = (id: string, status: Product["status"], ativo: boolean): Product => ({\n    id, produto: id, categoria: "Decoração", preco: 100, imagens: ["https://example.com/a.jpg"],\n    link: `https://example.com/${id}`, ativo, destaque: false, status,\n  });\n  const products = [\n    ...Array.from({ length: 6 }, (_, index) => product(`published-${index}`, "published", true)),\n    product("queued", "paused", false),\n    product("archived", "archived", false),\n  ];\n  assert.equal(activePublishedCount(products), 6);\n  assert.equal(inventoryDeficit(products, {} as NodeJS.ProcessEnv), 4);\n});\n\ntest("emergency refill overrides cooldown only until the floor deficit is filled", () => {\n  const now = new Date("2026-08-31T02:30:00.000Z");\n  const justPublished = new Date(now.getTime() - 60_000).toISOString();\n  assert.equal(dueForPublication(justPublished, now), false);\n  assert.equal(dueForCycle(justPublished, now, true, 4), true);\n  assert.equal(dueForCycle(justPublished, now, true, 1), true);\n  assert.equal(dueForCycle(justPublished, now, true, 0), false);\n  assert.equal(dueForCycle(justPublished, now, false, 0), false);\n});\n'''
+          test_path.write_text(tests)
+
+          workflow = Path('.github/workflows/_tmp-curator-inventory-floor-patch.yml')
+          workflow.unlink()
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused inventory and curator quality tests
+        env:
+          TELEGRAM_ALLOWED_USER_IDS: '1976526372'
+        run: node --import tsx/esm --test --test-concurrency=1 tests/autonomousCuratorContinuousV2.test.ts tests/autonomousCuratorCerberusGate.test.ts
+      - name: TypeScript
+        run: npx tsc --noEmit
+      - name: Commit deterministic patch
+        shell: bash
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/services/autonomousCuratorContinuousV2.ts tests/autonomousCuratorContinuousV2.test.ts .github/workflows/_tmp-curator-inventory-floor-patch.yml
+          git commit -m "fix: enforce live catalog inventory floor"
+          git push origin HEAD:fix/curator-inventory-floor-2026-08-30
