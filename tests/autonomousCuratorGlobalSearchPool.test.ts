@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const source = fs.readFileSync("server/services/autonomousCuratorContinuousV2.ts", "utf8");
+const source = fs.readFileSync("server/services/autonomousCuratorContinuousV2Base.ts", "utf8");
 
 test("continuous curator builds a deduplicated global search pool before expensive evaluation", () => {
   assert.match(source, /const candidatePool:/);
