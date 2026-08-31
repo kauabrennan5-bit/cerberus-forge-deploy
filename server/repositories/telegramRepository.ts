@@ -116,6 +116,10 @@ export function isActivePendingReview(review: PendingReview, now = Date.now()): 
   return (review.status === undefined || review.status === "pending") && now < reviewExpiresAt(review);
 }
 
+function isExpiredReview(review: PendingReview, now = Date.now()): boolean {
+  return review.status === "expired" || ((review.status === undefined || review.status === "pending") && now >= reviewExpiresAt(review));
+}
+
 function normalizeReviewRow(row: any): PendingReview | null {
   if (!row?.data || typeof row.data !== "object") return null;
   const review = { ...row.data } as PendingReview;
@@ -205,7 +209,8 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
 
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
   if (testOverrideGetPendingReview) {
-    return testOverrideGetPendingReview(reviewId);
+    const overridden = await testOverrideGetPendingReview(reviewId);
+    return overridden && !isExpiredReview(overridden) ? overridden : null;
   }
   let review: PendingReview | null = null;
 
@@ -241,6 +246,10 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
     await savePendingReview(review);
   }
 
+  // Expired reviews remain available to audit listings, but direct callback
+  // lookup is non-actionable. Returning null here makes every old Telegram
+  // callback fail closed before publication/edit/cancel handlers can mutate it.
+  if (review.status === "expired") return null;
   return review;
 }
 
