@@ -8,6 +8,9 @@ export type AutonomousCuratorScoreBreakdown = {
   novelty: number;
   imageQuality: number;
   valueFit: number;
+  desirabilityFit: number;
+  presentationFit: number;
+  priceToAutoCap: number;
   categoryFit: number;
   completeness: number;
   strongStyleHits: number;
@@ -48,11 +51,22 @@ function includesTerm(normalizedText: string, term: string): boolean {
   return ` ${normalizedText} `.includes(` ${normalizedTerm} `) || normalizedText.includes(normalizedTerm);
 }
 
+function distinctMatchedTermCount(normalizedText: string, terms: readonly string[]): number {
+  const matched = new Set<string>();
+  for (const term of terms) {
+    const normalizedTerm = normalize(term);
+    if (!normalizedTerm || matched.has(normalizedTerm)) continue;
+    if (includesTerm(normalizedText, normalizedTerm)) matched.add(normalizedTerm);
+  }
+  return matched.size;
+}
+
 function aestheticSignals(profile: AutonomousCuratorCategoryProfile, text: string): { strong: number; signature: number } {
   const normalizedText = normalize(text);
-  const strong = new Set(profile.strongStyleTerms.filter(term => includesTerm(normalizedText, term))).size;
-  const signature = new Set(profile.signatureTerms.filter(term => includesTerm(normalizedText, term))).size;
-  return { strong, signature };
+  return {
+    strong: distinctMatchedTermCount(normalizedText, profile.strongStyleTerms),
+    signature: distinctMatchedTermCount(normalizedText, profile.signatureTerms),
+  };
 }
 
 export function tokenJaccard(a: string, b: string): number {
@@ -127,10 +141,9 @@ function visualStyleEvidence(curation: ProductImageCuration): number {
   const high = clean.filter(item => item.confidence === "HIGH").length;
   const medium = clean.filter(item => item.confidence === "MEDIUM").length;
 
-  // `clean` is not merely a photographic label: the authoritative visual
-  // reviewer only emits it when the object itself is convincingly Cerberus.
-  // This lets image evidence rescue terse/SEO marketplace copy without ever
-  // lowering the existing style threshold of 72 or bypassing blocked terms.
+  // `clean` remains useful visual evidence, but human-feedback quality gates
+  // below prevent a technically clean marketplace image from auto-publishing
+  // a weak, low-desire or poorly presented product by itself.
   if (high >= 2) return 86;
   if (high === 1 && clean.length >= 2) return 82;
   if (high === 1) return 78;
@@ -138,11 +151,52 @@ function visualStyleEvidence(curation: ProductImageCuration): number {
   return 72;
 }
 
+function priceToAutoCap(profile: AutonomousCuratorCategoryProfile, price: number): number {
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(profile.maxAutoPrice) || profile.maxAutoPrice <= 0) return Number.POSITIVE_INFINITY;
+  return price / profile.maxAutoPrice;
+}
+
 function valueFit(profile: AutonomousCuratorCategoryProfile, price: number): number {
   if (!Number.isFinite(price) || price <= 0) return 0;
-  if (price <= profile.maxAutoPrice) return 100;
-  if (price <= profile.maxReviewPrice) return 65;
+  const ratio = priceToAutoCap(profile, price);
+  if (ratio <= 0.50) return 100;
+  if (ratio <= 0.65) return 92;
+  if (ratio <= 0.80) return 80;
+  if (ratio <= 1) return 68;
+  if (price <= profile.maxReviewPrice) return 45;
   return 0;
+}
+
+function desirabilityFit(category: string, strong: number, signature: number, styleScore: number, novelty: number): number {
+  // Infantil precisa de desenho memorável: madeira + formas geométricas por si
+  // só não transformam um brinquedo correto em um find Cerberus de destaque.
+  if (category === "Infantil" && strong === 0 && styleScore < 94 && signature < 5) return 72;
+  if (strong >= 2) return 100;
+  if (strong === 1 && signature >= 1) return 96;
+  if (signature >= 4 && novelty >= 95) return 92;
+  if (strong === 1 && novelty >= 95) return 88;
+  if (styleScore >= 94 && novelty >= 85) return 90;
+  // Preserva a capacidade de evidência visual forte resgatar copy curta em
+  // categorias onde novidade pode ser suficiente. Acessórios simples não
+  // ganham esse resgate só por ainda não existirem no catálogo.
+  if (novelty >= 95 && category !== "Calçados & Acessórios") return 82;
+  if (signature >= 4 && novelty >= 90) return 86;
+  if (styleScore >= 90 && novelty >= 90) return 84;
+  return 68;
+}
+
+function presentationFit(category: string, curation: ProductImageCuration): number {
+  if (curation.status !== "ready" || !curation.primaryImageUrl) return 0;
+  const clean = curation.assessments.filter(item => item.decision === "clean" && item.confidence !== "LOW");
+  if (clean.length === 0) return 0;
+  if (category !== "Vestuário") return 100;
+
+  // Moda precisa vender silhueta e styling, não apenas provar que a peça existe.
+  // Um único recorte de produto/cabide não é apresentação editorial suficiente.
+  const professionalSignals = /\b(modelo|vestindo|corpo|look|editorial|estudio|manequim|campanha|lookbook|ambientad[oa])\b/i;
+  if (clean.some(item => professionalSignals.test(normalize(item.reason)))) return 100;
+  if (clean.length >= 2) return 84;
+  return 55;
 }
 
 export function maximumCatalogSimilarity(displayTitle: string, category: string, existingProducts: readonly Product[]): number {
@@ -165,6 +219,9 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
       novelty: 0,
       imageQuality: 0,
       valueFit: 0,
+      desirabilityFit: 0,
+      presentationFit: 0,
+      priceToAutoCap: 0,
       categoryFit: 0,
       completeness: 0,
       strongStyleHits: 0,
@@ -180,6 +237,9 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
   const styleScore = Math.max(textualStyle.score, visualStyleEvidence(input.imageCuration));
   const image = imageQuality(input.imageCuration);
   const value = valueFit(input.profile, input.price);
+  const desirability = desirabilityFit(input.category, textualStyle.strong, textualStyle.signature, styleScore, novelty);
+  const presentation = presentationFit(input.category, input.imageCuration);
+  const priceRatio = priceToAutoCap(input.profile, input.price);
   const categoryFit = input.category === input.profile.category ? 100 : 0;
   const complete = input.displayTitle.trim().length >= 4
     && input.description.trim().length >= 24
@@ -198,10 +258,20 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     + complete * 0.05,
   );
 
-  // Gates Cerberus remain absolute. The threshold does not move; the only
-  // change is that reviewed visual evidence can now satisfy the same style gate
-  // when marketplace copy fails to name the design language explicitly.
-  if (styleScore < 72 || value === 0 || categoryFit === 0 || complete === 0 || image === 0) {
+  // Gates Cerberus remain absolute. Human feedback adds three requirements:
+  // a product must be desirable, fashion must have credible presentation, and
+  // a high relative price must be justified by stronger design distinction.
+  if (
+    styleScore < 72
+    || value === 0
+    || categoryFit === 0
+    || complete === 0
+    || image === 0
+    || desirability < 80
+    || presentation < 80
+    || priceRatio > 1
+    || (priceRatio > 0.55 && styleScore < 94 && desirability < 90)
+  ) {
     finalScore = Math.min(finalScore, 71);
   }
 
@@ -211,6 +281,9 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     novelty,
     imageQuality: image,
     valueFit: value,
+    desirabilityFit: desirability,
+    presentationFit: presentation,
+    priceToAutoCap: Number.isFinite(priceRatio) ? Number(priceRatio.toFixed(4)) : 999,
     categoryFit,
     completeness: complete,
     strongStyleHits: textualStyle.strong,
@@ -222,4 +295,8 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
 
 export const autonomousCuratorScoringInternals = {
   visualStyleEvidence,
+  valueFit,
+  desirabilityFit,
+  presentationFit,
+  priceToAutoCap,
 };
