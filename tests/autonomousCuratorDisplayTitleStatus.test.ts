@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const continuous = readFileSync(new URL("../server/services/autonomousCuratorContinuous.ts", import.meta.url), "utf8");
-const continuousV2 = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+const continuousV2 = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
 const migration = readFileSync(
   new URL("../supabase/migrations/20260830134120_autonomous_curator_reviewed_display_title_status.sql", import.meta.url),
   "utf8",
