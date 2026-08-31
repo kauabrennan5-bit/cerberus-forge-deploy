@@ -1,5 +1,155 @@
 [
   {
+    "id": "prod-1788138818663-e9abbb6ebb",
+    "ref": "AUTOQ-E9ABBB6EBB",
+    "slug": "quebra-cabeca-geometrico-de-madeira-e9abbb",
+    "produto": "Quebra-Cabeça Geométrico de Madeira",
+    "displayTitle": "Quebra-Cabeça Geométrico de Madeira",
+    "preco": 113.5,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-8258o-ms9zero1nlz586",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8258o-ms9zero1nlz586"
+    ],
+    "link": "https://s.shopee.com.br/9pdwG518Az",
+    "categoria": "Infantil",
+    "descricao": "Jogo de encaixe com base de madeira aparente e peças coloridas em formas geométricas. As imagens mostram desafios de composição para preencher o tabuleiro.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":93,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"quebra cabeça madeira formas geométricas\",\"shopId\":\"1924817491\",\"itemId\":\"56316585735\",\"sourceProductUrl\":\"https://shopee.com.br/product/1924817491/56316585735\",\"imageUrl\":\"https://cf.shopee.com.br/file/sg-11134201-8258o-ms9zero1nlz586\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:47:27.901977+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-1940ad0b14",
+    "ref": "AUTOQ-1940AD0B14",
+    "slug": "radio-retro-portatil-bluetooth-1940ad",
+    "produto": "Rádio Retrô Portátil Bluetooth",
+    "displayTitle": "Rádio Retrô Portátil Bluetooth",
+    "preco": 79.99,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-lz80tb7i8t9h01",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lz80tb7i8t9h01",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lz80tb7ia7tx2b",
+      "https://down-br.img.susercontent.com/file/br-11134201-820lq-mr0j5c3fdkhyb5"
+    ],
+    "link": "https://s.shopee.com.br/20v3kSz7u1",
+    "categoria": "Tecnologia",
+    "descricao": "Rádio portátil com formato inspirado em aparelhos vintage, acabamento amadeirado aparente, alça superior, mostrador frontal e lanterna lateral visível. O visual combina detalhes metálicos, botões físicos e linguagem retrô refinada.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":98,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"radio retro portatil bluetooth madeira\",\"shopId\":\"1181289913\",\"itemId\":\"18399371566\",\"sourceProductUrl\":\"https://shopee.com.br/product/1181289913/18399371566\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-7r98o-lz80tb7i8t9h01\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:38:16.160855+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-704cfbe698",
+    "ref": "AUTOQ-704CFBE698",
+    "slug": "oculos-solares-geometricos-pretos-704cfb",
+    "produto": "Óculos solares geométricos pretos",
+    "displayTitle": "Óculos solares geométricos pretos",
+    "preco": 269.99,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820lr-mofijsbpxcsg9d",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lr-mofijsbpxcsg9d"
+    ],
+    "link": "https://s.shopee.com.br/8Kp8SRp3ca",
+    "categoria": "Calçados & Acessórios",
+    "descricao": "Óculos solares com armação preta de linhas angulares, lentes escuras e hastes com recortes e volumes marcantes. O desenho tem linguagem visual geométrica e contemporânea.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":93,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"óculos geométrico acetato masculino\",\"shopId\":\"330850245\",\"itemId\":\"58210952060\",\"sourceProductUrl\":\"https://shopee.com.br/product/330850245/58210952060\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-820lr-mofijsbpxcsg9d\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:34:18.603012+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-fd17cd642f",
+    "ref": "AUTOQ-FD17CD642F",
+    "slug": "bermuda-cinza-de-alfaiataria-fd17cd",
+    "produto": "Bermuda Cinza de Alfaiataria",
+    "displayTitle": "Bermuda Cinza de Alfaiataria",
+    "preco": 70,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/br-11134207-820mh-mm0cnct3tkhs09"
+    ],
+    "link": "https://s.shopee.com.br/2LXu48cH5w",
+    "categoria": "Vestuário",
+    "descricao": "Bermuda masculina cinza de corte reto, com cós estruturado, passantes e bolsos laterais. Apresenta visual sóbrio e minimalista, adequado a composições casuais refinadas.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":99,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"alfaiataria masculina anos 70\",\"shopId\":\"330449607\",\"itemId\":\"58207204350\",\"sourceProductUrl\":\"https://shopee.com.br/product/330449607/58207204350\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-820mg-mn4cuwdsc1s4dc\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:28:48.905573+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-de5eb83d45",
+    "ref": "AUTOQ-DE5EB83D45",
+    "slug": "organizador-modular-bauhaus-de5eb8",
+    "produto": "Organizador Modular Bauhaus",
+    "displayTitle": "Organizador Modular Bauhaus",
+    "preco": 159.99,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820l6-moli3028uu4j21",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l6-moli3028uu4j21",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lx-molk7ejacjk599",
+      "https://down-br.img.susercontent.com/file/br-11134207-820la-moli3028w8oz93",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lu-molk7ejh3jsw9a",
+      "https://down-br.img.susercontent.com/file/br-11134207-820mb-moli3028s0zne3"
+    ],
+    "link": "https://s.shopee.com.br/8plNWpERZS",
+    "categoria": "Organização",
+    "descricao": "Organizador de apoio com composição modular, nichos, bandejas e ganchos em formas geométricas e cores primárias. A estrutura acomoda objetos pequenos como chaves, carteira, acessórios e relógio.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":95,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"porta objetos bauhaus\",\"shopId\":\"1505031988\",\"itemId\":\"58211269425\",\"sourceProductUrl\":\"https://shopee.com.br/product/1505031988/58211269425\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-820l6-moli3028uu4j21\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:24:52.89841+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-e3c6798d2c",
+    "ref": "AUTOQ-E3C6798D2C",
+    "slug": "mesa-de-cabeceira-retro-com-prateleiras-e3c679",
+    "produto": "Mesa de Cabeceira Retrô com Prateleiras",
+    "displayTitle": "Mesa de Cabeceira Retrô com Prateleiras",
+    "preco": 59.9,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820m7-mou4k1fdsbuubc",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lf-mou4k1fdtqfae7",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fe0r9i6f",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fdwjk609",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l5-mou4k1fdzcp285",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fe4yyua2"
+    ],
+    "link": "https://s.shopee.com.br/1qbeGOeSnI",
+    "categoria": "Móveis",
+    "descricao": "Mesa de cabeceira com estrutura retangular aberta, prateleiras internas e pés palito inclinados. O visual combina superfícies lisas, detalhes amadeirados aparentes e linguagem retrô de inspiração modernista.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":96,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"criado mudo retro madeira\",\"shopId\":\"346704794\",\"itemId\":\"58211437744\",\"sourceProductUrl\":\"https://shopee.com.br/product/346704794/58211437744\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-820m7-mou4k1fdsbuubc\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:19:56.302346+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-2d42bbd320",
+    "ref": "AUTOQ-2D42BBD320",
+    "slug": "quadro-decorativo-geometrico-retro-2d42bb",
+    "produto": "Quadro Decorativo Geométrico Retrô",
+    "displayTitle": "Quadro Decorativo Geométrico Retrô",
+    "preco": 22,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-mci0i86uhatde0",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uhatde0",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uk3y9b6"
+    ],
+    "link": "https://s.shopee.com.br/9KhfEar3Qq",
+    "categoria": "Decoração",
+    "descricao": "Quadro decorativo com composição geométrica em círculos concêntricos nas cores vermelho, laranja e amarelo, acompanhado da frase em inglês “Fall 7 Times Stand Up”. A estética gráfica remete ao modernismo retrô e pode ser usada na decoração de paredes.",
+    "curatorNote": "AUTONOMOUS_CURATOR_QUEUE_V1:{\"score\":98,\"profileVersion\":\"1.6\",\"queuedAt\":\"2026-08-31T01:13:38.663Z\",\"publishedAt\":\"2026-08-31T01:13:38.663Z\",\"query\":\"decoracao bauhaus\",\"shopId\":\"989949738\",\"itemId\":\"40809457948\",\"sourceProductUrl\":\"https://shopee.com.br/product/989949738/40809457948\",\"imageUrl\":\"https://cf.shopee.com.br/file/br-11134207-7r98o-mci0i86uhatde0\"}",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:17:08.630109+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788111188280-23bbefa374",
     "ref": "AUTOQ-23BBEFA374",
     "slug": "balde-de-gelo-e-copo-anos-70-23bbef",
