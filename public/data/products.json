@@ -1,5 +1,28 @@
 [
   {
+    "id": "prod-1788162139123-2c9cbf0544",
+    "ref": "AUTOQ-2C9CBF0544",
+    "slug": "copo-de-vidro-anos-70-2c9cbf",
+    "produto": "Copo de Vidro Anos 70",
+    "displayTitle": "Copo de Vidro Anos 70",
+    "preco": 55,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820lw-mqxjuyz4g2dif4",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lw-mqxjuyz4g2dif4",
+      "https://down-br.img.susercontent.com/file/br-11134207-820m5-mqxjuyz6cwzo0d",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mqxjuyz4ent2df",
+      "https://down-br.img.susercontent.com/file/br-11134207-820mc-mqxjuyz6o5jbc9",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lg-mqxjuyz4d98m40"
+    ],
+    "link": "https://s.shopee.com.br/3VjrPqX60i",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Copo de vidro vintage fabricado pela Nadir Figueiredo com capacidade de duzentos mililitros. Uma peça clássica com estética retrô ideal para uso cotidiano ou colecionismo.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T07:46:17.348333+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788146512634-2da4ba876b",
     "ref": "AUTOQ-2DA4BA876B",
     "slug": "radio-retro-de-madeira-2da4ba",
