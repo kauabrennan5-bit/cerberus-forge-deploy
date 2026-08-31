@@ -4,6 +4,7 @@ import https from 'https';
 import path from 'path';
 import dotenv from 'dotenv';
 import { resolvePublicProductCategory } from '../src/lib/productCategory.ts';
+import { sanitizePublicCuratorNote } from '../src/lib/publicCuratorNote.ts';
 
 dotenv.config();
 
@@ -183,7 +184,7 @@ async function generateStaticCatalog() {
       description: p.descricao || p.description,
     }),
     descricao: containsRawPayloadMarkers(p.descricao || p.description || '') ? '' : (p.descricao || p.description || ''),
-    curatorNote: typeof (p.curatorNote || p.curator_note) === 'string' ? (p.curatorNote || p.curator_note).trim() : undefined,
+    curatorNote: sanitizePublicCuratorNote(p.curatorNote || p.curator_note),
     paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',
     createdAt: p.createdAt || p.created_at || undefined,
     ofertaPromocional: sanitizePromotionOffer(p.ofertaPromocional || p.oferta_promocional),
