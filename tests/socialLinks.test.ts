@@ -77,7 +77,9 @@ describe("social links", () => {
   });
 
   test("Telegram exposes the social-links editor without hardcoded destinations", () => {
-    const bot = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+    const core = readFileSync(new URL("../server/services/telegramBotCore.ts", import.meta.url), "utf8");
+    const extension = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+    const bot = `${core}\n${extension}`;
     const commands = readFileSync(new URL("../server/services/telegramCommands.ts", import.meta.url), "utf8");
     assert.match(bot, /callback_data: "social_links"/);
     assert.match(bot, /social_edit:/);
