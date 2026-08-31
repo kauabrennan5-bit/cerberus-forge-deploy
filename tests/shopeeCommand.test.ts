@@ -179,11 +179,19 @@ describe("parseShopeeCommand — contrato termo primeiro, quantidade por último
     }
   });
 
-  it("mantém URL direta somente quando ela é explicitamente Shopee e quantidade vem por último", () => {
+  it("mantém URL direta quando quantidade vem por último", () => {
     const parsed = parseShopeeCommand(`${PRODUCT_1} 1`);
     assert.equal(parsed.error, null);
     assert.equal(parsed.mode, "urls");
     assert.deepEqual(parsed.urls, [PRODUCT_1]);
+  });
+
+  it("mantém compatibilidade antiga somente para quantidade + URL Shopee explícita", () => {
+    const direct = parseShopeeCommand(`1 ${PRODUCT_1}`);
+    assert.equal(direct.error, null);
+    assert.equal(direct.mode, "urls");
+    assert.deepEqual(direct.urls, [PRODUCT_1]);
+    assert.notEqual(parseShopeeCommand("1 luminária").error, null);
   });
 });
 
@@ -218,6 +226,7 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     assert.equal(savedReviews[0]?.normalizedUrl, PRODUCT_1);
     assert.equal(savedReviews[0]?.existingProduct?.shopId, SHOP_ID);
     assert.equal(savedReviews[0]?.existingProduct?.itemId, ITEM_1);
+    assert.equal(savedReviews[0]?.affiliateUrl, undefined);
     assert.equal(savedReviews[0]?.existingProduct?.affiliateUrl, `https://s.shopee.com.br/aff-${ITEM_1.slice(-4)}`);
   });
 
@@ -249,6 +258,7 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     const result = await runShopeeCommand("luminária 1");
 
     assert.equal(result.ok, 0);
+    assert.equal(result.errorCode, "NO_QUALIFIED_REPLACEMENT_FOUND");
     assert.equal(result.rejectionCounts.OFFICIAL_PRODUCT_LINK_INVALID, 1);
     assert.equal(savedReviews.length, 0);
     assert.equal(photoMessages.length, 0);
@@ -261,12 +271,13 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     const result = await runShopeeCommand("luminária 1");
 
     assert.equal(result.ok, 0);
+    assert.equal(result.errorCode, "NO_QUALIFIED_REPLACEMENT_FOUND");
     assert.equal(result.items[0]?.status, "duplicate_rejected");
     assert.equal(result.items[0]?.reason, "SOURCE_IDENTITY_ALREADY_OWNED");
     assert.equal(savedReviews.length, 0);
   });
 
-  it("rejeita candidato sem título e preço canônicos", async () => {
+  it("rejeita candidato sem título e preço canônicos e distingue candidatos rejeitados", async () => {
     setTestShopeeClient(clientWithOffers([
       { ...offer(ITEM_1, PRODUCT_1), name: "" },
       { ...offer(ITEM_2, PRODUCT_2), price: null },
@@ -275,6 +286,8 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     const result = await runShopeeCommand("luminária 1");
 
     assert.equal(result.ok, 0);
+    assert.equal(result.errorCode, "NO_QUALIFIED_REPLACEMENT_FOUND");
+    assert.equal(result.candidatesReceived, 2);
     assert.equal(result.rejectionCounts.TITLE_MISSING, 1);
     assert.equal(result.rejectionCounts.PRICE_MISSING, 1);
   });
@@ -293,6 +306,7 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     const result = await runShopeeCommand("luminária 1");
 
     assert.equal(result.ok, 0);
+    assert.equal(result.errorCode, "NO_QUALIFIED_REPLACEMENT_FOUND");
     assert.equal(result.items[0]?.status, "editorial_curation_failed");
     assert.match(result.items[0]?.reason || "", /imagem HTTPS válida ausente|IMAGE_REVIEW_REQUIRED/);
     assert.equal(savedReviews.length, 0);
@@ -345,13 +359,7 @@ describe("runShopeeCommand — configuração e falhas do provider", () => {
 
   it("autenticação inválida retorna SHOPEE_PROVIDER_AUTH_FAILED", async () => {
     setTestShopeeClient(clientWithOffers([], {
-      search: async () => ({
-        ok: false,
-        items: [],
-        httpStatus: 401,
-        reason: "SHOPEE_AUTH_ERROR",
-        error: { kind: "SHOPEE_AUTH_ERROR" },
-      }),
+      search: async () => ({ ok: false, items: [], httpStatus: 401, reason: "SHOPEE_AUTH_ERROR", error: { kind: "SHOPEE_AUTH_ERROR" } }),
     }));
 
     const result = await runShopeeCommand("copo 1");
@@ -361,15 +369,39 @@ describe("runShopeeCommand — configuração e falhas do provider", () => {
     assert.equal(result.ok, 0);
   });
 
-  it("resposta vazia real é distinguida de falha de infraestrutura", async () => {
+  it("autorização insuficiente é distinta de autenticação inválida", async () => {
+    setTestShopeeClient(clientWithOffers([], {
+      search: async () => ({ ok: false, items: [], httpStatus: 403, reason: "SHOPEE_FORBIDDEN", error: { kind: "SHOPEE_FORBIDDEN" } }),
+    }));
+
+    const result = await runShopeeCommand("copo 1");
+
+    assert.equal(result.errorCode, "SHOPEE_PROVIDER_FORBIDDEN");
+    assert.equal(result.providerQueryExecuted, true);
+    assert.match(textMessages.map(message => message.text).join("\n"), /SHOPEE_PROVIDER_FORBIDDEN/);
+  });
+
+  it("resposta vazia real retorna NO_RESULTS, não falha de infraestrutura", async () => {
     setTestShopeeClient(clientWithOffers([]));
 
     const result = await runShopeeCommand("copo 1");
 
-    assert.equal(result.errorCode, null);
+    assert.equal(result.errorCode, "NO_RESULTS");
     assert.equal(result.providerQueryExecuted, true);
     assert.equal(result.candidatesReceived, 0);
     assert.equal(result.ok, 0);
+    assert.match(textMessages.map(message => message.text).join("\n"), /NO_RESULTS/);
+  });
+
+  it("resposta incompatível do provider recebe código próprio", async () => {
+    setTestShopeeClient(clientWithOffers([], {
+      search: async () => ({ ok: false, items: [], httpStatus: 200, reason: "SHOPEE_INVALID_RESPONSE", error: { kind: "SHOPEE_INVALID_RESPONSE" } }),
+    }));
+
+    const result = await runShopeeCommand("copo 1");
+
+    assert.equal(result.errorCode, "SHOPEE_PROVIDER_RESPONSE_INVALID");
+    assert.equal(result.providerQueryExecuted, true);
   });
 
   it("timeout usa retry limitado e termina com código estável", async () => {
