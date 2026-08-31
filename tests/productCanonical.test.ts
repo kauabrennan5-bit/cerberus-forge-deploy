@@ -185,7 +185,7 @@ test("main visual consumers use the shared canonical image resolver", () => {
     "server/services/newsletterInstitutional.ts",
     "server/services/newsletterCampaignService.ts",
     "server/services/newsletterCampaignTemplate.ts",
-    "server/services/telegramBot.ts",
+    "server/services/telegramProductRotation.ts",
     "server/routes/previewTelegramRoutes.ts",
     "server/services/shopeeCommand.ts",
     "scripts/productOpenGraph.js",
