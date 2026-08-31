@@ -1,5 +1,25 @@
 [
   {
+    "id": "prod-1788193747119-9a8c47e00e",
+    "ref": "AUTOQ-9A8C47E00E",
+    "slug": "copo-de-vidro-para-whisky-9a8c47",
+    "produto": "Copo de Vidro para Whisky",
+    "displayTitle": "Copo de Vidro para Whisky",
+    "preco": 22,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-m2qzh0f0bggj6c",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f0bggj6c",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f0a1w3b3"
+    ],
+    "link": "https://s.shopee.com.br/2qUAccZdMW",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Copo de vidro vintage para whisky com design clássico dos anos 70. Uma peça nostálgica ideal para colecionadores e para servir bebidas com estilo retrô.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T16:34:01.728464+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788162139123-2c9cbf0544",
     "ref": "AUTOQ-2C9CBF0544",
     "slug": "copo-de-vidro-anos-70-2c9cbf",
@@ -38,6 +58,50 @@
     "descricao": "Rádio de mesa com formato arqueado, acabamento amadeirado e frentes de tela trançada. O painel frontal reúne visor, botões e controle giratório, com conectividade Bluetooth indicada no título.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T03:37:10.258395+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788146512634-9c9ca05ff7",
+    "ref": "AUTOQ-9C9CA05FF7",
+    "slug": "jaqueta-esportiva-verde-retro-9c9ca0",
+    "produto": "Jaqueta Masculina Vintage Verde Anos Setenta",
+    "displayTitle": "Jaqueta Masculina Vintage Verde Anos Setenta",
+    "preco": 150,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-81ztc-mk2rjlschiiq6a",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztc-mk2rjlschiiq6a",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztc-mk2rjlskvim9f0",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztc-mk2rjlsl9kaof8",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztc-mk2rjlsmh3wg48"
+    ],
+    "link": "https://s.shopee.com.br/AUtbkioii5",
+    "categoria": "Vestuário",
+    "descricao": "Peça de vestuário em estilo vintage com design raglan e tom verde característico. Ideal para compor visuais retrô com forte inspiração esportiva clássica.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T03:33:45.663964+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788146512634-ba2675ab18",
+    "ref": "AUTOQ-BA2675AB18",
+    "slug": "luminaria-cogumelo-canelada-ba2675",
+    "produto": "Luminária Abajur Mesa Estilo Cogumelo",
+    "displayTitle": "Luminária Abajur Mesa Estilo Cogumelo",
+    "preco": 89.9,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820m5-ms2za6gw9i4m23",
+      "https://down-br.img.susercontent.com/file/br-11134207-820md-ms1xatwafbwk88",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lk-ms1xatwajjlw0f",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lo-ms1xatwai51gf3",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lm-ms1xatwagqh062"
+    ],
+    "link": "https://s.shopee.com.br/6L4423yg01",
+    "categoria": "Iluminação",
+    "descricao": "Esta luminária estilo cogumelo apresenta um design minimalista e moderno de inspiração Bauhaus. É ideal para compor a decoração e iluminação de mesas de quarto com um toque estético marcante.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T03:23:52.120926+00:00",
     "ativo": true,
     "status": "published"
   },
