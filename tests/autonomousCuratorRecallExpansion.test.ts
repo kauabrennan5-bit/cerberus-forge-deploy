@@ -6,20 +6,37 @@ import {
   profileForCategory,
 } from "../server/services/autonomousCuratorProfiles";
 
-const expandedCategories = [
-  "Decoração",
+const recoveryCategories = [
   "Móveis",
+  "Organização",
   "Calçados & Acessórios",
-  "Tecnologia",
+  "Beleza & Bem-estar",
   "Infantil",
 ] as const;
 
-test("profile 1.6 preserves expanded recall for categories that were empty", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");
-  for (const category of expandedCategories) {
+test("profile 1.7 expands recall specifically for categories still below the 2/2 floor", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.7");
+  for (const category of recoveryCategories) {
     const profile = profileForCategory(category);
     assert.ok(profile.queries.length >= 12, `${category} must expose at least twelve discovery queries`);
     assert.equal(new Set(profile.queries).size, profile.queries.length, `${category} queries must remain unique`);
+  }
+});
+
+test("sparse-category recovery uses concrete Cerberus archetypes without changing final gates", () => {
+  const expected = new Map([
+    ["Móveis", ["mesa lateral cromada", "banqueta tubular"]],
+    ["Organização", ["porta revistas cromado", "gaveteiro modular"]],
+    ["Calçados & Acessórios", ["oculos acetato", "mocassim camurca"]],
+    ["Beleza & Bem-estar", ["espelho mesa cromado", "porta perfume vintage"]],
+    ["Infantil", ["blocos bauhaus", "brinquedo equilibrio madeira"]],
+  ] as const);
+
+  for (const [category, archetypes] of expected) {
+    const profile = profileForCategory(category);
+    for (const archetype of archetypes) {
+      assert.ok(profile.strongStyleTerms.includes(archetype), `${category} is missing recovery archetype ${archetype}`);
+    }
   }
 });
 
@@ -32,17 +49,17 @@ test("all official Shopee discovery keywords stay bounded and non-empty", () => 
   }
 });
 
-test("recall expansion does not alter category price gates", () => {
+test("recovery expansion does not alter category price gates", () => {
   assert.deepEqual(
-    expandedCategories.map(category => {
+    recoveryCategories.map(category => {
       const profile = profileForCategory(category);
       return [category, profile.maxAutoPrice, profile.maxReviewPrice];
     }),
     [
-      ["Decoração", 350, 600],
       ["Móveis", 900, 1500],
+      ["Organização", 220, 350],
       ["Calçados & Acessórios", 300, 450],
-      ["Tecnologia", 700, 1200],
+      ["Beleza & Bem-estar", 300, 500],
       ["Infantil", 300, 500],
     ],
   );
