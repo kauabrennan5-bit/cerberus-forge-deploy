@@ -2,6 +2,7 @@ import type { Product } from "../../src/types";
 import * as productsRepository from "../repositories/productsRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { createOperationId, type OperationalDiagnostic, type OperationalFailureCode } from "./operationalDiagnostics";
+import { revalidateShopeeCandidateBeforePublication } from "./shopeePublicationPreflight";
 import {
   curateCandidate,
   event,
@@ -43,6 +44,7 @@ export interface ProductPipelineAdapters {
   createCanonicalProduct: (candidate: ProductCandidate) => Promise<Product>;
   syncAndValidatePublication: (product: Product, operationId: string) => Promise<PublicationVerification>;
   pauseCanonicalProduct: (productId: string) => Promise<void>;
+  preflightPublication?: (candidate: ProductCandidate) => Promise<{ ok: boolean; code: string }>;
 }
 
 const recentLifecycleRecords = new Map<string, LifecycleRecord>();
@@ -147,6 +149,16 @@ export class ProductPipeline {
       return record;
     }
 
+    if (this.adapters.preflightPublication) {
+      const preflight = await this.adapters.preflightPublication(record.candidate);
+      if (!preflight.ok) {
+        record.error = "VALIDATION_ERROR";
+        record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PUBLICATION_PREFLIGHT_BLOCKED:${preflight.code}`));
+        rememberLifecycleRecord(record);
+        return record;
+      }
+    }
+
     try {
       const operationId = createOperationId("PUB");
       record.operationId = operationId;
@@ -200,21 +212,17 @@ export function restoreLifecycleRecord(value: LifecycleRecord): LifecycleRecord 
   };
 }
 
-// --- HOOKS DE TESTE CONTROLADO (padrão setXForTests da codebase) ---
-// Substitui a fábrica do pipeline de produção SOMENTE em testes unitários;
-// NUNCA usar em produção. Null restaura o adaptador de Supabase canônico.
 let testPipelineFactory: (() => ProductPipeline) | null = null;
 
-/** Substitui a fábrica do pipeline de produção em testes; null restaura o real. */
 export function setTestProductPipeline(factory: (() => ProductPipeline) | null): void {
   testPipelineFactory = factory;
 }
 
-/** Adaptador de produção: Supabase continua canônico e a publicação só conclui após syncCatalogAndDeploy. */
 export function createProductionProductPipeline(): ProductPipeline {
   if (testPipelineFactory) return testPipelineFactory();
   return new ProductPipeline({
     getProducts: () => productsRepository.getProducts(),
+    preflightPublication: async candidate => revalidateShopeeCandidateBeforePublication(candidate),
     createCanonicalProduct: candidate => productsRepository.createProduct({
       produto: candidate.produto,
       rawTitle: candidate.rawTitle,
@@ -225,8 +233,6 @@ export function createProductionProductPipeline(): ProductPipeline {
       imagens: candidate.imagens,
       imageEditorialStatus: candidate.imageEditorialStatus,
       imageCuration: candidate.imageCuration,
-      // FASE 25C (Commit 3): autoridade do link = affiliate oficial (candidate.link);
-      // sem ele, a URL pública canônica. normalizedUrl permanece para auditoria.
       link: candidate.link || candidate.normalizedUrl,
       descricao: candidate.descricao,
       status: "approved",
@@ -243,8 +249,6 @@ export function createProductionProductPipeline(): ProductPipeline {
         return { success: true, operationId, diagnostic: undefined };
       }
 
-      // A fonte canônica não deve apresentar um produto como publicado se a validação
-      // pública falhou. A compensação é não destrutiva e nunca apaga o registro.
       await productsRepository.updateProduct(product.id, { ativo: false, status: "error" }, { syncCatalog: false });
       const rollback = await syncCatalogAndDeploy(`rollback de publicação ${product.id}`, undefined, operationId);
       if (!rollback.success) {

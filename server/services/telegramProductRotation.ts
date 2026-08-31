@@ -6,10 +6,12 @@ import {
   approveProductRotation,
   cancelProductRotation,
   getProductRotationRequest,
+  ProductRotationSearchError,
   proposeNextProductRotationCandidate,
   rejectRotationCandidateAndSearchAgain,
   startProductRotation,
   type RotationProposal,
+  type RotationSearchDiagnostics,
 } from "./productRotation";
 
 function escapeHtml(value: unknown): string {
@@ -49,6 +51,100 @@ function searchingKeyboard(requestId: string) {
   };
 }
 
+function retryKeyboard(requestId: string) {
+  return {
+    inline_keyboard: [
+      [{ text: "🔁 Tentar novamente", callback_data: `rotation_retry:${requestId}` }],
+      [{ text: "❌ Cancelar rotação", callback_data: `rotation_cancel:${requestId}` }],
+    ],
+  };
+}
+
+function summarizeRotationDiagnostics(diagnostics: RotationSearchDiagnostics): string {
+  const reasons = Object.entries(diagnostics.rejectionCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([reason, count]) => `${count}× ${reason}`)
+    .join("; ");
+  return [
+    `busca executada: ${diagnostics.providerQueriesExecuted > 0 ? "sim" : "não"}`,
+    `candidatos recebidos: ${diagnostics.candidatesReceived}`,
+    `candidatos avaliados: ${diagnostics.candidatesExamined}`,
+    reasons ? `rejeições: ${reasons}` : "rejeições: nenhuma registrada",
+  ].join("; ");
+}
+
+function rotationSearchFailureMessage(error: unknown): { text: string; retryable: boolean } {
+  if (!(error instanceof ProductRotationSearchError)) {
+    return {
+      text:
+        "⚠️ <b>ROTAÇÃO NÃO CONCLUÍDA</b>\n\n" +
+        `Motivo: <code>${escapeHtml(safeError(error))}</code>\n\n` +
+        "A peça atual continua publicada e nenhuma troca foi feita.",
+      retryable: true,
+    };
+  }
+
+  const diagnostic = escapeHtml(summarizeRotationDiagnostics(error.diagnostics));
+  if (error.code === "SHOPEE_PROVIDER_NOT_CONFIGURED") {
+    return {
+      text:
+        "⛔ <b>ROTAÇÃO BLOQUEADA — PROVIDER SHOPEE NÃO CONFIGURADO</b>\n\n" +
+        "<code>SHOPEE_PROVIDER_NOT_CONFIGURED</code>\n" +
+        "Configure as credenciais oficiais da Affiliate API somente no secret manager do ambiente. Nenhuma ausência de configuração foi convertida em falta de candidatos.\n\n" +
+        "A peça atual continua publicada e nenhuma troca foi feita.",
+      retryable: false,
+    };
+  }
+  if (error.code === "SHOPEE_PROVIDER_AUTH_FAILED") {
+    return {
+      text:
+        "⛔ <b>ROTAÇÃO BLOQUEADA — AUTENTICAÇÃO SHOPEE REJEITADA</b>\n\n" +
+        "<code>SHOPEE_PROVIDER_AUTH_FAILED</code>\n" +
+        "Revise credenciais e permissões/scopes no secret manager do ambiente.\n\n" +
+        "A peça atual continua publicada e nenhuma troca foi feita.",
+      retryable: false,
+    };
+  }
+  if (["SHOPEE_PROVIDER_RATE_LIMITED", "SHOPEE_PROVIDER_TIMEOUT", "SHOPEE_PROVIDER_UNAVAILABLE"].includes(error.code)) {
+    return {
+      text:
+        "⚠️ <b>ROTAÇÃO ADIADA — PROVIDER SHOPEE INDISPONÍVEL</b>\n\n" +
+        `<code>${escapeHtml(error.code)}</code>\n` +
+        `Diagnóstico seguro: <code>${diagnostic}</code>\n\n` +
+        "A falha foi tratada como temporária; a peça atual continua publicada e nenhuma troca foi feita.",
+      retryable: true,
+    };
+  }
+  if (error.code === "SHOPEE_PROVIDER_RESPONSE_INVALID") {
+    return {
+      text:
+        "⛔ <b>ROTAÇÃO BLOQUEADA — RESPOSTA SHOPEE INCOMPATÍVEL</b>\n\n" +
+        "<code>SHOPEE_PROVIDER_RESPONSE_INVALID</code>\n" +
+        `Diagnóstico seguro: <code>${diagnostic}</code>\n\n` +
+        "A peça atual continua publicada e nenhuma troca foi feita.",
+      retryable: false,
+    };
+  }
+  if (error.code === "ROTATION_CANDIDATE_PERSIST_FAILED") {
+    return {
+      text:
+        "⚠️ <b>ROTAÇÃO BLOQUEADA — CANDIDATO NÃO PERSISTIDO</b>\n\n" +
+        "<code>ROTATION_CANDIDATE_PERSIST_FAILED</code>\n" +
+        `Diagnóstico seguro: <code>${diagnostic}</code>\n\n` +
+        "Um candidato passou pela busca, mas o estado do card não pôde ser persistido com segurança. A peça atual continua publicada.",
+      retryable: true,
+    };
+  }
+  return {
+    text:
+      "⚠️ <b>ROTAÇÃO SEM CANDIDATO APROVADO</b>\n\n" +
+      `Motivo: ${diagnostic}.\n\n` +
+      "A busca oficial foi executada e os candidatos recebidos foram rejeitados pelas regras de elegibilidade. A peça atual continua publicada e nenhuma troca foi feita.",
+    retryable: true,
+  };
+}
+
 async function sendRotationProposal(proposal: RotationProposal): Promise<void> {
   const { request, source, candidate, score } = proposal;
   const caption = [
@@ -75,19 +171,19 @@ async function sendRotationProposal(proposal: RotationProposal): Promise<void> {
     const sent = await core.sendTelegramPhoto(request.telegramChatId, image, caption, rotationKeyboard(request.id));
     if (sent.ok) return;
   }
-  await core.sendTelegramMessage(request.telegramChatId, caption, rotationKeyboard(request.id));
+  const textSent = await core.sendTelegramMessage(request.telegramChatId, caption, rotationKeyboard(request.id));
+  if (!textSent.ok) throw new Error("ROTATION_CARD_DELIVERY_FAILED");
 }
 
 async function searchAndDeliverRotation(requestId: string, chatId: string | number): Promise<void> {
   try {
     await sendRotationProposal(await proposeNextProductRotationCandidate(requestId));
   } catch (error) {
+    const rendered = rotationSearchFailureMessage(error);
     await core.sendTelegramMessage(
       chatId,
-      "⚠️ <b>ROTAÇÃO SEM CANDIDATO APROVADO</b>\n\n" +
-        `Motivo: <code>${escapeHtml(safeError(error))}</code>\n\n` +
-        "A peça atual continua publicada e nenhuma troca foi feita.",
-      { inline_keyboard: [[{ text: "🔁 Tentar novamente", callback_data: `rotation_retry:${requestId}` }], [{ text: "❌ Cancelar rotação", callback_data: `rotation_cancel:${requestId}` }]] },
+      rendered.text,
+      rendered.retryable ? retryKeyboard(requestId) : { inline_keyboard: [[{ text: "❌ Cancelar rotação", callback_data: `rotation_cancel:${requestId}` }]] },
     );
   }
 }
@@ -228,3 +324,8 @@ export async function handleProductRotationCallback(update: any): Promise<void> 
   await core.sendTelegramMessage(chatId, "🚀 <b>APROVAÇÃO RECEBIDA</b>\n\nO candidato será revalidado novamente antes da troca. O produto antigo só sai depois da sincronização segura do catálogo.");
   void applyRotationAndNotify(requestId, chatId);
 }
+
+export const telegramProductRotationInternals = {
+  rotationSearchFailureMessage,
+  summarizeRotationDiagnostics,
+};

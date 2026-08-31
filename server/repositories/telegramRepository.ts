@@ -116,6 +116,22 @@ export function isActivePendingReview(review: PendingReview, now = Date.now()): 
   return (review.status === undefined || review.status === "pending") && now < reviewExpiresAt(review);
 }
 
+function isExpiredReview(review: PendingReview, now = Date.now()): boolean {
+  return review.status === "expired" || ((review.status === undefined || review.status === "pending") && now >= reviewExpiresAt(review));
+}
+
+/**
+ * Reviews expiradas continuam legíveis para auditoria e para que o Telegram
+ * consiga comunicar "review expirada", mas nenhuma mutação posterior pode
+ * reativá-las. A única escrita permitida depois do TTL é a transição para
+ * status=expired em si.
+ */
+export function isReviewMutationAllowed(review: PendingReview, now = Date.now()): boolean {
+  const expiresAt = reviewExpiresAt(review);
+  if (now < expiresAt) return true;
+  return review.status === "expired";
+}
+
 function normalizeReviewRow(row: any): PendingReview | null {
   if (!row?.data || typeof row.data !== "object") return null;
   const review = { ...row.data } as PendingReview;
@@ -174,9 +190,14 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
     status,
   };
 
+  const reviews = readReviewsFromFile();
+  const previous = reviews[normReview.id];
+  if (previous?.status === "expired" && normReview.status !== "expired") {
+    throw new Error("TELEGRAM_REVIEW_EXPIRED_IMMUTABLE");
+  }
+
   await syncAutonomousCuratorReviewIdentity(normReview);
 
-  const reviews = readReviewsFromFile();
   reviews[normReview.id] = normReview;
   writeReviewsToFile(reviews);
 
@@ -205,7 +226,7 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
 
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
   if (testOverrideGetPendingReview) {
-    return testOverrideGetPendingReview(reviewId);
+    return await testOverrideGetPendingReview(reviewId);
   }
   let review: PendingReview | null = null;
 
@@ -241,6 +262,8 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
     await savePendingReview(review);
   }
 
+  // A review expirada permanece consultável para auditoria e para mensagens
+  // específicas de expiração, mas savePendingReview impede reativação/mutação.
   return review;
 }
 
@@ -278,7 +301,7 @@ export async function getLatestPendingReviewForUser(
         }
       }
     } catch {
-      // Fallback para arquivo local.
+      // Fallback local quando Supabase estiver indisponível.
     }
   }
 
