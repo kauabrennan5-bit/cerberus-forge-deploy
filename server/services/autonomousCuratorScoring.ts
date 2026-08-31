@@ -166,8 +166,9 @@ function desirabilityFit(category: string, strong: number, signature: number, st
   if (strong === 1 && novelty >= 95) return 88;
   if (styleScore >= 94 && novelty >= 85) return 90;
   // Preserva a capacidade de evidência visual forte resgatar copy curta em
-  // outras categorias, sem aceitar itens medianos de baixa novidade.
-  if (novelty >= 95) return 82;
+  // categorias onde novidade pode ser suficiente. Acessórios simples não
+  // ganham esse resgate só por ainda não existirem no catálogo.
+  if (novelty >= 95 && category !== "Calçados & Acessórios") return 82;
   if (signature >= 4 && novelty >= 90) return 86;
   if (styleScore >= 90 && novelty >= 90) return 84;
   return 68;
