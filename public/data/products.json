@@ -1,5 +1,45 @@
 [
   {
+    "id": "prod-1788210150661-9d319211f1",
+    "ref": "AUTOQ-9D319211F1",
+    "slug": "cadeira-branca-tubular-cromada-9d3192",
+    "produto": "Cadeira Branca Tubular Cromada",
+    "displayTitle": "Cadeira Branca Tubular Cromada",
+    "preco": 581.97,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-825ag-mr26z493prsw91",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825ag-mr26z493prsw91",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8259y-mr26z4vxbs3wd4"
+    ],
+    "link": "https://s.shopee.com.br/2LXwM1ZBSX",
+    "categoria": "Móveis",
+    "descricao": "Cadeira de linhas orgânicas, com assento e encosto brancos e base de tubos cromados. A silhueta curva e os frisos verticais destacam sua linguagem modernista e leve.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T21:06:36.51886+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788210150661-98d6aa5e74",
+    "ref": "AUTOQ-98D6AA5E74",
+    "slug": "luminaria-de-mesa-touch-formato-cogumelo-98d6aa",
+    "produto": "Luminária de Mesa Touch Formato Cogumelo",
+    "displayTitle": "Luminária de Mesa Touch Formato Cogumelo",
+    "preco": 105,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m5bol6bc2jeab4",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m5bol6bc3xyq07",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m5bol6bc5cj6db"
+    ],
+    "link": "https://s.shopee.com.br/3VjrB0vHsN",
+    "categoria": "Iluminação",
+    "descricao": "Esta luminária de mesa em formato de cogumelo possui acionamento touch e design compacto. É ideal para compor a iluminação de ambientes como escritórios, bares e mesas de cabeceira.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T21:03:54.255604+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788196124635-0227515f2e",
     "ref": "AUTOQ-0227515F2E",
     "slug": "poster-geometrico-abstrato-bauhaus-para-decoracao-022751",
