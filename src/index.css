@@ -238,9 +238,23 @@ html.product-detail-view footer > div > div:nth-child(2) button:first-child {
   color: #E8E1D3;
 }
 
-html.product-detail-view footer > div > div:nth-child(2) button:first-child::before {
-  content: '← ';
-  color: #8A1F1F;
+/* Product cards are previews, not nested galleries. Keeping image navigation
+   inside horizontally-scrollable recommendation cards created competing arrow
+   systems and unreliable tap targets on mobile. The full product gallery owns
+   photo navigation after the visitor opens the product. */
+[data-testid="product-card"] button[aria-label="Foto anterior"],
+[data-testid="product-card"] button[aria-label="Próxima foto"],
+[data-testid="product-card"] button[aria-label^="Ir para foto "] {
+  display: none !important;
+}
+
+/* Related products already use native horizontal swipe and scroll snapping.
+   Overlay chevrons duplicate that interaction and visually collide with the
+   gallery controls, so mobile recommendations expose one navigation language:
+   swipe to explore. */
+html.product-detail-view button[aria-label="Ver recomendação anterior"],
+html.product-detail-view button[aria-label="Ver próxima recomendação"] {
+  display: none !important;
 }
 
 /* Mobile containment is structural: flexible children wrap, grids own min-width: 0, and only the document edge clips overscroll. */
