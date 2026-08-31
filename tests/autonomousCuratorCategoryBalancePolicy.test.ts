@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const coordinator = fs.readFileSync("server/services/autonomousCuratorContinuousV2.ts", "utf8");
+const coordinator = fs.readFileSync("server/services/autonomousCuratorContinuousV2Core.ts", "utf8");
+const wrapper = fs.readFileSync("server/services/autonomousCuratorContinuousV2.ts", "utf8");
 const base = fs.readFileSync("server/services/autonomousCuratorContinuousV2Base.ts", "utf8");
 
 test("balanced coordinator keeps the proven discovery engine intact behind a two-per-category policy", () => {
@@ -13,6 +14,7 @@ test("balanced coordinator keeps the proven discovery engine intact behind a two
   assert.match(coordinator, /syncCatalogAndDeploy\("autonomous curator category balance"\)/);
   assert.match(coordinator, /category_counts_after/);
   assert.match(coordinator, />=24h-per-category cadence/);
+  assert.match(wrapper, /core\.runAutonomousCuratorContinuousV2\(options\)/);
 });
 
 test("quality gates remain in the preserved v2 discovery engine", () => {
