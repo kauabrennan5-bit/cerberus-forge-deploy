@@ -42,6 +42,7 @@ const SEARCH_MAX_PAGE = 10;
 const MAX_CYCLE_HISTORY = 48;
 const EXPLORATION_QUERY_MODULUS = 3;
 const QUALIFIED_COMPARISON_TARGET = 4;
+const DEFAULT_LIVE_CATALOG_TARGET = 10;
 
 type QueueMetadata = {
   score: number;
@@ -144,6 +145,23 @@ function positiveInt(value: unknown, fallback: number, max: number): number {
 
 function queueTarget(env: NodeJS.ProcessEnv): number {
   return positiveInt(env.AUTONOMOUS_CURATOR_QUEUE_TARGET_PER_CATEGORY, 7, 30);
+}
+
+function liveCatalogTarget(env: NodeJS.ProcessEnv): number {
+  return positiveInt(env.AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET, DEFAULT_LIVE_CATALOG_TARGET, 100);
+}
+
+function activePublishedCount(products: readonly Product[]): number {
+  return products.filter(product => product.status === "published" && product.ativo !== false).length;
+}
+
+function inventoryDeficit(products: readonly Product[], env: NodeJS.ProcessEnv): number {
+  return Math.max(0, liveCatalogTarget(env) - activePublishedCount(products));
+}
+
+function dueForCycle(lastPublishedAt: string | null, now: Date, emergencyMode: boolean, emergencyRemaining: number): boolean {
+  if (emergencyMode) return emergencyRemaining > 0;
+  return dueForPublication(lastPublishedAt, now);
 }
 
 function queueNote(meta: QueueMetadata): string {
@@ -910,6 +928,11 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   await markCycleStarted(runId, cycleId, cycleNumber, now, baseMetadata);
 
   let products = await productsRepository.getProducts();
+  const liveCatalogTargetCount = liveCatalogTarget(env);
+  const liveCatalogCountBefore = activePublishedCount(products);
+  const inventoryDeficitBefore = Math.max(0, liveCatalogTargetCount - liveCatalogCountBefore);
+  const emergencyMode = inventoryDeficitBefore > 0;
+  let emergencyRefillRemaining = inventoryDeficitBefore;
   const categories: ContinuousCuratorCategoryResultV2[] = [];
   const pendingPublications: Array<{ product: Product; candidate: CuratedCandidate }> = [];
   let failedThisCycle = 0;
@@ -928,10 +951,15 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     };
     try {
       const last = await lastPublishedAt(profile.category, products);
-      result.due = dueForPublication(last, now);
-      result.reason = result.due
-        ? "SEARCHING_FOR_DUE_PRODUCT"
-        : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;
+      const editorialDue = dueForPublication(last, now);
+      result.due = dueForCycle(last, now, emergencyMode, emergencyRefillRemaining);
+      result.reason = emergencyMode
+        ? result.due
+          ? `EMERGENCY_REFILL_DEFICIT_${emergencyRefillRemaining}`
+          : "INVENTORY_FLOOR_RESTORED_DEFER_EDITORIAL_CADENCE"
+        : editorialDue
+          ? "SEARCHING_FOR_DUE_PRODUCT"
+          : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;
       let budgetRemaining = config.maxEnrichPerCategory;
 
       if (result.due && config.maxDailyPerCategory > 0) {
@@ -950,6 +978,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
             reviewVersion: "1.2",
           });
           pendingPublications.push({ product: queuedProduct, candidate: refreshed.candidate });
+          if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);
           result.published = true;
           result.score = refreshed.candidate.score;
           result.title = refreshed.candidate.displayTitle;
@@ -967,6 +996,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
             if (queued.product) {
               await updateQueuedProduct(queued.product, discovery.candidate, now, true, env);
               pendingPublications.push({ product: queued.product, candidate: discovery.candidate });
+              if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);
               result.published = true;
               result.score = discovery.candidate.score;
               result.title = discovery.candidate.displayTitle;
@@ -1029,6 +1059,8 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   }
 
   products = await productsRepository.getProducts();
+  const liveCatalogCountAfter = activePublishedCount(products);
+  const inventoryDeficitAfter = Math.max(0, liveCatalogTargetCount - liveCatalogCountAfter);
   let fulfilledCategories = 0;
   for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
     const last = await lastPublishedAt(profile.category, products);
@@ -1036,9 +1068,11 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   }
   const queuedProducts = products.filter(product => product.createdBy === QUEUE_CREATED_BY && product.status === "paused" && product.ativo === false && parseQueueNote(product.curatorNote)).length;
   const publishedThisCycle = categories.filter(category => category.published && category.reason === "PUBLISHED_AND_PUBLICLY_VALIDATED").length;
-  const status: ContinuousCuratorResultV2["status"] = fulfilledCategories === AUTONOMOUS_CURATOR_PROFILES.length && failedThisCycle === 0
-    ? "completed"
-    : failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial";
+  const status: ContinuousCuratorResultV2["status"] = inventoryDeficitAfter > 0
+    ? failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial"
+    : fulfilledCategories === AUTONOMOUS_CURATOR_PROFILES.length && failedThisCycle === 0
+      ? "completed"
+      : failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial";
 
   const completedAt = new Date().toISOString();
   const priorHistory = Array.isArray(baseMetadata.continuous_cycles) ? baseMetadata.continuous_cycles : [];
@@ -1087,6 +1121,12 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       queued_products: queuedProducts,
       failed_this_cycle: failedThisCycle,
       queue_target_per_category: queueTarget(env),
+      live_catalog_target: liveCatalogTargetCount,
+      live_catalog_count_before: liveCatalogCountBefore,
+      live_catalog_count_after: liveCatalogCountAfter,
+      inventory_deficit_before: inventoryDeficitBefore,
+      inventory_deficit_after: inventoryDeficitAfter,
+      emergency_refill: emergencyMode,
       continuous_cycles: continuousCycles,
     },
   });
@@ -1120,6 +1160,10 @@ export const autonomousCuratorContinuousV2Internals = {
   queueNote,
   parseQueueNote,
   queueTarget,
+  liveCatalogTarget,
+  activePublishedCount,
+  inventoryDeficit,
+  dueForCycle,
   revalidationPermanentFailure,
   safeCategoryFailureReason,
   semanticEntryScore,

@@ -11,7 +11,7 @@ import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
  * Aplica rigorosamente as regras de sanitização exigidas:
  * - Apenas produtos válidos, publicados e com URL válida.
  * - Eliminação de produtos fictícios, fantasmas ou sem dados essenciais.
- * - Sem inclusão de dados administrativos ou senhas.
+ * - Sem inclusão de dados administrativos, senhas ou metadados internos da automação.
  * - Preservação dos campos essenciais para o frontend (id, ref quando existente, produto, preco, imagens, link e categoria).
  */
 export async function exportStaticProductsJson(): Promise<number> {
@@ -67,7 +67,8 @@ export async function exportStaticProductsJson(): Promise<number> {
       link: p.link,
       categoria: resolvePublicProductCategory(p.categoria, { title: p.displayTitle || p.produto, description: p.descricao }),
       descricao: containsRawPayloadMarkers(p.descricao) ? '' : p.descricao || '',
-      curatorNote: p.curatorNote?.trim() || undefined,
+      // curatorNote é metadado operacional privado do Curator e nunca cruza
+      // a fronteira pública do catálogo estático.
       paginaPonteUrl: p.paginaPonteUrl || '',
       createdAt: p.createdAt,
       // A oferta observada é separada de `preco`; o frontend a rotula com
