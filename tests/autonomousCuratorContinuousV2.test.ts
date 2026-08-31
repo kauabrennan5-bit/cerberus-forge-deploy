@@ -18,6 +18,10 @@ const {
   activePublishedCount,
   inventoryDeficit,
   dueForCycle,
+  LIVE_TARGET_PER_CATEGORY,
+  categoryCounts,
+  totalDeficit,
+  retirementCandidates,
 } = autonomousCuratorContinuousV2Internals;
 
 test("Shopee discovery accepts an explicit page and returns official imageUrl evidence", async () => {
@@ -77,7 +81,7 @@ test("every query starts from relevance page 1 and deep exploration remains boun
 });
 
 test("continuous discovery compares qualified finalists instead of publishing the first passing item", async () => {
-  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
   assert.match(source, /qualified\.push/);
   assert.match(source, /BEST_OF_\$\{qualified\.length\}_QUALIFIED_CANDIDATES/);
   assert.doesNotMatch(source, /if \(evaluated\.candidate\) return \{ candidate: evaluated\.candidate/);
@@ -133,26 +137,25 @@ test("legacy paused rejects do not poison catalog similarity, but active and fut
 });
 
 test("continuous v2 never persists a no_candidate attempt over the daily category authority", async () => {
-  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /decision:\s*["']no_candidate["']/);
   assert.match(source, /continuous_cycles/);
   assert.match(source, /failedThisCycle \+= 1/);
 });
 
-test("continuous route is wired to v2", async () => {
+test("continuous route is wired to balanced v2 coordinator", async () => {
   const source = await readFile(new URL("../server/routes/autonomousCuratorRoutes.ts", import.meta.url), "utf8");
   assert.match(source, /runAutonomousCuratorContinuousV2/);
   assert.doesNotMatch(source, /runAutonomousCuratorContinuous\s*\(/);
 });
 
-
-test("live catalog floor defaults to ten and is bounded", () => {
+test("legacy base global floor remains bounded for compatibility", () => {
   assert.equal(liveCatalogTarget({} as NodeJS.ProcessEnv), 10);
   assert.equal(liveCatalogTarget({ AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: "14" } as NodeJS.ProcessEnv), 14);
   assert.equal(liveCatalogTarget({ AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: "999" } as NodeJS.ProcessEnv), 100);
 });
 
-test("inventory deficit counts only active published products", () => {
+test("legacy inventory deficit counts only active published products", () => {
   const product = (id: string, status: Product["status"], ativo: boolean): Product => ({
     id, produto: id, categoria: "Decoração", preco: 100, imagens: ["https://example.com/a.jpg"],
     link: `https://example.com/${id}`, ativo, destaque: false, status,
@@ -166,7 +169,7 @@ test("inventory deficit counts only active published products", () => {
   assert.equal(inventoryDeficit(products, {} as NodeJS.ProcessEnv), 4);
 });
 
-test("emergency refill overrides cooldown only until the floor deficit is filled", () => {
+test("legacy emergency refill primitive still overrides cooldown only while its supplied deficit remains", () => {
   const now = new Date("2026-08-31T02:30:00.000Z");
   const justPublished = new Date(now.getTime() - 60_000).toISOString();
   assert.equal(dueForPublication(justPublished, now), false);
@@ -174,4 +177,51 @@ test("emergency refill overrides cooldown only until the floor deficit is filled
   assert.equal(dueForCycle(justPublished, now, true, 1), true);
   assert.equal(dueForCycle(justPublished, now, true, 0), false);
   assert.equal(dueForCycle(justPublished, now, false, 0), false);
+});
+
+test("balanced coordinator requires exactly two active pieces in every public category", () => {
+  assert.equal(LIVE_TARGET_PER_CATEGORY, 2);
+  const product = (id: string, category: Product["categoria"], status: Product["status"] = "published", ativo = true): Product => ({
+    id,
+    produto: id,
+    categoria: category,
+    preco: 100,
+    imagens: ["https://example.com/a.jpg"],
+    link: `https://example.com/${id}`,
+    ativo,
+    destaque: false,
+    status,
+  });
+  const products: Product[] = [
+    product("lamp-1", "Iluminação"),
+    product("lamp-2", "Iluminação"),
+    product("decor-1", "Decoração"),
+    product("shoe-archived", "Calçados & Acessórios", "archived", false),
+  ];
+  const counts = categoryCounts(products);
+  assert.equal(counts["Iluminação"], 2);
+  assert.equal(counts["Decoração"], 1);
+  assert.equal(counts["Calçados & Acessórios"], 0);
+  assert.equal(totalDeficit(counts), 17);
+});
+
+test("daily rotation keeps the new piece and retires the oldest prior curator item", () => {
+  const item = (id: string, createdAt: string, createdBy = "autonomous_curator_queue"): Product => ({
+    id,
+    produto: id,
+    categoria: "Tecnologia",
+    preco: 100,
+    imagens: ["https://example.com/a.jpg"],
+    link: `https://example.com/${id}`,
+    ativo: true,
+    destaque: false,
+    status: "published",
+    createdBy,
+    createdAt,
+  });
+  const old = item("old", "2026-08-28T00:00:00Z");
+  const middle = item("middle", "2026-08-29T00:00:00Z");
+  const newest = item("new", "2026-08-31T00:00:00Z");
+  const retire = retirementCandidates([old, middle, newest], "Tecnologia", new Set(["new"]));
+  assert.deepEqual(retire.map(product => product.id), ["old"]);
 });
