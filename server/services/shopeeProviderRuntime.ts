@@ -6,6 +6,7 @@ import type { ShopeeErrorKind } from "../commercial/affiliate/shopeeClientContra
 export const SHOPEE_PROVIDER_ERROR_CODES = [
   "SHOPEE_PROVIDER_NOT_CONFIGURED",
   "SHOPEE_PROVIDER_AUTH_FAILED",
+  "SHOPEE_PROVIDER_FORBIDDEN",
   "SHOPEE_PROVIDER_RATE_LIMITED",
   "SHOPEE_PROVIDER_TIMEOUT",
   "SHOPEE_PROVIDER_UNAVAILABLE",
@@ -101,7 +102,8 @@ export function buildConfiguredShopeeClient(env: NodeJS.ProcessEnv = process.env
 
 export function mapShopeeErrorKindToProviderCode(kind: ShopeeErrorKind | string | null | undefined): ShopeeProviderErrorCode {
   if (kind === "SHOPEE_NOT_CONFIGURED") return "SHOPEE_PROVIDER_NOT_CONFIGURED";
-  if (kind === "SHOPEE_AUTH_ERROR" || kind === "SHOPEE_FORBIDDEN") return "SHOPEE_PROVIDER_AUTH_FAILED";
+  if (kind === "SHOPEE_AUTH_ERROR") return "SHOPEE_PROVIDER_AUTH_FAILED";
+  if (kind === "SHOPEE_FORBIDDEN") return "SHOPEE_PROVIDER_FORBIDDEN";
   if (kind === "SHOPEE_RATE_LIMITED") return "SHOPEE_PROVIDER_RATE_LIMITED";
   if (kind === "SHOPEE_TIMEOUT") return "SHOPEE_PROVIDER_TIMEOUT";
   if (kind === "SHOPEE_INVALID_RESPONSE" || kind === "SHOPEE_GRAPHQL_ERROR") return "SHOPEE_PROVIDER_RESPONSE_INVALID";
@@ -119,7 +121,10 @@ export function providerErrorFromSearchResult(result: Awaited<ReturnType<ShopeeA
 }
 
 export function providerErrorFromAcquisitionStatus(status: string, errorKind?: string | null): ShopeeProviderRuntimeError | null {
-  if (status === "auth_error") return new ShopeeProviderRuntimeError("SHOPEE_PROVIDER_AUTH_FAILED", errorKind || status, false);
+  if (status === "auth_error") {
+    const code = errorKind === "SHOPEE_FORBIDDEN" ? "SHOPEE_PROVIDER_FORBIDDEN" : "SHOPEE_PROVIDER_AUTH_FAILED";
+    return new ShopeeProviderRuntimeError(code, errorKind || status, false);
+  }
   if (status === "rate_limited") return new ShopeeProviderRuntimeError("SHOPEE_PROVIDER_RATE_LIMITED", errorKind || status, true);
   if (status === "transient") {
     const code = errorKind === "SHOPEE_TIMEOUT" ? "SHOPEE_PROVIDER_TIMEOUT" : "SHOPEE_PROVIDER_UNAVAILABLE";
