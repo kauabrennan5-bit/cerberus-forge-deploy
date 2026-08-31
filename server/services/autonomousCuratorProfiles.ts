@@ -206,7 +206,7 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "espelho maquiagem vintage design", "espelho maquiagem dobravel couro", "porta perfume bauhaus",
       "necessaire retro design", "porta pincel space age", "pente madeira modernista",
       "espelho maquiagem anos 70", "estojo maquiagem vintage minimalista",
-      "espelho mesa cromado vintage", "espelho dupla face cromado anos 70",
+      "espelho maquiagem mesa cromado vintage", "espelho maquiagem dupla face cromado anos 70",
       "necessaire couro minimalista vintage", "porta perfume vidro metal vintage",
     ],
     strongStyleTerms: [
