@@ -768,8 +768,8 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
       const statusEmoji = report.overallStatus === "HEALTHY" ? "🟢" : report.overallStatus === "DEGRADED" ? "🟡" : "🔴";
       const healthyCount = Object.values(report.components).filter(c => c.status === "HEALTHY").length;
       const totalCount = Object.keys(report.components).length;
-      
-      const text = 
+
+      const text =
         "🧠 <b>CERBERUS HEARTBEAT & OPERATOR</b>\n" +
         "━━━━━━━━━━━━━━━━━━\n" +
         `Status do Sistema: ${statusEmoji} <b>${report.overallStatus}</b>\n` +
@@ -2445,7 +2445,7 @@ async function renderCycleState(input: string): Promise<string> {
       const query = text.toLowerCase();
       const products = await productsRepository.getProducts();
       const matched = products.filter(p => p.produto.toLowerCase().includes(query) || p.ref.toLowerCase().includes(query) || p.categoria.toLowerCase().includes(query));
-      
+
       let textResp = `🔎 <b>RESULTADOS DA BUSCA: "${text}"</b>\nEncontradas: ${matched.length} peças\n\n`;
       const buttons = [];
       for (const p of matched.slice(0, 10)) {
