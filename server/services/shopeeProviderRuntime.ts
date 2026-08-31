@@ -41,6 +41,11 @@ export type ShopeeProviderEnvStatus = {
   retryAttempts: number;
 };
 
+export type ResolvedShopeeProviderCredentials = {
+  appId: string;
+  appSecret: string;
+};
+
 const DEFAULT_BASE_URL = "https://open-api.affiliate.shopee.com.br/graphql";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const SEARCH_PAGE_LIMIT = 10;
@@ -48,13 +53,22 @@ const SEARCH_MAX_PAGE = 10;
 const DEFAULT_RETRY_ATTEMPTS = 2;
 const DEFAULT_RETRY_BACKOFF_MS = 750;
 
-function envValue(env: NodeJS.ProcessEnv, primary: string, legacy: string): string {
-  return String(env[primary] || env[legacy] || "").trim();
+/**
+ * Resolve the canonical Shopee credential names first and only fall back to
+ * the legacy Affiliate aliases when the canonical variable is null/undefined.
+ * Values are trimmed for validation/use but are never logged.
+ */
+export function resolveShopeeProviderCredentials(env: NodeJS.ProcessEnv = process.env): ResolvedShopeeProviderCredentials {
+  const appId = env.SHOPEE_APP_ID ?? env.SHOPEE_AFFILIATE_APP_ID;
+  const appSecret = env.SHOPEE_APP_SECRET ?? env.SHOPEE_AFFILIATE_APP_SECRET;
+  return {
+    appId: String(appId ?? "").trim(),
+    appSecret: String(appSecret ?? "").trim(),
+  };
 }
 
 export function inspectShopeeProviderEnv(env: NodeJS.ProcessEnv = process.env): ShopeeProviderEnvStatus {
-  const appId = envValue(env, "SHOPEE_APP_ID", "SHOPEE_AFFILIATE_APP_ID");
-  const secret = envValue(env, "SHOPEE_APP_SECRET", "SHOPEE_AFFILIATE_APP_SECRET");
+  const { appId, appSecret } = resolveShopeeProviderCredentials(env);
   const rawBase = String(env.SHOPEE_AFFILIATE_API_BASE_URL || "").trim();
   const effectiveBase = rawBase || DEFAULT_BASE_URL;
   let baseUrlHost: string | null = null;
@@ -69,9 +83,9 @@ export function inspectShopeeProviderEnv(env: NodeJS.ProcessEnv = process.env): 
   return {
     provider: "shopee_affiliate_api",
     adapter: "ShopeeApiClient",
-    credentialsConfigured: Boolean(appId && secret),
+    credentialsConfigured: Boolean(appId && appSecret),
     appIdConfigured: Boolean(appId),
-    appSecretConfigured: Boolean(secret),
+    appSecretConfigured: Boolean(appSecret),
     baseUrlConfigured: Boolean(rawBase),
     baseUrlStructurallyValid,
     baseUrlHost,
@@ -83,6 +97,7 @@ export function inspectShopeeProviderEnv(env: NodeJS.ProcessEnv = process.env): 
 }
 
 export function buildConfiguredShopeeClient(env: NodeJS.ProcessEnv = process.env): ShopeeApiClient {
+  const { appId, appSecret } = resolveShopeeProviderCredentials(env);
   const status = inspectShopeeProviderEnv(env);
   if (!status.credentialsConfigured || !status.baseUrlStructurallyValid) {
     throw new ShopeeProviderRuntimeError(
@@ -91,11 +106,9 @@ export function buildConfiguredShopeeClient(env: NodeJS.ProcessEnv = process.env
       false,
     );
   }
-  const appId = envValue(env, "SHOPEE_APP_ID", "SHOPEE_AFFILIATE_APP_ID");
-  const secret = envValue(env, "SHOPEE_APP_SECRET", "SHOPEE_AFFILIATE_APP_SECRET");
   return createShopeeApiClient({
     appId,
-    secret,
+    secret: appSecret,
     baseUrl: String(env.SHOPEE_AFFILIATE_API_BASE_URL || "").trim() || undefined,
   });
 }
