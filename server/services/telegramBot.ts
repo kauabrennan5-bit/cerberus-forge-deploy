@@ -53,24 +53,12 @@ export function inspectTelegramAllowedUserIds(env: NodeJS.ProcessEnv = process.e
   return parseTelegramAllowedUserIds(env.TELEGRAM_ALLOWED_USER_IDS).status;
 }
 
-function webhookSenderId(update: any): string | null {
-  const raw = update?.callback_query?.from?.id ?? update?.message?.from?.id ?? update?.edited_message?.from?.id;
-  if (raw === undefined || raw === null) return null;
-  return String(raw);
-}
-
-function validateWebhookRuntime(update: any): boolean {
+function validateWebhookRuntime(): boolean {
   const parsed = parseTelegramAllowedUserIds(process.env.TELEGRAM_ALLOWED_USER_IDS);
   if (!parsed.status.valid) {
     console.warn(
       `[Telegram] webhook_env_invalid allowed_ids_present=${parsed.status.configured} parsed_id_count=${parsed.status.parsedCount} invalid_id_count=${parsed.status.invalidCount}`,
     );
-    return false;
-  }
-
-  const senderId = webhookSenderId(update);
-  if (senderId !== null && !parsed.ids.includes(senderId)) {
-    console.warn("[Telegram] webhook_sender_not_allowed sender_present=true");
     return false;
   }
   return true;
@@ -84,14 +72,16 @@ function validateWebhookRuntime(update: any): boolean {
  * only the product detail/manual rotation callbacks through the isolated
  * rotation extension.
  *
- * The allowlist preflight intentionally runs in this wrapper because this is
- * the exact function imported by server.ts for the Telegram webhook. It checks
- * TELEGRAM_ALLOWED_USER_IDS from the same Node process that receives the
- * webhook, trims and parses numeric IDs, fails closed when absent/malformed,
- * and never logs the configured IDs themselves.
+ * The allowlist configuration preflight intentionally runs in this wrapper
+ * because this is the exact function imported by server.ts for the Telegram
+ * webhook. It checks TELEGRAM_ALLOWED_USER_IDS from the same Node process that
+ * receives the webhook, trims and parses numeric IDs, fails closed when the
+ * configuration is absent/malformed, and never logs the configured IDs.
+ * Sender authorization itself remains in the canonical Telegram core/rotation
+ * handlers so the established access-denied response and human gate are kept.
  */
 export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
-  if (!validateWebhookRuntime(update)) return;
+  if (!validateWebhookRuntime()) return;
 
   const data = String(update?.callback_query?.data || "");
   if (isProductRotationCallback(data)) {
