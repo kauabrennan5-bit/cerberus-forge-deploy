@@ -51,11 +51,22 @@ function includesTerm(normalizedText: string, term: string): boolean {
   return ` ${normalizedText} `.includes(` ${normalizedTerm} `) || normalizedText.includes(normalizedTerm);
 }
 
+function distinctMatchedTermCount(normalizedText: string, terms: readonly string[]): number {
+  const matched = new Set<string>();
+  for (const term of terms) {
+    const normalizedTerm = normalize(term);
+    if (!normalizedTerm || matched.has(normalizedTerm)) continue;
+    if (includesTerm(normalizedText, normalizedTerm)) matched.add(normalizedTerm);
+  }
+  return matched.size;
+}
+
 function aestheticSignals(profile: AutonomousCuratorCategoryProfile, text: string): { strong: number; signature: number } {
   const normalizedText = normalize(text);
-  const strong = new Set(profile.strongStyleTerms.filter(term => includesTerm(normalizedText, term))).size;
-  const signature = new Set(profile.signatureTerms.filter(term => includesTerm(normalizedText, term))).size;
-  return { strong, signature };
+  return {
+    strong: distinctMatchedTermCount(normalizedText, profile.strongStyleTerms),
+    signature: distinctMatchedTermCount(normalizedText, profile.signatureTerms),
+  };
 }
 
 export function tokenJaccard(a: string, b: string): number {
