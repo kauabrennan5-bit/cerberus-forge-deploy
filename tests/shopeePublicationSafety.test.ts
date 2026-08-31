@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ProductPipeline, type LifecycleRecord } from "../server/services/productPipeline";
@@ -136,6 +137,32 @@ describe("callback antigo", () => {
     assert.equal(review?.status, "expired");
     assert.equal(isReviewMutationAllowed({ ...expired, status: "publishing" } as any), false);
     assert.equal(isReviewMutationAllowed(expired as any), true);
+  });
+});
+
+describe("contrato positivo da rotação", () => {
+  it("candidato oficial qualificado vira candidate_ready e só é aplicado após aprovação", () => {
+    const source = fs.readFileSync(new URL("../server/services/productRotation.ts", import.meta.url), "utf8");
+
+    // A busca oficial precisa preservar o productLink recebido do provider.
+    assert.match(source, /validateOfficialProductLink\(item\.productLink, item\.shopId, item\.itemId\)/);
+    assert.match(source, /productLink:\s*item\.productLink/);
+    assert.match(source, /const sourceProductUrl = acquisition\.productLink/);
+
+    // Um candidato que passa a avaliação canônica deve sair imediatamente como substituto qualificado.
+    assert.match(source, /if \(evaluated\.candidate\) return evaluated\.candidate;/);
+
+    // O substituto descoberto é persistido apenas como candidato pausado e o request vira candidate_ready.
+    assert.match(source, /status:\s*"candidate_ready"[\s\S]*candidate_product_id:\s*persisted\.id/);
+    assert.match(source, /ativo:\s*false,[\s\S]*status:\s*"paused"/);
+
+    // A troca efetiva continua separada e exige approveProductRotation.
+    assert.match(source, /export async function approveProductRotation/);
+    assert.match(source, /if \(request\.status !== "candidate_ready" \|\| !request\.candidateProductId\)/);
+    assert.match(source, /status:\s*"replaced"[\s\S]*reason:\s*"ROTATED_BY_USER"/);
+
+    // Se a aplicação falhar, o produto atual é restaurado como published.
+    assert.match(source, /if \(sourceArchived\)[\s\S]*ativo:\s*true,[\s\S]*status:\s*"published"/);
   });
 });
 
