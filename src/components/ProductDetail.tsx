@@ -321,7 +321,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               {displayTitle}
             </h1>
 
-            {formattedPromotionPrice && (
+            {formattedPromotionPrice ? (
               <div className="border-l-2 border-[#D7A64B] bg-[#D7A64B]/10 px-3 py-2 text-xs text-[#E8E1D3]">
                 <p className="font-display text-[10px] uppercase tracking-widest text-[#D7A64B]">PREÇO VERIFICADO</p>
                 <p className="mt-0.5 font-mono font-bold text-2xl sm:text-3xl text-[#D7A64B]">{formattedPromotionPrice} {promotionCondition}</p>
@@ -332,6 +332,12 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
                     {visiblePromotionBenefits.map((benefit) => <li key={benefit}>{benefit.replace(/\s+/g, ' ').trim()}</li>)}
                   </ul>
                 ) : null}
+              </div>
+            ) : (
+              <div className="border-y border-[#3A342E] py-2.5 text-[#E8E1D3]">
+                <p className="font-display text-[10px] uppercase tracking-[0.18em] text-[#E8E1D3]/55">PREÇO DO ANÚNCIO</p>
+                <p className="mt-0.5 font-mono text-2xl sm:text-3xl font-bold text-[#E8E1D3]">{formattedPrice}</p>
+                <p className="mt-1 text-[10px] leading-snug text-[#E8E1D3]/55">Condições finais de pagamento e frete são confirmadas na loja oficial.</p>
               </div>
             )}
 
@@ -471,7 +477,7 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
           <div className="relative max-w-4xl max-h-[75vh] w-full min-h-0 flex items-center justify-center my-auto p-2">
             <img
               src={images[selectedImageIndex]}
-                alt={displayTitle}
+              alt={displayTitle}
               className="max-w-full max-h-full object-contain"
             />
 
