@@ -193,6 +193,13 @@ jobs:
               process.stdout.write('waiting');
               process.exit(0);
             }
+            // The base engine records a terminal run before the category-balance
+            // coordinator has necessarily finished catalog cleanup and public sync.
+            // Keep polling while the backend still owns this exact cycle.
+            if (body?.running === true && String(body.activeCycleId || '') === expectedCycle) {
+              process.stdout.write('waiting');
+              process.exit(0);
+            }
             if (terminalStatus && run.completed_at && metadata.continuous_cycle_completed_at) {
               console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}:queue=${body.queueCount || 0}`);
               process.exit(0);
