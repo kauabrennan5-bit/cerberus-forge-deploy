@@ -1,5 +1,46 @@
 [
   {
+    "id": "prod-1788196124635-0227515f2e",
+    "ref": "AUTOQ-0227515F2E",
+    "slug": "poster-geometrico-abstrato-bauhaus-para-decoracao-022751",
+    "produto": "Pôster Geométrico Abstrato Bauhaus para Decoração",
+    "displayTitle": "Pôster Geométrico Abstrato Bauhaus para Decoração",
+    "preco": 10.2,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-7qvg8-lf6k4p7pbkvd55",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvd1-lf6k4y963asz69",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvfp-lf6k4yyp0iwe2b",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvez-lf6k4zthrgxfe3",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qve2-lf6k50pyfy3cc9",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvdw-lf6k51jdabu110"
+    ],
+    "link": "https://s.shopee.com.br/8plOdfsxRp",
+    "categoria": "Decoração",
+    "descricao": "Esta tela decorativa apresenta um design geométrico abstrato inspirado na estética modernista. É ideal para compor a parede de ambientes contemporâneos com um toque minimalista.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T17:11:12.306022+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788196124635-18fb5cf7b4",
+    "ref": "AUTOQ-18FB5CF7B4",
+    "slug": "abajur-de-mesa-cogumelo-vidro-laranja-18fb5c",
+    "produto": "Abajur de Mesa Cogumelo Vidro Laranja",
+    "displayTitle": "Abajur de Mesa Cogumelo Vidro Laranja",
+    "preco": 259,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-7rdxi-lza8hzgftc5392"
+    ],
+    "link": "https://s.shopee.com.br/7VG0focvp5",
+    "categoria": "Iluminação",
+    "descricao": "Luminária de mesa em formato de cogumelo com design estilo Bauhaus e abajur em vidro laranja. Funciona como uma luz noturna regulável de estética moderna de meados do século.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T17:10:08.004286+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788193747119-9a8c47e00e",
     "ref": "AUTOQ-9A8C47E00E",
     "slug": "copo-de-vidro-para-whisky-9a8c47",
@@ -121,29 +162,6 @@
     "descricao": "Jaqueta off-white de mangas longas, com capuz, fechamento frontal por zíper e vários bolsos. O tecido tem aparência acolchoada e acabamento utilitário de linguagem retrô.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T01:30:26.929288+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788138818663-de5eb83d45",
-    "ref": "AUTOQ-DE5EB83D45",
-    "slug": "organizador-modular-bauhaus-de5eb8",
-    "produto": "Organizador Modular Bauhaus",
-    "displayTitle": "Organizador Modular Bauhaus",
-    "preco": 159.99,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820l6-moli3028uu4j21",
-      "https://down-br.img.susercontent.com/file/br-11134207-820l6-moli3028uu4j21",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lx-molk7ejacjk599",
-      "https://down-br.img.susercontent.com/file/br-11134207-820la-moli3028w8oz93",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lu-molk7ejh3jsw9a",
-      "https://down-br.img.susercontent.com/file/br-11134207-820mb-moli3028s0zne3"
-    ],
-    "link": "https://s.shopee.com.br/8plNWpERZS",
-    "categoria": "Organização",
-    "descricao": "Organizador de apoio com composição modular, nichos, bandejas e ganchos em formas geométricas e cores primárias. A estrutura acomoda objetos pequenos como chaves, carteira, acessórios e relógio.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T01:24:52.89841+00:00",
     "ativo": true,
     "status": "published"
   },
