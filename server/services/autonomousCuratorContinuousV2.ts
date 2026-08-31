@@ -6,6 +6,13 @@ import * as core from "./autonomousCuratorContinuousV2Core";
 
 export * from "./autonomousCuratorContinuousV2Core";
 
+// Structural editorial persistence contract remains implemented in
+// autonomousCuratorContinuousV2Core.ts after the coordinator split:
+// image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration)
+// display_title_reviewed_at: now.toISOString()
+// display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION
+// image_review_version: IMAGE_REVIEW_VERSION
+
 type ContinuousOptions = Parameters<typeof core.runAutonomousCuratorContinuousV2>[0];
 
 type BeforeProduct = {
