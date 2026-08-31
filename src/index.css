@@ -202,6 +202,47 @@
   --border-dark: #3A342E;
 }
 
+/* Product-detail chrome: keep the institutional footer, but make it secondary.
+   Newsletter acquisition belongs to the catalog/home experience, not to the
+   end of every product. Header.tsx owns this root marker for the route. */
+html.product-detail-view footer {
+  padding-top: 1.25rem !important;
+  padding-bottom: 1.25rem !important;
+  background-color: #100E0D !important;
+}
+
+html.product-detail-view footer > div {
+  gap: 0.9rem !important;
+}
+
+html.product-detail-view footer form {
+  display: none !important;
+}
+
+html.product-detail-view footer .font-gothic {
+  font-size: 1rem !important;
+  letter-spacing: 0.08em !important;
+}
+
+html.product-detail-view footer .font-condensed {
+  font-size: 0.62rem !important;
+  letter-spacing: 0.08em !important;
+}
+
+html.product-detail-view footer > div > div:nth-child(2) {
+  border-top: 1px solid rgba(58, 52, 46, 0.72);
+  padding-top: 0.75rem;
+}
+
+html.product-detail-view footer > div > div:nth-child(2) button:first-child {
+  color: #E8E1D3;
+}
+
+html.product-detail-view footer > div > div:nth-child(2) button:first-child::before {
+  content: '← ';
+  color: #8A1F1F;
+}
+
 /* Mobile containment is structural: flexible children wrap, grids own min-width: 0, and only the document edge clips overscroll. */
 @media (max-width: 768px) {
   html, body {
@@ -225,5 +266,24 @@
 
   button, a {
     touch-action: manipulation;
+  }
+
+  html.product-detail-view footer {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  html.product-detail-view footer > div {
+    gap: 0.75rem !important;
+  }
+
+  html.product-detail-view footer > div > div:first-child {
+    gap: 0.65rem !important;
+  }
+
+  html.product-detail-view footer > div > div:nth-child(2) {
+    width: 100%;
+    gap: 0.85rem !important;
+    padding-top: 0.7rem;
   }
 }

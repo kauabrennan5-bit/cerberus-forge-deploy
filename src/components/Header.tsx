@@ -1,7 +1,7 @@
 import React from 'react';
 // Mobile refinement: keep the approved Cerberus header identity while allowing the brand and actions to shrink safely instead of forcing lateral overflow.
 import { ViewMode } from '../types';
-import { ShoppingBag, Heart, Settings, ShieldCheck } from 'lucide-react';
+import { ShoppingBag, Heart, ArrowLeft } from 'lucide-react';
 import { CerberusLogo } from './CerberusLogo';
 
 interface HeaderProps {
@@ -17,12 +17,75 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   currentView,
   onSelectView,
-  onOpenSettings,
+  onOpenSettings: _onOpenSettings,
   productCount,
   favoritesCount,
   showOnlyFavorites,
   onToggleShowFavorites
 }) => {
+  const isProductDetail = currentView === 'product-detail';
+
+  // Product pages deliberately use a quieter shell than the catalog. The root
+  // marker also lets the shared footer collapse into its compact product-page
+  // variant without duplicating footer markup or newsletter state.
+  React.useLayoutEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    root.classList.toggle('product-detail-view', isProductDetail);
+    return () => root.classList.remove('product-detail-view');
+  }, [isProductDetail]);
+
+  if (isProductDetail) {
+    return (
+      <header className="sticky top-0 z-40 w-full min-w-0 max-w-full border-b border-[#3A342E] bg-[#100E0D]/97 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-7xl min-w-0 items-center justify-between gap-2 px-3 sm:h-16 sm:px-6">
+          <button
+            onClick={() => {
+              if (showOnlyFavorites) onToggleShowFavorites();
+              onSelectView('catalog');
+            }}
+            className="group flex min-w-0 items-center gap-2 text-left focus:outline-none"
+            aria-label="Voltar ao acervo Cerberus"
+          >
+            <div className="tech-frame flex h-8 w-8 shrink-0 items-center justify-center border border-[#8A1F1F] bg-[#0B0908] sm:h-9 sm:w-9">
+              <CerberusLogo className="h-5 w-5 sm:h-6 sm:w-6" />
+            </div>
+            <span className="truncate font-gothic text-[15px] uppercase tracking-[0.12em] text-[#E8E1D3] transition-colors group-hover:text-[#8A1F1F] sm:text-lg">
+              CERBERUS
+            </span>
+          </button>
+
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <button
+              onClick={() => {
+                if (showOnlyFavorites) onToggleShowFavorites();
+                onSelectView('catalog');
+              }}
+              className="flex min-h-9 items-center gap-1.5 border border-[#3A342E] bg-[#0B0908] px-2.5 py-1.5 font-display text-[10px] uppercase tracking-widest text-[#E8E1D3]/80 transition-colors hover:border-[#8A1F1F] hover:text-[#E8E1D3] sm:px-3"
+              title="Voltar ao acervo"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 text-[#8A1F1F]" />
+              <span className="hidden min-[360px]:inline">Acervo</span>
+            </button>
+
+            <button
+              onClick={() => {
+                onSelectView('catalog');
+                onToggleShowFavorites();
+              }}
+              className="flex min-h-9 items-center gap-1.5 border border-[#3A342E] bg-[#0B0908] px-2.5 py-1.5 text-[#E8E1D3] transition-colors hover:border-[#8A1F1F] sm:px-3"
+              title="Ver peças salvas"
+              aria-label={`Ver peças salvas: ${favoritesCount}`}
+            >
+              <Heart className={`h-3.5 w-3.5 ${favoritesCount > 0 ? 'fill-[#8A1F1F] text-[#8A1F1F]' : 'text-[#E8E1D3]'}`} />
+              <span className="font-mono text-[10px] text-[#8A1F1F]">{favoritesCount}</span>
+            </button>
+          </div>
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header className="sticky top-0 z-40 bg-[#141210]/95 backdrop-blur-md border-b border-[#3A342E] transition-all w-full max-w-full min-w-0">
       <div className="max-w-7xl mx-auto px-2 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-1 sm:gap-2 min-w-0">
