@@ -56,7 +56,10 @@ test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe na
     publicBaseUrl: "https://cerberus.example.com",
     privacyUrl: "https://cerberus.example.com/privacidade",
     termsUrl: "https://cerberus.example.com/termos",
-    socialLinks: [{ label: "Instagram", url: "https://instagram.com/cerberusfinds", iconUrl: "https://cerberus.example.com/instagram.png" }],
+    socialLinks: [
+      { label: "Instagram", url: "https://instagram.com/cerberusfinds", iconUrl: "https://cerberus.example.com/instagram.png" },
+      { label: "TikTok", url: "https://tiktok.com/@cerberusfinds", iconUrl: "https://cerberus.example.com/tiktok.png" },
+    ],
   });
   assert.match(rendered.html, /<table\b/i);
   assert.match(rendered.html, /bgcolor="#0B0908"/);
@@ -66,8 +69,9 @@ test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe na
   assert.match(rendered.html, /#c0392b/i);
   assert.match(rendered.html, /editorial-masthead editorial-masthead-b/);
   assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="64" height="44"/);
-  assert.doesNotMatch(rendered.html, /email-masthead-logo[^>]+(?:width|height):156px/i);
-  assert.doesNotMatch(rendered.html, /email-masthead-brand-mark[^>]+(?:width|height):170px/i);
+  assert.match(rendered.html, /class="email-masthead-logo-print"[^>]+cerberus-logo-square\.png[^>]+width="156" height="156"/);
+  assert.doesNotMatch(rendered.html, /class="email-masthead-logo"[^>]+(?:width|height):156px/i);
+  assert.doesNotMatch(rendered.html, /class="email-masthead-brand-mark"[^>]+(?:width|height):170px/i);
   assert.match(rendered.html, /CERBERUS FINDS/);
   assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
   assert.match(rendered.html, /EDIÇÃO/);
@@ -80,6 +84,9 @@ test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe na
   assert.match(rendered.html, /CONTINUE DESCOBRINDO/i);
   assert.match(rendered.html, /Política de privacidade/);
   assert.match(rendered.html, /Termos e condições/);
+  assert.match(rendered.html, /instagram\.png/);
+  assert.doesNotMatch(rendered.html, /tiktok\.png/);
+  assert.match(rendered.html, /@media print\{\.email-masthead-brand-mark\{width:170px!important;height:170px!important;\}/);
   assert.match(rendered.html, /Encontre a Cerberus Finds/);
   assert.match(rendered.html, /R\$\s*10,00/);
   assert.match(rendered.html, /\/go\/REF-A/);

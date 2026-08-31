@@ -90,17 +90,22 @@ const env = {
   NEWSLETTER_PREVIEW_SIGNING_SECRET: "design-test-preview-secret-at-least-24-chars",
 };
 
-test("design-test projeta exatamente três cards sem alterar os produtos canônicos", () => {
+test("design-test projeta exatamente oito cards sem alterar os produtos canônicos", () => {
   const products = [
     reviewedProduct("a", "2026-08-30T20:00:00Z"),
     reviewedProduct("b", "2026-08-30T19:00:00Z"),
     baseProduct("c", "2026-08-30T18:00:00Z"),
+    baseProduct("d", "2026-08-30T17:00:00Z"),
+    baseProduct("e", "2026-08-30T16:00:00Z"),
+    baseProduct("f", "2026-08-30T15:00:00Z"),
+    baseProduct("g", "2026-08-30T14:00:00Z"),
+    baseProduct("h", "2026-08-30T13:00:00Z"),
   ];
   const before = structuredClone(products);
   const selection = selectWeeklyDesignTestProducts(products, NOW);
 
-  assert.equal(selection.products.length, 3);
-  assert.deepEqual(selection.products.map(product => product.id), ["a", "b", "c"]);
+  assert.equal(selection.products.length, 8);
+  assert.deepEqual(selection.products.map(product => product.id), ["a", "b", "c", "d", "e", "f", "g", "h"]);
   const projected = selection.products[2];
   assert.equal(projected.displayTitle, "Seleção Cerberus 3");
   assert.equal(projected.imageCuration?.status, "ready");
@@ -115,6 +120,11 @@ test("design-test cria weekly-test sanitizada, não usa Gemini e não cria recip
     reviewedProduct("a", "2026-08-30T20:00:00Z"),
     reviewedProduct("b", "2026-08-30T19:00:00Z"),
     baseProduct("c", "2026-08-30T18:00:00Z"),
+    baseProduct("d", "2026-08-30T17:00:00Z"),
+    baseProduct("e", "2026-08-30T16:00:00Z"),
+    baseProduct("f", "2026-08-30T15:00:00Z"),
+    baseProduct("g", "2026-08-30T14:00:00Z"),
+    baseProduct("h", "2026-08-30T13:00:00Z"),
   ];
   const result = await runWeeklyDraftCycle({
     store,
@@ -134,9 +144,17 @@ test("design-test cria weekly-test sanitizada, não usa Gemini e não cria recip
   assert.equal(result.status, "created");
   if (result.status !== "created") return;
   assert.match(String(result.campaign.editionKey), /^weekly-test:design:/);
-  assert.match(result.campaign.subject, /^\[TESTE DE DESIGN\]/);
+  assert.equal(result.campaign.subject, "[Teste controlado] Novidades da semana — Edição 2026-08-30 · 8 novos achados");
   assert.match(result.campaign.bodyHtml, /Seleção Cerberus 3/);
   assert.doesNotMatch(result.campaign.bodyHtml, /Título marketplace cru c/);
+  assert.match(result.campaign.bodyHtml, /cerberus-logo-official\.png/);
+  assert.match(result.campaign.bodyHtml, /class="email-masthead-logo-print"[^>]+cerberus-logo-square\.png/);
+  assert.match(result.campaign.bodyHtml, />08<\/font>/);
+  assert.match(result.campaign.bodyHtml, /UM OLHAR ATENTO PARA O QUE ENTRA\./);
+  assert.equal((result.campaign.bodyHtml.match(/class="editorial-block editorial-micro"/g) || []).length, 3);
+  assert.equal((result.campaign.bodyHtml.match(/class="editorial-grid-cell email-collection-grid-cell"/g) || []).length, 4);
+  assert.equal((result.campaign.bodyHtml.match(/class="editorial-block editorial-horizontal"/g) || []).length, 1);
+  assert.equal((result.campaign.bodyHtml.match(/class="editorial-block editorial-compact"/g) || []).length, 2);
   assert.equal(result.campaign.counts.total, 0);
   assert.equal(copyGeneratorCalls, 0);
   await assert.rejects(
@@ -173,7 +191,7 @@ test("weekly-test normal continua bloqueada com somente dois produtos editorialm
   assert.equal(store.recipientCalls, 0);
 });
 
-test("design-test falha fechada quando não existem três produtos tecnicamente renderizáveis", async () => {
+test("design-test falha fechada quando não existem oito produtos tecnicamente renderizáveis", async () => {
   const store = memoryStore();
   const result = await runWeeklyDraftCycle({
     store,

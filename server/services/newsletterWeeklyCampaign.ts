@@ -126,7 +126,7 @@ function telegramPreview(
   );
   return [
     designTestMode
-      ? "🧪 <b>TESTE DE DESIGN — 3 CARDS ISOLADOS</b>"
+      ? "🧪 <b>TESTE DE DESIGN — EDIÇÃO COMPLETA DE 8 PRODUTOS</b>"
       : testMode ? "🧪 <b>RASCUNHO SEMANAL — LISTA DE TESTE</b>" : "📨 <b>RASCUNHO SEMANAL CERBERUS</b>",
     "",
     `<b>Assunto:</b> ${escapeWeeklyTelegramHtml(copy.subject)}`,
@@ -436,7 +436,7 @@ export async function runWeeklyDraftCycle(deps: WeeklyDraftDeps = {}): Promise<W
     let copy: WeeklyNewsletterCopy;
     try {
       copy = designTestMode
-        ? buildWeeklyDesignTestCopy(selected)
+        ? buildWeeklyDesignTestCopy(selected, now)
         : await (deps.copyGenerator || generateWeeklyNewsletterCopy)(selected, composition);
     }
     catch (error) { fail("GEMINI", classifyGeminiDiagnosticReason(error)); }

@@ -1,5 +1,25 @@
 [
   {
+    "id": "prod-1788210150661-9d319211f1",
+    "ref": "AUTOQ-9D319211F1",
+    "slug": "cadeira-branca-tubular-cromada-9d3192",
+    "produto": "Cadeira Branca Tubular Cromada",
+    "displayTitle": "Cadeira Branca Tubular Cromada",
+    "preco": 581.97,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-825ag-mr26z493prsw91",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825ag-mr26z493prsw91",
+      "https://down-br.img.susercontent.com/file/sg-11134201-8259y-mr26z4vxbs3wd4"
+    ],
+    "link": "https://s.shopee.com.br/2LXwM1ZBSX",
+    "categoria": "Móveis",
+    "descricao": "Cadeira de linhas orgânicas, com assento e encosto brancos e base de tubos cromados. A silhueta curva e os frisos verticais destacam sua linguagem modernista e leve.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T21:06:36.51886+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788196124635-0227515f2e",
     "ref": "AUTOQ-0227515F2E",
     "slug": "poster-geometrico-abstrato-bauhaus-para-decoracao-022751",
@@ -211,26 +231,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788138818663-2d42bbd320",
-    "ref": "AUTOQ-2D42BBD320",
-    "slug": "quadro-decorativo-geometrico-retro-2d42bb",
-    "produto": "Quadro Decorativo Geométrico Retrô",
-    "displayTitle": "Quadro Decorativo Geométrico Retrô",
-    "preco": 22,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-7r98o-mci0i86uhatde0",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uhatde0",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uk3y9b6"
-    ],
-    "link": "https://s.shopee.com.br/9KhfEar3Qq",
-    "categoria": "Decoração",
-    "descricao": "Quadro decorativo com composição geométrica em círculos concêntricos nas cores vermelho, laranja e amarelo, acompanhado da frase em inglês “Fall 7 Times Stand Up”. A estética gráfica remete ao modernismo retrô e pode ser usada na decoração de paredes.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T01:17:08.630109+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788111188280-6091cfb87a",
     "ref": "AUTOQ-6091CFB87A",
     "slug": "arandela-redonda-de-aluminio-estilo-retro-6091cf",
@@ -245,24 +245,6 @@
     "descricao": "Arandela de parede com corpo circular, cúpula superior metálica aparente e difusor inferior claro. A imagem ambientada mostra a peça emitindo luz quente em um quarto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-30T17:33:45.724699+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788111188280-8564b3ddfe",
-    "ref": "AUTOQ-8564B3DDFE",
-    "slug": "arandela-decorativa-acrilica-estilo-bauhaus-8564b3",
-    "produto": "Arandela Decorativa Acrílica Estilo Bauhaus",
-    "displayTitle": "Arandela Decorativa Acrílica Estilo Bauhaus",
-    "preco": 199,
-    "imagens": [
-      "https://cf.shopee.com.br/file/cn-11134207-7r98o-lwz48rq0dkpv2d"
-    ],
-    "link": "https://s.shopee.com.br/1LfNPqBYa6",
-    "categoria": "Iluminação",
-    "descricao": "Luminária de parede em acrílico com design inspirado na estética medieval e Bauhaus. Ideal para compor a atmosfera decorativa de salas de estar e ambientes internos.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-30T17:33:35.388412+00:00",
     "ativo": true,
     "status": "published"
   },

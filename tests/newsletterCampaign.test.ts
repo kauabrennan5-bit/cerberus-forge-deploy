@@ -1323,7 +1323,7 @@ test("collection visible surface uses only customer-safe fields and descriptive 
   assert.ok(rendered.publicFieldAudit?.excludedInternal.includes("providerRef"));
   assert.doesNotMatch(rendered.text, /db-internal-001|REF-INTERNAL-001|archive_pending|provider-secret-owner|BREVO_PROVIDER_ARCHIVE_TITLE|affiliate_preview|AFILIADO/i);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
-  assert.equal(imageTags.length, 2);
+  assert.equal(imageTags.length, 3);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /display\s*:\s*(?:flex|grid)|linear-gradient|mix-blend-mode|<script/i);
 });
@@ -1541,6 +1541,7 @@ test("MASTHEAD is the first editorial block and Variant A is universal", () => {
   assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
   assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-official.png");
   assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="64" height="44"/);
+  assert.match(rendered.html, /class="email-masthead-logo-print"[^>]+cerberus-logo-square\.png[^>]+width="156" height="156"/);
   assert.match(rendered.html, /class="email-masthead-brand-mark" width="72" height="52"/);
   assert.match(rendered.html, /alt="Logo Cerberus Finds"/);
   assert.match(rendered.html, /CERBERUS FINDS/);
@@ -1625,8 +1626,9 @@ test("full collection campaign keeps the Cerberus editorial shell and email safe
   assert.match(rendered.html, /email-collection-grid-title\{height:58px!important;/);
   assert.match(rendered.html, /@media only screen and \(max-width:374px\).*email-collection-grid-cell\{display:block!important;width:100%!important;/);
   assert.match(rendered.html, /email-collection-grid-action a\{font-size:9px!important;padding:8px 8px!important;/);
+  assert.match(rendered.html, /@media print\{\.email-masthead-brand-mark\{width:170px!important;height:170px!important;\}/);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
-  assert.equal(imageTags.length, 10);
+  assert.equal(imageTags.length, 11);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /<script|gradient|mix-blend-mode|gmail-blend-screen|gmail-blend-difference|app store|google play|qr code|\bBREVO\b|\bSUPABASE\b|\bRender\b|email_campaign_products/i);
   assert.doesNotMatch(rendered.html, /NEWSLETTER_TEST_EMAIL|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
