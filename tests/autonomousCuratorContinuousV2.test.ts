@@ -14,6 +14,10 @@ const {
   similarityUniverse,
   queueNote,
   parseQueueNote,
+  liveCatalogTarget,
+  activePublishedCount,
+  inventoryDeficit,
+  dueForCycle,
 } = autonomousCuratorContinuousV2Internals;
 
 test("Shopee discovery accepts an explicit page and returns official imageUrl evidence", async () => {
@@ -139,4 +143,35 @@ test("continuous route is wired to v2", async () => {
   const source = await readFile(new URL("../server/routes/autonomousCuratorRoutes.ts", import.meta.url), "utf8");
   assert.match(source, /runAutonomousCuratorContinuousV2/);
   assert.doesNotMatch(source, /runAutonomousCuratorContinuous\s*\(/);
+});
+
+
+test("live catalog floor defaults to ten and is bounded", () => {
+  assert.equal(liveCatalogTarget({} as NodeJS.ProcessEnv), 10);
+  assert.equal(liveCatalogTarget({ AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: "14" } as NodeJS.ProcessEnv), 14);
+  assert.equal(liveCatalogTarget({ AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: "999" } as NodeJS.ProcessEnv), 100);
+});
+
+test("inventory deficit counts only active published products", () => {
+  const product = (id: string, status: Product["status"], ativo: boolean): Product => ({
+    id, produto: id, categoria: "Decoração", preco: 100, imagens: ["https://example.com/a.jpg"],
+    link: `https://example.com/${id}`, ativo, destaque: false, status,
+  });
+  const products = [
+    ...Array.from({ length: 6 }, (_, index) => product(`published-${index}`, "published", true)),
+    product("queued", "paused", false),
+    product("archived", "archived", false),
+  ];
+  assert.equal(activePublishedCount(products), 6);
+  assert.equal(inventoryDeficit(products, {} as NodeJS.ProcessEnv), 4);
+});
+
+test("emergency refill overrides cooldown only until the floor deficit is filled", () => {
+  const now = new Date("2026-08-31T02:30:00.000Z");
+  const justPublished = new Date(now.getTime() - 60_000).toISOString();
+  assert.equal(dueForPublication(justPublished, now), false);
+  assert.equal(dueForCycle(justPublished, now, true, 4), true);
+  assert.equal(dueForCycle(justPublished, now, true, 1), true);
+  assert.equal(dueForCycle(justPublished, now, true, 0), false);
+  assert.equal(dueForCycle(justPublished, now, false, 0), false);
 });
