@@ -1,709 +1,444 @@
-
-import { describe, it, beforeEach, afterEach, mock } from "node:test";
+import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
-  parseShopeeCommand,
   buildShopeeBatchId,
   buildShopeeReviewId,
+  parseShopeeCommand,
   runShopeeCommand,
+  setTestShopeeClient,
+  setTestShopeeIdentityChecker,
   setTestShopeeLotPauseMs,
 } from "../server/services/shopeeCommand";
-import * as shopeeCmdTopo from "../server/services/shopeeCommand";
-import * as telegramBotModule from "../server/services/telegramBot";
-import * as telegramRepositoryModule from "../server/repositories/telegramRepository";
-import * as discoveryModule from "../server/commercial/discovery/fetchShared";
-import * as shopeeDiscoveryModule from "../server/services/shopeeDiscovery";
+import { setTestTelegramSenders } from "../server/services/telegramBot";
+import { setTestSavePendingReview } from "../server/repositories/telegramRepository";
+import { setTestExtractProductForReview } from "../server/services/productAutomation";
+import {
+  inspectShopeeProviderEnv,
+  safeShopeeLog,
+  searchShopeeOffersWithRetry,
+  ShopeeProviderRuntimeError,
+} from "../server/services/shopeeProviderRuntime";
 
-function buildSearchResponse(nodes: Record<string, unknown>[]): Response {
-  return {
-    ok: true,
-    status: 200,
-    json: () => Promise.resolve({ data: { productOfferV2: { nodes } } }),
-  } as unknown as Response;
-}
+const SHOP_ID = "1530442944";
+const ITEM_1 = "23794344926";
+const ITEM_2 = "23794344927";
+const PRODUCT_1 = `https://shopee.com.br/Luminaria-Bauhaus-i.${SHOP_ID}.${ITEM_1}`;
+const PRODUCT_2 = `https://shopee.com.br/Luminaria-Cogumelo-i.${SHOP_ID}.${ITEM_2}`;
+const IMAGE_1 = "https://img.example.com/lamp-1.webp";
+const IMAGE_2 = "https://img.example.com/lamp-2.webp";
 
-function buildSearchNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    itemId: "23794344926",
-    shopId: "1530442944",
-    productName: "Produto Teste",
-    price: "79.90",
-    productLink: "https://shopee.com.br/product/1530442944/23794344926",
-    offerLink: "https://s.shopee.com.br/TERM",
-    ...overrides,
-  };
-}
-
-type TermClientModule = typeof import("../server/commercial/affiliate/shopeeApiClient");
-
-function installTermClient(cm: TermClientModule, mockFetch: any): void {
-  shopeeCmdTopo.setTestShopeeClient(
-    cm.createShopeeApiClient({
-      appId: "fake_app_id",
-      secret: "fake_app_secret",
-      transport: mockFetch,
-    }),
-  );
-}
-
-function makeTermFetch(acquireResponse: unknown = AFFILIATE_RESPONSE): any {
-  return (async (...iargs: any[]) => {
-    const input = iargs[0];
-    const url = String(input instanceof Request ? input.url : input);
-    if (url.includes("open-api.affiliate.shopee")) {
-      const init = iargs[1] as { body?: string } | undefined;
-      if (init?.body?.includes("productOfferV2(keyword:")) {
-        return buildSearchResponse([]) as unknown as Response;
-      }
-      return acquireResponse as unknown as Response;
-    }
-    throw new Error(`fetch inesperado no modo termo: ${url}`);
-  }) as any;
-}
-
-const AFFILIATE_RESPONSE = {
-  ok: true,
-  json: () =>
-    Promise.resolve({
-      data: {
-        productOfferV2: {
-          nodes: [
-            {
-              itemId: "23794344926",
-              shopId: "1530442944",
-              productName: "Produto Teste",
-              price: "79.90",
-              productLink: "https://shopee.com.br/product/1530442944/23794344926",
-              offerLink: "https://s.shopee.com.br/TESTE",
-            },
-          ],
-        },
-      },
-    }),
+const originalEnv = {
+  allowed: process.env.TELEGRAM_ALLOWED_USER_IDS,
+  appId: process.env.SHOPEE_APP_ID,
+  appSecret: process.env.SHOPEE_APP_SECRET,
+  legacyAppId: process.env.SHOPEE_AFFILIATE_APP_ID,
+  legacyAppSecret: process.env.SHOPEE_AFFILIATE_APP_SECRET,
+  baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL,
 };
 
-function buildCompleteReviewData(normalizedUrl: string, overrides: Record<string, unknown> = {}) {
+function restoreEnv(name: keyof typeof process.env, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+function offer(itemId: string, productLink: string, imageUrl = IMAGE_1) {
   return {
-    normalizedUrl,
-    imagens: ["https://img.test/1.webp"],
-    preco: 79.9,
-    rawTitle: "Produto teste observado no anúncio",
-    displayTitle: "Luminária de Mesa Bauhaus",
-    produto: "Produto teste observado no anúncio",
-    descricao: "Peça compacta de vidro com presença gráfica para compor iluminação de apoio.",
-    categoria: "Acessórios",
-    ...overrides,
+    shopId: SHOP_ID,
+    itemId,
+    name: itemId === ITEM_1 ? "Luminária Bauhaus de mesa" : "Luminária cogumelo de mesa",
+    price: itemId === ITEM_1 ? 79.9 : 89.9,
+    productLink,
+    offerLink: `https://s.shopee.com.br/offer-${itemId.slice(-4)}`,
+    imageUrl,
   };
 }
 
-describe("parseShopeeCommand", () => {
-  it("rejeita argumento vazio", () => {
-    const p = parseShopeeCommand("");
-    assert.equal(p.error !== null, true);
-    assert.equal(p.count, 0);
+function successAcquisition(itemId: string, productLink: string) {
+  return {
+    status: "link_acquired",
+    affiliateUrl: `https://s.shopee.com.br/aff-${itemId.slice(-4)}`,
+    productLink,
+    shopId: SHOP_ID,
+    itemId,
+    name: itemId === ITEM_1 ? "Luminária Bauhaus de mesa" : "Luminária cogumelo de mesa",
+    price: itemId === ITEM_1 ? 79.9 : 89.9,
+    raw: null,
+    error: null,
+  };
+}
+
+function validReviewData(normalizedUrl: string) {
+  const second = normalizedUrl.includes(ITEM_2);
+  return {
+    normalizedUrl,
+    imagens: [second ? IMAGE_2 : IMAGE_1],
+    imagensOriginais: [second ? IMAGE_2 : IMAGE_1],
+    preco: second ? 89.9 : 79.9,
+    rawTitle: second ? "Luminária cogumelo observada no anúncio" : "Luminária Bauhaus observada no anúncio",
+    displayTitle: second ? "Luminária Cogumelo Retrô" : "Luminária de Mesa Bauhaus",
+    produto: second ? "Luminária cogumelo observada no anúncio" : "Luminária Bauhaus observada no anúncio",
+    descricao: "Luminária de apoio com construção compacta, acabamento verificável e proporções adequadas para interiores.",
+    categoria: "Iluminação",
+    imageEditorialStatus: "clean" as const,
+  };
+}
+
+function clientWithOffers(items: any[], options: {
+  search?: () => Promise<any>;
+  acquire?: (input: { shopId: string; itemId: string }) => Promise<any>;
+} = {}) {
+  return {
+    searchOffers: options.search || (async () => ({ ok: true, items, httpStatus: 200, error: null, reason: null })),
+    acquireAffiliateLink: options.acquire || (async ({ itemId }: { shopId: string; itemId: string }) => {
+      const found = items.find((item) => item.itemId === itemId);
+      return successAcquisition(itemId, found?.productLink || PRODUCT_1);
+    }),
+    lookupProduct: async () => ({ status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus: 200, raw: null, error: null }),
+    inspectPromotionFields: async () => ({ ok: false, nodeType: null, fields: [], reason: "not_tested" }),
+    inspectPromotionOffer: async () => ({ ok: false, values: null, reason: "not_tested" }),
+  } as any;
+}
+
+let savedReviews: any[] = [];
+let textMessages: Array<{ text: string; markup: any }> = [];
+let photoMessages: Array<{ photo: string; caption: string; markup: any }> = [];
+
+beforeEach(() => {
+  process.env.TELEGRAM_ALLOWED_USER_IDS = "123456";
+  delete process.env.SHOPEE_APP_ID;
+  delete process.env.SHOPEE_APP_SECRET;
+  delete process.env.SHOPEE_AFFILIATE_APP_ID;
+  delete process.env.SHOPEE_AFFILIATE_APP_SECRET;
+  delete process.env.SHOPEE_AFFILIATE_API_BASE_URL;
+
+  savedReviews = [];
+  textMessages = [];
+  photoMessages = [];
+  setTestShopeeLotPauseMs(0);
+  setTestShopeeIdentityChecker(async () => false);
+  setTestSavePendingReview(async review => { savedReviews.push(review); });
+  setTestTelegramSenders(
+    async (_chatId, text, markup) => {
+      textMessages.push({ text: String(text), markup });
+      return { ok: true };
+    },
+    async (_chatId, photo, caption, markup) => {
+      photoMessages.push({ photo: String(photo), caption: String(caption), markup });
+      return { ok: true };
+    },
+  );
+  setTestExtractProductForReview(async (url: string) => ({ success: true, data: validReviewData(url) as any }));
+});
+
+afterEach(() => {
+  setTestShopeeClient(null);
+  setTestShopeeIdentityChecker(null);
+  setTestShopeeLotPauseMs(null);
+  setTestSavePendingReview(null);
+  setTestTelegramSenders(null, null);
+  setTestExtractProductForReview(null);
+  restoreEnv("TELEGRAM_ALLOWED_USER_IDS", originalEnv.allowed);
+  restoreEnv("SHOPEE_APP_ID", originalEnv.appId);
+  restoreEnv("SHOPEE_APP_SECRET", originalEnv.appSecret);
+  restoreEnv("SHOPEE_AFFILIATE_APP_ID", originalEnv.legacyAppId);
+  restoreEnv("SHOPEE_AFFILIATE_APP_SECRET", originalEnv.legacyAppSecret);
+  restoreEnv("SHOPEE_AFFILIATE_API_BASE_URL", originalEnv.baseUrl);
+});
+
+describe("parseShopeeCommand — contrato termo primeiro, quantidade por último", () => {
+  it("aceita /shopee luminária 2", () => {
+    assert.deepEqual(parseShopeeCommand("luminária 2"), { count: 2, query: "luminária", error: null, mode: "term", urls: [] });
   });
 
-  it("rejeita N fora do intervalo 1–10", () => {
-    assert.equal(parseShopeeCommand("0").error !== null, true);
-    assert.equal(parseShopeeCommand("11").error !== null, true);
-    assert.equal(parseShopeeCommand("abc").error !== null, true);
-    assert.equal(parseShopeeCommand("-1").error !== null, true);
-    assert.equal(parseShopeeCommand("3.5").count, 3);
+  it("preserva termo composto, acentos e normaliza múltiplos espaços", () => {
+    const parsed = parseShopeeCommand("  mesa   lateral de   madeira   3  ");
+    assert.equal(parsed.error, null);
+    assert.equal(parsed.count, 3);
+    assert.equal(parsed.query, "mesa lateral de madeira");
   });
 
-  it("aceita N=10 com termo e N=5 sem termo", () => {
-    const a = parseShopeeCommand("10 achados cozinha");
-    assert.equal(a.error, null);
-    assert.equal(a.count, 10);
-    assert.equal(a.query, "achados cozinha");
-
-    const b = parseShopeeCommand("5");
-    assert.equal(b.error, null);
-    assert.equal(b.count, 5);
-    assert.equal(b.query, "achados shopee");
+  it("aceita Unicode no termo", () => {
+    const parsed = parseShopeeCommand("luminária décor retrô 1");
+    assert.equal(parsed.query, "luminária décor retrô");
+    assert.equal(parsed.count, 1);
   });
 
-  it("aceita shortlink oficial Shopee como URL direta, sem tratá-lo como termo", () => {
-    const parsed = parseShopeeCommand("1 https://s.shopee.com.br/50YaCO4kF9");
+  it("rejeita quantidade ausente", () => {
+    assert.match(parseShopeeCommand("luminária").error || "", /uso:/i);
+  });
+
+  it("rejeita último argumento textual em vez de reinterpretar o termo", () => {
+    const parsed = parseShopeeCommand("luminária zero");
+    assert.equal(parsed.count, 0);
+    assert.match(parsed.error || "", /último argumento.*inteiro/i);
+  });
+
+  it("rejeita zero, negativo, decimal e quantidade excessiva", () => {
+    for (const input of ["luminária 0", "luminária -1", "luminária 1.5", "luminária 50"]) {
+      assert.notEqual(parseShopeeCommand(input).error, null, input);
+    }
+  });
+
+  it("mantém URL direta somente quando ela é explicitamente Shopee e quantidade vem por último", () => {
+    const parsed = parseShopeeCommand(`${PRODUCT_1} 1`);
     assert.equal(parsed.error, null);
     assert.equal(parsed.mode, "urls");
-    assert.deepEqual(parsed.urls, ["https://s.shopee.com.br/50YaCO4kF9"]);
+    assert.deepEqual(parsed.urls, [PRODUCT_1]);
   });
 });
 
-describe("identificadores do lote", () => {
-  it("buildShopeeBatchId gera um lote com prefixo shopee-", () => {
-    const id = buildShopeeBatchId();
-    assert.match(id, /^shopee-[a-z0-9]+$/);
-  });
-
-  it("buildShopeeReviewId é determinístico para mesma URL+chat", () => {
-    const a = buildShopeeReviewId("https://shopee.com.br/product/1/2", 42);
-    const b = buildShopeeReviewId("https://shopee.com.br/product/1/2", 42);
-    assert.equal(a, b);
-    assert.match(a, /^affprev-[a-z0-9]+-[a-z0-9]+$/);
+describe("identificadores auditáveis", () => {
+  it("gera ids de lote e review sem depender de segredo", () => {
+    assert.match(buildShopeeBatchId(), /^shopee-[a-z0-9]+$/);
+    assert.match(buildShopeeReviewId(PRODUCT_1, 123456), /^affprev-[a-z0-9]+-[a-z0-9]+$/);
   });
 });
 
-describe("runShopeeCommand — lote completo", () => {
-  let originalFetch: typeof globalThis.fetch;
-  let originalAllowed: string | undefined;
-  let savedReviews: any[] = [];
-  let telegramModule: typeof telegramBotModule;
-  let clientModule: TermClientModule;
+describe("runShopeeCommand — discovery oficial e cards", () => {
+  it("/shopee luminária 2 retorna dois cards para dois candidatos oficiais válidos", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1), offer(ITEM_2, PRODUCT_2)]));
 
-  beforeEach(async () => {
-    clientModule = await import("../server/commercial/affiliate/shopeeApiClient");
-    originalFetch = globalThis.fetch;
-    originalAllowed = process.env.TELEGRAM_ALLOWED_USER_IDS;
-    process.env.TELEGRAM_ALLOWED_USER_IDS = "1976526372";
-    process.env.SHOPEE_AFFILIATE_APP_ID = "fake_app_id";
-    process.env.SHOPEE_AFFILIATE_APP_SECRET = "fake_app_secret";
+    const result = await runShopeeCommand("luminária 2");
 
-    savedReviews = [];
-    telegramRepositoryModule.setTestSavePendingReview(async (review) => {
-      savedReviews.push(review);
-    });
-
-    telegramModule = await import("../server/services/telegramBot");
-    telegramModule.setTestTelegramSenders(async () => ({ ok: true }), async () => ({ ok: true }));
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async () => ({
-      success: true,
-      data: {
-        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
-        imagens: ["https://img.test/1.webp"],
-        preco: 79.9,
-        rawTitle: "Produto Teste Shopee — título observado",
-        displayTitle: "Luminária de Mesa Bauhaus",
-        produto: "Produto Teste",
-        descricao: "Luminária compacta com leitura contemporânea e acabamento em vidro.",
-        categoria: "Acessórios",
-      },
-    }));
-
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: [{
-        url: "https://shopee.com.br/product/1530442944/23794344926",
-        shopId: "1530442944",
-        itemId: "23794344926",
-        title: "Produto Teste"
-      }]
-    }));
-
-    globalThis.fetch = makeTermFetch() as unknown as typeof globalThis.fetch;
-    setTestShopeeLotPauseMs(0);
+    assert.equal(result.errorCode, null);
+    assert.equal(result.providerQueryExecuted, true);
+    assert.equal(result.countRequested, 2);
+    assert.equal(result.ok, 2);
+    assert.equal(result.failed, 0);
+    assert.equal(photoMessages.length, 2);
+    assert.equal(savedReviews.length, 2);
+    assert.deepEqual(savedReviews.map(review => review.existingProduct?.itemId), [ITEM_1, ITEM_2]);
   });
 
-  afterEach(async () => {
-    globalThis.fetch = originalFetch;
-    process.env.TELEGRAM_ALLOWED_USER_IDS = originalAllowed;
-    telegramRepositoryModule.setTestSavePendingReview(null);
-    telegramModule.setTestTelegramSenders(null, null);
-    shopeeDiscoveryModule.setTestDiscoveryOverride(null);
-    shopeeCmdTopo.setTestShopeeClient(null);
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(null);
-    setTestShopeeLotPauseMs(null);
-  });
-
-  it("envia card do item como foto quando o scraper retorna imagens", async () => {
-    let capturedPhoto: any = null;
-    telegramModule.setTestTelegramSenders(null, async (chatId: any, photoUrl: any, caption: any, markup?: any) => {
-        capturedPhoto = { chatId, photoUrl, caption, markup };
-        return { ok: true };
-    });
-    const r = await runShopeeCommand("1");
-    assert.equal(r.ok, 1);
-    assert.notEqual(capturedPhoto, null);
-    assert.match(capturedPhoto.caption, /PREVIEW SHOPEE AFFILIATE/);
-    assert.equal(capturedPhoto.caption.includes("shop_id=<code>1530442944</code>"), true);
-    assert.equal(capturedPhoto.caption.includes("item_id=<code>23794344926</code>"), true);
-  });
-
-  it("persiste na review os campos editoriais e comerciais que a publicação canônica precisa", async () => {
-    const result = await runShopeeCommand("1 luminária bauhaus");
+  it("preserva shopId, itemId e productLink oficiais na revisão autoritativa", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    const result = await runShopeeCommand("luminária 1");
 
     assert.equal(result.ok, 1);
-    assert.equal(savedReviews.length, 1);
-    assert.equal(savedReviews[0]?.produto, "Produto Teste Shopee — título observado");
-    assert.equal(savedReviews[0]?.rawTitle, "Produto Teste Shopee — título observado");
-    assert.equal(savedReviews[0]?.displayTitle, "Luminária de Mesa Bauhaus");
-    assert.equal(savedReviews[0]?.descricao, "Luminária compacta com leitura contemporânea e acabamento em vidro.");
-    assert.equal(savedReviews[0]?.categoria, "Acessórios");
-    assert.equal(savedReviews[0]?.existingProduct?.affiliateUrl, "https://s.shopee.com.br/TESTE");
+    assert.equal(savedReviews[0]?.normalizedUrl, PRODUCT_1);
+    assert.equal(savedReviews[0]?.existingProduct?.shopId, SHOP_ID);
+    assert.equal(savedReviews[0]?.existingProduct?.itemId, ITEM_1);
+    assert.equal(savedReviews[0]?.existingProduct?.affiliateUrl, `https://s.shopee.com.br/aff-${ITEM_1.slice(-4)}`);
   });
 
-  it("rejeita antes do card a curadoria indisponível e não persiste review que falharia em confirm_pub", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async () => ({
-      success: true,
-      data: {
-        normalizedUrl: "https://shopee.com.br/product/1530442944/23794344926",
-        imagens: ["https://img.test/1.webp"],
-        preco: 79.9,
-        rawTitle: "Luminária Bauhaus do anúncio",
-        displayTitle: "Luminária Bauhaus do anúncio",
-        produto: "Luminária Bauhaus do anúncio",
-        descricao: "",
-        categoria: "Acessórios",
-      },
-    }));
-    const sentPreviews: string[] = [];
-    telegramModule.setTestTelegramSenders(
-      async (_chatId, text) => {
-        sentPreviews.push(String(text));
-        return { ok: true };
-      },
-      async (_chatId, _photoUrl, caption) => {
-        sentPreviews.push(String(caption));
-        return { ok: true };
-      },
-    );
+  it("não expõe URL oficial completa nem link afiliado no card; usa referência mascarada", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    await runShopeeCommand("luminária 1");
 
-    const result = await runShopeeCommand("1 luminária bauhaus");
+    const caption = photoMessages[0]?.caption || "";
+    assert.match(caption, /Referência de auditoria/);
+    assert.match(caption, /••••/);
+    assert.equal(caption.includes(PRODUCT_1), false);
+    assert.equal(caption.includes("https://s.shopee.com.br/"), false);
+    assert.equal(caption.includes(ITEM_1), false);
+  });
+
+  it("mantém aprovação humana no card", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    await runShopeeCommand("luminária 1");
+
+    const buttons = photoMessages[0]?.markup?.inline_keyboard?.flat?.() || [];
+    assert.equal(buttons.some((button: any) => String(button.callback_data || "").startsWith("confirm_pub:")), true);
+    assert.equal(savedReviews[0]?.status, "pending");
+  });
+
+  it("rejeita URL que não prova a mesma identidade oficial, sem derivar uma substituta", async () => {
+    const mismatched = `https://shopee.com.br/product/${SHOP_ID}/99999999999`;
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, mismatched)]));
+
+    const result = await runShopeeCommand("luminária 1");
 
     assert.equal(result.ok, 0);
+    assert.equal(result.rejectionCounts.OFFICIAL_PRODUCT_LINK_INVALID, 1);
     assert.equal(savedReviews.length, 0);
+    assert.equal(photoMessages.length, 0);
+  });
+
+  it("rejeita identidade já pertencente ao catálogo", async () => {
+    setTestShopeeIdentityChecker(async () => true);
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+
+    const result = await runShopeeCommand("luminária 1");
+
+    assert.equal(result.ok, 0);
+    assert.equal(result.items[0]?.status, "duplicate_rejected");
+    assert.equal(result.items[0]?.reason, "SOURCE_IDENTITY_ALREADY_OWNED");
+    assert.equal(savedReviews.length, 0);
+  });
+
+  it("rejeita candidato sem título e preço canônicos", async () => {
+    setTestShopeeClient(clientWithOffers([
+      { ...offer(ITEM_1, PRODUCT_1), name: "" },
+      { ...offer(ITEM_2, PRODUCT_2), price: null },
+    ]));
+
+    const result = await runShopeeCommand("luminária 1");
+
+    assert.equal(result.ok, 0);
+    assert.equal(result.rejectionCounts.TITLE_MISSING, 1);
+    assert.equal(result.rejectionCounts.PRICE_MISSING, 1);
+  });
+
+  it("rejeita imagem não HTTPS ou imagem em revisão antes de criar card", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    setTestExtractProductForReview(async (url: string) => ({
+      success: true,
+      data: {
+        ...validReviewData(url),
+        imagens: ["http://img.example.com/insegura.webp"],
+        imageEditorialStatus: "review_required",
+      } as any,
+    }));
+
+    const result = await runShopeeCommand("luminária 1");
+
+    assert.equal(result.ok, 0);
     assert.equal(result.items[0]?.status, "editorial_curation_failed");
-    assert.match(result.items[0]?.reason ?? "", /título editorial ausente/);
-    assert.match(result.items[0]?.reason ?? "", /descrição editorial ausente/);
-    assert.equal(sentPreviews.some((text) => text.includes("PREVIEW SHOPEE AFFILIATE")), false);
+    assert.match(result.items[0]?.reason || "", /imagem HTTPS válida ausente|IMAGE_REVIEW_REQUIRED/);
+    assert.equal(savedReviews.length, 0);
   });
 
-  it("usa busca oficial por termo antes do fallback externo e entrega card sem URL do administrador", async () => {
-    let officialSearchCalls = 0;
-    shopeeCmdTopo.setTestShopeeClient({
-      searchOffers: async () => {
-        officialSearchCalls += 1;
-        return {
-          ok: true,
-          items: [{
-            shopId: "1530442944",
-            itemId: "23794344926",
-            name: "Luminária Bauhaus",
-            price: 79.9,
-            productLink: "https://shopee.com.br/product/1530442944/23794344926",
-            offerLink: "https://s.shopee.com.br/TESTE",
-          }],
-          httpStatus: 200,
-          error: null,
-        };
+  it("usa fallback de entrega texto somente se sendPhoto falhar, sem mudar elegibilidade", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    let fallbackTextCards = 0;
+    setTestTelegramSenders(
+      async (_chatId, text) => {
+        if (String(text).includes("PREVIEW SHOPEE AFFILIATE")) fallbackTextCards += 1;
+        return { ok: true };
       },
-      acquireAffiliateLink: async () => ({
-        status: "link_acquired",
-        shopId: "1530442944",
-        itemId: "23794344926",
-        name: "Luminária Bauhaus",
-        productLink: "https://shopee.com.br/product/1530442944/23794344926",
-        affiliateUrl: "https://s.shopee.com.br/TESTE",
-      }),
-    } as any);
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
-      throw new Error("fallback externo não deveria ser chamado");
-    });
-
-    const result = await runShopeeCommand("1 luminária bauhaus");
-
-    assert.equal(result.ok, 1);
-    assert.equal(result.discoveryRounds, 1);
-    assert.equal(officialSearchCalls, 1);
-    assert.equal(result.items[0]?.status, "ok");
-  });
-
-  it("usa o preço atual da Affiliate API quando o SSR da Shopee não expõe preço ao scraper", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async () => ({
-      success: true,
-      data: buildCompleteReviewData("https://shopee.com.br/product/1530442944/23794344926", { preco: null }),
-    }));
-    let capturedCaption = "";
-    let capturedKeyboard: any = null;
-    telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption, keyboard) => {
-      capturedCaption = String(caption);
-      capturedKeyboard = keyboard;
-      return { ok: true };
-    });
-    shopeeCmdTopo.setTestShopeeClient({
-      searchOffers: async () => ({
-        ok: true,
-        items: [{
-          shopId: "1530442944",
-          itemId: "23794344926",
-          name: "Luminária Bauhaus",
-          price: 79.9,
-          productLink: "https://shopee.com.br/product/1530442944/23794344926",
-          offerLink: "https://s.shopee.com.br/TESTE",
-        }],
-        httpStatus: 200,
-        error: null,
-      }),
-      acquireAffiliateLink: async () => ({
-        status: "link_acquired",
-        shopId: "1530442944",
-        itemId: "23794344926",
-        name: "Luminária Bauhaus",
-        price: 79.9,
-        productLink: "https://shopee.com.br/product/1530442944/23794344926",
-        affiliateUrl: "https://s.shopee.com.br/TESTE",
-      }),
-    } as any);
-
-    const result = await runShopeeCommand("1 luminária bauhaus");
-
-    assert.equal(result.ok, 1);
-    assert.match(capturedCaption, /Preço do anúncio:<\/b> R\$\s*79,90/);
-    assert.match(capturedCaption, /Shopee Affiliate API/);
-    assert.match(capturedCaption, /este card não estima descontos/);
-    assert.equal(savedReviews[0]?.preco, 79.9);
-    assert.match(String(capturedKeyboard?.inline_keyboard?.[0]?.[0]?.callback_data), /^confirm_pub:/);
-  });
-
-  it("mostra Pix com cupom apenas quando o scraper devolve valor e condição explícitos", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async () => ({
-      success: true,
-      data: buildCompleteReviewData("https://shopee.com.br/product/1530442944/23794344926", {
-        preco: 519,
-        precoMaximo: 599,
-        precoCheckout: 460,
-        condicaoPrecoCheckout: "pix_with_coupon",
-      }),
-    }));
-    let capturedCaption = "";
-    telegramModule.setTestTelegramSenders(null, async (_chatId, _photoUrl, caption) => {
-      capturedCaption = String(caption);
-      return { ok: true };
-    });
-
-    const result = await runShopeeCommand("1 luminária bauhaus");
-
-    assert.equal(result.ok, 1);
-    assert.match(capturedCaption, /Preço do anúncio:<\/b> R\$\s*519,00/);
-    assert.match(capturedCaption, /Faixa por variante:<\/b> R\$\s*519,00–R\$\s*599,00/);
-    assert.match(capturedCaption, /Preço no Pix com cupom:<\/b> R\$\s*460,00/);
-    assert.match(capturedCaption, /devem ser confirmados no checkout/);
-  });
-
-  it("deduplica candidatos repetidos sem criar cards duplicados", async () => {
-    const captured: string[] = [];
-    telegramModule.setTestTelegramSenders(async (chatId: any, text: any) => { captured.push(String(text)); return { ok: true }; }, async (chatId: any, photoUrl: any, caption: any) => { captured.push(String(caption)); return { ok: true }; });
-
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async (q, limit) => ({
-      success: true,
-      products: Array(limit).fill({
-        url: "https://shopee.com.br/product/1530442944/23794344926",
-        shopId: "1530442944",
-        itemId: "23794344926",
-        title: "Produto Teste"
-      })
-    }));
-
-    const r = await runShopeeCommand("3 cozinha");
-    assert.equal(r.ok, 1);
-    assert.equal(r.searchExhausted, true);
-    assert.equal(savedReviews.length, 1);
-    assert.equal(r.items.filter((item) => item.reason === "duplicate_candidate").length, 0);
-    assert.equal(r.poolCandidates, 1);
-  });
-
-  it("faz over-fetch e substitui candidato não elegível pelo próximo candidato válido", async () => {
-    let requestedLimit = 0;
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async (_query, limit) => {
-      requestedLimit = limit;
-      return {
-        success: true,
-        products: [
-          { url: "https://shopee.com.br/product/1530442944/11111111111", shopId: "1530442944", itemId: "11111111111", title: "Indisponível" },
-          { url: "https://shopee.com.br/product/1530442944/23794344926", shopId: "1530442944", itemId: "23794344926", title: "Produto Teste" },
-        ],
-      };
-    });
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
-        itemId === "11111111111"
-          ? { status: "not_found" }
-          : {
-              status: "link_acquired",
-              shopId: "1530442944",
-              itemId: "23794344926",
-              name: "Produto Teste",
-              productLink: "https://shopee.com.br/product/1530442944/23794344926",
-              affiliateUrl: "https://s.shopee.com.br/TESTE",
-            },
-    } as any);
-
-    const result = await runShopeeCommand("1 cozinha");
-
-    assert.equal(requestedLimit, 3);
-    assert.equal(result.ok, 1);
-    assert.equal(result.candidatesExamined, 2);
-    assert.equal(result.items[0]?.reason, "not_found");
-    assert.equal(result.items[1]?.status, "ok");
-    assert.equal(savedReviews.length, 1);
-  });
-
-  it("resposta vazia do Gemini → lote fail-closed", async () => {
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: []
-    }));
-    const r = await runShopeeCommand("3 cozinha");
-    assert.equal(r.ok, 0);
-    assert.equal(r.failed, 3);
-    assert.equal(r.items.every((i) => i.reason === "no_products_found"), true);
-  });
-
-  it("erro do Gemini na busca → lote fail-closed com reason do erro", async () => {
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: false,
-      products: [],
-      error: "GEMINI_QUOTA_EXCEEDED"
-    }));
-    const r = await runShopeeCommand("3 cozinha");
-    assert.equal(r.ok, 0);
-    assert.equal(r.failed, 3);
-    assert.equal(r.items.every((i) => i.reason === "GEMINI_QUOTA_EXCEEDED"), true);
-  });
-
-  it("N=3 substitui dois NOT_FOUND por três candidatos válidos", async () => {
-    const ids = ["11111111111", "22222222222", "33333333333", "44444444444", "55555555555"];
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url),
-    }));
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
-    }));
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
-        ids.slice(0, 2).includes(itemId)
-          ? { status: "not_found" }
-          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
-    } as any);
-
-    const result = await runShopeeCommand("3 cozinha");
-    assert.equal(result.ok, 3);
-    assert.equal(result.candidatesExamined, 5);
-    assert.equal(result.rejectedCandidates, 2);
-    assert.equal(result.discoveryRounds, 1);
-  });
-
-  it("N=5 substitui seis rejeições por cinco candidatos válidos", async () => {
-    const ids = Array.from({ length: 11 }, (_, index) => String(11111111111 + index));
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url),
-    }));
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
-    }));
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
-        ids.slice(0, 6).includes(itemId)
-          ? { status: "not_found" }
-          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
-    } as any);
-
-    const result = await runShopeeCommand("5 cozinha");
-    assert.equal(result.ok, 5);
-    assert.equal(result.candidatesExamined, 11);
-    assert.equal(result.rejectedCandidates, 6);
-  });
-
-  it("NOT_ELIGIBLE não consome slot e libera o próximo candidato", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url),
-    }));
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: ["11111111111", "22222222222"].map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
-    }));
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
-        itemId === "11111111111"
-          ? { status: "not_eligible" }
-          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
-    } as any);
-
-    const result = await runShopeeCommand("1 cozinha");
-    assert.equal(result.ok, 1);
-    assert.equal(result.items[0]?.reason, "not_eligible");
-    assert.equal(result.candidatesExamined, 2);
-  });
-
-  it("quinze candidatos com cinco válidos entregam exatamente cinco cards", async () => {
-    const ids = Array.from({ length: 15 }, (_, index) => String(21111111111 + index));
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url),
-    }));
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
-    }));
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
-        ids.slice(0, 10).includes(itemId)
-          ? { status: "not_found" }
-          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
-    } as any);
-
-    const result = await runShopeeCommand("5 cozinha");
-    assert.equal(result.ok, 5);
-    assert.equal(result.candidatesExamined, 15);
-    assert.equal(result.rejectedCandidates, 10);
-    assert.equal(result.poolCandidates, 15);
-  });
-
-  it("todos os candidatos rejeitados terminam sem card falso e com resumo explícito", async () => {
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: Array.from({ length: 5 }, (_, index) => {
-        const itemId = String(31111111111 + index);
-        return { url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" };
-      }),
-    }));
-    shopeeCmdTopo.setTestShopeeClient({ acquireAffiliateLink: async () => ({ status: "not_found" }) } as any);
-
-    const result = await runShopeeCommand("5 cozinha");
-    assert.equal(result.ok, 0);
-    assert.equal(result.rejectedCandidates, 5);
-    assert.equal(result.poolLocalExhausted, true);
-    assert.equal(result.budgetExhausted, true);
-    assert.equal(result.items.every((item) => item.status === "affiliate_not_eligible"), true);
-  });
-
-  it("executa nova rodada quando o pool inicial é insuficiente e elimina duplicatas entre rounds", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url),
-    }));
-    let calls = 0;
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
-      calls += 1;
-      const ids = calls === 1 ? ["11111111111"] : ["11111111111", "22222222222", "33333333333"];
-      return { success: true, products: ids.map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })) };
-    });
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) => ({ status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" }),
-    } as any);
-
-    const result = await runShopeeCommand("3 cozinha");
-    assert.equal(result.ok, 3);
-    assert.equal(result.discoveryRounds, 2);
-    assert.equal(result.poolCandidates, 3);
-    assert.equal(calls, 2);
-    assert.equal(result.items.some((item) => item.reason === "duplicate_candidate"), false);
-  });
-
-  it("termina incompleto somente após esgotar o orçamento de discovery", async () => {
-    let calls = 0;
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => {
-      calls += 1;
-      return { success: true, products: [] };
-    });
-
-    const result = await runShopeeCommand("3 cozinha");
-    assert.equal(result.ok, 0);
-    assert.equal(result.poolLocalExhausted, true);
-    assert.equal(result.sourceExhausted, true);
-    assert.equal(result.budgetExhausted, true);
-    assert.equal(result.discoveryRounds, 3);
-    assert.equal(calls, 3);
-  });
-
-  it("foto com ok:false usa fallback texto e só conta a confirmação lógica do texto", async () => {
-    let photoCalls = 0;
-    let messageCalls = 0;
-    telegramModule.setTestTelegramSenders(
-      async () => { messageCalls += 1; return { ok: true }; },
-      async () => { photoCalls += 1; return { ok: false, description: "PHOTO_INVALID" }; },
+      async () => ({ ok: false, failureReason: "photo_failed" }),
     );
 
-    const result = await runShopeeCommand("1");
+    const result = await runShopeeCommand("luminária 1");
+
     assert.equal(result.ok, 1);
-    assert.equal(photoCalls, 1);
-    assert.equal(messageCalls >= 3, true);
+    assert.equal(fallbackTextCards, 1);
+  });
+});
+
+describe("runShopeeCommand — configuração e falhas do provider", () => {
+  it("TELEGRAM_ALLOWED_USER_IDS ausente bloqueia antes de qualquer consulta", async () => {
+    delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+    let calls = 0;
+    setTestShopeeClient(clientWithOffers([], { search: async () => { calls += 1; return { ok: true, items: [], httpStatus: 200, error: null, reason: null }; } }));
+
+    const result = await runShopeeCommand("copo 1");
+
+    assert.equal(result.errorCode, "TELEGRAM_ALLOWED_USER_IDS_MISSING");
+    assert.equal(result.providerQueryExecuted, false);
+    assert.equal(calls, 0);
   });
 
-  it("foto e texto com ok:false não contam card e permitem replacement", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url),
-    }));
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: ["11111111111", "22222222222"].map((itemId) => ({ url: `https://shopee.com.br/product/1530442944/${itemId}`, shopId: "1530442944", itemId, title: "Produto Teste" })),
-    }));
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) => ({ status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" }),
-    } as any);
-    telegramModule.setTestTelegramSenders(async () => ({ ok: false, description: "MESSAGE_REJECTED" }), async () => ({ ok: false, description: "PHOTO_REJECTED" }));
+  it("credenciais ausentes retornam SHOPEE_PROVIDER_NOT_CONFIGURED e não NO_RESULTS", async () => {
+    setTestShopeeClient(null);
+    delete process.env.SHOPEE_APP_ID;
+    delete process.env.SHOPEE_APP_SECRET;
+    delete process.env.SHOPEE_AFFILIATE_APP_ID;
+    delete process.env.SHOPEE_AFFILIATE_APP_SECRET;
 
-    const result = await runShopeeCommand("1 cozinha");
+    const result = await runShopeeCommand("copo 1");
+
+    assert.equal(result.errorCode, "SHOPEE_PROVIDER_NOT_CONFIGURED");
+    assert.equal(result.providerQueryExecuted, false);
+    assert.match(textMessages.map(message => message.text).join("\n"), /SHOPEE_PROVIDER_NOT_CONFIGURED/);
+  });
+
+  it("autenticação inválida retorna SHOPEE_PROVIDER_AUTH_FAILED", async () => {
+    setTestShopeeClient(clientWithOffers([], {
+      search: async () => ({
+        ok: false,
+        items: [],
+        httpStatus: 401,
+        reason: "SHOPEE_AUTH_ERROR",
+        error: { kind: "SHOPEE_AUTH_ERROR" },
+      }),
+    }));
+
+    const result = await runShopeeCommand("copo 1");
+
+    assert.equal(result.errorCode, "SHOPEE_PROVIDER_AUTH_FAILED");
+    assert.equal(result.providerQueryExecuted, true);
     assert.equal(result.ok, 0);
-    assert.equal(result.candidatesExamined, 2);
-    assert.equal(result.items.every((item) => item.status === "telegram_send_failed"), true);
-    assert.equal(result.budgetExhausted, true);
   });
 
-  it("candidato sem imagem não é entregue nem persistido como review publicável", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => ({
-      success: true,
-      data: buildCompleteReviewData(url, { imagens: [], produto: "Produto Sem Foto" }),
-    }));
-    telegramModule.setTestTelegramSenders(async () => ({ ok: false, description: "MESSAGE_REJECTED" }), async () => ({ ok: true }));
+  it("resposta vazia real é distinguida de falha de infraestrutura", async () => {
+    setTestShopeeClient(clientWithOffers([]));
 
-    const result = await runShopeeCommand("1 https://shopee.com.br/product/1530442944/23794344926");
+    const result = await runShopeeCommand("copo 1");
+
+    assert.equal(result.errorCode, null);
+    assert.equal(result.providerQueryExecuted, true);
+    assert.equal(result.candidatesReceived, 0);
     assert.equal(result.ok, 0);
-    assert.equal(result.sourceExhausted, true);
-    assert.equal(result.items[0]?.status, "editorial_curation_failed");
   });
 
-  it("substitui rejeições mistas de identidade, Affiliate, scraper e Telegram até entregar N", async () => {
-    const paModule = await import("../server/services/productAutomation");
-    paModule.setTestExtractProductForReview(async (url) => {
-      if (url.endsWith("33333333333")) return { success: false, error: "scraper_blocked" };
-      return { success: true, data: buildCompleteReviewData(url) };
-    });
-    shopeeDiscoveryModule.setTestDiscoveryOverride(async () => ({
-      success: true,
-      products: [
-        { url: "https://shopee.com.br/search?q=sem-identidade", shopId: null, itemId: null, title: "Inválido" },
-        { url: "https://shopee.com.br/product/1530442944/22222222222", shopId: "1530442944", itemId: "22222222222", title: "Affiliate" },
-        { url: "https://shopee.com.br/product/1530442944/33333333333", shopId: "1530442944", itemId: "33333333333", title: "Scraper" },
-        { url: "https://shopee.com.br/product/1530442944/44444444444", shopId: "1530442944", itemId: "44444444444", title: "Telegram" },
-        { url: "https://shopee.com.br/product/1530442944/55555555555", shopId: "1530442944", itemId: "55555555555", title: "Válido" },
-      ],
-    }));
-    shopeeCmdTopo.setTestShopeeClient({
-      acquireAffiliateLink: async ({ itemId }: { itemId: string }) =>
-        itemId === "22222222222"
-          ? { status: "not_found" }
-          : { status: "link_acquired", shopId: "1530442944", itemId, name: "Produto Teste", productLink: `https://shopee.com.br/product/1530442944/${itemId}`, affiliateUrl: "https://s.shopee.com.br/TESTE" },
-    } as any);
-    let photoAttempts = 0;
-    telegramModule.setTestTelegramSenders(async (_chatId, text) => ({ ok: !String(text).includes("PREVIEW SHOPEE AFFILIATE") || photoAttempts > 1 }), async () => {
-      photoAttempts += 1;
-      return photoAttempts === 1 ? { ok: false, description: "PHOTO_REJECTED" } : { ok: true };
+  it("timeout usa retry limitado e termina com código estável", async () => {
+    let attempts = 0;
+    const client = clientWithOffers([], {
+      search: async () => {
+        attempts += 1;
+        return { ok: false, items: [], httpStatus: null, reason: "SHOPEE_TIMEOUT", error: { kind: "SHOPEE_TIMEOUT" } };
+      },
     });
 
-    const result = await runShopeeCommand("1 cozinha");
-    assert.equal(result.ok, 1);
-    assert.equal(result.candidatesExamined, 5);
-    assert.equal(result.rejectedCandidates, 4);
-    assert.equal(result.items.map((item) => item.status).join(","), "discovery_failed,affiliate_not_eligible,scraper_enrichment_failed,telegram_send_failed,ok");
+    await assert.rejects(
+      searchShopeeOffersWithRetry({ client, query: "luminária", attempts: 2, backoffMs: 0 }),
+      (error: any) => error instanceof ShopeeProviderRuntimeError && error.code === "SHOPEE_PROVIDER_TIMEOUT",
+    );
+    assert.equal(attempts, 2);
+  });
+
+  it("rate limit usa retry limitado e não entra em loop infinito", async () => {
+    let attempts = 0;
+    const client = clientWithOffers([], {
+      search: async () => {
+        attempts += 1;
+        return { ok: false, items: [], httpStatus: 429, reason: "SHOPEE_RATE_LIMITED", error: { kind: "SHOPEE_RATE_LIMITED" } };
+      },
+    });
+
+    await assert.rejects(
+      searchShopeeOffersWithRetry({ client, query: "luminária", attempts: 3, backoffMs: 0 }),
+      (error: any) => error instanceof ShopeeProviderRuntimeError && error.code === "SHOPEE_PROVIDER_RATE_LIMITED",
+    );
+    assert.equal(attempts, 3);
+  });
+});
+
+describe("observabilidade Shopee", () => {
+  it("inspeciona somente presença/estrutura sem retornar credenciais", () => {
+    process.env.SHOPEE_APP_ID = "test-app-id-secret-value";
+    process.env.SHOPEE_APP_SECRET = "test-app-secret-value";
+    const status = inspectShopeeProviderEnv(process.env);
+    const serialized = JSON.stringify(status);
+
+    assert.equal(status.adapter, "ShopeeApiClient");
+    assert.equal(status.credentialsConfigured, true);
+    assert.equal(status.baseUrlStructurallyValid, true);
+    assert.equal(serialized.includes("test-app-id-secret-value"), false);
+    assert.equal(serialized.includes("test-app-secret-value"), false);
+  });
+
+  it("logs estruturados removem secrets, tokens, URLs e payloads sensíveis", () => {
+    const lines: string[] = [];
+    const originalInfo = console.info;
+    console.info = (...args: any[]) => { lines.push(args.map(String).join(" ")); };
+    try {
+      safeShopeeLog("test_event", {
+        correlationId: "corr-1",
+        requested: 2,
+        secret: "must-not-appear",
+        telegramToken: "must-not-appear-either",
+        productUrl: PRODUCT_1,
+        providerPayload: "sensitive-payload",
+      });
+    } finally {
+      console.info = originalInfo;
+    }
+    const joined = lines.join("\n");
+    assert.match(joined, /corr-1/);
+    assert.equal(joined.includes("must-not-appear"), false);
+    assert.equal(joined.includes(PRODUCT_1), false);
+    assert.equal(joined.includes("sensitive-payload"), false);
   });
 });
