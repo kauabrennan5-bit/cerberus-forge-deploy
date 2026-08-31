@@ -4,7 +4,7 @@ import type { PublicProductCategory } from "../../src/lib/productCategory";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { generateSlug } from "../../src/data/initialProducts";
 import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
-import { createShopeeApiClient, type ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
+import type { ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
 import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
@@ -27,11 +27,24 @@ import {
   scoreAutonomousCandidate,
   type AutonomousCuratorScoreBreakdown,
 } from "./autonomousCuratorScoring";
+import {
+  buildConfiguredShopeeClient,
+  mapShopeeErrorKindToProviderCode,
+  newShopeeCorrelationId,
+  providerErrorFromAcquisitionStatus,
+  safeShopeeLog,
+  searchShopeeOffersWithRetry,
+  ShopeeProviderRuntimeError,
+  type ShopeeProviderErrorCode,
+  validateOfficialProductLink,
+} from "./shopeeProviderRuntime";
 
 const AUTO_QUEUE_CREATED_BY = "autonomous_curator_queue";
 const ROTATION_CANDIDATE_CREATED_BY = "telegram_rotation_candidate";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
-const ROTATION_VERSION = "1";
+const ROTATION_VERSION = "2";
+const ROTATION_SEARCH_MAX_PAGES = 3;
+const ROTATION_SEARCH_PAGE_LIMIT = 10;
 
 export type ProductRotationStatus =
   | "searching"
@@ -90,6 +103,27 @@ type EvaluatedCandidate = {
   lifecycle: LifecycleRecord;
 };
 
+export type RotationSearchDiagnostics = {
+  correlationId: string;
+  provider: "ShopeeApiClient";
+  queriesAttempted: number;
+  providerQueriesExecuted: number;
+  candidatesReceived: number;
+  candidatesInPool: number;
+  candidatesExamined: number;
+  rejectionCounts: Record<string, number>;
+};
+
+export class ProductRotationSearchError extends Error {
+  constructor(
+    readonly code: "NO_QUALIFIED_REPLACEMENT_FOUND" | "ROTATION_CANDIDATE_PERSIST_FAILED" | ShopeeProviderErrorCode,
+    readonly diagnostics: RotationSearchDiagnostics,
+  ) {
+    super(code);
+    this.name = "ProductRotationSearchError";
+  }
+}
+
 export type RotationProposal = {
   request: ProductRotationRequest;
   source: Product;
@@ -146,10 +180,6 @@ function profileFor(category: string): AutonomousCuratorCategoryProfile | null {
   return AUTONOMOUS_CURATOR_PROFILES.find(profile => profile.category === category) || null;
 }
 
-function canonicalSourceUrl(shopId: string, itemId: string): string {
-  return `https://shopee.com.br/product/${shopId}/${itemId}`;
-}
-
 function sourceIdentityMatches(url: string, shopId: string, itemId: string): boolean {
   const identity = extractShopeeIdentity(url);
   return identity.shopId === shopId && identity.itemId === itemId;
@@ -165,16 +195,39 @@ function similarityUniverse(products: readonly Product[], excludedCandidateId?: 
 }
 
 function buildShopeeClient(env: NodeJS.ProcessEnv): ShopeeApiClient {
-  const appId = String(env.SHOPEE_APP_ID || env.SHOPEE_AFFILIATE_APP_ID || "").trim();
-  const secret = String(env.SHOPEE_APP_SECRET || env.SHOPEE_AFFILIATE_APP_SECRET || "").trim();
-  if (!appId || !secret) throw new Error("ROTATION_SHOPEE_NOT_CONFIGURED");
-  return createShopeeApiClient({ appId, secret, baseUrl: env.SHOPEE_AFFILIATE_API_BASE_URL });
+  return buildConfiguredShopeeClient(env);
 }
 
 function safeReason(value: unknown): string {
   return (value instanceof Error ? value.message : String(value || "UNKNOWN"))
     .replace(/[\r\n]+/g, " ")
     .slice(0, 180);
+}
+
+function newDiagnostics(): RotationSearchDiagnostics {
+  return {
+    correlationId: newShopeeCorrelationId("rotation"),
+    provider: "ShopeeApiClient",
+    queriesAttempted: 0,
+    providerQueriesExecuted: 0,
+    candidatesReceived: 0,
+    candidatesInPool: 0,
+    candidatesExamined: 0,
+    rejectionCounts: {},
+  };
+}
+
+function bump(diag: RotationSearchDiagnostics, reason: string): void {
+  diag.rejectionCounts[reason] = (diag.rejectionCounts[reason] || 0) + 1;
+}
+
+function providerErrorFromLookup(errorKind: string | null | undefined): ShopeeProviderRuntimeError {
+  const code = mapShopeeErrorKindToProviderCode(errorKind);
+  return new ShopeeProviderRuntimeError(
+    code,
+    errorKind || "lookup_error",
+    code === "SHOPEE_PROVIDER_RATE_LIMITED" || code === "SHOPEE_PROVIDER_TIMEOUT" || code === "SHOPEE_PROVIDER_UNAVAILABLE",
+  );
 }
 
 async function getRequest(id: string): Promise<ProductRotationRequest | null> {
@@ -263,15 +316,28 @@ async function evaluateIdentity(input: {
 
   const lookup = await input.client.lookupProduct({ shopId: input.shopId, itemId: input.itemId });
   if (lookup.status === "not_found") return { candidate: null, reason: "SHOPEE_PRODUCT_NOT_FOUND" };
+  if (lookup.status === "error") throw providerErrorFromLookup(lookup.error?.kind);
   if (lookup.status !== "found" || lookup.shopId !== input.shopId || lookup.itemId !== input.itemId) {
     return { candidate: null, reason: `SHOPEE_LOOKUP_${lookup.status}` };
   }
+  if (!lookup.productLink || !validateOfficialProductLink(lookup.productLink, input.shopId, input.itemId)) {
+    return { candidate: null, reason: "SHOPEE_LOOKUP_PRODUCT_LINK_INVALID" };
+  }
 
   const acquisition = await input.client.acquireAffiliateLink({ shopId: input.shopId, itemId: input.itemId });
-  if (acquisition.status !== "link_acquired" || !acquisition.affiliateUrl || !acquisition.productLink || !acquisition.shopId || !acquisition.itemId) {
+  if (acquisition.status !== "link_acquired") {
+    const providerFailure = providerErrorFromAcquisitionStatus(acquisition.status, acquisition.error?.kind);
+    if (providerFailure) throw providerFailure;
     return { candidate: null, reason: `AFFILIATE_${acquisition.status}` };
   }
-  if (acquisition.shopId !== input.shopId || acquisition.itemId !== input.itemId || !sourceIdentityMatches(acquisition.productLink, input.shopId, input.itemId)) {
+  if (!acquisition.affiliateUrl || !acquisition.productLink || !acquisition.shopId || !acquisition.itemId) {
+    return { candidate: null, reason: "AFFILIATE_EVIDENCE_INCOMPLETE" };
+  }
+  if (
+    acquisition.shopId !== input.shopId
+    || acquisition.itemId !== input.itemId
+    || !validateOfficialProductLink(acquisition.productLink, input.shopId, input.itemId)
+  ) {
     return { candidate: null, reason: "AFFILIATE_IDENTITY_MISMATCH" };
   }
 
@@ -307,11 +373,13 @@ async function evaluateIdentity(input: {
   if (!displayTitle || displayTitle === rawTitle || description.length < 24) return { candidate: null, reason: "EDITORIAL_COPY_INCOMPLETE" };
   if (category !== input.profile.category) return { candidate: null, reason: `CATEGORY_MISMATCH:${category || "unknown"}` };
   if (!Number.isFinite(price) || price <= 0) return { candidate: null, reason: "PRICE_UNVERIFIED" };
-  if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl) {
+  if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl || !/^https:\/\//i.test(image.primaryImageUrl)) {
     return { candidate: null, reason: "IMAGE_REVIEW_NOT_CLEAN" };
   }
 
-  const sourceProductUrl = canonicalSourceUrl(input.shopId, input.itemId);
+  // Never derive a Shopee URL from ids. The exact official productLink returned
+  // by the provider is the canonical source URL carried into persistence.
+  const sourceProductUrl = acquisition.productLink;
   const lifecycle = await createProductionProductPipeline().evaluate({
     normalizedUrl: sourceProductUrl,
     link: acquisition.affiliateUrl,
@@ -498,7 +566,10 @@ async function evaluateStoredProduct(product: Product, source: Product, profile:
     .eq("product_id", product.id)
     .maybeSingle();
   if (error) throw error;
-  if (!identity?.shop_id || !identity?.item_id) return { candidate: null, reason: "SOURCE_IDENTITY_MISSING" };
+  if (!identity?.shop_id || !identity?.item_id || !identity?.source_product_url) return { candidate: null, reason: "SOURCE_IDENTITY_MISSING" };
+  if (!validateOfficialProductLink(String(identity.source_product_url), String(identity.shop_id), String(identity.item_id))) {
+    return { candidate: null, reason: "SOURCE_PRODUCT_URL_NOT_OFFICIAL" };
+  }
   const meta = parseQueueNote(product.curatorNote);
   const products = await productsRepository.getProducts();
   return evaluateIdentity({
@@ -536,41 +607,62 @@ async function discoverLiveCandidate(input: {
   rejected: ReadonlySet<string>;
   client: ShopeeApiClient;
   env: NodeJS.ProcessEnv;
+  diagnostics: RotationSearchDiagnostics;
 }): Promise<EvaluatedCandidate | null> {
   const config = await curatorRepo.getAutonomousCuratorConfig();
   const products = await productsRepository.getProducts();
   const seen = new Set<string>();
-  const pool: Array<{ query: string; shopId: string; itemId: string; name: string; price: number | null; imageUrl: string | null; cheap: number }> = [];
+  const pool: Array<{ query: string; shopId: string; itemId: string; name: string; price: number; imageUrl: string; productLink: string; cheap: number }> = [];
+  const poolTarget = Math.max(12, Math.min(30, Number(config.maxSearchCandidates) || 20));
+
   for (const query of input.profile.queries.slice(0, 8)) {
-    const search = await input.client.searchOffers({ query, limit: Math.max(8, Math.min(20, config.maxSearchCandidates)), page: 1 });
-    if (!search.ok) continue;
-    for (const item of search.items) {
-      if (!item.shopId || !item.itemId || !item.name) continue;
-      const key = `${item.shopId}:${item.itemId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (hasBlockedProfileTerm(input.profile, item.name)) continue;
-      const identity = await curatorRepo.findProductSourceIdentity("Shopee", String(item.shopId), String(item.itemId));
-      if (identity?.productId) continue;
-      const cheap = cheapProfileScore(input.profile, item.name);
-      if (cheap <= -1000) continue;
-      pool.push({
+    if (pool.length >= poolTarget) break;
+    input.diagnostics.queriesAttempted += 1;
+    for (let page = 1; page <= ROTATION_SEARCH_MAX_PAGES && pool.length < poolTarget; page += 1) {
+      input.diagnostics.providerQueriesExecuted += 1;
+      const search = await searchShopeeOffersWithRetry({
+        client: input.client,
         query,
-        shopId: String(item.shopId),
-        itemId: String(item.itemId),
-        name: item.name,
-        price: item.price === null ? null : Number(item.price),
-        imageUrl: item.imageUrl || null,
-        cheap,
+        limit: ROTATION_SEARCH_PAGE_LIMIT,
+        page,
       });
+      input.diagnostics.candidatesReceived += search.items.length;
+      if (search.items.length === 0) break;
+      for (const item of search.items) {
+        if (!item.shopId || !item.itemId) { bump(input.diagnostics, "IDENTITY_MISSING"); continue; }
+        if (!item.name?.trim()) { bump(input.diagnostics, "TITLE_MISSING"); continue; }
+        if (item.price === null || !Number.isFinite(item.price) || item.price <= 0) { bump(input.diagnostics, "PRICE_UNVERIFIED"); continue; }
+        if (!validateOfficialProductLink(item.productLink, item.shopId, item.itemId)) { bump(input.diagnostics, "OFFICIAL_PRODUCT_LINK_INVALID"); continue; }
+        if (!item.imageUrl || !/^https:\/\//i.test(item.imageUrl)) { bump(input.diagnostics, "IMAGE_HTTPS_MISSING"); continue; }
+        const key = `${item.shopId}:${item.itemId}`;
+        if (seen.has(key)) { bump(input.diagnostics, "DUPLICATE_IN_SEARCH_POOL"); continue; }
+        seen.add(key);
+        if (hasBlockedProfileTerm(input.profile, item.name)) { bump(input.diagnostics, "PROFILE_BLOCKED_TERM"); continue; }
+        const identity = await curatorRepo.findProductSourceIdentity("Shopee", String(item.shopId), String(item.itemId));
+        if (identity?.productId) { bump(input.diagnostics, "SOURCE_IDENTITY_ALREADY_OWNED"); continue; }
+        const cheap = cheapProfileScore(input.profile, item.name);
+        if (cheap <= -1000) { bump(input.diagnostics, "PROFILE_REJECTED"); continue; }
+        pool.push({
+          query,
+          shopId: String(item.shopId),
+          itemId: String(item.itemId),
+          name: item.name,
+          price: Number(item.price),
+          imageUrl: item.imageUrl,
+          productLink: item.productLink,
+          cheap,
+        });
+        if (pool.length >= poolTarget) break;
+      }
+      if (search.items.length < ROTATION_SEARCH_PAGE_LIMIT) break;
     }
   }
+
+  input.diagnostics.candidatesInPool = pool.length;
   pool.sort((a, b) => b.cheap - a.cheap || a.itemId.localeCompare(b.itemId));
-  const budget = Math.max(4, Math.min(8, config.maxEnrichPerCategory * 2));
-  let examined = 0;
-  for (const item of pool) {
-    if (examined >= budget) break;
-    examined += 1;
+  const enrichBudget = Math.max(6, Math.min(12, (Number(config.maxEnrichPerCategory) || 4) * 2));
+  for (const item of pool.slice(0, enrichBudget)) {
+    input.diagnostics.candidatesExamined += 1;
     const evaluated = await evaluateIdentity({
       profile: input.profile,
       query: item.query,
@@ -584,8 +676,28 @@ async function discoverLiveCandidate(input: {
       env: input.env,
     });
     if (evaluated.candidate) return evaluated.candidate;
+    bump(input.diagnostics, evaluated.reason);
   }
   return null;
+}
+
+async function markProviderFailure(request: ProductRotationRequest, error: ShopeeProviderRuntimeError, diagnostics: RotationSearchDiagnostics): Promise<never> {
+  await patchRequest(request.id, {
+    status: "failed",
+    reason: error.code,
+    metadata: {
+      ...request.metadata,
+      last_search_diagnostics: diagnostics,
+      failure_type: error.code === "SHOPEE_PROVIDER_NOT_CONFIGURED" ? "provider_not_configured" : "provider_failure",
+    },
+  }).catch(() => undefined);
+  safeShopeeLog("rotation_provider_failure", {
+    correlationId: diagnostics.correlationId,
+    errorCode: error.code,
+    queries: diagnostics.providerQueriesExecuted,
+    candidatesReceived: diagnostics.candidatesReceived,
+  });
+  throw new ProductRotationSearchError(error.code, diagnostics);
 }
 
 export async function proposeNextProductRotationCandidate(requestId: string, env: NodeJS.ProcessEnv = process.env): Promise<RotationProposal> {
@@ -596,56 +708,110 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
   if (!source || source.status !== "published" || source.ativo === false) throw new Error("ROTATION_SOURCE_NO_LONGER_ACTIVE");
   const profile = profileFor(source.categoria);
   if (!profile || profile.category !== request.category) throw new Error("ROTATION_CATEGORY_CHANGED");
-  const client = buildShopeeClient(env);
-  const rejected = new Set(request.rejectedCandidateIds);
+  const diagnostics = newDiagnostics();
 
-  if (request.candidateProductId && !rejected.has(request.candidateProductId)) {
-    const currentCandidate = await productsRepository.getProductByIdOrSlug(request.candidateProductId);
-    if (currentCandidate && currentCandidate.status === "paused" && currentCandidate.ativo === false) {
-      const evaluated = await evaluateStoredProduct(currentCandidate, source, profile, client, env);
-      if (evaluated.candidate) {
-        await refreshCandidateProduct(currentCandidate, evaluated.candidate, false, env);
-        request = await patchRequest(request.id, { status: "candidate_ready", reason: null });
-        const refreshed = await productsRepository.getProductByIdOrSlug(currentCandidate.id);
-        if (!refreshed) throw new Error("ROTATION_CANDIDATE_REFRESH_MISSING");
-        return { request, source, candidate: refreshed, score: evaluated.candidate.score };
+  let client: ShopeeApiClient;
+  try {
+    client = buildShopeeClient(env);
+  } catch (error) {
+    const providerError = error instanceof ShopeeProviderRuntimeError
+      ? error
+      : new ShopeeProviderRuntimeError("SHOPEE_PROVIDER_NOT_CONFIGURED", "client_build_failed", false);
+    return markProviderFailure(request, providerError, diagnostics);
+  }
+
+  const rejected = new Set(request.rejectedCandidateIds);
+  try {
+    if (request.candidateProductId && !rejected.has(request.candidateProductId)) {
+      const currentCandidate = await productsRepository.getProductByIdOrSlug(request.candidateProductId);
+      if (currentCandidate && currentCandidate.status === "paused" && currentCandidate.ativo === false) {
+        diagnostics.candidatesExamined += 1;
+        const evaluated = await evaluateStoredProduct(currentCandidate, source, profile, client, env);
+        if (evaluated.candidate) {
+          await refreshCandidateProduct(currentCandidate, evaluated.candidate, false, env);
+          request = await patchRequest(request.id, { status: "candidate_ready", reason: null });
+          const refreshed = await productsRepository.getProductByIdOrSlug(currentCandidate.id);
+          if (!refreshed) throw new Error("ROTATION_CANDIDATE_REFRESH_MISSING");
+          return { request, source, candidate: refreshed, score: evaluated.candidate.score };
+        }
+        bump(diagnostics, evaluated.reason);
       }
     }
-  }
 
-  for (const queued of await availableQueuedCandidates(profile.category, rejected)) {
-    if (queued.id === source.id) continue;
-    const origin = queued.createdBy || AUTO_QUEUE_CREATED_BY;
-    const evaluated = await evaluateStoredProduct(queued, source, profile, client, env);
-    if (!evaluated.candidate) continue;
-    await refreshCandidateProduct(queued, evaluated.candidate, false, env);
-    request = await patchRequest(request.id, {
-      status: "candidate_ready",
-      candidate_product_id: queued.id,
-      reason: null,
-      metadata: { ...request.metadata, candidate_origin: origin, candidate_score: evaluated.candidate.score },
-    });
-    const refreshed = await productsRepository.getProductByIdOrSlug(queued.id);
-    if (!refreshed) throw new Error("ROTATION_CANDIDATE_CLAIM_MISSING");
-    return { request, source, candidate: refreshed, score: evaluated.candidate.score };
-  }
-
-  const discovered = await discoverLiveCandidate({ profile, source, rejected, client, env });
-  if (discovered) {
-    const persisted = await persistCandidate(discovered, new Date(), env);
-    if (persisted) {
+    for (const queued of await availableQueuedCandidates(profile.category, rejected)) {
+      if (queued.id === source.id) continue;
+      diagnostics.candidatesExamined += 1;
+      const origin = queued.createdBy || AUTO_QUEUE_CREATED_BY;
+      const evaluated = await evaluateStoredProduct(queued, source, profile, client, env);
+      if (!evaluated.candidate) { bump(diagnostics, evaluated.reason); continue; }
+      await refreshCandidateProduct(queued, evaluated.candidate, false, env);
       request = await patchRequest(request.id, {
         status: "candidate_ready",
-        candidate_product_id: persisted.id,
+        candidate_product_id: queued.id,
         reason: null,
-        metadata: { ...request.metadata, candidate_origin: ROTATION_CANDIDATE_CREATED_BY, candidate_score: discovered.score },
+        metadata: { ...request.metadata, candidate_origin: origin, candidate_score: evaluated.candidate.score, last_search_diagnostics: diagnostics },
       });
-      return { request, source, candidate: persisted, score: discovered.score };
+      const refreshed = await productsRepository.getProductByIdOrSlug(queued.id);
+      if (!refreshed) throw new Error("ROTATION_CANDIDATE_CLAIM_MISSING");
+      return { request, source, candidate: refreshed, score: evaluated.candidate.score };
     }
+
+    const discovered = await discoverLiveCandidate({ profile, source, rejected, client, env, diagnostics });
+    if (discovered) {
+      try {
+        const persisted = await persistCandidate(discovered, new Date(), env);
+        if (persisted) {
+          request = await patchRequest(request.id, {
+            status: "candidate_ready",
+            candidate_product_id: persisted.id,
+            reason: null,
+            metadata: {
+              ...request.metadata,
+              candidate_origin: ROTATION_CANDIDATE_CREATED_BY,
+              candidate_score: discovered.score,
+              last_search_diagnostics: diagnostics,
+            },
+          });
+          safeShopeeLog("rotation_candidate_ready", {
+            correlationId: diagnostics.correlationId,
+            candidatesReceived: diagnostics.candidatesReceived,
+            candidatesExamined: diagnostics.candidatesExamined,
+          });
+          return { request, source, candidate: persisted, score: discovered.score };
+        }
+        bump(diagnostics, "IDENTITY_CLAIM_CONFLICT");
+      } catch (error) {
+        await patchRequest(request.id, {
+          status: "failed",
+          reason: "ROTATION_CANDIDATE_PERSIST_FAILED",
+          metadata: { ...request.metadata, last_search_diagnostics: diagnostics, failure_type: "candidate_persistence" },
+        }).catch(() => undefined);
+        throw new ProductRotationSearchError("ROTATION_CANDIDATE_PERSIST_FAILED", diagnostics);
+      }
+    }
+  } catch (error) {
+    if (error instanceof ShopeeProviderRuntimeError) return markProviderFailure(request, error, diagnostics);
+    if (error instanceof ProductRotationSearchError) throw error;
+    throw error;
   }
 
-  await patchRequest(request.id, { status: "failed", reason: "NO_QUALIFIED_REPLACEMENT_FOUND" });
-  throw new Error("NO_QUALIFIED_REPLACEMENT_FOUND");
+  await patchRequest(request.id, {
+    status: "failed",
+    reason: "NO_QUALIFIED_REPLACEMENT_FOUND",
+    metadata: {
+      ...request.metadata,
+      last_search_diagnostics: diagnostics,
+      failure_type: "qualified_candidates_exhausted",
+    },
+  });
+  safeShopeeLog("rotation_no_qualified_candidate", {
+    correlationId: diagnostics.correlationId,
+    providerQueriesExecuted: diagnostics.providerQueriesExecuted,
+    candidatesReceived: diagnostics.candidatesReceived,
+    candidatesInPool: diagnostics.candidatesInPool,
+    candidatesExamined: diagnostics.candidatesExamined,
+  });
+  throw new ProductRotationSearchError("NO_QUALIFIED_REPLACEMENT_FOUND", diagnostics);
 }
 
 export async function rejectRotationCandidateAndSearchAgain(requestId: string): Promise<ProductRotationRequest> {
@@ -786,4 +952,5 @@ export const productRotationInternals = {
   profileFor,
   sourceIdentityMatches,
   safeReason,
+  newDiagnostics,
 };
