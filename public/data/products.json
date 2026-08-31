@@ -1,17 +1,61 @@
 [
   {
+    "id": "prod-1788146512634-2da4ba876b",
+    "ref": "AUTOQ-2DA4BA876B",
+    "slug": "radio-retro-de-madeira-2da4ba",
+    "produto": "Rádio retrô de madeira",
+    "displayTitle": "Rádio retrô de madeira",
+    "preco": 357.83,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-81ztj-mmw59nj8v20z4a",
+      "https://down-br.img.susercontent.com/file/sg-11134201-81ztj-mmw59nj8v20z4a"
+    ],
+    "link": "https://s.shopee.com.br/7psqhBYWI6",
+    "categoria": "Tecnologia",
+    "descricao": "Rádio de mesa com formato arqueado, acabamento amadeirado e frentes de tela trançada. O painel frontal reúne visor, botões e controle giratório, com conectividade Bluetooth indicada no título.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T03:37:10.258395+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788138818663-1940ad0b14",
     "ref": "AUTOQ-1940AD0B14",
     "slug": "radio-retro-portatil-bluetooth-1940ad",
     "produto": "Rádio Retrô Portátil Bluetooth",
     "displayTitle": "Rádio Retrô Portátil Bluetooth",
     "preco": 79.99,
-    "imagens": ["https://cf.shopee.com.br/file/br-11134207-7r98o-lz80tb7i8t9h01","https://down-br.img.susercontent.com/file/br-11134207-7r98o-lz80tb7i8t9h01","https://down-br.img.susercontent.com/file/br-11134207-7r98o-lz80tb7ia7tx2b","https://down-br.img.susercontent.com/file/br-11134201-820lq-mr0j5c3fdkhyb5"],
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-lz80tb7i8t9h01",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lz80tb7i8t9h01",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lz80tb7ia7tx2b",
+      "https://down-br.img.susercontent.com/file/br-11134201-820lq-mr0j5c3fdkhyb5"
+    ],
     "link": "https://s.shopee.com.br/20v3kSz7u1",
     "categoria": "Tecnologia",
     "descricao": "Rádio portátil com formato inspirado em aparelhos vintage, acabamento amadeirado aparente, alça superior, mostrador frontal e lanterna lateral visível. O visual combina detalhes metálicos, botões físicos e linguagem retrô refinada.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T01:38:16.160855+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-e9a4ca592f",
+    "ref": "AUTOQ-E9A4CA592F",
+    "slug": "jaqueta-acolchoada-off-white-e9a4ca",
+    "produto": "Jaqueta Japona Off-White Vintage",
+    "displayTitle": "Jaqueta Japona Off-White Vintage",
+    "preco": 120,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-lxhasqlxmqwv6c",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lxhasqlxmqwv6c",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lxh982q8se4y0a"
+    ],
+    "link": "https://s.shopee.com.br/9zxL9nqcj0",
+    "categoria": "Vestuário",
+    "descricao": "Jaqueta off-white de mangas longas, com capuz, fechamento frontal por zíper e vários bolsos. O tecido tem aparência acolchoada e acabamento utilitário de linguagem retrô.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:30:26.929288+00:00",
     "ativo": true,
     "status": "published"
   },
@@ -22,7 +66,14 @@
     "produto": "Organizador Modular Bauhaus",
     "displayTitle": "Organizador Modular Bauhaus",
     "preco": 159.99,
-    "imagens": ["https://cf.shopee.com.br/file/br-11134207-820l6-moli3028uu4j21","https://down-br.img.susercontent.com/file/br-11134207-820l6-moli3028uu4j21","https://down-br.img.susercontent.com/file/br-11134207-820lx-molk7ejacjk599","https://down-br.img.susercontent.com/file/br-11134207-820la-moli3028w8oz93","https://down-br.img.susercontent.com/file/br-11134207-820lu-molk7ejh3jsw9a","https://down-br.img.susercontent.com/file/br-11134207-820mb-moli3028s0zne3"],
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820l6-moli3028uu4j21",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l6-moli3028uu4j21",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lx-molk7ejacjk599",
+      "https://down-br.img.susercontent.com/file/br-11134207-820la-moli3028w8oz93",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lu-molk7ejh3jsw9a",
+      "https://down-br.img.susercontent.com/file/br-11134207-820mb-moli3028s0zne3"
+    ],
     "link": "https://s.shopee.com.br/8plNWpERZS",
     "categoria": "Organização",
     "descricao": "Organizador de apoio com composição modular, nichos, bandejas e ganchos em formas geométricas e cores primárias. A estrutura acomoda objetos pequenos como chaves, carteira, acessórios e relógio.",
@@ -38,12 +89,41 @@
     "produto": "Mesa de Cabeceira Retrô com Prateleiras",
     "displayTitle": "Mesa de Cabeceira Retrô com Prateleiras",
     "preco": 59.9,
-    "imagens": ["https://cf.shopee.com.br/file/br-11134207-820m7-mou4k1fdsbuubc","https://down-br.img.susercontent.com/file/br-11134207-820lf-mou4k1fdtqfae7","https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fe0r9i6f","https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fdwjk609","https://down-br.img.susercontent.com/file/br-11134207-820l5-mou4k1fdzcp285","https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fe4yyua2"],
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820m7-mou4k1fdsbuubc",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lf-mou4k1fdtqfae7",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fe0r9i6f",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fdwjk609",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l5-mou4k1fdzcp285",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mou4k1fe4yyua2"
+    ],
     "link": "https://s.shopee.com.br/1qbeGOeSnI",
     "categoria": "Móveis",
     "descricao": "Mesa de cabeceira com estrutura retangular aberta, prateleiras internas e pés palito inclinados. O visual combina superfícies lisas, detalhes amadeirados aparentes e linguagem retrô de inspiração modernista.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T01:19:56.302346+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788138818663-3a761242b2",
+    "ref": "AUTOQ-3A761242B2",
+    "slug": "posteres-geometricos-bauhaus-3a7612",
+    "produto": "Pôsteres Gráficos Bauhaus",
+    "displayTitle": "Pôsteres Gráficos Bauhaus",
+    "preco": 12.2,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvfb-lf6ot9ksysha56",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvdn-lf6otac9ulpvc9",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qveo-lf6otb68o5di16",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qver-lf6otcaqzh495d",
+      "https://down-br.img.susercontent.com/file/sg-11134201-7qvg8-lf6otd2huux48d"
+    ],
+    "link": "https://s.shopee.com.br/9pdvpVp9Pz",
+    "categoria": "Decoração",
+    "descricao": "Conjunto de pôsteres decorativos com composições geométricas, linhas onduladas, blocos de cor e tipografia inspirada na linguagem visual Bauhaus. As artes são apresentadas em formato retangular para uso na decoração de paredes.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T01:18:39.756863+00:00",
     "ativo": true,
     "status": "published"
   },
@@ -54,12 +134,34 @@
     "produto": "Quadro Decorativo Geométrico Retrô",
     "displayTitle": "Quadro Decorativo Geométrico Retrô",
     "preco": 22,
-    "imagens": ["https://cf.shopee.com.br/file/br-11134207-7r98o-mci0i86uhatde0","https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uhatde0","https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uk3y9b6"],
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-mci0i86uhatde0",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uhatde0",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uk3y9b6"
+    ],
     "link": "https://s.shopee.com.br/9KhfEar3Qq",
     "categoria": "Decoração",
     "descricao": "Quadro decorativo com composição geométrica em círculos concêntricos nas cores vermelho, laranja e amarelo, acompanhado da frase em inglês “Fall 7 Times Stand Up”. A estética gráfica remete ao modernismo retrô e pode ser usada na decoração de paredes.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T01:17:08.630109+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788111188280-6091cfb87a",
+    "ref": "AUTOQ-6091CFB87A",
+    "slug": "arandela-redonda-de-aluminio-estilo-retro-6091cf",
+    "produto": "Arandela Redonda Bauhaus",
+    "displayTitle": "Arandela Redonda Bauhaus",
+    "preco": 359,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134224-8259d-mrdtwdzwaqdc06"
+    ],
+    "link": "https://s.shopee.com.br/904oiuxO9z",
+    "categoria": "Iluminação",
+    "descricao": "Arandela de parede com corpo circular, cúpula superior metálica aparente e difusor inferior claro. A imagem ambientada mostra a peça emitindo luz quente em um quarto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-30T17:33:45.724699+00:00",
     "ativo": true,
     "status": "published"
   },
@@ -70,7 +172,9 @@
     "produto": "Arandela Decorativa Acrílica Estilo Bauhaus",
     "displayTitle": "Arandela Decorativa Acrílica Estilo Bauhaus",
     "preco": 199,
-    "imagens": ["https://cf.shopee.com.br/file/cn-11134207-7r98o-lwz48rq0dkpv2d"],
+    "imagens": [
+      "https://cf.shopee.com.br/file/cn-11134207-7r98o-lwz48rq0dkpv2d"
+    ],
     "link": "https://s.shopee.com.br/1LfNPqBYa6",
     "categoria": "Iluminação",
     "descricao": "Luminária de parede em acrílico com design inspirado na estética medieval e Bauhaus. Ideal para compor a atmosfera decorativa de salas de estar e ambientes internos.",
@@ -86,7 +190,10 @@
     "produto": "Espelho de Maquiagem Dobrável para Viagem",
     "displayTitle": "Espelho de Maquiagem Dobrável para Viagem",
     "preco": 180.32,
-    "imagens": ["https://down-br.img.susercontent.com/file/sg-11134201-825aq-mqegoj5850y6f6","https://down-br.img.susercontent.com/file/sg-11134201-825ad-mqegq68a6m8121"],
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-825aq-mqegoj5850y6f6",
+      "https://down-br.img.susercontent.com/file/sg-11134201-825ad-mqegq68a6m8121"
+    ],
     "link": "https://s.shopee.com.br/3VjrB66XH0",
     "categoria": "Beleza & Bem-estar",
     "descricao": "Este espelho de maquiagem dobrável possui design compacto com acabamento em couro e ângulo ajustável. Ideal para transportar em viagens, oferece praticidade nos cuidados diários.",
