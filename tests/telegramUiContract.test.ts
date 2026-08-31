@@ -17,7 +17,9 @@ import {
 } from "../server/services/telegramBot";
 import { TELEGRAM_PANEL_COMMANDS } from "../server/services/telegramPanel";
 
-const telegramSource = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+const telegramExtensionSource = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+const telegramCoreSource = readFileSync(new URL("../server/services/telegramBotCore.ts", import.meta.url), "utf8");
+const telegramSource = `${telegramCoreSource}\n${telegramExtensionSource}`;
 const panelSource = readFileSync(new URL("../server/services/telegramPanel.ts", import.meta.url), "utf8");
 
 function assertHandler(token: string, pattern: RegExp): void {
@@ -105,6 +107,15 @@ test("ações críticas de produto possuem handlers", () => {
   assert.doesNotMatch(telegramSource, /\.addCategory\(/);
   assert.doesNotMatch(telegramSource, /\.renameCategory\(/);
   assert.doesNotMatch(telegramSource, /getLatestPendingReviewForUser\(senderId, chatId\)/);
+});
+
+test("rotação manual exige proposta, aprovação e cancelamento explícitos", () => {
+  assert.match(telegramExtensionSource, /callback_data: `product_rotate:\$\{product\.id\}`/);
+  assert.match(telegramExtensionSource, /rotation_approve:/);
+  assert.match(telegramExtensionSource, /rotation_retry:/);
+  assert.match(telegramExtensionSource, /rotation_cancel:/);
+  assert.match(telegramExtensionSource, /A peça atual continua publicada/);
+  assert.match(telegramExtensionSource, /ROTATED_BY_USER/);
 });
 
 test("catálogo do Telegram não esconde produtos pausados", () => {
