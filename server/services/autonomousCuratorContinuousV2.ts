@@ -1,10 +1,16 @@
 import type { Product } from "../../src/types";
 import type { PublicProductCategory } from "../../src/lib/productCategory";
+import { createShopeeApiClient, type ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
 import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
+import * as curatorRepository from "../repositories/autonomousCuratorRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
 import { AUTONOMOUS_CURATOR_PROFILES } from "./autonomousCuratorProfiles";
+import {
+  auditPublishedProductHealth,
+  type PublishedProductHealthResult,
+} from "./publishedProductHealth";
 import {
   runAutonomousCuratorContinuousV2 as runAutonomousCuratorContinuousV2Base,
   autonomousCuratorContinuousV2Internals as baseInternals,
@@ -37,6 +43,7 @@ export type {
  */
 const LIVE_TARGET_PER_CATEGORY = 2;
 const CATEGORY_BALANCE_VERSION = "1";
+const PUBLISHED_HEALTH_COORDINATOR_VERSION = "1";
 
 type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0];
 
@@ -111,6 +118,36 @@ async function setProductVisibility(productId: string, published: boolean): Prom
   if (error) throw error;
 }
 
+function resolveShopeeClient(env: NodeJS.ProcessEnv, provided?: ShopeeApiClient): ShopeeApiClient | null {
+  if (provided) return provided;
+  const appId = String(env.SHOPEE_APP_ID || env.SHOPEE_AFFILIATE_APP_ID || "").trim();
+  const secret = String(env.SHOPEE_APP_SECRET || env.SHOPEE_AFFILIATE_APP_SECRET || "").trim();
+  if (!appId || !secret) return null;
+  return createShopeeApiClient({ appId, secret, baseUrl: env.SHOPEE_AFFILIATE_API_BASE_URL });
+}
+
+function emptyHealthResult(): PublishedProductHealthResult {
+  return {
+    checkedIds: [],
+    unavailableIds: [],
+    skippedRecentIds: [],
+    unknownIds: [],
+    failures: [],
+  };
+}
+
+async function archiveUnavailableProducts(ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const uniqueIds = [...new Set(ids)];
+  for (const id of uniqueIds) await setProductVisibility(id, false);
+  const sync = await syncCatalogAndDeploy("published product health archive");
+  if (sync.success) return;
+
+  for (const id of uniqueIds) await setProductVisibility(id, true).catch(() => undefined);
+  await syncCatalogAndDeploy("published product health rollback").catch(() => undefined);
+  throw new Error(`PUBLISHED_PRODUCT_HEALTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
+}
+
 async function persistBalanceMetadata(input: {
   result: ContinuousCuratorResultV2;
   bootstrapMode: boolean;
@@ -118,6 +155,7 @@ async function persistBalanceMetadata(input: {
   countsAfter: CategoryCounts;
   retiredIds: string[];
   bootstrapExtraIds: string[];
+  health: PublishedProductHealthResult;
 }): Promise<void> {
   if (!input.result.runId) return;
   const client = requireSupabase();
@@ -143,6 +181,12 @@ async function persistBalanceMetadata(input: {
       category_deficits_after: categoryDeficits(input.countsAfter),
       category_balance_retired_ids: input.retiredIds,
       category_balance_bootstrap_extra_ids: input.bootstrapExtraIds,
+      published_product_health_version: PUBLISHED_HEALTH_COORDINATOR_VERSION,
+      published_product_health_checked_ids: input.health.checkedIds,
+      published_product_health_unavailable_ids: input.health.unavailableIds,
+      published_product_health_skipped_recent_ids: input.health.skippedRecentIds,
+      published_product_health_unknown_ids: input.health.unknownIds,
+      published_product_health_failures: input.health.failures,
     },
   }).eq("id", input.result.runId);
   if (error) throw error;
@@ -158,6 +202,7 @@ async function notifyBalance(
   result: ContinuousCuratorResultV2,
   counts: CategoryCounts,
   env: NodeJS.ProcessEnv,
+  health: PublishedProductHealthResult,
 ): Promise<void> {
   const chatId = adminChatId(env);
   if (!chatId) return;
@@ -171,6 +216,7 @@ async function notifyBalance(
     "",
     `Categorias com 2 peças: <b>${covered}/${AUTONOMOUS_CURATOR_PROFILES.length}</b>`,
     `Novos publicados neste ciclo: <b>${result.publishedThisCycle}</b>`,
+    `Links Shopee indisponíveis removidos: <b>${health.unavailableIds.length}</b>`,
     "",
     ...lines,
     "",
@@ -183,7 +229,31 @@ async function notifyBalance(
 
 export async function runAutonomousCuratorContinuousV2(options: ContinuousOptions = {}): Promise<ContinuousCuratorResultV2> {
   const env = options.env || process.env;
-  const productsBefore = await productsRepository.getProducts();
+  const now = options.now || new Date();
+  const config = await curatorRepository.getAutonomousCuratorConfig();
+  let productsBefore = await productsRepository.getProducts();
+  let health = emptyHealthResult();
+  const shopeeClient = config.enabled ? resolveShopeeClient(env, options.shopeeClient) : options.shopeeClient || null;
+
+  // Published products are periodically revalidated against the exact official
+  // Shopee shopId/itemId. Only a definitive `not_found` archives a product;
+  // auth, network and provider failures are recorded as UNKNOWN and never hide
+  // a valid listing. Archiving happens before deficit calculation so the same
+  // curator cycle can refill the affected category.
+  if (config.enabled && shopeeClient) {
+    health = await auditPublishedProductHealth({
+      products: productsBefore,
+      client: shopeeClient,
+      now,
+      env,
+      correlationId: options.cycleId ? `published-health:${options.cycleId}` : `published-health:${now.toISOString()}`,
+    });
+    if (health.unavailableIds.length > 0) {
+      await archiveUnavailableProducts(health.unavailableIds);
+      productsBefore = await productsRepository.getProducts();
+    }
+  }
+
   const countsBefore = categoryCounts(productsBefore);
   const bootstrapMode = totalDeficit(countsBefore) > 0;
   const activeBefore = productsBefore.filter(isActivePublished).length;
@@ -203,6 +273,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
 
   const result = await runAutonomousCuratorContinuousV2Base({
     ...options,
+    ...(shopeeClient ? { shopeeClient } : {}),
     env: baseEnv,
     notify: false,
   });
@@ -283,9 +354,10 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     countsAfter,
     retiredIds,
     bootstrapExtraIds,
+    health,
   }).catch(error => console.warn("[Autonomous Curator Balance] metadata update failed", error));
 
-  if (options.notify !== false) await notifyBalance(result, countsAfter, env);
+  if (options.notify !== false) await notifyBalance(result, countsAfter, env, health);
   return result;
 }
 
@@ -293,10 +365,12 @@ export const autonomousCuratorContinuousV2Internals = {
   ...baseInternals,
   LIVE_TARGET_PER_CATEGORY,
   CATEGORY_BALANCE_VERSION,
+  PUBLISHED_HEALTH_COORDINATOR_VERSION,
   activePublishedForCategory,
   categoryCounts,
   categoryDeficits,
   totalDeficit,
   publicationTimestamp,
   retirementCandidates,
+  resolveShopeeClient,
 };
