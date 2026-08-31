@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { AUTONOMOUS_CURATOR_PROFILES, AUTONOMOUS_CURATOR_PROFILE_VERSION } from "../server/services/autonomousCuratorProfiles";
 import { inferPublicProductCategory } from "../src/lib/productCategory";
 
-test("curator 1.6 combines broad marketplace recall with precise category coverage", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.6");
+test("curator 1.7 combines broad marketplace recall with precise category coverage", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.7");
   assert.equal(AUTONOMOUS_CURATOR_PROFILES.length, 10);
 
   for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
