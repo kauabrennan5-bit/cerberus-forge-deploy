@@ -1,5 +1,6 @@
 import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
 import { resolvePublicProductCategory } from "../lib/productCategory";
+import { sanitizePublicCuratorNote } from "../lib/publicCuratorNote";
 
 export interface CreateProductInput {
   senha?: string;
@@ -91,7 +92,7 @@ export async function getProducts(): Promise<any[]> {
     id: String(p.id || ''),
     produto: p.produto || '',
     displayTitle: typeof (p.displayTitle || p.display_title) === 'string' ? (p.displayTitle || p.display_title).trim() : undefined,
-    curatorNote: typeof (p.curatorNote || p.curator_note) === 'string' ? (p.curatorNote || p.curator_note).trim() : undefined,
+    curatorNote: sanitizePublicCuratorNote(p.curatorNote || p.curator_note),
     preco: Number(p.preco) || 0,
     imagens: Array.isArray(p.imagens)
       ? p.imagens
