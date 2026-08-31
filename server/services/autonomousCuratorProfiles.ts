@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.6";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.7";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -55,10 +55,10 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
 }
 
 /**
- * Perfil 1.6: precision-first com recall ampliado nas categorias que ficaram
- * sem cobertura em runtime. As consultas adicionais usam arquétipos concretos
- * do mesmo repertório Cerberus; gates finais, bloqueios e preços não mudam.
- * Zero por categoria continua possível somente após uma busca mais ampla.
+ * Perfil 1.7: precision-first com recall direcionado para categorias que ainda
+ * ficaram abaixo do piso 2/2 em produção. Os novos arquétipos são objetos reais
+ * do repertório Cerberus; image review, pipeline, similaridade, preço e threshold
+ * final permanecem inalterados.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
@@ -104,6 +104,13 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "mesa lateral italiana vintage", "banqueta tubular bauhaus",
       "mesa apoio cromada anos 70", "mesa lateral tubular cromada",
       "banqueta cromada vintage", "criado mudo retro madeira",
+      "mesa lateral cromada vidro fume", "mesa auxiliar tubular cromada",
+      "banqueta tubular cromada", "mesa pedestal tulipa retro",
+    ],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "mesa lateral cromada", "mesa auxiliar cromada", "banqueta tubular", "tubular cromado",
+      "vidro fumê", "vidro fume", "pedestal tulipa",
     ],
     signatureTerms: ["tubular", "cromado", "inox", "curvo", "curva", "modular", "nogueira", "teca", "vidro fumê", "vidro fume", "metal", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "capa para cadeira", "rodizio", "parafuso", "puxador", "eiffel", "eames", "cadeira gamer", "cadeira plastica", "cadeira plástica"],
@@ -128,6 +135,13 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "organizador acrilico space age", "porta objetos bauhaus", "organizador cromado anos 70",
       "porta revistas mid century", "cabideiro vintage design", "gaveteiro bauhaus",
       "organizador modular retro", "porta objetos italiano vintage",
+      "porta revistas cromado tubular", "cabideiro cromado vintage",
+      "gaveteiro modular retro", "organizador acrilico fume",
+    ],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "porta revistas cromado", "cabideiro cromado", "gaveteiro modular",
+      "organizador acrilico", "organizador acrílico", "acrilico fume", "acrílico fumê",
     ],
     signatureTerms: ["acrilico", "acrílico", "cromado", "inox", "transparente", "modular", "tubular", "metal", "geométrico", "geometrico", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "organizador cabos 100", "etiqueta", "saco vacuo kit", "bicicleta", "motocicleta", "carro", "boneco", "porta caneta divertido"],
@@ -154,6 +168,14 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "oculos space age masculino", "acessorio masculino anos 70",
       "oculos acetato retro masculino", "cinto couro vintage masculino",
       "mocassim retro masculino anos 70", "relogio digital retro masculino",
+      "oculos acetato tartaruga vintage masculino", "oculos aviador metal anos 70 masculino",
+      "mocassim camurca retro masculino", "bolsa carteiro couro vintage masculina",
+    ],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "oculos acetato", "óculos acetato", "oculos aviador", "óculos aviador",
+      "mocassim camurca", "mocassim couro", "bolsa carteiro",
+      "relogio digital retro", "relógio digital retrô",
     ],
     signatureTerms: ["acetato", "couro", "camurca", "camurça", "metal", "cromado", "geométrico", "geometrico", "minimalista", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "replica", "inspirado marca", "falsificado", "feminina", "feminino", "mulher", "women", "strass", "pedraria"],
@@ -184,6 +206,14 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "espelho maquiagem vintage design", "espelho maquiagem dobravel couro", "porta perfume bauhaus",
       "necessaire retro design", "porta pincel space age", "pente madeira modernista",
       "espelho maquiagem anos 70", "estojo maquiagem vintage minimalista",
+      "espelho maquiagem mesa cromado vintage", "espelho maquiagem dupla face cromado anos 70",
+      "necessaire couro minimalista vintage", "porta perfume vidro metal vintage",
+    ],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "espelho mesa cromado", "espelho de mesa cromado",
+      "espelho maquiagem retro", "espelho maquiagem retrô",
+      "espelho dobravel", "espelho dobrável", "porta perfume vintage",
     ],
     signatureTerms: ["dobravel", "dobrável", "compacto", "couro", "acrilico", "acrílico", "metal", "espelho", "geométrico", "geometrico", "minimalista", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "medicamento", "remedio", "hormonio", "emagrecedor", "suplemento", "clareador ingerivel"],
@@ -198,6 +228,15 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "brinquedo montessori bauhaus", "decoracao infantil mid century",
       "brinquedo madeira geometrico", "arco iris madeira montessori",
       "blocos madeira cores primarias", "mobile madeira geometrico infantil",
+      "blocos madeira bauhaus cores primarias", "brinquedo equilibrio madeira escandinavo",
+      "mobile madeira formas geometricas", "brinquedo empilhavel madeira geometrico",
+    ],
+    strongStyleTerms: [
+      ...STRONG_STYLE_TERMS,
+      "blocos bauhaus", "blocos madeira cores primarias", "blocos madeira cores primárias",
+      "brinquedo equilibrio madeira", "brinquedo equilíbrio madeira",
+      "mobile geometrico", "mobile geométrico",
+      "brinquedo empilhavel madeira", "brinquedo empilhável madeira",
     ],
     signatureTerms: ["geométrico", "geometrico", "formas", "cores primarias", "cores primárias", "madeira natural", "encaixe", "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage"],
     blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte", "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem"],
