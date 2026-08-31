@@ -5,6 +5,11 @@
  * Discovery is official Shopee Affiliate API only. No generic-search or
  * generated-product fallback is allowed in the command path.
  * Publication remains a separate human callback (confirm_pub).
+ *
+ * Compatibility: the legacy quantity-first shape is accepted only for an
+ * explicit Shopee URL (`1 https://...`) because this is unambiguous and is
+ * still used by the internal direct-link dispatcher. Quantity-first search
+ * terms remain invalid.
  */
 import {
   createShopeeApiClient,
@@ -80,6 +85,25 @@ export function parseShopeeCommand(argsRaw: string): ParsedShopeeCommand {
   if (!trimmed) return { count: 0, query: "", error: USAGE };
   const parts = trimmed.split(/\s+/u);
   if (parts.length < 2) return { count: 0, query: "", error: USAGE };
+
+  // Compatibilidade estrita para o dispatcher interno antigo: `1 <URL>`.
+  // Nunca aceita `1 <termo>`, portanto não há ambiguidade com o novo contrato.
+  if (/^\d+$/u.test(parts[0])) {
+    const legacyCount = Number(parts[0]);
+    const legacyDiscovery = parseShopeeDiscovery(parts.slice(1));
+    if (
+      Number.isSafeInteger(legacyCount) && legacyCount >= MIN_ITEMS && legacyCount <= MAX_ITEMS &&
+      legacyDiscovery.mode === "urls"
+    ) {
+      return {
+        count: legacyCount,
+        query: legacyDiscovery.urls.join(" · "),
+        error: null,
+        mode: "urls",
+        urls: legacyDiscovery.urls,
+      };
+    }
+  }
 
   const rawCount = parts.at(-1) || "";
   if (!/^\d+$/u.test(rawCount)) {
@@ -354,6 +378,11 @@ export interface ShopeeLotItemResult {
   reason: string | null;
 }
 
+export type ShopeeCommandOutcomeCode = ShopeeProviderErrorCode
+  | "TELEGRAM_ALLOWED_USER_IDS_MISSING"
+  | "NO_RESULTS"
+  | "NO_QUALIFIED_REPLACEMENT_FOUND";
+
 export interface ShopeeLotResult {
   lotId: string;
   correlationId: string;
@@ -372,7 +401,7 @@ export interface ShopeeLotResult {
   discoveryRounds: number;
   poolCandidates: number;
   discoveryError: string | null;
-  errorCode: ShopeeProviderErrorCode | "TELEGRAM_ALLOWED_USER_IDS_MISSING" | null;
+  errorCode: ShopeeCommandOutcomeCode | null;
   providerQueryExecuted: boolean;
   rejectionCounts: Record<string, number>;
   items: ShopeeLotItemResult[];
@@ -527,12 +556,32 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
 
   if (providerFailure) {
     const message = providerFailure.code === "SHOPEE_PROVIDER_AUTH_FAILED"
-      ? "⚠️ <b>/shopee bloqueado</b>\n\n<code>SHOPEE_PROVIDER_AUTH_FAILED</code>\nA API oficial rejeitou a autenticação/permissão. Revise as credenciais e scopes no secret manager."
-      : `⚠️ <b>/shopee indisponível temporariamente</b>\n\n<code>${providerFailure.code}</code>\nA consulta oficial falhou; nenhum resultado vazio foi fabricado.`;
+      ? "⚠️ <b>/shopee bloqueado</b>\n\n<code>SHOPEE_PROVIDER_AUTH_FAILED</code>\nA API oficial rejeitou a autenticação. Revise as credenciais no secret manager."
+      : providerFailure.code === "SHOPEE_PROVIDER_FORBIDDEN"
+        ? "⚠️ <b>/shopee bloqueado</b>\n\n<code>SHOPEE_PROVIDER_FORBIDDEN</code>\nA credencial foi reconhecida, mas não possui autorização suficiente para a operação oficial. Revise os scopes/permissões do provider."
+        : `⚠️ <b>/shopee indisponível temporariamente</b>\n\n<code>${providerFailure.code}</code>\nA consulta oficial falhou; nenhum resultado vazio foi fabricado.`;
     await sendTelegramMessage(chatId, message).catch(() => undefined);
     safeShopeeLog("shopee_provider_failure", { correlationId, requested: parsed.count, errorCode: providerFailure.code, providerQueryExecuted });
     const base = emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: providerFailure.code, discoveryError: providerFailure.code });
     return { ...base, providerQueryExecuted, discoveryRounds, candidatesReceived, poolCandidates: candidates.length, rejectionCounts, sourceExhausted, budgetExhausted };
+  }
+
+  if (discoveryMode === "term" && providerQueryExecuted && candidatesReceived === 0) {
+    await sendTelegramMessage(
+      chatId,
+      `🔎 <b>SHOPEE — NENHUM RESULTADO OFICIAL</b>\n\n<code>NO_RESULTS</code>\nSolicitados: <b>${parsed.count}</b>\nEncontrados: <b>0</b>\n\nA consulta oficial foi executada com sucesso, mas não retornou candidatos. Tente um termo mais amplo.`,
+    ).catch(() => undefined);
+    safeShopeeLog("shopee_command_no_results", { correlationId, requested: parsed.count, providerQueryExecuted, candidatesReceived: 0, errorCode: "NO_RESULTS" });
+    return {
+      ...emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: "NO_RESULTS", discoveryError: "NO_RESULTS" }),
+      providerQueryExecuted: true,
+      discoveryRounds,
+      candidatesReceived: 0,
+      poolCandidates: 0,
+      sourceExhausted,
+      budgetExhausted,
+      rejectionCounts,
+    };
   }
 
   await sendTelegramMessage(
@@ -706,16 +755,23 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     accepted += 1;
   }
 
-  const errorCode = providerFailure?.code || null;
+  let errorCode: ShopeeLotResult["errorCode"] = providerFailure?.code || null;
+  if (!errorCode && discoveryMode === "term" && providerQueryExecuted && candidatesReceived > 0 && accepted === 0) {
+    errorCode = "NO_QUALIFIED_REPLACEMENT_FOUND";
+  }
   const failureSummary = Object.entries(rejectionCounts)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6)
     .map(([reason, count]) => `${count}× ${reason}`)
     .join("; ") || "nenhuma rejeição registrada";
-  const finalTitle = providerFailure ? "⚠️ <b>LOTE INTERROMPIDO POR FALHA DO PROVIDER</b>" : "🏁 <b>LOTE SHOPEE CONCLUÍDO</b>";
+  const finalTitle = providerFailure
+    ? "⚠️ <b>LOTE INTERROMPIDO POR FALHA DO PROVIDER</b>"
+    : errorCode === "NO_QUALIFIED_REPLACEMENT_FOUND"
+      ? "⚠️ <b>SHOPEE — NENHUM CANDIDATO QUALIFICADO</b>"
+      : "🏁 <b>LOTE SHOPEE CONCLUÍDO</b>";
   await sendTelegramMessage(
     chatId,
-    `${finalTitle}\n\nSolicitados: <b>${parsed.count}</b>\nEncontrados/recebidos: <b>${candidatesReceived || candidates.length}</b>\nCards aprovados para revisão humana: <b>${accepted}</b>\nRejeições: <code>${failureSummary}</code>${accepted < parsed.count && !providerFailure ? "\n\nTente um termo mais amplo para aumentar o pool oficial." : ""}${providerFailure ? `\n\nErro: <code>${providerFailure.code}</code>. Não foi convertido em NO_RESULTS.` : ""}`,
+    `${finalTitle}\n\nSolicitados: <b>${parsed.count}</b>\nEncontrados/recebidos: <b>${candidatesReceived || candidates.length}</b>\nCards aprovados para revisão humana: <b>${accepted}</b>\nRejeições: <code>${failureSummary}</code>${accepted < parsed.count && !providerFailure ? "\n\nTente um termo mais amplo para aumentar o pool oficial." : ""}${providerFailure ? `\n\nErro: <code>${providerFailure.code}</code>. Não foi convertido em NO_RESULTS.` : ""}${errorCode === "NO_QUALIFIED_REPLACEMENT_FOUND" ? "\n\nCódigo: <code>NO_QUALIFIED_REPLACEMENT_FOUND</code> — a busca foi executada e os candidatos recebidos foram rejeitados pelas regras de elegibilidade." : ""}`,
   ).catch(() => undefined);
 
   safeShopeeLog("shopee_command_complete", {
@@ -748,7 +804,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     budgetExhausted,
     discoveryRounds,
     poolCandidates: candidates.length,
-    discoveryError: providerFailure?.code || null,
+    discoveryError: errorCode,
     errorCode,
     providerQueryExecuted,
     rejectionCounts,
@@ -757,9 +813,3 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     affiliateClientAvailable,
   };
 }
-
-export const shopeeCommandInternals = {
-  USAGE,
-  readinessErrors,
-  extractCanonicalShopeeIds,
-};
