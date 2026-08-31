@@ -62,7 +62,9 @@ test("diagnóstico do Telegram compara webhook canônico sem expor token", async
 
 test("boot do Telegram é independente do Operator e setWebhook usa URL canônica", () => {
   const serverSource = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
-  const telegramSource = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  const telegramCoreSource = readFileSync(new URL("../server/services/telegramBotCore.ts", import.meta.url), "utf8");
+  const telegramExtensionSource = readFileSync(new URL("../server/services/telegramBot.ts", import.meta.url), "utf8");
+  const telegramSource = `${telegramCoreSource}\n${telegramExtensionSource}`;
   const stateSource = readFileSync(new URL("../server/services/operatorStateStore.ts", import.meta.url), "utf8");
 
   const listenBlockStart = serverSource.indexOf('app.listen(PORT, "0.0.0.0", () => {');
