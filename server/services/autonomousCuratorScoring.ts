@@ -156,12 +156,18 @@ function valueFit(profile: AutonomousCuratorCategoryProfile, price: number): num
   return 0;
 }
 
-function desirabilityFit(strong: number, signature: number, styleScore: number, novelty: number): number {
+function desirabilityFit(category: string, strong: number, signature: number, styleScore: number, novelty: number): number {
+  // Infantil precisa de desenho memorável: madeira + formas geométricas por si
+  // só não transformam um brinquedo correto em um find Cerberus de destaque.
+  if (category === "Infantil" && strong === 0 && styleScore < 94 && signature < 5) return 72;
   if (strong >= 2) return 100;
   if (strong === 1 && signature >= 1) return 96;
   if (signature >= 4 && novelty >= 95) return 92;
   if (strong === 1 && novelty >= 95) return 88;
   if (styleScore >= 94 && novelty >= 85) return 90;
+  // Preserva a capacidade de evidência visual forte resgatar copy curta em
+  // outras categorias, sem aceitar itens medianos de baixa novidade.
+  if (novelty >= 95) return 82;
   if (signature >= 4 && novelty >= 90) return 86;
   if (styleScore >= 90 && novelty >= 90) return 84;
   return 68;
@@ -219,7 +225,7 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
   const styleScore = Math.max(textualStyle.score, visualStyleEvidence(input.imageCuration));
   const image = imageQuality(input.imageCuration);
   const value = valueFit(input.profile, input.price);
-  const desirability = desirabilityFit(textualStyle.strong, textualStyle.signature, styleScore, novelty);
+  const desirability = desirabilityFit(input.category, textualStyle.strong, textualStyle.signature, styleScore, novelty);
   const presentation = presentationFit(input.category, input.imageCuration);
   const priceRatio = priceToAutoCap(input.profile, input.price);
   const categoryFit = input.category === input.profile.category ? 100 : 0;
