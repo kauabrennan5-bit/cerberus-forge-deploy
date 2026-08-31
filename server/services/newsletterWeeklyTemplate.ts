@@ -48,6 +48,13 @@ function projectWeeklyProduct(
   };
 }
 
+function weeklyReferenceSocialLinks(
+  links: readonly NewsletterSocialLink[] | undefined,
+): readonly NewsletterSocialLink[] {
+  const instagram = (links || []).find(link => link.label.trim().toLowerCase() === "instagram");
+  return instagram ? [instagram] : [];
+}
+
 /**
  * A newsletter semanal usa o mesmo sistema editorial da referência oficial:
  * masthead com edição, hero, microeditorial, GRID-2 e módulos horizontais.
@@ -66,7 +73,7 @@ export function renderWeeklyNewsletter(
     now?: Date;
   },
 ): RenderedNewsletterCampaign & { preheader: string; offerUrls: string[] } {
-  if (products.length < 3 || products.length > 4)
+  if (![3, 4, 8].includes(products.length))
     throw new Error("WEEKLY_TEMPLATE_PRODUCT_COUNT_INVALID");
 
   const now = options.now || new Date();
@@ -90,7 +97,8 @@ export function renderWeeklyNewsletter(
     unsubscribeUrl: BREVO_NATIVE_UNSUBSCRIBE,
     privacyUrl: options.privacyUrl,
     termsUrl: options.termsUrl,
-    socialLinks: options.socialLinks,
+    // A referência aprovada encerra com um único destino institucional.
+    socialLinks: weeklyReferenceSocialLinks(options.socialLinks),
     mastheadLogoStatus: "available",
   });
 

@@ -10,7 +10,7 @@ import {
 import { evaluateWeeklyProductEligibility, type WeeklyComposition } from "./newsletterWeeklyEditorial";
 import type { WeeklyNewsletterCopy } from "./newsletterWeeklyCopy";
 
-export const WEEKLY_DESIGN_TEST_PRODUCT_COUNT = 3;
+export const WEEKLY_DESIGN_TEST_PRODUCT_COUNT = 8;
 const DESIGN_TEST_REVIEW_MODEL = "weekly-design-test-exception";
 
 type DesignCandidate = {
@@ -99,7 +99,8 @@ function projectForDesignTest(candidate: DesignCandidate, position: number, now:
 /**
  * Exceção efêmera para um único design-test. Nunca grava em products e nunca
  * muda a elegibilidade canônica: somente a projeção retornada contém os campos
- * necessários para renderizar três cards no email destinado ao administrador.
+ * necessários para renderizar a edição editorial completa de oito cards no
+ * email destinado ao administrador.
  */
 export function selectWeeklyDesignTestProducts(
   products: readonly Product[],
@@ -127,7 +128,10 @@ export function selectWeeklyDesignTestProducts(
   };
 }
 
-export function buildWeeklyDesignTestCopy(products: readonly Product[]): WeeklyNewsletterCopy {
+export function buildWeeklyDesignTestCopy(
+  products: readonly Product[],
+  now = new Date(),
+): WeeklyNewsletterCopy {
   if (products.length !== WEEKLY_DESIGN_TEST_PRODUCT_COUNT) {
     throw new Error("WEEKLY_DESIGN_TEST_PRODUCT_COUNT_INVALID");
   }
@@ -137,11 +141,12 @@ export function buildWeeklyDesignTestCopy(products: readonly Product[]): WeeklyN
       "Card interno para revisar imagem, hierarquia, preço e ritmo visual.",
     ]),
   );
+  const editionDate = now.toISOString().slice(0, 10);
   return {
-    subject: "[TESTE DE DESIGN] Cerberus Finds — prévia semanal",
-    previewText: "Prévia interna do layout semanal com exatamente três produtos.",
-    heroHeadline: "Três achados, uma edição",
-    heroBody: "Uma prévia interna para revisar a composição visual da newsletter antes de qualquer campanha real.",
+    subject: `[Teste controlado] Novidades da semana — Edição ${editionDate} · 8 novos achados`,
+    previewText: "Uma edição curta para descobrir o que saiu do óbvio.",
+    heroHeadline: "UM OLHAR ATENTO PARA O QUE ENTRA.",
+    heroBody: "Uma edição curta para descobrir o que saiu do óbvio.",
     secondaryCaptions,
   };
 }
