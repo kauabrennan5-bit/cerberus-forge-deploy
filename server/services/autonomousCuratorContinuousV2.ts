@@ -28,6 +28,12 @@ export type {
  * The proven V2 discovery/scoring/image/pipeline implementation lives in the
  * adjacent Base module unchanged. This coordinator changes inventory policy,
  * never the quality gates.
+ *
+ * Editorial persistence invariants remain owned by the preserved base:
+ * image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration)
+ * display_title_reviewed_at: now.toISOString()
+ * display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION
+ * image_review_version: IMAGE_REVIEW_VERSION
  */
 const LIVE_TARGET_PER_CATEGORY = 2;
 const CATEGORY_BALANCE_VERSION = "1";
