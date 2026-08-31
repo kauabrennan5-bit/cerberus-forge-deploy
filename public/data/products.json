@@ -20,26 +20,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788210150661-98d6aa5e74",
-    "ref": "AUTOQ-98D6AA5E74",
-    "slug": "luminaria-de-mesa-touch-formato-cogumelo-98d6aa",
-    "produto": "Luminária de Mesa Touch Formato Cogumelo",
-    "displayTitle": "Luminária de Mesa Touch Formato Cogumelo",
-    "preco": 105,
-    "imagens": [
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m5bol6bc2jeab4",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m5bol6bc3xyq07",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m5bol6bc5cj6db"
-    ],
-    "link": "https://s.shopee.com.br/3VjrB0vHsN",
-    "categoria": "Iluminação",
-    "descricao": "Esta luminária de mesa em formato de cogumelo possui acionamento touch e design compacto. É ideal para compor a iluminação de ambientes como escritórios, bares e mesas de cabeceira.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T21:03:54.255604+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788196124635-0227515f2e",
     "ref": "AUTOQ-0227515F2E",
     "slug": "poster-geometrico-abstrato-bauhaus-para-decoracao-022751",
@@ -251,26 +231,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788138818663-2d42bbd320",
-    "ref": "AUTOQ-2D42BBD320",
-    "slug": "quadro-decorativo-geometrico-retro-2d42bb",
-    "produto": "Quadro Decorativo Geométrico Retrô",
-    "displayTitle": "Quadro Decorativo Geométrico Retrô",
-    "preco": 22,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-7r98o-mci0i86uhatde0",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uhatde0",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-mci0i86uk3y9b6"
-    ],
-    "link": "https://s.shopee.com.br/9KhfEar3Qq",
-    "categoria": "Decoração",
-    "descricao": "Quadro decorativo com composição geométrica em círculos concêntricos nas cores vermelho, laranja e amarelo, acompanhado da frase em inglês “Fall 7 Times Stand Up”. A estética gráfica remete ao modernismo retrô e pode ser usada na decoração de paredes.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T01:17:08.630109+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788111188280-6091cfb87a",
     "ref": "AUTOQ-6091CFB87A",
     "slug": "arandela-redonda-de-aluminio-estilo-retro-6091cf",
@@ -285,24 +245,6 @@
     "descricao": "Arandela de parede com corpo circular, cúpula superior metálica aparente e difusor inferior claro. A imagem ambientada mostra a peça emitindo luz quente em um quarto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-30T17:33:45.724699+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788111188280-8564b3ddfe",
-    "ref": "AUTOQ-8564B3DDFE",
-    "slug": "arandela-decorativa-acrilica-estilo-bauhaus-8564b3",
-    "produto": "Arandela Decorativa Acrílica Estilo Bauhaus",
-    "displayTitle": "Arandela Decorativa Acrílica Estilo Bauhaus",
-    "preco": 199,
-    "imagens": [
-      "https://cf.shopee.com.br/file/cn-11134207-7r98o-lwz48rq0dkpv2d"
-    ],
-    "link": "https://s.shopee.com.br/1LfNPqBYa6",
-    "categoria": "Iluminação",
-    "descricao": "Luminária de parede em acrílico com design inspirado na estética medieval e Bauhaus. Ideal para compor a atmosfera decorativa de salas de estar e ambientes internos.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-30T17:33:35.388412+00:00",
     "ativo": true,
     "status": "published"
   },
