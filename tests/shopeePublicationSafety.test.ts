@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ProductPipeline, type LifecycleRecord } from "../server/services/productPipeline";
-import { getPendingReview, setTestGetPendingReview } from "../server/repositories/telegramRepository";
+import { getPendingReview, isReviewMutationAllowed, setTestGetPendingReview } from "../server/repositories/telegramRepository";
 import {
   ProductRotationSearchError,
   type RotationSearchDiagnostics,
@@ -114,8 +114,8 @@ describe("publication preflight", () => {
 });
 
 describe("callback antigo", () => {
-  it("review expirada não volta como revisão acionável", async () => {
-    setTestGetPendingReview(async () => ({
+  it("review expirada permanece auditável, mas não pode ser reativada por mutação", async () => {
+    const expired = {
       id: "expired-review",
       chatId: 123456,
       senderId: 123456,
@@ -128,10 +128,14 @@ describe("callback antigo", () => {
       preco: 79.9,
       imagens: ["https://img.example.com/lamp.webp"],
       normalizedUrl: "https://shopee.com.br/Luminaria-i.1530442944.23794344926",
-      status: "pending",
-    }));
+      status: "expired" as const,
+    };
+    setTestGetPendingReview(async () => expired as any);
 
-    assert.equal(await getPendingReview("expired-review"), null);
+    const review = await getPendingReview("expired-review");
+    assert.equal(review?.status, "expired");
+    assert.equal(isReviewMutationAllowed({ ...expired, status: "publishing" } as any), false);
+    assert.equal(isReviewMutationAllowed(expired as any), true);
   });
 });
 
