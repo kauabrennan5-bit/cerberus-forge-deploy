@@ -257,6 +257,41 @@ html.product-detail-view button[aria-label="Ver próxima recomendação"] {
   display: none !important;
 }
 
+/* Product previews should feel image-led rather than like a photo floating
+   inside a large black mat. Cards crop only the preview; the complete image
+   remains available on the product page/lightbox. */
+[data-testid="product-card"] > div > div:nth-child(2) {
+  padding: 0 !important;
+  background-color: #181512 !important;
+}
+
+[data-testid="product-card"] > div > div:nth-child(2) > div {
+  overflow: hidden;
+}
+
+[data-testid="product-card"] > div > div:nth-child(2) img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover !important;
+  object-position: center;
+}
+
+/* On the product page, remove the heavy inner matte while preserving the full
+   photo with contain. The stage uses the warmer surface tone instead of pure
+   black, so any unavoidable aspect-ratio remainder reads as intentional UI. */
+html.product-detail-view main .tech-frame.group.cursor-pointer {
+  padding: 0 !important;
+  background-color: #181512 !important;
+}
+
+html.product-detail-view main .tech-frame.group.cursor-pointer > img {
+  object-fit: contain !important;
+}
+
+html.product-detail-view main .tech-frame.group.cursor-pointer + div img {
+  object-fit: cover !important;
+}
+
 /* Mobile containment is structural: flexible children wrap, grids own min-width: 0, and only the document edge clips overscroll. */
 @media (max-width: 768px) {
   html, body {
