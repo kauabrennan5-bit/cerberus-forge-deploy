@@ -84,28 +84,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788146512634-ba2675ab18",
-    "ref": "AUTOQ-BA2675AB18",
-    "slug": "luminaria-cogumelo-canelada-ba2675",
-    "produto": "Luminária Abajur Mesa Estilo Cogumelo",
-    "displayTitle": "Luminária Abajur Mesa Estilo Cogumelo",
-    "preco": 89.9,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820m5-ms2za6gw9i4m23",
-      "https://down-br.img.susercontent.com/file/br-11134207-820md-ms1xatwafbwk88",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lk-ms1xatwajjlw0f",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lo-ms1xatwai51gf3",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lm-ms1xatwagqh062"
-    ],
-    "link": "https://s.shopee.com.br/6L4423yg01",
-    "categoria": "Iluminação",
-    "descricao": "Esta luminária estilo cogumelo apresenta um design minimalista e moderno de inspiração Bauhaus. É ideal para compor a decoração e iluminação de mesas de quarto com um toque estético marcante.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T03:23:52.120926+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788138818663-1940ad0b14",
     "ref": "AUTOQ-1940AD0B14",
     "slug": "radio-retro-portatil-bluetooth-1940ad",
