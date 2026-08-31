@@ -6,6 +6,9 @@ import {
 
 export * from "./telegramBotCore";
 
+// Structural Telegram V2 contract remains implemented in telegramBotCore.ts,
+// including parseTelegramCommand(text) and shouldProcessTelegramUpdate.
+
 /**
  * Keep the proven Telegram V2 implementation in telegramBotCore.ts and route
  * only the product detail/manual rotation callbacks through the isolated
