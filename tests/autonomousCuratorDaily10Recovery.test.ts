@@ -9,7 +9,10 @@ test("primary curator owns all quarter-hour production triggers", async () => {
   assert.match(primary, /group: cerberus-autonomous-curator/);
   assert.match(primary, /cancel-in-progress: false/);
   assert.match(primary, /id-token: write/);
-  assert.match(primary, /github\.event_name == 'schedule' && 'continuous'/);
+  assert.match(primary, /github\.event_name == 'schedule'/);
+  assert.match(primary, /github\.event_name == 'push'/);
+  assert.match(primary, /&& 'continuous'/);
+  assert.doesNotMatch(primary, /github\.event_name == 'push' && 'dry_run'/);
   assert.match(primary, /api\/internal\/autonomous-curator\/continuous/);
   assert.match(primary, /-d '\{\"notify\":true\}'/);
 });
