@@ -1,22 +1,40 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { ProductImageCuration } from "../src/lib/productImageCuration";
 import { profileForCategory } from "../server/services/autonomousCuratorProfiles";
 import { cheapProfileScore, hasBlockedProfileTerm, scoreAutonomousCandidate } from "../server/services/autonomousCuratorScoring";
 
-const cleanCuration = {
-  status: "ready" as const,
+const cleanCuration: ProductImageCuration = {
+  status: "ready",
   rawImageUrls: ["https://img.example.com/raw.jpg"],
   primaryImageUrl: "https://img.example.com/clean.jpg",
   galleryImageUrls: [],
   assessments: [{
     url: "https://img.example.com/clean.jpg",
-    decision: "clean" as const,
-    confidence: "HIGH" as const,
-    reason: "Produto isolado e sem overlay.",
+    decision: "clean",
+    confidence: "HIGH",
+    reason: "Produto isolado, visualmente Cerberus e sem overlay.",
   }],
 };
 
-function score(category: Parameters<typeof profileForCategory>[0], rawTitle: string, displayTitle: string, description: string, price: number) {
+const lowConfidenceCuration: ProductImageCuration = {
+  ...cleanCuration,
+  assessments: [{
+    url: "https://img.example.com/clean.jpg",
+    decision: "clean",
+    confidence: "LOW",
+    reason: "Evidência visual insuficiente.",
+  }],
+};
+
+function score(
+  category: Parameters<typeof profileForCategory>[0],
+  rawTitle: string,
+  displayTitle: string,
+  description: string,
+  price: number,
+  imageCuration: ProductImageCuration = cleanCuration,
+) {
   return scoreAutonomousCandidate({
     profile: profileForCategory(category),
     rawTitle,
@@ -24,13 +42,13 @@ function score(category: Parameters<typeof profileForCategory>[0], rawTitle: str
     description,
     category,
     price,
-    imageCuration: cleanCuration,
+    imageCuration,
     pipelineScore: 100,
     existingProducts: [],
   });
 }
 
-test("recall barato pode admitir título curto sem enfraquecer o gate final", () => {
+test("evidência visual clean pode resgatar copy curta sem baixar o threshold", () => {
   const profile = profileForCategory("Cozinha & Mesa");
   assert.ok(cheapProfileScore(profile, "Jarra de Vidro Retrô para Bebidas") > -1000);
   const result = score(
@@ -40,8 +58,21 @@ test("recall barato pode admitir título curto sem enfraquecer o gate final", ()
     "Jarra de vidro transparente com design retrô para água, sucos e chás.",
     37.99,
   );
+  assert.ok(result.styleFit >= 72);
+  assert.ok(result.finalScore >= 88);
+});
+
+test("review visual LOW nunca resgata linguagem textual insuficiente", () => {
+  const result = score(
+    "Cozinha & Mesa",
+    "Jarra 1,8L Vidro Transparente Luxo Grande Suco Chá Água Cozinha",
+    "Jarra de Vidro para Bebidas",
+    "Jarra de vidro transparente para água, sucos e chás em uso cotidiano.",
+    37.99,
+    lowConfidenceCuration,
+  );
   assert.ok(result.styleFit < 72);
-  assert.ok(result.finalScore < 72);
+  assert.ok(result.finalScore <= 71);
 });
 
 test("peça incompleta de luminária é bloqueada mesmo com Space Age e anos 70", () => {
