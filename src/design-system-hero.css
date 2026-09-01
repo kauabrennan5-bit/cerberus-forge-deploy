@@ -6,6 +6,12 @@
   color: var(--cerberus-warm-gray) !important;
 }
 
+/* Normalize the remaining translucent legacy gold surface used by verified
+   promotion pricing. Text/borders are already remapped by exact token rules. */
+[class~="bg-[#D7A64B]/10"] {
+  background-color: color-mix(in srgb, var(--cerberus-red) 10%, transparent) !important;
+}
+
 /* Header edge cases: only numeric counters receive the red badge treatment,
    and the edition badge keeps its intended desktop-only visibility. */
 #nav-catalog-btn > span:last-child:not([class~="font-mono"]) {
