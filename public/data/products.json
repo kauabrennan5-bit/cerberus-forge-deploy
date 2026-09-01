@@ -1,5 +1,44 @@
 [
   {
+    "id": "prod-1788290601373-99e82b198c",
+    "ref": "AUTOQ-99E82B198C",
+    "slug": "quadro-decorativo-geometrico-moderno-com-moldura-bauhaus-99e82b",
+    "produto": "Quadro Decorativo Geométrico Moderno com Moldura Bauhaus –",
+    "displayTitle": "Quadro Decorativo Geométrico Moderno com Moldura Bauhaus –",
+    "preco": 25.91,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-maikmwmamnzt83",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-maikmwmamnzt83",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-maikmwmal9fd14",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-maikmwmao2k92c"
+    ],
+    "link": "https://s.shopee.com.br/9V15QtqQ5t",
+    "categoria": "Decoração",
+    "descricao": "Descrição factual baseada no anúncio: Quadro Decorativo Geométrico Moderno com Moldura Bauhaus –. Os demais detalhes devem ser conferidos na página oficial do produto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T19:32:47.230141+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788291076374-9c6e415cd2",
+    "ref": "ROTA-9C6E415CD2",
+    "slug": "caixa-de-pao-de-metal-vintage-cozinha-vintage-9c6e41",
+    "produto": "caixa de pão de metal vintage, cozinha vintage,",
+    "displayTitle": "caixa de pão de metal vintage, cozinha vintage,",
+    "preco": 296.1,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820l9-mlqfed305b7o5f"
+    ],
+    "link": "https://s.shopee.com.br/1A2w3HphK",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Descrição factual baseada no anúncio: caixa de pão de metal vintage, cozinha vintage,. Os demais detalhes devem ser conferidos na página oficial do produto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T19:31:16.476331+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788291045980-1cfd0ac837",
     "ref": "ROTA-1CFD0AC837",
     "slug": "caixa-de-joias-madeira-nogueira-3-camadas-organizador-1cfd0a",
@@ -214,29 +253,6 @@
     "descricao": "Copo de vidro vintage para whisky com design clássico dos anos 70. Uma peça nostálgica ideal para colecionadores e para servir bebidas com estilo retrô.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T16:34:01.728464+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788162139123-2c9cbf0544",
-    "ref": "AUTOQ-2C9CBF0544",
-    "slug": "copo-de-vidro-anos-70-2c9cbf",
-    "produto": "Copo de Vidro Anos 70",
-    "displayTitle": "Copo de Vidro Anos 70",
-    "preco": 55,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820lw-mqxjuyz4g2dif4",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lw-mqxjuyz4g2dif4",
-      "https://down-br.img.susercontent.com/file/br-11134207-820m5-mqxjuyz6cwzo0d",
-      "https://down-br.img.susercontent.com/file/br-11134207-820l8-mqxjuyz4ent2df",
-      "https://down-br.img.susercontent.com/file/br-11134207-820mc-mqxjuyz6o5jbc9",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lg-mqxjuyz4d98m40"
-    ],
-    "link": "https://s.shopee.com.br/3VjrPqX60i",
-    "categoria": "Cozinha & Mesa",
-    "descricao": "Copo de vidro vintage fabricado pela Nadir Figueiredo com capacidade de duzentos mililitros. Uma peça clássica com estética retrô ideal para uso cotidiano ou colecionismo.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T07:46:17.348333+00:00",
     "ativo": true,
     "status": "published"
   },
