@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import sharp, { type Metadata } from "sharp";
 import { resolvePublicProductCategory } from "../../src/lib/productCategory";
 import type { ProductImageAssessment, ProductImageCuration } from "../../src/lib/productImageCuration";
 import { reviewProductImages } from "./productImageReview";
@@ -174,7 +174,7 @@ export async function probeOfficialShopeeImage(
     return { ok: false, httpStatus: response.status, mimeType: null, width: null, height: null, format: null, byteLength: bytes.length, reason: bytes.length === 0 ? "IMAGE_EMPTY" : "IMAGE_TOO_LARGE" };
   }
 
-  let metadata: sharp.Metadata;
+  let metadata: Metadata;
   try {
     metadata = await sharp(bytes, { failOn: "error" }).metadata();
   } catch {
@@ -300,7 +300,7 @@ export function evaluateShopeeCandidateRelevance(query: string, officialTitle: s
   return { compatible: true, category: candidateCategory || queryCategory || "", score: Math.min(100, score), reason: "RELEVANT" };
 }
 
-export function rankShopeeCandidates(candidates: readonly ShopeeRankableCandidate[]): ShopeeRankableCandidate[] {
+export function rankShopeeCandidates<T extends ShopeeRankableCandidate>(candidates: readonly T[]): T[] {
   const stateWeight: Record<ShopeeCandidateVisualState, number> = {
     QUALIFIED: 220,
     NEEDS_HUMAN_REVIEW: 100,

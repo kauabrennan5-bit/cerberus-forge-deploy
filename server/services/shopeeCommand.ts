@@ -52,7 +52,7 @@ async function qualifyLegacyTestImage(imageUrl: string): Promise<ShopeeImageQual
         reason: null,
       },
       assessment: null,
-      curationReason: "legacy_test_fixture_requires_human_review",
+      curationReason: "image_review_unavailable",
       visualScore: 70,
     };
   }
