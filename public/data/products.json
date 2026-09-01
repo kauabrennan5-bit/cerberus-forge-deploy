@@ -1,5 +1,23 @@
 [
   {
+    "id": "prod-1788294016648-d54ad1070f",
+    "ref": "ROTA-D54AD1070F",
+    "slug": "fruteira-dupla-de-mesa-vintage-dois-andares-para-d54ad1",
+    "produto": "Fruteira Dupla De Mesa Vintage Dois Andares Para",
+    "displayTitle": "Fruteira Dupla De Mesa Vintage Dois Andares Para",
+    "preco": 58,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820mb-mn0drtuoa1383a"
+    ],
+    "link": "https://s.shopee.com.br/1LfQWVCkzi",
+    "categoria": "Cozinha & Mesa",
+    "descricao": "Descrição factual baseada no anúncio: Fruteira Dupla De Mesa Vintage Dois Andares Para. Os demais detalhes devem ser conferidos na página oficial do produto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T20:20:16.787512+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788290601373-99e82b198c",
     "ref": "AUTOQ-99E82B198C",
     "slug": "quadro-decorativo-geometrico-moderno-com-moldura-bauhaus-99e82b",
@@ -233,26 +251,6 @@
     "descricao": "Luminária de mesa em formato de cogumelo com design estilo Bauhaus e abajur em vidro laranja. Funciona como uma luz noturna regulável de estética moderna de meados do século.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-31T17:10:08.004286+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788193747119-9a8c47e00e",
-    "ref": "AUTOQ-9A8C47E00E",
-    "slug": "copo-de-vidro-para-whisky-9a8c47",
-    "produto": "Copo de Vidro para Whisky",
-    "displayTitle": "Copo de Vidro para Whisky",
-    "preco": 22,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-7r98o-m2qzh0f0bggj6c",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f0bggj6c",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-m2qzh0f0a1w3b3"
-    ],
-    "link": "https://s.shopee.com.br/2qUAccZdMW",
-    "categoria": "Cozinha & Mesa",
-    "descricao": "Copo de vidro vintage para whisky com design clássico dos anos 70. Uma peça nostálgica ideal para colecionadores e para servir bebidas com estilo retrô.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-31T16:34:01.728464+00:00",
     "ativo": true,
     "status": "published"
   },
