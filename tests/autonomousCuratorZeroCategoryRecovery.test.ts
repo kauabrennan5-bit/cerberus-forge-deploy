@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 import { AUTONOMOUS_CURATOR_PROFILES } from "../server/services/autonomousCuratorProfiles";
 import { productImageReviewInternals } from "../server/services/productImageReview";
 
-test("starved categories run first in the continuous curator", () => {
-  assert.deepEqual(
-    AUTONOMOUS_CURATOR_PROFILES.slice(0, 2).map(profile => profile.category),
-    ["Infantil", "Calçados & Acessórios"],
-  );
+test("zero-category recovery keeps the canonical curator profile order stable", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILES[0]?.category, "Iluminação");
+  assert.equal(AUTONOMOUS_CURATOR_PROFILES.at(-1)?.category, "Infantil");
 });
 
 test("Infantil visual review treats child themes as category context instead of automatic novelty", () => {
