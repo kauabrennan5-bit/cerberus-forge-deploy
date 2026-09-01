@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Cerberus 3D Preview</title>
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.3.1/model-viewer.min.js"></script>
+  <script src="/cerberus3d/p0.js"></script>
+  <script src="/cerberus3d/p1.js"></script>
+  <script src="/cerberus3d/p2.js"></script>
+  <style>
+    :root { color-scheme: dark; --bg:#0B0908; --panel:#100E0D; --line:#3A342E; --ink:#E8E1D3; --muted:#9D9588; --accent:#8A1F1F; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; min-height:100%; background:var(--bg); color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+    body { min-height:100vh; overflow-x:hidden; }
+    .shell { min-height:100vh; display:flex; flex-direction:column; }
+    header { height:64px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 18px; border-bottom:1px solid var(--line); background:rgba(20,18,16,.95); backdrop-filter:blur(12px); }
+    .brand { display:flex; align-items:center; gap:12px; min-width:0; }
+    .mark { width:38px; height:38px; border:1px solid var(--accent); display:grid; place-items:center; font-family:Georgia,serif; font-size:18px; }
+    .brand-copy strong { display:block; font-family:Georgia,serif; letter-spacing:.12em; font-size:16px; }
+    .brand-copy small { color:var(--muted); font-size:8px; letter-spacing:.18em; }
+    .status { color:#b28c58; font-size:10px; letter-spacing:.14em; white-space:nowrap; }
+    main { width:min(1180px,100%); margin:0 auto; padding:18px; flex:1; display:flex; flex-direction:column; }
+    .stage { position:relative; flex:1; min-height:calc(100vh - 100px); border:1px solid var(--line); background:radial-gradient(circle at 50% 44%, #1d1916 0%, #100e0d 48%, #0b0908 80%); overflow:hidden; }
+    model-viewer { width:100%; height:100%; min-height:calc(100vh - 100px); background:transparent; --poster-color:transparent; touch-action:pan-y; }
+    .hud { position:absolute; inset:0; pointer-events:none; }
+    .label { position:absolute; top:16px; left:16px; padding:7px 9px; border:1px solid rgba(232,225,211,.14); background:rgba(11,9,8,.62); color:var(--muted); font-size:9px; letter-spacing:.14em; text-transform:uppercase; }
+    .hint { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); padding:8px 12px; border:1px solid rgba(232,225,211,.12); background:rgba(11,9,8,.64); color:var(--muted); font-size:9px; letter-spacing:.1em; white-space:nowrap; transition:opacity .25s ease; }
+    .loading { position:absolute; inset:0; display:grid; place-items:center; color:var(--muted); font-size:10px; letter-spacing:.16em; text-transform:uppercase; background:var(--panel); transition:opacity .35s ease; z-index:4; }
+    .loading.done { opacity:0; pointer-events:none; }
+    .error { color:#d89898; max-width:520px; padding:24px; text-align:center; line-height:1.6; }
+    button { pointer-events:auto; border:1px solid var(--line); background:rgba(11,9,8,.78); color:var(--ink); font:inherit; font-size:9px; letter-spacing:.12em; text-transform:uppercase; padding:9px 11px; cursor:pointer; }
+    button:hover { border-color:var(--accent); }
+    .reset { position:absolute; right:16px; bottom:16px; }
+    @media (max-width:640px) {
+      header { height:58px; padding:0 12px; }
+      .mark { width:34px; height:34px; }
+      .brand-copy small { display:none; }
+      .status { font-size:8px; letter-spacing:.08em; }
+      main { padding:10px; }
+      .stage, model-viewer { min-height:calc(100vh - 78px); }
+      .hint { bottom:14px; max-width:calc(100% - 110px); overflow:hidden; text-overflow:ellipsis; }
+      .reset { right:10px; bottom:10px; }
+    }
+    @media (prefers-reduced-motion: reduce) { .hint { display:none; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand">
+      <div class="mark">III</div>
+      <div class="brand-copy"><strong>CERBERUS</strong><small>3D OBJECT BEHAVIOR TEST</small></div>
+    </div>
+    <div class="status">BRANCH PREVIEW · NÃO É PRODUÇÃO</div>
+  </header>
+  <main>
+    <section class="stage" aria-label="Prévia interativa do objeto 3D Cerberus">
+      <div class="loading" id="loading">CARREGANDO OBJETO 3D…</div>
+      <model-viewer id="viewer" alt="Cerberus de três cabeças, objeto 3D da marca" camera-controls auto-rotate auto-rotate-delay="1200" rotation-per-second="8deg" interaction-prompt="none" shadow-intensity="1.1" shadow-softness="0.9" exposure="1.15" environment-image="neutral" tone-mapping="aces" camera-orbit="0deg 75deg auto" min-camera-orbit="auto 45deg auto" max-camera-orbit="auto 95deg auto" min-field-of-view="18deg" max-field-of-view="48deg"></model-viewer>
+      <div class="hud">
+        <div class="label">CERBERUS / WEB GLB / INTERACTIVE TEST</div>
+        <div class="hint" id="hint">ARRASTE PARA GIRAR · PINÇA/SCROLL PARA ZOOM</div>
+        <button class="reset" id="reset" type="button">RESETAR</button>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+  const viewer = document.getElementById('viewer');
+  const loading = document.getElementById('loading');
+  const hint = document.getElementById('hint');
+  let modelUrl = '';
+  async function buildModelUrl() {
+    if (!window.CERBERUS_GZ) throw new Error('Dados do modelo não foram carregados.');
+    if (!('DecompressionStream' in window)) throw new Error('Navegador sem suporte à descompressão necessária para este preview.');
+    const raw = atob(window.CERBERUS_GZ);
+    const compressed = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) compressed[i] = raw.charCodeAt(i);
+    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+    const buffer = await new Response(stream).arrayBuffer();
+    modelUrl = URL.createObjectURL(new Blob([buffer], { type: 'model/gltf-binary' }));
+    viewer.src = modelUrl;
+  }
+  viewer.addEventListener('load', () => loading.classList.add('done'));
+  viewer.addEventListener('error', (event) => {
+    console.error('Cerberus model-viewer error', event);
+    loading.innerHTML = '<div class="error">O objeto 3D não pôde ser renderizado neste dispositivo.</div>';
+  });
+  viewer.addEventListener('camera-change', () => { hint.style.opacity = '.35'; });
+  document.getElementById('reset').addEventListener('click', () => {
+    viewer.cameraOrbit = '0deg 75deg auto';
+    viewer.fieldOfView = '30deg';
+    viewer.jumpCameraToGoal();
+  });
+  buildModelUrl().catch((error) => {
+    console.error(error);
+    loading.innerHTML = `<div class="error">${error.message}</div>`;
+  });
+  window.addEventListener('pagehide', () => { if (modelUrl) URL.revokeObjectURL(modelUrl); });
+</script>
+</body>
+</html>
