@@ -1,45 +1,5 @@
 [
   {
-    "id": "prod-1788241457328-7c3efeb0df",
-    "ref": "AUTOQ-7C3EFEB0DF",
-    "slug": "mesa-lateral-redonda-retro-7c3efe",
-    "produto": "Mesa Lateral Redonda Retrô",
-    "displayTitle": "Mesa Lateral Redonda Retrô",
-    "preco": 79.98,
-    "imagens": [
-      "https://cf.shopee.com.br/file/sg-11134201-7rdy7-mdbsr9d07ldla9",
-      "https://down-br.img.susercontent.com/file/sg-11134201-7rdy7-mdbsr9d07ldla9"
-    ],
-    "link": "https://s.shopee.com.br/8plOdhN4qM",
-    "categoria": "Móveis",
-    "descricao": "Mesa lateral de tampo redondo, com três pés palito e acabamento visual em dois tons. O desenho simples remete ao modernismo retrô.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T05:53:15.656765+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788241457328-fbed5327ca",
-    "ref": "AUTOQ-FBED5327CA",
-    "slug": "kit-2-quadros-bauhaus-geometricos-fbed53",
-    "produto": "Kit 2 Quadros Bauhaus Geométricos",
-    "displayTitle": "Kit 2 Quadros Bauhaus Geométricos",
-    "preco": 43.25,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-7r98o-maiqxqtvpe33af",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-maiqxqtvpe33af",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-maiqqqhfrhmhb5",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-maiqqqhfq321b7"
-    ],
-    "link": "https://s.shopee.com.br/9fKVdCpmkw",
-    "categoria": "Decoração",
-    "descricao": "Composição com dois quadros emoldurados, apresentando grafismos geométricos em preto sobre fundo claro. As linhas curvas e formas circulares criam uma linguagem visual modernista para decoração de interiores.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T05:48:34.727528+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788219849993-f1bc11884e",
     "ref": "AUTOQ-F1BC11884E",
     "slug": "kit-de-organizadores-acrilicos-modulares-f1bc11",
