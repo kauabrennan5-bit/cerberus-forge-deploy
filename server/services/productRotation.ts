@@ -42,9 +42,18 @@ import {
 const AUTO_QUEUE_CREATED_BY = "autonomous_curator_queue";
 const ROTATION_CANDIDATE_CREATED_BY = "telegram_rotation_candidate";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
-const ROTATION_VERSION = "3";
-const ROTATION_SEARCH_MAX_PAGES = 3;
+const ROTATION_VERSION = "4";
+// Manual rotation is an operator-facing browse loop, not an autonomous publication
+// tournament. Keep every pass deliberately small so a card arrives quickly and the
+// operator can reject it and immediately ask for the next option.
+const ROTATION_SEARCH_MAX_PAGES = 1;
 const ROTATION_SEARCH_PAGE_LIMIT = 10;
+const ROTATION_FAST_POOL_TARGET = 10;
+const ROTATION_FAST_MAX_EVALUATIONS = 4;
+const ROTATION_FAST_QUEUED_EVALUATIONS = 1;
+// Autonomous publication can remain selective. A human-requested rotation only
+// needs a reasonable, fully valid option because the operator is the final taste gate.
+const ROTATION_PROPOSAL_MIN_SCORE = 60;
 const ROTATION_RETRYABLE_PROVIDER_CODES = new Set<ShopeeProviderErrorCode>([
   "SHOPEE_PROVIDER_RATE_LIMITED",
   "SHOPEE_PROVIDER_TIMEOUT",
@@ -318,6 +327,7 @@ export async function startProductRotation(input: {
     telegram_chat_id: String(input.telegramChatId),
     metadata: {
       rotation_version: ROTATION_VERSION,
+      rotation_mode: "operator_fast",
       search_round: 0,
       total_candidates_received: 0,
       total_candidates_examined: 0,
@@ -449,9 +459,8 @@ async function evaluateIdentity(input: {
     pipelineScore: lifecycle.curation.score,
     existingProducts: similarityUniverse(input.products, input.allowedProductId || undefined),
   });
-  const config = await curatorRepo.getAutonomousCuratorConfig();
   if (breakdown.maximumCatalogSimilarity >= 0.82) return { candidate: null, reason: `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}` };
-  if (breakdown.finalScore < config.autoPublishThreshold) return { candidate: null, reason: `BELOW_PUBLICATION_THRESHOLD:${breakdown.finalScore}` };
+  if (breakdown.finalScore < ROTATION_PROPOSAL_MIN_SCORE) return { candidate: null, reason: `BELOW_ROTATION_PROPOSAL_THRESHOLD:${breakdown.finalScore}` };
 
   return {
     candidate: {
@@ -647,11 +656,10 @@ async function discoverLiveCandidate(input: {
   diagnostics: RotationSearchDiagnostics;
   searchRound: number;
 }): Promise<EvaluatedCandidate | null> {
-  const config = await curatorRepo.getAutonomousCuratorConfig();
   const products = await productsRepository.getProducts();
   const seen = new Set<string>();
   const pool: Array<{ query: string; shopId: string; itemId: string; name: string; price: number; imageUrl: string; productLink: string; cheap: number }> = [];
-  const poolTarget = Math.max(30, Math.min(60, Number(config.maxSearchCandidates) || 40));
+  const poolTarget = ROTATION_FAST_POOL_TARGET;
   const configuredQueries = input.profile.queries.slice(0, 8);
   const queries = configuredQueries.length > 0
     ? configuredQueries
@@ -706,10 +714,10 @@ async function discoverLiveCandidate(input: {
 
   input.diagnostics.candidatesInPool = pool.length;
   pool.sort((a, b) => b.cheap - a.cheap || a.itemId.localeCompare(b.itemId));
-  // Manual rotation is an operator-requested replacement contract. Every retained
-  // candidate in the current search window is evaluated before advancing the
-  // cursor; no valid candidate can be silently skipped by an enrichment budget.
-  for (const item of pool) {
+  // Do not spend tens of minutes trying to find a mythical "perfect" product.
+  // Evaluate a tiny best-first batch; if it does not yield an option, advance the
+  // durable cursor and immediately try the next query/page block.
+  for (const item of pool.slice(0, ROTATION_FAST_MAX_EVALUATIONS)) {
     input.diagnostics.candidatesExamined += 1;
     const evaluated = await evaluateIdentity({
       profile: input.profile,
@@ -789,7 +797,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       }
     }
 
-    for (const queued of await availableQueuedCandidates(profile.category, rejected)) {
+    for (const queued of (await availableQueuedCandidates(profile.category, rejected)).slice(0, ROTATION_FAST_QUEUED_EVALUATIONS)) {
       if (queued.id === source.id) continue;
       diagnostics.candidatesExamined += 1;
       const origin = queued.createdBy || AUTO_QUEUE_CREATED_BY;
@@ -818,6 +826,8 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
             reason: null,
             metadata: {
               ...request.metadata,
+              rotation_version: ROTATION_VERSION,
+              rotation_mode: "operator_fast",
               candidate_origin: ROTATION_CANDIDATE_CREATED_BY,
               candidate_score: discovered.score,
               last_search_diagnostics: diagnostics,
@@ -856,11 +866,12 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
     metadata: {
       ...request.metadata,
       rotation_version: ROTATION_VERSION,
+      rotation_mode: "operator_fast",
       search_round: nextSearchRound,
       last_search_diagnostics: diagnostics,
       total_candidates_received: metadataNumber(request.metadata, "total_candidates_received") + diagnostics.candidatesReceived,
       total_candidates_examined: metadataNumber(request.metadata, "total_candidates_examined") + diagnostics.candidatesExamined,
-      failure_type: "search_window_exhausted_continuing",
+      failure_type: "fast_search_batch_continuing",
     },
   });
   safeShopeeLog("rotation_search_window_exhausted", {
@@ -872,8 +883,8 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
     candidatesInPool: diagnostics.candidatesInPool,
     candidatesExamined: diagnostics.candidatesExamined,
   });
-  // This error is now an internal continuation signal. It must never be treated
-  // as a terminal "no replacement" outcome by the Telegram worker.
+  // Internal continuation only; Telegram must keep advancing the cursor without
+  // asking the operator to start over.
   throw new ProductRotationSearchError("NO_QUALIFIED_REPLACEMENT_FOUND", diagnostics);
 }
 
@@ -889,7 +900,7 @@ export async function rejectRotationCandidateAndSearchAgain(requestId: string): 
     candidate_product_id: null,
     rejected_candidate_ids: [...new Set([...request.rejectedCandidateIds, candidateId])],
     reason: "CANDIDATE_REJECTED_BY_USER",
-    metadata: { ...request.metadata, last_rejected_candidate_id: candidateId },
+    metadata: { ...request.metadata, last_rejected_candidate_id: candidateId, rotation_mode: "operator_fast" },
   });
 }
 
@@ -940,7 +951,16 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
   const client = buildShopeeClient(env);
   const revalidated = await evaluateStoredProduct(candidateProduct, source, profile, client, env);
   if (!revalidated.candidate) {
-    request = await patchRequest(request.id, { status: "failed", reason: `PREFLIGHT_REJECTED:${revalidated.reason}` });
+    // A failed preflight is recoverable: preserve the current source and continue
+    // looking for the next option instead of terminating the operator's rotation.
+    request = await patchRequest(request.id, {
+      status: "searching",
+      candidate_product_id: null,
+      rejected_candidate_ids: [...new Set([...request.rejectedCandidateIds, candidateProduct.id])],
+      reason: `PREFLIGHT_REJECTED:${revalidated.reason}`,
+      metadata: { ...request.metadata, rotation_mode: "operator_fast", last_rejected_candidate_id: candidateProduct.id },
+    });
+    await requireSupabase().from("products").update({ ativo: false, status: "archived" }).eq("id", candidateProduct.id);
     throw new Error(`ROTATION_PREFLIGHT_REJECTED:${revalidated.reason}`);
   }
   await refreshCandidateProduct(candidateProduct, revalidated.candidate, false, env);
@@ -1010,6 +1030,12 @@ export const productRotationInternals = {
   ROTATION_CANDIDATE_CREATED_BY,
   QUEUE_NOTE_PREFIX,
   ROTATION_VERSION,
+  ROTATION_SEARCH_MAX_PAGES,
+  ROTATION_SEARCH_PAGE_LIMIT,
+  ROTATION_FAST_POOL_TARGET,
+  ROTATION_FAST_MAX_EVALUATIONS,
+  ROTATION_FAST_QUEUED_EVALUATIONS,
+  ROTATION_PROPOSAL_MIN_SCORE,
   ROTATION_RETRYABLE_PROVIDER_CODES,
   queueNote,
   parseQueueNote,
