@@ -6,6 +6,27 @@
   color: var(--cerberus-warm-gray) !important;
 }
 
+/* Header edge cases: only numeric counters receive the red badge treatment,
+   and the edition badge keeps its intended desktop-only visibility. */
+#nav-catalog-btn > span:last-child:not([class~="font-mono"]) {
+  border: 0 !important;
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+}
+
+@media (max-width: 1023px) {
+  .stamp-badge[class~="hidden"] {
+    display: none !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .stamp-badge[class~="lg:inline-block"] {
+    display: inline-flex !important;
+  }
+}
+
 ::-webkit-scrollbar-track {
   background: var(--cerberus-black) !important;
 }
