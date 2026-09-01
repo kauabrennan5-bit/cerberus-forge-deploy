@@ -297,10 +297,29 @@ function parseModelJson(text: string | null | undefined): unknown {
   }
 }
 
+function normalizeReviewTitle(title: string): string {
+  return String(title || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function productFamilyGuidance(title: string): string {
+  const normalized = normalizeReviewTitle(title);
+  if (/\b(infantil|crianca|bebe|brinquedo|montessori|waldorf|berco|mobile|babuch|fazendinha|cowgirl|country)\b/.test(normalized)) {
+    return `CONTEXTO DE CATEGORIA — Infantil: esta família não precisa parecer um objeto Bauhaus/Mid-Century para pertencer ao Cerberus. Linguagem lúdica, formas temáticas infantis, cores vivas, referências country/cowgirl/fazendinha e silhuetas de calçado infantil NÃO são novelty por si só. Use novelty apenas quando gimmick/kitsch barato dominar a função e o desenho; use off_brand apenas quando houver evidência visual de peça genérica, fraca ou mal resolvida, nunca apenas por ela ser infantil. Um produto completo, comercial, coerente, com proporção, material e apresentação intencionais pode ser clean.`;
+  }
+  if (/\b(oculos|cinto|mocassim|tenis|bolsa|carteira|relogio|calcado|sapato|sandalia|acessorio)\b/.test(normalized)) {
+    return `CONTEXTO DE CATEGORIA — Calçados & Acessórios: uma peça vestível não precisa reproduzir linguagem de mobiliário Bauhaus/Mid-Century. Julgue óculos, cintos, bolsas, mocassins, tênis, relógios e outros acessórios pela silhueta, proporção, material aparente, acabamento, detalhe e coerência visual. NÃO marque off_brand só por ser produto de moda comercial ou por não parecer um objeto de interiores; use off_brand quando a evidência visual for realmente genérica, fraca ou barata. NÃO marque novelty para uma silhueta normal de moda apenas por ser temática ou diferente.`;
+  }
+  return "";
+}
+
 function buildReviewPrompt(title: string): string {
+  const familyGuidance = productFamilyGuidance(title);
   return `Você é o reviewer visual do CERBERUS FINDS, um arquivo de curadoria de objetos e moda de design. Avalie TODAS as imagens numeradas do produto: ${title || "sem título"}.
 
-A identidade CERBERUS privilegia design autoral ou visualmente distinto relacionado a Bauhaus, Mid-Century Modern, modernismo dos anos 60/70, Space Age, retrofuturismo, vintage/retrô refinado, pós-modernismo/Memphis, design italiano, minimalismo industrial e minimalismo japonês. A curadoria rejeita produto genérico de marketplace, aparência barata, novelty/gimmick/kitsch, luxo ornamental genérico, gamer/RGB e peças que só usam palavras como "retro" sem linguagem visual convincente.
+${familyGuidance ? `${familyGuidance}\n\n` : ""}A identidade CERBERUS privilegia design autoral ou visualmente distinto relacionado a Bauhaus, Mid-Century Modern, modernismo dos anos 60/70, Space Age, retrofuturismo, vintage/retrô refinado, pós-modernismo/Memphis, design italiano, minimalismo industrial e minimalismo japonês. A curadoria rejeita produto genérico de marketplace, aparência barata, novelty/gimmick/kitsch, luxo ornamental genérico, gamer/RGB e peças que só usam palavras como "retro" sem linguagem visual convincente.
 
 Classifique cada imagem com EXATAMENTE uma decisão:
 - clean: foto comercial utilizável E o produto visível é completo, coerente com a identidade Cerberus e tem desenho/material/proporção suficientemente intencional; não precisa ser caro nem literalmente rotulado Bauhaus.
@@ -704,6 +723,8 @@ export const productImageReviewInternals = {
   downloadReviewableImages,
   parseAssessments,
   parseModelJson,
+  normalizeReviewTitle,
+  productFamilyGuidance,
   buildReviewPrompt,
   buildReviewRequest,
   buildOpenAIReviewRequest,
