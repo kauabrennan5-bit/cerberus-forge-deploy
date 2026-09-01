@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
   <title>Cerberus 3D Preview</title>
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.3.1/model-viewer.min.js"></script>
-  <script src="/cerberus3d/p0.js"></script>
-  <script src="/cerberus3d/p1.js"></script>
-  <script src="/cerberus3d/p2.js"></script>
   <style>
     :root { color-scheme: dark; --bg:#0B0908; --panel:#100E0D; --line:#3A342E; --ink:#E8E1D3; --muted:#9D9588; --accent:#8A1F1F; }
     * { box-sizing:border-box; }
@@ -57,7 +54,26 @@
   <main>
     <section class="stage" aria-label="Prévia interativa do objeto 3D Cerberus">
       <div class="loading" id="loading">CARREGANDO OBJETO 3D…</div>
-      <model-viewer id="viewer" alt="Cerberus de três cabeças, objeto 3D da marca" camera-controls auto-rotate auto-rotate-delay="1200" rotation-per-second="8deg" interaction-prompt="none" shadow-intensity="1.1" shadow-softness="0.9" exposure="1.15" environment-image="neutral" tone-mapping="aces" camera-orbit="0deg 75deg auto" min-camera-orbit="auto 45deg auto" max-camera-orbit="auto 95deg auto" min-field-of-view="18deg" max-field-of-view="48deg"></model-viewer>
+      <model-viewer
+        id="viewer"
+        src="/cerberus3d/cerberus-refined.glb"
+        alt="Cerberus de três cabeças, objeto 3D da marca"
+        camera-controls
+        auto-rotate
+        auto-rotate-delay="1200"
+        rotation-per-second="8deg"
+        interaction-prompt="none"
+        shadow-intensity="1.1"
+        shadow-softness="0.9"
+        exposure="1.15"
+        environment-image="neutral"
+        tone-mapping="aces"
+        camera-orbit="0deg 75deg auto"
+        min-camera-orbit="auto 45deg auto"
+        max-camera-orbit="auto 95deg auto"
+        min-field-of-view="18deg"
+        max-field-of-view="48deg">
+      </model-viewer>
       <div class="hud">
         <div class="label">CERBERUS / WEB GLB / INTERACTIVE TEST</div>
         <div class="hint" id="hint">ARRASTE PARA GIRAR · PINÇA/SCROLL PARA ZOOM</div>
@@ -70,18 +86,7 @@
   const viewer = document.getElementById('viewer');
   const loading = document.getElementById('loading');
   const hint = document.getElementById('hint');
-  let modelUrl = '';
-  async function buildModelUrl() {
-    if (!window.CERBERUS_GZ) throw new Error('Dados do modelo não foram carregados.');
-    if (!('DecompressionStream' in window)) throw new Error('Navegador sem suporte à descompressão necessária para este preview.');
-    const raw = atob(window.CERBERUS_GZ);
-    const compressed = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i += 1) compressed[i] = raw.charCodeAt(i);
-    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
-    const buffer = await new Response(stream).arrayBuffer();
-    modelUrl = URL.createObjectURL(new Blob([buffer], { type: 'model/gltf-binary' }));
-    viewer.src = modelUrl;
-  }
+
   viewer.addEventListener('load', () => loading.classList.add('done'));
   viewer.addEventListener('error', (event) => {
     console.error('Cerberus model-viewer error', event);
@@ -93,11 +98,6 @@
     viewer.fieldOfView = '30deg';
     viewer.jumpCameraToGoal();
   });
-  buildModelUrl().catch((error) => {
-    console.error(error);
-    loading.innerHTML = `<div class="error">${error.message}</div>`;
-  });
-  window.addEventListener('pagehide', () => { if (modelUrl) URL.revokeObjectURL(modelUrl); });
 </script>
 </body>
 </html>
