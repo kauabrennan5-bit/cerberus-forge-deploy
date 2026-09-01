@@ -12,6 +12,9 @@
  * auditPublishedProductHealth
  * archiveUnavailableProducts(health.unavailableIds)
  * const countsBefore = categoryCounts(productsBefore)
+ * function dailyTargetPerCategory
+ * recoveryMode = totalDeficit(countsBefore, dailyTarget) > 0
+ * Amanhã o piso sobe automaticamente
  *
  * Healthy historical publications are never archived merely because a category crossed a fixed cap.
  */
