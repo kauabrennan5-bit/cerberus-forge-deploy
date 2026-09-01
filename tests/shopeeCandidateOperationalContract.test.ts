@@ -7,13 +7,13 @@ const qualification = fs.readFileSync("server/services/shopeeCandidateQualificat
 
 describe("ranked /shopee structural safety contract", () => {
   it("preserves provider productLink and never constructs a product URL from ids", () => {
-    assert.match(command, /productLink:\s*String\(raw\.productLink/);
+    assert.match(command, /(?:const\s+productLink\s*=\s*String\(raw\.productLink|productLink:\s*String\(raw\.productLink)/);
     assert.match(command, /normalizedUrl:\s*acquisition\.productLink/);
     assert.doesNotMatch(command, /`https:\/\/shopee\.com\.br\/product\/\$\{/);
   });
 
   it("uses official Affiliate imageUrl as the primary term-mode visual evidence", () => {
-    assert.match(command, /imageUrl:\s*String\(raw\.imageUrl/);
+    assert.match(command, /(?:const\s+imageUrl\s*=\s*String\(raw\.imageUrl|imageUrl:\s*String\(raw\.imageUrl)/);
     assert.match(command, /qualifyImage\(candidate\.imageUrl, candidate\.name\)/);
     assert.match(command, /imagemPrincipal:\s*candidate\.imageUrl/);
   });
