@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.7";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.8";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -41,7 +41,10 @@ const BROAD_RECALL_QUERIES: Partial<Record<PublicProductCategory, readonly strin
   "Calçados & Acessórios": ["oculos retro masculino", "cinto vintage masculino", "bolsa vintage masculina", "mocassim retro masculino"],
   "Tecnologia": ["radio retro", "caixa som retro", "relogio retro mesa", "teclado vintage"],
   "Beleza & Bem-estar": ["espelho maquiagem retro", "necessaire vintage", "porta perfume vintage", "espelho maquiagem"],
-  "Infantil": ["brinquedo madeira", "blocos madeira", "brinquedo geometrico", "mobile infantil"],
+  "Infantil": [
+    "brinquedo madeira", "blocos madeira", "brinquedo geometrico", "mobile infantil",
+    "brinquedo montessori", "brinquedo encaixe madeira", "brinquedo empilhavel madeira", "arco iris madeira",
+  ],
 };
 
 function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms" | "preferredTerms"> & { strongStyleTerms?: readonly string[] }): AutonomousCuratorCategoryProfile {
@@ -55,10 +58,10 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
 }
 
 /**
- * Perfil 1.7: precision-first com recall direcionado para categorias que ainda
- * ficaram abaixo do piso 2/2 em produção. Os novos arquétipos são objetos reais
- * do repertório Cerberus; image review, pipeline, similaridade, preço e threshold
- * final permanecem inalterados.
+ * Perfil 1.8: mantém os gates de qualidade e amplia recall onde a produção real
+ * mostrou falso-negativos sistemáticos, sobretudo Infantil. Arquétipos legítimos
+ * de brinquedo de madeira/Montessori agora contam como evidência estética forte;
+ * image review, pipeline, similaridade, preço e threshold final continuam iguais.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
@@ -230,15 +233,24 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "blocos madeira cores primarias", "mobile madeira geometrico infantil",
       "blocos madeira bauhaus cores primarias", "brinquedo equilibrio madeira escandinavo",
       "mobile madeira formas geometricas", "brinquedo empilhavel madeira geometrico",
+      "brinquedo montessori madeira", "brinquedo waldorf madeira",
+      "brinquedo encaixe madeira montessori", "brinquedo empilhavel montessori",
     ],
     strongStyleTerms: [
       ...STRONG_STYLE_TERMS,
+      "brinquedo madeira", "blocos madeira", "brinquedo montessori", "montessori", "waldorf",
+      "brinquedo geometrico", "brinquedo geométrico", "brinquedo encaixe madeira",
+      "arco iris madeira", "arco-íris madeira",
       "blocos bauhaus", "blocos madeira cores primarias", "blocos madeira cores primárias",
       "brinquedo equilibrio madeira", "brinquedo equilíbrio madeira",
-      "mobile geometrico", "mobile geométrico",
+      "mobile geometrico", "mobile geométrico", "mobile madeira",
       "brinquedo empilhavel madeira", "brinquedo empilhável madeira",
     ],
-    signatureTerms: ["geométrico", "geometrico", "formas", "cores primarias", "cores primárias", "madeira natural", "encaixe", "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage"],
+    signatureTerms: [
+      "geométrico", "geometrico", "formas", "cores primarias", "cores primárias", "madeira natural",
+      "madeira", "montessori", "waldorf", "encaixe", "empilhavel", "empilhável",
+      "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage",
+    ],
     blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte", "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem"],
     maxAutoPrice: 300,
     maxReviewPrice: 500,
