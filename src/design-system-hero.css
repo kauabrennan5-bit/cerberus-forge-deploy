@@ -1,0 +1,96 @@
+/* Hero-specific completion for the Cerberus redesign system. */
+
+::-webkit-scrollbar-track {
+  background: var(--cerberus-black) !important;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--cerberus-warm-gray) !important;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--cerberus-red) !important;
+}
+
+.nexbot-hero__canvas canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--cerberus-red) !important;
+}
+
+.nexbot-hero__loading {
+  border-color: color-mix(in srgb, var(--cerberus-warm-gray) 45%, transparent) !important;
+  background: color-mix(in srgb, var(--cerberus-black) 82%, transparent) !important;
+  color: var(--cerberus-warm-gray) !important;
+}
+
+.nexbot-hero__loading-dot {
+  background: var(--cerberus-red) !important;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--cerberus-red) 55%, transparent) !important;
+}
+
+.nexbot-hero__fallback {
+  border-color: color-mix(in srgb, var(--cerberus-red) 38%, transparent) !important;
+  color: var(--cerberus-warm-gray) !important;
+}
+
+.nexbot-hero__fallback-mark {
+  color: var(--cerberus-red) !important;
+}
+
+.nexbot-hero__fallback p {
+  color: var(--cerberus-cream) !important;
+}
+
+.nexbot-hero__controls button:hover {
+  border-color: var(--cerberus-red) !important;
+  background: color-mix(in srgb, var(--cerberus-red) 14%, var(--cerberus-black)) !important;
+  color: var(--cerberus-cream) !important;
+}
+
+.nexbot-hero__meta-line {
+  background: color-mix(in srgb, var(--cerberus-warm-gray) 34%, transparent) !important;
+}
+
+@media (max-width: 959px) {
+  .nexbot-hero {
+    grid-template-areas:
+      'copy'
+      'model' !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(320px, 45svh) !important;
+    min-height: auto !important;
+  }
+
+  .nexbot-hero::after {
+    background: linear-gradient(180deg, transparent 57%, color-mix(in srgb, var(--cerberus-warm-gray) 14%, transparent) 57.1%, transparent 57.2%) !important;
+  }
+
+  .nexbot-hero__copy {
+    align-items: flex-start !important;
+    padding: clamp(1.8rem, 7vw, 3.4rem) clamp(1.15rem, 6vw, 3rem) 1.25rem !important;
+    text-align: left !important;
+  }
+
+  .nexbot-hero__copy h1 {
+    max-width: 12ch !important;
+  }
+
+  .nexbot-hero__meta {
+    justify-content: flex-start !important;
+  }
+
+  .nexbot-hero__model-column,
+  .nexbot-hero__stage {
+    min-height: 320px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .nexbot-hero {
+    grid-template-rows: auto minmax(300px, 40svh) !important;
+  }
+
+  .nexbot-hero__copy h1 {
+    font-size: clamp(2.35rem, 11vw, 3.55rem) !important;
+    letter-spacing: -0.035em !important;
+  }
+}
