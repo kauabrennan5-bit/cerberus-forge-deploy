@@ -1,5 +1,25 @@
 [
   {
+    "id": "prod-1788275360966-77a8a6f288",
+    "ref": "AUTOQ-77A8A6F288",
+    "slug": "luminaria-de-mesa-cogumelo-laranja-77a8a6",
+    "produto": "Luminária de Mesa Cogumelo Laranja",
+    "displayTitle": "Luminária de Mesa Cogumelo Laranja",
+    "preco": 89.9,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820lr-ms1iqpn6kah306",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lr-ms1iqpn6kah306",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lg-ms1iqpnc55ok6a"
+    ],
+    "link": "https://s.shopee.com.br/6fgtgHg6Vy",
+    "categoria": "Iluminação",
+    "descricao": "Abajur moderno com design inspirado no estilo Bauhaus e formato de cogumelo. Uma peça decorativa funcional ideal para iluminar quartos e salas com estética retrô.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T15:10:51.959258+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788219849993-f1bc11884e",
     "ref": "AUTOQ-F1BC11884E",
     "slug": "kit-de-organizadores-acrilicos-modulares-f1bc11",
