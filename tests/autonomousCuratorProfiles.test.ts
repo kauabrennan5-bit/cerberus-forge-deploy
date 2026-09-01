@@ -21,16 +21,16 @@ test("curator 1.9 combines broad marketplace recall with precise category covera
 
 test("Infantil 1.9 mirrors manual Shopee recall without removing safety blocks", () => {
   const infant = profileForCategory("Infantil");
-  for (const query of ["infantil", "brinquedo infantil", "calcado infantil", "babuch infantil", "brinquedo madeira", "brinquedo montessori"]) {
+  for (const query of ["infantil", "brinquedo infantil", "quarto infantil", "brinquedo madeira", "brinquedo montessori", "mobile infantil"]) {
     assert.ok(infant.queries.includes(query), `Infantil precisa buscar ${query}`);
   }
   for (const term of ["brinquedo madeira", "montessori", "babuch infantil", "calcado infantil", "country infantil"]) {
     assert.ok(infant.strongStyleTerms.includes(term), `Infantil precisa reconhecer ${term}`);
   }
-  for (const themed of ["tematico", "temática", "tematica", "caminhao", "caminhão"]) {
+  for (const themed of ["tematico", "temática", "tematica"]) {
     assert.ok(!infant.blockedTerms.includes(themed), `Infantil não deve bloquear tema lúdico por si só: ${themed}`);
   }
-  for (const blocked of ["arma brinquedo", "pistola", "laser forte", "personagem"]) {
+  for (const blocked of ["arma brinquedo", "pistola", "laser forte", "personagem", "caminhao", "caminhão"]) {
     assert.ok(infant.blockedTerms.includes(blocked), `Infantil deve continuar bloqueando ${blocked}`);
   }
 });
