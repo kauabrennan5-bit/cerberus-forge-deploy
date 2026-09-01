@@ -5,14 +5,23 @@ import fs from "node:fs";
 const coordinator = fs.readFileSync("server/services/autonomousCuratorContinuousV2.ts", "utf8");
 const base = fs.readFileSync("server/services/autonomousCuratorContinuousV2Base.ts", "utf8");
 
-test("balanced coordinator keeps the proven discovery engine intact behind a two-per-category policy", () => {
-  assert.match(coordinator, /const LIVE_TARGET_PER_CATEGORY = 2/);
-  assert.match(coordinator, /bootstrapMode = totalDeficit\(countsBefore\) > 0/);
+test("coordinator replaces the exact-two cap with a cumulative one-per-day floor", () => {
+  assert.match(coordinator, /function dailyTargetPerCategory/);
+  assert.match(coordinator, /today - start \+ 1/);
+  assert.match(coordinator, /AUTONOMOUS_CURATOR_GROWTH_START_DATE/);
+  assert.match(coordinator, /daily_target_per_category/);
+  assert.match(coordinator, /growth_day/);
+  assert.doesNotMatch(coordinator, /const LIVE_TARGET_PER_CATEGORY = 2/);
+  assert.doesNotMatch(coordinator, /function retirementCandidates/);
+  assert.doesNotMatch(coordinator, /category_balance_retired_ids/);
+});
+
+test("deficient categories remain in automatic recovery while already-covered categories cannot consume bootstrap growth", () => {
+  assert.match(coordinator, /recoveryMode = totalDeficit\(countsBefore, dailyTarget\) > 0/);
   assert.match(coordinator, /activeBefore \+ AUTONOMOUS_CURATOR_PROFILES\.length/);
-  assert.match(coordinator, /retirementCandidates/);
-  assert.match(coordinator, /syncCatalogAndDeploy\("autonomous curator category balance"\)/);
-  assert.match(coordinator, /category_counts_after/);
-  assert.match(coordinator, />=24h-per-category cadence/);
+  assert.match(coordinator, /countsBefore\[profile\.category\].*dailyTarget/s);
+  assert.match(coordinator, /overTargetPublicationIds\.push\(product\.id\)/);
+  assert.match(coordinator, /progressive growth correction/);
 });
 
 test("quality gates remain in the preserved v2 discovery engine", () => {
@@ -22,8 +31,8 @@ test("quality gates remain in the preserved v2 discovery engine", () => {
   assert.match(base, /breakdown\.finalScore < input\.config\.autoPublishThreshold/);
 });
 
-test("bootstrap extras from already-covered categories are removed before the balancing catalog sync", () => {
-  assert.match(coordinator, /countsBefore\[profile\.category\].*LIVE_TARGET_PER_CATEGORY/s);
-  assert.match(coordinator, /bootstrapExtraIds\.push\(product\.id\)/);
-  assert.match(coordinator, /publishedIds.*bootstrapExtraIds/s);
+test("growth messaging promises accumulation instead of rotating healthy products away", () => {
+  assert.match(coordinator, /Amanhã o piso sobe automaticamente/);
+  assert.match(coordinator, /nenhuma peça saudável é removida só para manter limite/);
+  assert.match(coordinator, /never archived merely because a category crossed a fixed cap/);
 });
