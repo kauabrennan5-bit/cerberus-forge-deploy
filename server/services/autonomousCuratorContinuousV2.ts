@@ -24,26 +24,24 @@ export type {
 
 /**
  * Public catalog contract:
- * - every public category owns exactly two visible pieces;
- * - categories below two bypass the 24h cooldown until the floor is restored;
- * - once all categories are covered, the base curator returns to its normal
- *   >=24h-per-category cadence;
- * - a successful daily addition replaces the oldest visible piece in the same
- *   category so the storefront remains intentionally small and balanced.
+ * - the autonomous catalog grows cumulatively by one visible piece per category
+ *   for every local calendar day since autonomous publication began;
+ * - day 1 targets 1/category, day 2 targets 2/category, day 3 targets 3/category,
+ *   and so on; already-published pieces are never retired merely to keep a cap;
+ * - a category below today's cumulative floor bypasses the 24h cadence on every
+ *   scheduled cycle until it catches up; categories already at/above today's
+ *   target do not receive bootstrap extras;
+ * - availability failures still archive only listings definitively unavailable
+ *   on the exact Shopee identity and therefore create a refill deficit.
  *
  * The proven V2 discovery/scoring/image/pipeline implementation lives in the
- * adjacent Base module unchanged. This coordinator changes inventory policy,
- * never the quality gates.
- *
- * Editorial persistence invariants remain owned by the preserved base:
- * image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration)
- * display_title_reviewed_at: now.toISOString()
- * display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION
- * image_review_version: IMAGE_REVIEW_VERSION
+ * adjacent Base module. This coordinator changes inventory growth policy,
+ * never the safety, identity, image, pipeline, similarity or final score gates.
  */
-const LIVE_TARGET_PER_CATEGORY = 2;
-const CATEGORY_BALANCE_VERSION = "1";
+const CATEGORY_GROWTH_VERSION = "2";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "1";
+const GROWTH_TIME_ZONE = "America/Fortaleza";
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0];
 
@@ -73,48 +71,58 @@ function categoryCounts(products: readonly Product[]): CategoryCounts {
   ) as CategoryCounts;
 }
 
-function categoryDeficits(counts: CategoryCounts): CategoryCounts {
+function localDateKey(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: GROWTH_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(value);
+  const part = (name: string) => parts.find(item => item.type === name)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function dateKeyOrdinal(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || "").trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day);
+  return Number.isFinite(timestamp) ? Math.floor(timestamp / DAY_MS) : null;
+}
+
+function autonomousGrowthStartDate(products: readonly Product[], now: Date, env: NodeJS.ProcessEnv): string {
+  const configured = String(env.AUTONOMOUS_CURATOR_GROWTH_START_DATE || "").trim();
+  if (dateKeyOrdinal(configured) !== null) return configured;
+
+  let earliest = Number.POSITIVE_INFINITY;
+  for (const product of products) {
+    if (product.createdBy !== baseInternals.QUEUE_CREATED_BY || !product.createdAt) continue;
+    const timestamp = Date.parse(product.createdAt);
+    if (Number.isFinite(timestamp) && timestamp < earliest) earliest = timestamp;
+  }
+  return Number.isFinite(earliest) ? localDateKey(new Date(earliest)) : localDateKey(now);
+}
+
+function dailyTargetPerCategory(products: readonly Product[], now: Date, env: NodeJS.ProcessEnv): number {
+  const start = dateKeyOrdinal(autonomousGrowthStartDate(products, now, env));
+  const today = dateKeyOrdinal(localDateKey(now));
+  if (start === null || today === null) return 1;
+  return Math.max(1, today - start + 1);
+}
+
+function categoryDeficits(counts: CategoryCounts, target: number): CategoryCounts {
   return Object.fromEntries(
     AUTONOMOUS_CURATOR_PROFILES.map(profile => [
       profile.category,
-      Math.max(0, LIVE_TARGET_PER_CATEGORY - (counts[profile.category] || 0)),
+      Math.max(0, target - (counts[profile.category] || 0)),
     ]),
   ) as CategoryCounts;
 }
 
-function totalDeficit(counts: CategoryCounts): number {
-  return Object.values(categoryDeficits(counts)).reduce((sum, value) => sum + value, 0);
-}
-
-function publicationTimestamp(product: Product): number {
-  const meta = baseInternals.parseQueueNote(product.curatorNote);
-  const value = meta?.publishedAt || product.createdAt || "";
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function retirementCandidates(
-  products: readonly Product[],
-  category: PublicProductCategory,
-  protectedIds: ReadonlySet<string>,
-): Product[] {
-  const active = activePublishedForCategory(products, category);
-  const excess = Math.max(0, active.length - LIVE_TARGET_PER_CATEGORY);
-  if (excess === 0) return [];
-
-  return active
-    .filter(product => !protectedIds.has(product.id))
-    .sort((a, b) => {
-      // Prefer retiring an older curator-managed item before a manual/system
-      // seed. If necessary, the oldest remaining public item is still eligible
-      // so the exact-two storefront invariant cannot drift.
-      const aManaged = a.createdBy === baseInternals.QUEUE_CREATED_BY ? 0 : 1;
-      const bManaged = b.createdBy === baseInternals.QUEUE_CREATED_BY ? 0 : 1;
-      return aManaged - bManaged
-        || publicationTimestamp(a) - publicationTimestamp(b)
-        || a.id.localeCompare(b.id);
-    })
-    .slice(0, excess);
+function totalDeficit(counts: CategoryCounts, target: number): number {
+  return Object.values(categoryDeficits(counts, target)).reduce((sum, value) => sum + value, 0);
 }
 
 async function setProductVisibility(productId: string, published: boolean): Promise<void> {
@@ -155,13 +163,14 @@ async function archiveUnavailableProducts(ids: readonly string[]): Promise<void>
   throw new Error(`PUBLISHED_PRODUCT_HEALTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
 }
 
-async function persistBalanceMetadata(input: {
+async function persistGrowthMetadata(input: {
   result: ContinuousCuratorResultV2;
-  bootstrapMode: boolean;
+  recoveryMode: boolean;
+  dailyTarget: number;
+  growthStartDate: string;
   countsBefore: CategoryCounts;
   countsAfter: CategoryCounts;
-  retiredIds: string[];
-  bootstrapExtraIds: string[];
+  overTargetPublicationIds: string[];
   health: PublishedProductHealthResult;
 }): Promise<void> {
   if (!input.result.runId) return;
@@ -179,15 +188,17 @@ async function persistBalanceMetadata(input: {
     status: input.result.status === "completed" ? "completed" : input.result.status === "failed" ? "failed" : "partial",
     metadata: {
       ...metadata,
-      category_balance_version: CATEGORY_BALANCE_VERSION,
-      live_target_per_category: LIVE_TARGET_PER_CATEGORY,
-      live_catalog_target: LIVE_TARGET_PER_CATEGORY * AUTONOMOUS_CURATOR_PROFILES.length,
-      category_balance_bootstrap: input.bootstrapMode,
+      category_growth_version: CATEGORY_GROWTH_VERSION,
+      category_growth_recovery: input.recoveryMode,
+      growth_start_date: input.growthStartDate,
+      growth_day: input.dailyTarget,
+      daily_target_per_category: input.dailyTarget,
+      daily_catalog_target: input.dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length,
+      live_catalog_target: input.dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length,
       category_counts_before: input.countsBefore,
       category_counts_after: input.countsAfter,
-      category_deficits_after: categoryDeficits(input.countsAfter),
-      category_balance_retired_ids: input.retiredIds,
-      category_balance_bootstrap_extra_ids: input.bootstrapExtraIds,
+      category_deficits_after: categoryDeficits(input.countsAfter, input.dailyTarget),
+      category_growth_over_target_publication_ids: input.overTargetPublicationIds,
       published_product_health_version: PUBLISHED_HEALTH_COORDINATOR_VERSION,
       published_product_health_checked_ids: input.health.checkedIds,
       published_product_health_unavailable_ids: input.health.unavailableIds,
@@ -276,31 +287,35 @@ async function notifyConfirmedUnavailableTransitions(
   }
 }
 
-async function notifyBalance(
+async function notifyGrowth(
   result: ContinuousCuratorResultV2,
   counts: CategoryCounts,
+  dailyTarget: number,
+  growthStartDate: string,
   env: NodeJS.ProcessEnv,
   health: PublishedProductHealthResult,
 ): Promise<void> {
   const chatId = adminChatId(env);
   if (!chatId) return;
-  const covered = AUTONOMOUS_CURATOR_PROFILES.filter(profile => counts[profile.category] >= LIVE_TARGET_PER_CATEGORY).length;
+  const covered = AUTONOMOUS_CURATOR_PROFILES.filter(profile => counts[profile.category] >= dailyTarget).length;
   const lines = AUTONOMOUS_CURATOR_PROFILES.map(profile => {
     const count = counts[profile.category] || 0;
-    return `${count >= LIVE_TARGET_PER_CATEGORY ? "✅" : "🔎"} <b>${profile.category}</b>: ${count}/${LIVE_TARGET_PER_CATEGORY}`;
+    return `${count >= dailyTarget ? "✅" : "🔎"} <b>${profile.category}</b>: ${count}/${dailyTarget}`;
   });
   const text = [
-    "⚖️ <b>CERBERUS — EQUILÍBRIO DO ACERVO</b>",
+    "📈 <b>CERBERUS — CRESCIMENTO DIÁRIO DO ACERVO</b>",
     "",
-    `Categorias com 2 peças: <b>${covered}/${AUTONOMOUS_CURATOR_PROFILES.length}</b>`,
+    `Dia de crescimento: <b>${dailyTarget}</b> · início: <code>${growthStartDate}</code>`,
+    `Meta mínima hoje: <b>${dailyTarget} peças por categoria</b>`,
+    `Categorias na meta: <b>${covered}/${AUTONOMOUS_CURATOR_PROFILES.length}</b>`,
     `Novos publicados neste ciclo: <b>${result.publishedThisCycle}</b>`,
     `Links Shopee indisponíveis removidos: <b>${health.unavailableIds.length}</b>`,
     "",
     ...lines,
     "",
     covered === AUTONOMOUS_CURATOR_PROFILES.length
-      ? "Acervo equilibrado. Cada categoria recebe no máximo 1 novo achado após 24h; o item mais antigo sai para manter 2 peças visíveis."
-      : "Categorias abaixo de 2 continuam em recuperação automática nos próximos ciclos, sem reduzir os gates de qualidade.",
+      ? `Meta do dia cumprida. Amanhã o piso sobe automaticamente para ${dailyTarget + 1} peças por categoria; nenhuma peça saudável é removida só para manter limite.`
+      : "Categorias abaixo da meta continuam em recuperação automática nos próximos ciclos de hoje, sem afrouxar identidade, imagem, pipeline, similaridade ou score final.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
 }
@@ -336,20 +351,23 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     }
   }
 
+  const growthStartDate = autonomousGrowthStartDate(productsBefore, now, env);
+  const dailyTarget = dailyTargetPerCategory(productsBefore, now, env);
   const countsBefore = categoryCounts(productsBefore);
-  const bootstrapMode = totalDeficit(countsBefore) > 0;
+  const recoveryMode = totalDeficit(countsBefore, dailyTarget) > 0;
   const activeBefore = productsBefore.filter(isActivePublished).length;
 
-  // The unchanged base V2 uses a global emergency floor. During bootstrap we
-  // deliberately create a deficit of ten, which makes all ten profiles get one
-  // bounded attempt in this cycle. After coverage reaches 2/category, the
-  // global emergency is disabled and the original >=24h cadence takes over.
+  // The base V2 uses a global emergency floor. While at least one category is
+  // behind today's cumulative target, create a temporary global deficit large
+  // enough to make every profile eligible for one bounded attempt this cycle.
+  // The coordinator discards publications from categories already at target,
+  // while deficient categories keep their successful catch-up publication.
   const baseEnv: NodeJS.ProcessEnv = {
     ...env,
     AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(
-      bootstrapMode
+      recoveryMode
         ? Math.min(100, activeBefore + AUTONOMOUS_CURATOR_PROFILES.length)
-        : LIVE_TARGET_PER_CATEGORY * AUTONOMOUS_CURATOR_PROFILES.length,
+        : Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length),
     ),
   };
 
@@ -361,65 +379,50 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   });
   if (result.status === "disabled" || !result.runId) return result;
 
-  let products = await productsRepository.getProducts();
+  const products = await productsRepository.getProducts();
   const publishedIds = new Set(
     result.categories
       .filter(category => category.published && category.productId)
       .map(category => String(category.productId)),
   );
-  const bootstrapExtraIds: string[] = [];
-  const retiredIds: string[] = [];
+  const overTargetPublicationIds: string[] = [];
 
-  // While repairing sparse categories, publications produced for categories
-  // that were already full are not allowed to churn the visible collection.
-  // They are archived immediately and the catalog is resynced below.
-  if (bootstrapMode) {
+  // Recovery cycles are allowed to add only to categories that were below the
+  // cumulative floor when the cycle began. This prevents emergency mode from
+  // creating more than the intended daily progression in already-covered lanes.
+  if (recoveryMode) {
     for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-      if ((countsBefore[profile.category] || 0) < LIVE_TARGET_PER_CATEGORY) continue;
+      if ((countsBefore[profile.category] || 0) < dailyTarget) continue;
       for (const product of activePublishedForCategory(products, profile.category)) {
         if (!publishedIds.has(product.id)) continue;
         await setProductVisibility(product.id, false);
         product.status = "archived";
         product.ativo = false;
-        bootstrapExtraIds.push(product.id);
+        overTargetPublicationIds.push(product.id);
       }
     }
   }
 
-  // Normal daily rotation protects the just-published item and retires the
-  // oldest prior item. During bootstrap, newly published items only remain in
-  // categories that were actually below the two-piece floor.
-  products = await productsRepository.getProducts();
-  const protectedIds = new Set(
-    [...publishedIds].filter(id => !bootstrapExtraIds.includes(id)),
-  );
-  for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-    for (const product of retirementCandidates(products, profile.category, protectedIds)) {
-      await setProductVisibility(product.id, false);
-      product.status = "archived";
-      product.ativo = false;
-      retiredIds.push(product.id);
-    }
-  }
-
-  if (bootstrapExtraIds.length > 0 || retiredIds.length > 0) {
-    const sync = await syncCatalogAndDeploy("autonomous curator category balance");
+  // Unlike the retired exact-two policy, successful historical publications are
+  // never archived merely because a category crossed a fixed cap. The catalog is
+  // cumulative; only an over-target publication created by emergency eligibility
+  // in this same cycle is rolled back.
+  if (overTargetPublicationIds.length > 0) {
+    const sync = await syncCatalogAndDeploy("autonomous curator progressive growth correction");
     if (!sync.success) {
-      // Restore the base publication state rather than leaving the database and
-      // public catalog disagreeing. The next scheduled cycle retries balance.
-      for (const id of [...bootstrapExtraIds, ...retiredIds]) {
+      for (const id of overTargetPublicationIds) {
         await setProductVisibility(id, true).catch(() => undefined);
       }
-      await syncCatalogAndDeploy("autonomous curator category balance rollback").catch(() => undefined);
-      throw new Error(`CATEGORY_BALANCE_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
+      await syncCatalogAndDeploy("autonomous curator progressive growth correction rollback").catch(() => undefined);
+      throw new Error(`CATEGORY_GROWTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
     }
   }
 
   const productsAfter = await productsRepository.getProducts();
   const countsAfter = categoryCounts(productsAfter);
-  const deficitAfter = totalDeficit(countsAfter);
+  const deficitAfter = totalDeficit(countsAfter, dailyTarget);
   const coveredCategories = AUTONOMOUS_CURATOR_PROFILES.filter(
-    profile => countsAfter[profile.category] >= LIVE_TARGET_PER_CATEGORY,
+    profile => countsAfter[profile.category] >= dailyTarget,
   ).length;
 
   result.fulfilledCategories = coveredCategories;
@@ -429,30 +432,33 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       ? "failed"
       : "partial";
 
-  await persistBalanceMetadata({
+  await persistGrowthMetadata({
     result,
-    bootstrapMode,
+    recoveryMode,
+    dailyTarget,
+    growthStartDate,
     countsBefore,
     countsAfter,
-    retiredIds,
-    bootstrapExtraIds,
+    overTargetPublicationIds,
     health,
-  }).catch(error => console.warn("[Autonomous Curator Balance] metadata update failed", error));
+  }).catch(error => console.warn("[Autonomous Curator Growth] metadata update failed", error));
 
-  if (options.notify !== false) await notifyBalance(result, countsAfter, env, health);
+  if (options.notify !== false) await notifyGrowth(result, countsAfter, dailyTarget, growthStartDate, env, health);
   return result;
 }
 
 export const autonomousCuratorContinuousV2Internals = {
   ...baseInternals,
-  LIVE_TARGET_PER_CATEGORY,
-  CATEGORY_BALANCE_VERSION,
+  CATEGORY_GROWTH_VERSION,
   PUBLISHED_HEALTH_COORDINATOR_VERSION,
+  GROWTH_TIME_ZONE,
   activePublishedForCategory,
   categoryCounts,
+  localDateKey,
+  dateKeyOrdinal,
+  autonomousGrowthStartDate,
+  dailyTargetPerCategory,
   categoryDeficits,
   totalDeficit,
-  publicationTimestamp,
-  retirementCandidates,
   resolveShopeeClient,
 };
