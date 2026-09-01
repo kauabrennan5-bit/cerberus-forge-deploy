@@ -16,6 +16,7 @@ import {
   type CatalogViewState,
 } from './lib/catalogNavigation';
 import { Header } from './components/Header';
+import { NexbotHero } from './components/NexbotHero';
 import { ProductGrid } from './components/ProductGrid';
 import { ProductDetail } from './components/ProductDetail';
 import { AdminForm } from './components/AdminForm';
@@ -382,6 +383,13 @@ export default function App() {
     setNewsletterStatus(result.error || 'Cadastro indisponível.');
   };
 
+  const handleEnterCatalog = useCallback(() => {
+    const catalog = document.getElementById('cerberus-acervo');
+    if (!catalog) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    catalog.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  }, []);
+
   // Back/Forward restores the exact history entry instead of applying a global catalog scroll snapshot.
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
@@ -491,22 +499,27 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 min-w-0">
         {currentView === 'catalog' && (
-          <ProductGrid
-            products={products}
-            favorites={favorites}
-            onToggleFavorite={handleToggleFavorite}
-            onSelectProduct={handleSelectProduct}
-            showOnlyFavorites={showOnlyFavorites}
-            onToggleShowFavorites={() => setShowOnlyFavorites((prev) => !prev)}
-            isLoading={isLoadingProducts}
-            error={fetchError}
-            onRefresh={loadProducts}
-            onOpenSettings={() => setIsSettingsOpen(true)}
-            metaPixelId={config.metaPixelId}
-            metaAccessToken={config.metaAccessToken}
-            viewState={catalogViewState}
-            onViewStateChange={setCatalogViewState}
-          />
+          <>
+            {!showOnlyFavorites && <NexbotHero onEnterCatalog={handleEnterCatalog} />}
+            <div id="cerberus-acervo" className="scroll-mt-24">
+              <ProductGrid
+                products={products}
+                favorites={favorites}
+                onToggleFavorite={handleToggleFavorite}
+                onSelectProduct={handleSelectProduct}
+                showOnlyFavorites={showOnlyFavorites}
+                onToggleShowFavorites={() => setShowOnlyFavorites((prev) => !prev)}
+                isLoading={isLoadingProducts}
+                error={fetchError}
+                onRefresh={loadProducts}
+                onOpenSettings={() => setIsSettingsOpen(true)}
+                metaPixelId={config.metaPixelId}
+                metaAccessToken={config.metaAccessToken}
+                viewState={catalogViewState}
+                onViewStateChange={setCatalogViewState}
+              />
+            </div>
+          </>
         )}
 
         {currentView === 'product-detail' && selectedProduct && (
