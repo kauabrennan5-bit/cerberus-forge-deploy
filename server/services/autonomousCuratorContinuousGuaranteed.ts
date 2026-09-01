@@ -7,7 +7,7 @@ import {
   runAutonomousCuratorContinuousV2 as runStrictAutonomousCuratorContinuousV2,
   autonomousCuratorContinuousV2Internals,
   type ContinuousCuratorResultV2,
-} from "./autonomousCuratorContinuousV2";
+} from "./autonomousCuratorContinuousV2Strict";
 import {
   fillAutonomousCatalogFloor,
   type CatalogFloorFallbackResult,
