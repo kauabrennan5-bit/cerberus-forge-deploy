@@ -5,14 +5,47 @@ import { Product } from "../../src/types";
 import { containsRawPayloadMarkers } from "./productLifecycle";
 import { resolvePublicProductCategory } from "../../src/lib/productCategory";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
+import { isAutonomousCuratorFloorFallback } from "./autonomousCuratorCatalogFloorPolicy";
+
+function publicHttpsImages(images: readonly string[]): string[] {
+  return images
+    .filter((image): image is string => typeof image === "string")
+    .map(image => image.trim())
+    .filter(Boolean)
+    .filter(image => {
+      try {
+        return new URL(image).protocol === "https:";
+      } catch {
+        return false;
+      }
+    })
+    .filter((image, index, list) => list.indexOf(image) === index);
+}
+
+/**
+ * Normal products remain fail-closed on the canonical clean-image contract.
+ * The guaranteed catalog-floor fallback is the one explicit exception: its
+ * official Shopee image is already technically probed, but may remain marked
+ * review_required because editorial/visual filters are ranking signals rather
+ * than a reason to leave a public category empty.
+ */
+function publicCatalogImages(product: Product): string[] {
+  const canonical = resolveCanonicalProductImage(product);
+  if (canonical.status === "ready" && canonical.primaryImageUrl) return canonical.publicHttpsImageUrls;
+  return isAutonomousCuratorFloorFallback(product.createdBy) ? publicHttpsImages(product.imagens || []) : [];
+}
 
 /**
  * Script de exportação do catálogo público para formato estático (/public/data/products.json).
- * Aplica rigorosamente as regras de sanitização exigidas:
+ * Aplica rigorosamente as regras da migração estática:
  * - Apenas produtos válidos, publicados e com URL válida.
  * - Eliminação de produtos fictícios, fantasmas ou sem dados essenciais.
  * - Sem inclusão de dados administrativos, senhas ou metadados internos da automação.
  * - Preservação dos campos essenciais para o frontend (id, ref quando existente, produto, preco, imagens, link e categoria).
+ *
+ * A única exceção editorial é o produto de floor fallback explicitamente
+ * auditado: ele pode usar a imagem oficial tecnicamente válida mesmo quando a
+ * revisão estética ficou review_required. Isso não altera gates de newsletter.
  */
 export async function exportStaticProductsJson(): Promise<number> {
   try {
@@ -20,38 +53,19 @@ export async function exportStaticProductsJson(): Promise<number> {
     const rawProducts = await getProducts();
     console.log(`[Static Export] ${rawProducts.length} produtos carregados do Repository.`);
     
-    // Filtragem rigorosa conforme regras da migração estática
     const validProducts = rawProducts.filter((p: Product) => {
-      // 1. Deve existir título/produto
-      if (!p.produto || typeof p.produto !== 'string' || p.produto.trim() === '') {
-        return false;
-      }
-      
-      // 2. Deve possuir link de afiliação/compra válido
-      if (!p.link || typeof p.link !== 'string' || p.link.trim() === '' || p.link.includes('exemplo.com')) {
-        return false;
-      }
+      if (!p.produto || typeof p.produto !== "string" || p.produto.trim() === "") return false;
+      if (!p.link || typeof p.link !== "string" || p.link.trim() === "" || p.link.includes("exemplo.com")) return false;
 
-      // 3. Excluir produtos fictícios ou teste óbvios
       const lowerTitle = p.produto.toLowerCase();
-      if (lowerTitle.includes('produto teste') || lowerTitle.includes('item fictício') || lowerTitle.includes('placeholder')) {
-        return false;
-      }
+      if (lowerTitle.includes("produto teste") || lowerTitle.includes("item fictício") || lowerTitle.includes("placeholder")) return false;
 
-      // 4. Deve possuir preço válido numérico maior que 0
       const price = Number(p.preco);
-      if (isNaN(price) || price <= 0) {
-        return false;
-      }
+      if (Number.isNaN(price) || price <= 0) return false;
 
-      // 5. Somente produtos ativos efetivamente publicados. Estados de workflow
-      // (approved, paused, archived, error) nunca são expostos como catálogo.
-      if (p.ativo === false || (p.status !== undefined && p.status !== 'published')) {
-        return false;
-      }
+      if (p.ativo === false || (p.status !== undefined && p.status !== "published")) return false;
 
-      const image = resolveCanonicalProductImage(p);
-      if (image.status !== "ready" || !image.primaryImageUrl) return false;
+      if (publicCatalogImages(p).length === 0) return false;
       if (!resolvePublicProductCategory(p.categoria, { title: p.displayTitle || p.produto, description: p.descricao })) return false;
 
       return true;
@@ -63,26 +77,19 @@ export async function exportStaticProductsJson(): Promise<number> {
       displayTitle: p.displayTitle?.trim() || undefined,
       preco: Number(p.preco),
       precoAntigo: (p as any).precoAntigo ? Number((p as any).precoAntigo) : undefined,
-      imagens: resolveCanonicalProductImage(p).publicHttpsImageUrls,
+      imagens: publicCatalogImages(p),
       link: p.link,
       categoria: resolvePublicProductCategory(p.categoria, { title: p.displayTitle || p.produto, description: p.descricao }),
-      descricao: containsRawPayloadMarkers(p.descricao) ? '' : p.descricao || '',
-      // curatorNote é metadado operacional privado do Curator e nunca cruza
-      // a fronteira pública do catálogo estático.
-      paginaPonteUrl: p.paginaPonteUrl || '',
+      descricao: containsRawPayloadMarkers(p.descricao) ? "" : p.descricao || "",
+      paginaPonteUrl: p.paginaPonteUrl || "",
       createdAt: p.createdAt,
-      // A oferta observada é separada de `preco`; o frontend a rotula com
-      // condição e ressalva, sem prometer total final de checkout.
       ofertaPromocional: p.ofertaPromocional,
       ativo: true,
-      status: 'published'
+      status: "published",
     }));
 
-    // Garantir que o diretório public/data existe
     const publicDataDir = path.join(process.cwd(), "public", "data");
-    if (!fs.existsSync(publicDataDir)) {
-      fs.mkdirSync(publicDataDir, { recursive: true });
-    }
+    if (!fs.existsSync(publicDataDir)) fs.mkdirSync(publicDataDir, { recursive: true });
 
     const outputPath = path.join(publicDataDir, "products.json");
     fs.writeFileSync(outputPath, JSON.stringify(validProducts, null, 2), "utf-8");
@@ -92,7 +99,11 @@ export async function exportStaticProductsJson(): Promise<number> {
     return validProducts.length;
   } catch (error) {
     console.error("[Static Export] Erro ao exportar products.json:", error);
-    // Uma falha de leitura não pode substituir o catálogo canônico por um array vazio.
     throw error;
   }
 }
+
+export const exportProductsJsonInternals = {
+  publicHttpsImages,
+  publicCatalogImages,
+};
