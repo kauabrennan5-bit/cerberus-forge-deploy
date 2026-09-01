@@ -94,6 +94,34 @@ export function sanitizeCuratorOutput(
   };
 }
 
+export function buildDeterministicEditorialFallback(input: {
+  rawTitle: string;
+}): { title: string; description: string } {
+  const rawTitle = normalizeCuratorText(input.rawTitle, 180);
+  const cleanedTitle = rawTitle
+    .replace(/\b(shopee|mercado\s*livre|amazon|aliexpress|temu)\b/gi, "")
+    .replace(/\b(oferta|promo[cç][aã]o|imperd[ií]vel|frete\s*gr[aá]tis|envio\s*gr[aá]tis|top\s*seller)\b/gi, "")
+    .replace(/\b(sku|c[oó]d(?:igo)?\.?\s*[a-z0-9-]+|ref\.?\s*[a-z0-9-]+)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 8)
+    .join(" ")
+    .slice(0, 80);
+  const baseTitle = cleanedTitle || rawTitle || "Produto anunciado";
+  const title = baseTitle.toLocaleLowerCase("pt-BR") === rawTitle.toLocaleLowerCase("pt-BR")
+    ? normalizeCuratorText(`Achado ${baseTitle}`, 90)
+    : baseTitle;
+  return {
+    title: title || "Achado de produto",
+    description: normalizeCuratorText(
+      `Descrição factual baseada no anúncio: ${baseTitle}. Os demais detalhes devem ser conferidos na página oficial do produto.`,
+      600,
+    ),
+  };
+}
+
 export async function reviewScrapedImages(
   rawImages: string[],
   title: string,
@@ -535,8 +563,12 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
       }
     }
 
-    if (!curatedTitle || isGenericTitle(curatedTitle)) {
-      curatedTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "Produto sem Título";
+    const deterministicFallback = buildDeterministicEditorialFallback({ rawTitle });
+    if (!curatedTitle || isGenericTitle(curatedTitle) || curatedTitle.trim().toLocaleLowerCase("pt-BR") === rawTitle.trim().toLocaleLowerCase("pt-BR")) {
+      curatedTitle = deterministicFallback.title;
+    }
+    if (!curatedDescription || curatedDescription.trim().length < 24 || containsRawPayloadMarkers(curatedDescription) || containsPromptInjectionText(curatedDescription)) {
+      curatedDescription = deterministicFallback.description;
     }
 
     if (!curatedCategory) return { success: false, error: "PUBLIC_CATEGORY_REVIEW_REQUIRED" };

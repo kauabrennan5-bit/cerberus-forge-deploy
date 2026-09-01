@@ -8,6 +8,7 @@ import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
+import { buildDeterministicEditorialFallback } from "./productAutomation";
 import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
@@ -82,6 +83,7 @@ type QueueMetadata = {
   itemId: string;
   sourceProductUrl: string;
   imageUrl?: string | null;
+  warnings?: string[];
 };
 
 type EvaluatedCandidate = {
@@ -99,6 +101,7 @@ type EvaluatedCandidate = {
   price: number;
   images: string[];
   score: number;
+  warnings: string[];
 };
 
 export type RotationSearchDiagnostics = {
@@ -127,6 +130,7 @@ export type RotationProposal = {
   source: Product;
   candidate: Product;
   score: number;
+  warnings: string[];
 };
 
 function mapRequest(row: any): ProductRotationRequest {
@@ -200,6 +204,21 @@ function metadataNumber(metadata: Record<string, unknown>, key: string): number 
 
 function requestSearchRound(request: ProductRotationRequest): number {
   return metadataNumber(request.metadata, "search_round");
+}
+
+function isLegacyRotation(request: ProductRotationRequest): boolean {
+  return String(request.metadata.rotation_version || "1") !== ROTATION_VERSION;
+}
+
+async function invalidateLegacyRotation(request: ProductRotationRequest): Promise<ProductRotationRequest> {
+  if (!isLegacyRotation(request) || ["replaced", "cancelled"].includes(request.status)) return request;
+  const now = new Date().toISOString();
+  return patchRequest(request.id, {
+    status: "cancelled",
+    reason: "ROTATION_SUPERSEDED_V5",
+    completed_at: now,
+    metadata: { ...request.metadata, invalidated_by_rotation_version: ROTATION_VERSION, invalidated_at: now },
+  });
 }
 
 function newDiagnostics(): RotationSearchDiagnostics {
@@ -283,9 +302,8 @@ export async function listRecoverableProductRotations(limit = 25): Promise<Produ
     "SHOPEE_PROVIDER_TIMEOUT",
     "SHOPEE_PROVIDER_UNAVAILABLE",
   ]);
-  return (data || [])
-    .map(mapRequest)
-    .filter(request => request.status === "searching" || retryableFailureReasons.has(String(request.reason || "")));
+  const requests = await Promise.all((data || []).map(row => invalidateLegacyRotation(mapRequest(row))));
+  return requests.filter(request => request.status === "searching" || retryableFailureReasons.has(String(request.reason || "")));
 }
 
 export async function startProductRotation(input: {
@@ -307,7 +325,10 @@ export async function startProductRotation(input: {
     .limit(1)
     .maybeSingle();
   if (existingError) throw existingError;
-  if (existing) return mapRequest(existing);
+  if (existing) {
+    const existingRequest = await invalidateLegacyRotation(mapRequest(existing));
+    if (existingRequest.status !== "cancelled") return existingRequest;
+  }
 
   const { data, error } = await requireSupabase().from("product_rotation_requests").insert({
     source_product_id: source.id,
@@ -378,10 +399,12 @@ async function evaluateIdentity(input: {
 
   const rawTitle = String(acquisition.name || lookup.name || input.discoveryName || "").replace(/\s+/g, " ").trim();
   if (!rawTitle) return { candidate: null, reason: "TITLE_MISSING" };
-  const blocked = hasBlockedProfileTerm(input.profile, rawTitle);
-  if (blocked) return { candidate: null, reason: `PROFILE_BLOCKED_TERM:${blocked}` };
   const score = fastCandidateScore(input.profile, rawTitle);
-  if (score < ROTATION_PROPOSAL_MIN_SCORE) return { candidate: null, reason: "PROFILE_REJECTED" };
+  const warnings: string[] = [];
+  const blocked = hasBlockedProfileTerm(input.profile, rawTitle);
+  if (blocked) warnings.push(`PROFILE_BLOCKED_TERM:${blocked}`);
+  if (score < ROTATION_PROPOSAL_MIN_SCORE) warnings.push("LOW_CONFIDENCE");
+  const editorial = buildDeterministicEditorialFallback({ rawTitle });
 
   const inferredCategory = resolvePublicProductCategory("", { title: rawTitle, description: "" });
   if (inferredCategory && inferredCategory !== input.profile.category) {
@@ -410,12 +433,13 @@ async function evaluateIdentity(input: {
       affiliateUrl: acquisition.affiliateUrl,
       sourceImageUrl,
       rawTitle,
-      displayTitle: fastDisplayTitle(rawTitle),
-      description: `Opção encontrada na Shopee para rotação manual em ${input.profile.category}.`,
+      displayTitle: editorial.title,
+      description: editorial.description,
       category: input.profile.category,
       price,
       images: [sourceImageUrl],
-      score,
+      score: Math.max(ROTATION_PROPOSAL_MIN_SCORE, score),
+      warnings,
     },
     reason: "QUALIFIED_FAST_OPERATOR_REVIEW",
   };
@@ -444,6 +468,7 @@ async function persistCandidate(candidate: EvaluatedCandidate, now: Date): Promi
   if (!(await claimIdentity(candidate, productId))) return null;
   const meta: QueueMetadata = {
     score: candidate.score,
+    warnings: candidate.warnings,
     profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
     queuedAt: now.toISOString(),
     publishedAt: null,
@@ -496,6 +521,7 @@ async function refreshCandidateProduct(product: Product, candidate: EvaluatedCan
   const now = new Date();
   const meta: QueueMetadata = {
     score: candidate.score,
+    warnings: candidate.warnings,
     profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
     queuedAt: previous?.queuedAt || product.createdAt || now.toISOString(),
     publishedAt: published ? now.toISOString() : null,
@@ -680,6 +706,10 @@ async function markProviderFailure(request: ProductRotationRequest, error: Shope
 export async function proposeNextProductRotationCandidate(requestId: string, env: NodeJS.ProcessEnv = process.env): Promise<RotationProposal> {
   let request = await getRequest(requestId);
   if (!request) throw new Error("ROTATION_REQUEST_NOT_FOUND");
+  if (isLegacyRotation(request)) {
+    await invalidateLegacyRotation(request);
+    throw new Error("ROTATION_SUPERSEDED_V5");
+  }
   if (!["searching", "candidate_ready", "failed"].includes(request.status)) throw new Error(`ROTATION_NOT_SEARCHABLE:${request.status}`);
   const source = await productsRepository.getProductByIdOrSlug(request.sourceProductId);
   if (!source || source.status !== "published" || source.ativo === false) throw new Error("ROTATION_SOURCE_NO_LONGER_ACTIVE");
@@ -710,7 +740,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
           request = await patchRequest(request.id, { status: "candidate_ready", reason: null });
           const refreshed = await productsRepository.getProductByIdOrSlug(currentCandidate.id);
           if (!refreshed) throw new Error("ROTATION_CANDIDATE_REFRESH_MISSING");
-          return { request, source, candidate: refreshed, score: evaluated.candidate.score };
+          return { request, source, candidate: refreshed, score: evaluated.candidate.score, warnings: evaluated.candidate.warnings || [] };
         }
         bump(diagnostics, evaluated.reason);
       }
@@ -731,7 +761,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       });
       const refreshed = await productsRepository.getProductByIdOrSlug(queued.id);
       if (!refreshed) throw new Error("ROTATION_CANDIDATE_CLAIM_MISSING");
-      return { request, source, candidate: refreshed, score: evaluated.candidate.score };
+      return { request, source, candidate: refreshed, score: evaluated.candidate.score, warnings: evaluated.candidate.warnings || [] };
     }
 
     const discovered = await discoverLiveCandidate({ profile, source, rejected, client, diagnostics, searchRound });
@@ -760,7 +790,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
             candidatesReceived: diagnostics.candidatesReceived,
             candidatesExamined: diagnostics.candidatesExamined,
           });
-          return { request, source, candidate: persisted, score: discovered.score };
+          return { request, source, candidate: persisted, score: discovered.score, warnings: discovered.warnings || [] };
         }
         bump(diagnostics, "IDENTITY_CLAIM_CONFLICT");
       } catch (error) {
@@ -849,6 +879,10 @@ export async function cancelProductRotation(requestId: string): Promise<ProductR
 export async function approveProductRotation(requestId: string, env: NodeJS.ProcessEnv = process.env): Promise<{ request: ProductRotationRequest; source: Product; replacement: Product }> {
   let request = await getRequest(requestId);
   if (!request) throw new Error("ROTATION_REQUEST_NOT_FOUND");
+  if (isLegacyRotation(request)) {
+    await invalidateLegacyRotation(request);
+    throw new Error("ROTATION_SUPERSEDED_V5");
+  }
   if (request.status === "replaced" && request.replacementProductId) {
     const source = await productsRepository.getProductByIdOrSlug(request.sourceProductId);
     const replacement = await productsRepository.getProductByIdOrSlug(request.replacementProductId);

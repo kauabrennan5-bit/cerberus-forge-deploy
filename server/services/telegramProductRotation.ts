@@ -18,6 +18,7 @@ import {
 const ROTATION_SEARCH_RETRY_MS = 2_000;
 const ROTATION_PROVIDER_RETRY_MS = 15_000;
 const ROTATION_SUPERVISOR_INTERVAL_MS = 60_000;
+const ROTATION_HARD_TIMEOUT_MS = 4 * 60_000;
 const activeRotationSearchWorkers = new Set<string>();
 let rotationSupervisorTimer: ReturnType<typeof setInterval> | null = null;
 let rotationSupervisorStarted = false;
@@ -41,6 +42,14 @@ function safeError(error: unknown): string {
   return (error instanceof Error ? error.message : String(error || "UNKNOWN"))
     .replace(/[\r\n]+/g, " ")
     .slice(0, 180);
+}
+
+function rotationWarningLabel(reason: string): string {
+  if (reason === "LOW_CONFIDENCE") return "baixa confiança";
+  if (reason.startsWith("PROFILE_BLOCKED_TERM:")) return "estética fora do perfil";
+  if (/PROMO|PROMOTIONAL|OVERLAY/i.test(reason)) return "imagem promocional";
+  if (/IMAGE_(UNKNOWN|REVIEW|CLEAN)_/i.test(reason)) return "imagem requer revisão humana";
+  return reason.toLocaleLowerCase("pt-BR").replace(/_/g, " ");
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -159,6 +168,10 @@ function rotationSearchFailureMessage(error: unknown): { text: string; retryable
 
 async function sendRotationProposal(proposal: RotationProposal): Promise<void> {
   const { request, source, candidate, score } = proposal;
+  const warnings = [...new Set((proposal.warnings || []).map(rotationWarningLabel))];
+  const warningBlock = warnings.length > 0
+    ? ["⚠️ <b>AVISOS — NÃO SÃO BLOQUEIOS FATAIS</b>", ...warnings.map(warning => `⚠️ ${escapeHtml(warning)}`)].join("\n")
+    : "✅ <b>Avisos estéticos:</b> nenhum registrado";
   const caption = [
     "🔄 <b>CERBERUS — PROPOSTA DE ROTAÇÃO</b>",
     "",
@@ -173,6 +186,8 @@ async function sendRotationProposal(proposal: RotationProposal): Promise<void> {
     `• ${money(candidate.preco)}`,
     `• Categoria: ${escapeHtml(candidate.categoria)}`,
     `• Compatibilidade rápida: <b>${Math.round(score)}/100</b>`,
+    "",
+    warningBlock,
     "",
     "✅ Identidade Shopee, disponibilidade, link afiliado, preço, categoria e imagem do anúncio foram conferidos.",
     "",
@@ -206,8 +221,14 @@ function automaticRotationRetryDelay(error: ProductRotationSearchError): number 
 async function searchAndDeliverRotation(requestId: string, chatId: string | number): Promise<void> {
   if (activeRotationSearchWorkers.has(requestId)) return;
   activeRotationSearchWorkers.add(requestId);
+  const deadline = Date.now() + ROTATION_HARD_TIMEOUT_MS;
   try {
     for (;;) {
+      if (Date.now() >= deadline) {
+        await cancelProductRotation(requestId).catch(() => undefined);
+        await core.sendTelegramMessage(chatId, "⏱️ <b>ROTAÇÃO ENCERRADA POR TIMEOUT</b>\n\nA busca manual atingiu o limite de quatro minutos. A peça atual continua publicada e nenhuma troca foi feita.");
+        return;
+      }
       const current = await getProductRotationRequest(requestId);
       if (!current || ["cancelled", "replaced", "applying"].includes(current.status)) return;
       try {
@@ -220,7 +241,9 @@ async function searchAndDeliverRotation(requestId: string, chatId: string | numb
         if (isAutomaticRotationRetry(error)) {
           const latest = await getProductRotationRequest(requestId).catch(() => null);
           if (!latest || ["cancelled", "replaced", "applying"].includes(latest.status)) return;
-          await sleep(automaticRotationRetryDelay(error));
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) continue;
+          await sleep(Math.min(automaticRotationRetryDelay(error), remaining));
           continue;
         }
         const rendered = rotationSearchFailureMessage(error);
