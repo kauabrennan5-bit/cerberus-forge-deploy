@@ -10,6 +10,7 @@
  */
 export * from "./shopeeCommandRanked";
 
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { extractProductForReview } from "./productAutomation";
 import type { ShopeeImageQualification } from "./shopeeCandidateQualification";
 import {
@@ -24,8 +25,15 @@ let legacyTestClientActive = false;
 async function qualifyLegacyTestImage(imageUrl: string): Promise<ShopeeImageQualification> {
   const extracted = await extractProductForReview(imageUrl);
   const data = extracted.success ? extracted.data : null;
-  const observedImage = String(data?.imagemPrincipal || data?.imagens?.[0] || imageUrl).trim();
-  const clean = data?.imageEditorialStatus === "clean" && /^https:\/\//i.test(observedImage);
+  const observedImage = String(data?.imagemPrincipal || data?.imagens?.find(Boolean) || imageUrl).trim();
+  const canonicalImage = resolveCanonicalProductImage({
+    imagens: observedImage ? [observedImage] : [],
+    imageCuration: data?.imageCuration,
+    imageEditorialStatus: data?.imageEditorialStatus,
+  });
+  const clean = data?.imageEditorialStatus === "clean"
+    && canonicalImage.status === "ready"
+    && canonicalImage.primaryImageUrl === observedImage;
 
   if (clean) {
     // Legacy fixtures predate the real CDN probe/reviewer. They may reach the
