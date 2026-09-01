@@ -1,5 +1,63 @@
 [
   {
+    "id": "prod-1788258670586-70f4ceb2bd",
+    "ref": "AUTOQ-70F4CEB2BD",
+    "slug": "caixa-de-som-radio-vintage-70f4ce",
+    "produto": "Caixa de Som Rádio Vintage",
+    "displayTitle": "Caixa de Som Rádio Vintage",
+    "preco": 115.99,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-825b0-mqmdcmpdlog0a0"
+    ],
+    "link": "https://s.shopee.com.br/20v3kT3O9x",
+    "categoria": "Tecnologia",
+    "descricao": "Caixa de som portátil com formato de rádio retrô, alça superior, acabamento amadeirado aparente e controles frontais.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T10:39:20.534828+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788258670586-4e37359558",
+    "ref": "AUTOQ-4E37359558",
+    "slug": "calca-jeans-wide-leg-4e3735",
+    "produto": "Calça Jeans Wide Leg",
+    "displayTitle": "Calça Jeans Wide Leg",
+    "preco": 109.99,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-lw119ilobdsi0b",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lw119ilobdsi0b",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lw119iloe6xe55",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lw119ilo9z82f2",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lw119ilocscy9f"
+    ],
+    "link": "https://s.shopee.com.br/9fKUlFuXSN",
+    "categoria": "Vestuário",
+    "descricao": "Calça de modelagem ampla, em tom azul-claro e com aparência de jeans. O caimento folgado remete a uma linguagem streetwear inspirada nos anos 2000.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T10:37:11.059662+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788258670586-5ac20f986c",
+    "ref": "AUTOQ-5AC20F986C",
+    "slug": "abajur-cogumelo-laranja-bauhaus-5ac20f",
+    "produto": "Abajur Cogumelo Laranja Bauhaus",
+    "displayTitle": "Abajur Cogumelo Laranja Bauhaus",
+    "preco": 253,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/sg-11134201-7rdw6-lza8i454x29j31"
+    ],
+    "link": "https://s.shopee.com.br/6L43HfhNBw",
+    "categoria": "Iluminação",
+    "descricao": "Abajur de mesa com cúpula laranja arredondada, haste central e base cromadas. A forma orgânica e o acabamento brilhante conferem linguagem visual moderna e retrô.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T10:32:13.627256+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788219849993-f1bc11884e",
     "ref": "AUTOQ-F1BC11884E",
     "slug": "kit-de-organizadores-acrilicos-modulares-f1bc11",
