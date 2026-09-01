@@ -1,19 +1,20 @@
 /**
  * Compatibility entrypoint for the manual Shopee command.
- * The implementation lives in shopeeCommandRanked so the ranking/image
- * qualification contract stays isolated from the generic product pipeline.
  *
- * The explicit test bridges below are test-only. Production never sets a
- * client override, so live image qualification still uses the official
- * Affiliate image URL + canonical probe/reviewer path and returns the new
- * public outcome codes unchanged.
+ * Production term searches use the operator-facing delivery contract: filters
+ * rank and annotate candidates, but cannot silently eliminate every card.
+ * Direct-URL discovery and historical fake-client fixtures remain on the
+ * ranked implementation so their existing safety/compatibility contracts stay
+ * isolated.
  */
 export * from "./shopeeCommandRanked";
 
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { extractProductForReview } from "./productAutomation";
 import type { ShopeeImageQualification } from "./shopeeCandidateQualification";
+import { runShopeeManualDeliveryCommand } from "./shopeeManualDelivery";
 import {
+  parseShopeeCommand,
   runShopeeCommand as runRankedShopeeCommand,
   setTestShopeeClient as setRankedTestShopeeClient,
   setTestShopeeImageQualifier as setRankedTestShopeeImageQualifier,
@@ -87,12 +88,15 @@ export function setTestShopeeClient(client: Parameters<typeof setRankedTestShope
 }
 
 /**
- * Preserve historical test aliases/fixture counters without changing the live
- * contract. Legacy fake clients return the same in-memory page for every
- * pagination/variant request; therefore only their unique item results are
- * meaningful as the historical "candidatesReceived" count.
+ * Preserve historical test aliases/fixture counters while production term
+ * searches follow the manual-delivery guarantee.
  */
 export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult> {
+  const parsed = parseShopeeCommand(argsRaw);
+  if (!legacyTestClientActive && !parsed.error && (parsed.mode || "term") === "term") {
+    return runShopeeManualDeliveryCommand(argsRaw);
+  }
+
   const result = await runRankedShopeeCommand(argsRaw);
   if (!legacyTestClientActive) return result;
 
