@@ -1,5 +1,5 @@
 /* Cerberus Finds redesign system — GAZU discipline + Reload atmosphere.
-   This layer intentionally centralizes public visual rules without changing catalog behavior. */
+   Centralized visual rules only; catalog behavior and data remain untouched. */
 
 :root {
   --cerberus-black: #0A0605;
@@ -11,60 +11,109 @@
 }
 
 /* -------------------------------------------------------------------------
-   Palette lock. Existing Tailwind arbitrary-color utilities are normalized
-   here so legacy screens cannot reintroduce competing accents. */
+   Palette lock — exact utility tokens only.
+   Using ~= avoids accidentally converting hover:/focus:/group-hover: states
+   into permanent colors. */
 
-[class*="text-[#8A1F1F]"],
-[class*="text-[#D7A64B]"],
-[class*="text-[#E5BC70]"] {
+:is(
+  [class~="text-[#8A1F1F]"],
+  [class~="text-[#D7A64B]"],
+  [class~="text-[#E5BC70]"]
+) {
   color: var(--cerberus-red) !important;
 }
 
-[class*="bg-[#8A1F1F]"],
-[class*="bg-[#D7A64B]"],
-[class*="bg-[#E5BC70]"] {
+:is(
+  [class~="bg-[#8A1F1F]"],
+  [class~="bg-[#D7A64B]"],
+  [class~="bg-[#E5BC70]"]
+) {
   background-color: var(--cerberus-red) !important;
 }
 
-[class*="border-[#8A1F1F]"],
-[class*="border-[#D7A64B]"],
-[class*="border-[#E5BC70]"] {
+:is(
+  [class~="border-[#8A1F1F]"],
+  [class~="border-[#D7A64B]"],
+  [class~="border-[#E5BC70]"]
+) {
   border-color: var(--cerberus-red) !important;
 }
 
-[class*="outline-[#8A1F1F]"],
-[class*="outline-[#D7A64B]"],
-[class*="outline-[#E5BC70]"] {
+[class~="bg-[#D7A64B]/10"] {
+  background: color-mix(in srgb, var(--cerberus-red) 10%, transparent) !important;
+}
+
+[class~="focus-visible:outline-[#D7A64B]"]:focus-visible {
   outline-color: var(--cerberus-red) !important;
 }
 
-[class*="text-[#E8E1D3]/"] {
-  color: var(--cerberus-warm-gray) !important;
-}
-
-[class*="text-[#E8E1D3]"] {
+:is(
+  [class~="text-[#E8E1D3]"],
+  [class~="text-[#F1EBDD]"]
+) {
   color: var(--cerberus-cream) !important;
 }
 
-[class*="border-[#3A342E]"] {
+:is(
+  [class~="text-[#E8E1D3]/80"],
+  [class~="text-[#E8E1D3]/75"],
+  [class~="text-[#E8E1D3]/70"],
+  [class~="text-[#E8E1D3]/65"],
+  [class~="text-[#E8E1D3]/60"],
+  [class~="text-[#E8E1D3]/55"],
+  [class~="text-[#E8E1D3]/50"],
+  [class~="text-[#E8E1D3]/45"],
+  [class~="text-[#E8E1D3]/40"],
+  [class~="text-[#E8E1D3]/35"],
+  [class~="text-[#E8E1D3]/30"],
+  [class~="text-[#E8E1D3]/25"]
+) {
+  color: var(--cerberus-warm-gray) !important;
+}
+
+:is(
+  [class~="border-[#3A342E]"],
+  [class~="border-[#3A342E]/70"]
+) {
   border-color: var(--cerberus-warm-gray) !important;
 }
 
-[class*="bg-[#0B0908]"],
-[class*="bg-[#141210]"],
-[class*="bg-[#181512]"],
-[class*="bg-[#2A2622]"],
-[class*="bg-[#1C1815]"],
-[class*="bg-[#211C18]"],
-[class*="bg-[#090807]"],
-[class*="bg-[#100E0D]"] {
+:is(
+  [class~="bg-[#0B0908]"],
+  [class~="bg-[#141210]"],
+  [class~="bg-[#181512]"],
+  [class~="bg-[#2A2622]"],
+  [class~="bg-[#1C1815]"],
+  [class~="bg-[#211C18]"],
+  [class~="bg-[#090807]"],
+  [class~="bg-[#100E0D]"]
+) {
   background-color: var(--cerberus-black) !important;
+}
+
+[class~="hover:text-[#8A1F1F]"]:hover,
+.group:hover [class~="group-hover:text-[#8A1F1F]"] {
+  color: var(--cerberus-red) !important;
+}
+
+[class~="hover:border-[#8A1F1F]"]:hover,
+.group:hover [class~="group-hover:border-[#8A1F1F]"] {
+  border-color: var(--cerberus-red) !important;
+}
+
+[class~="hover:bg-[#8A1F1F]"]:hover {
+  background-color: var(--cerberus-red) !important;
 }
 
 html,
 body,
 #root {
   background: var(--cerberus-black);
+  color: var(--cerberus-cream);
+}
+
+::selection {
+  background: var(--cerberus-red);
   color: var(--cerberus-cream);
 }
 
@@ -107,7 +156,7 @@ body {
 .cerberus-button-primary,
 .nexbot-hero__cta,
 footer form button[type="submit"],
-[data-testid="product-card"] button[class*="mt-1.5"][class*="w-full"] {
+[data-testid="product-card"] button[class~="w-full"][class~="mt-1.5"] {
   border: 1px solid var(--cerberus-red) !important;
   border-radius: var(--cerberus-radius) !important;
   background: var(--cerberus-red) !important;
@@ -122,7 +171,7 @@ footer form button[type="submit"],
 .cerberus-button-primary:hover,
 .nexbot-hero__cta:hover,
 footer form button[type="submit"]:hover,
-[data-testid="product-card"] button[class*="mt-1.5"][class*="w-full"]:hover {
+[data-testid="product-card"] button[class~="w-full"][class~="mt-1.5"]:hover {
   background: color-mix(in srgb, var(--cerberus-red) 82%, var(--cerberus-black)) !important;
   border-color: var(--cerberus-red) !important;
   color: var(--cerberus-cream) !important;
@@ -185,7 +234,7 @@ header {
 }
 
 /* -------------------------------------------------------------------------
-   Hero: the 3D object becomes atmosphere, not a second competing section. */
+   Hero: 3D as atmosphere, not a second competing section. */
 
 .nexbot-hero {
   grid-template-areas: "copy model" !important;
@@ -345,7 +394,7 @@ button[aria-controls="category-panel"],
   color: var(--cerberus-warm-gray) !important;
 }
 
-[data-testid="product-card"] button[class*="mt-1.5"][class*="w-full"] svg {
+[data-testid="product-card"] button[class~="w-full"][class~="mt-1.5"] svg {
   color: var(--cerberus-cream) !important;
 }
 
