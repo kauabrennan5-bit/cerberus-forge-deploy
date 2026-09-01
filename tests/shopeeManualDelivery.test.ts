@@ -146,6 +146,8 @@ describe("manual /shopee delivery guarantee", () => {
     assert.equal(saved.every(review => review.status === "pending"), true);
     assert.equal(saved.every(review => review.imageEditorialStatus === "review_required"), true);
     assert.equal(saved.every(review => review.existingProduct?.manualDeliveryContract === true), true);
+    assert.equal(saved.every(review => review.displayTitle !== review.rawTitle), true);
+    assert.equal(saved.every(review => String(review.descricao || "").length >= 24), true);
     assert.match(photos[0]?.caption || "", /DECISÃO HUMANA/);
     assert.match(photos.map(card => card.caption).join("\n"), /IMAGE_NOVELTY_HIGH|IMAGE_COLLAGE_HIGH/);
     assert.match(texts.join("\n"), /LOTE SHOPEE ENTREGUE/);

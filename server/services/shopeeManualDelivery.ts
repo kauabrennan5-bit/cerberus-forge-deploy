@@ -5,6 +5,7 @@ import {
 import { savePendingReview } from "../repositories/telegramRepository";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import { resolvePublicProductCategory } from "../../src/lib/productCategory";
+import { buildDeterministicEditorialFallback } from "./productAutomation";
 import type { ProductImageCuration } from "../../src/lib/productImageCuration";
 import type { PendingReview } from "./telegramBot";
 import { sendTelegramMessage, sendTelegramPhoto } from "./telegramBot";
@@ -528,6 +529,7 @@ export async function runShopeeManualDeliveryCommand(argsRaw: string, deps: Shop
     }
 
     const finalName = String(acquisition.name || candidate.name || "Produto Shopee em revisão").replace(/\s+/g, " ").trim().slice(0, 180);
+    const editorial = buildDeterministicEditorialFallback({ rawTitle: finalName });
     const acquiredPrice = Number(acquisition.price ?? candidate.price);
     const finalPrice = Number.isFinite(acquiredPrice) && acquiredPrice > 0 ? acquiredPrice : candidate.price;
     if (!Number.isFinite(finalPrice) || finalPrice <= 0) {
@@ -549,7 +551,7 @@ export async function runShopeeManualDeliveryCommand(argsRaw: string, deps: Shop
       username: process.env.USER || "admin",
       produto: finalName,
       rawTitle: finalName,
-      displayTitle: finalName,
+      displayTitle: editorial.title,
       curatorNote: candidate.warnings.length > 0
         ? `Busca manual entregue com ressalvas: ${candidate.warnings.join(", ")}`
         : "Busca manual sem ressalvas automáticas.",
@@ -562,7 +564,7 @@ export async function runShopeeManualDeliveryCommand(argsRaw: string, deps: Shop
       imageEditorialStatus: status === "QUALIFIED" ? "clean" : "review_required",
       imageCuration,
       normalizedUrl: acquiredLink,
-      descricao: "",
+      descricao: editorial.description,
       status: "pending",
       createdAt: Date.now(),
       expiresAt: Date.now() + REVIEW_TTL_MS,
