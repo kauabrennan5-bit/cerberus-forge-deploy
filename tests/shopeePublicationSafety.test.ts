@@ -164,6 +164,16 @@ describe("contrato positivo da rotação", () => {
     // Se a aplicação falhar, o produto atual é restaurado como published.
     assert.match(source, /if \(sourceArchived\)[\s\S]*ativo:\s*true,[\s\S]*status:\s*"published"/);
   });
+
+  it("esgotar um lote nunca encerra a rotação e o cursor avança para novas páginas/consultas", () => {
+    const source = fs.readFileSync(new URL("../server/services/productRotation.ts", import.meta.url), "utf8");
+    assert.match(source, /const searchRound = requestSearchRound\(request\)/);
+    assert.match(source, /const pageBlock = Math\.floor\(input\.searchRound \/ queries\.length\)/);
+    assert.match(source, /const pageStart = pageBlock \* ROTATION_SEARCH_MAX_PAGES \+ 1/);
+    assert.match(source, /for \(const item of pool\)/);
+    assert.match(source, /status:\s*"searching",[\s\S]*reason:\s*"SEARCH_CONTINUING"[\s\S]*search_round:\s*nextSearchRound/);
+    assert.doesNotMatch(source, /status:\s*"failed",\s*reason:\s*"NO_QUALIFIED_REPLACEMENT_FOUND"/);
+  });
 });
 
 describe("falhas da rotação", () => {
@@ -178,37 +188,38 @@ describe("falhas da rotação", () => {
     assert.equal(rendered.retryable, false);
   });
 
-  it("timeout/indisponibilidade são apresentados como falha temporária e preservam a peça atual", () => {
-    const rendered = telegramProductRotationInternals.rotationSearchFailureMessage(
-      new ProductRotationSearchError("SHOPEE_PROVIDER_TIMEOUT", diagnostics({ candidatesReceived: 4 })),
-    );
+  it("timeout/indisponibilidade são tratados como falha temporária e o worker retenta automaticamente", () => {
+    const error = new ProductRotationSearchError("SHOPEE_PROVIDER_TIMEOUT", diagnostics({ candidatesReceived: 4 }));
+    const rendered = telegramProductRotationInternals.rotationSearchFailureMessage(error);
 
     assert.match(rendered.text, /PROVIDER SHOPEE INDISPONÍVEL/);
     assert.match(rendered.text, /SHOPEE_PROVIDER_TIMEOUT/);
-    assert.match(rendered.text, /peça atual continua publicada/i);
+    assert.match(rendered.text, /busca continuará automaticamente/i);
     assert.equal(rendered.retryable, true);
+    assert.equal(telegramProductRotationInternals.isAutomaticRotationRetry(error), true);
   });
 
-  it("NO_QUALIFIED só é descrito como ausência após busca executada e traz contagens/rejeições", () => {
-    const rendered = telegramProductRotationInternals.rotationSearchFailureMessage(
-      new ProductRotationSearchError("NO_QUALIFIED_REPLACEMENT_FOUND", diagnostics()),
-    );
+  it("NO_QUALIFIED é apenas sinal interno para continuar buscando e nunca mensagem terminal", () => {
+    const error = new ProductRotationSearchError("NO_QUALIFIED_REPLACEMENT_FOUND", diagnostics());
+    const rendered = telegramProductRotationInternals.rotationSearchFailureMessage(error);
 
-    assert.match(rendered.text, /ROTAÇÃO SEM CANDIDATO APROVADO/);
-    assert.match(rendered.text, /busca executada: sim/);
+    assert.match(rendered.text, /ROTAÇÃO CONTINUA EM BUSCA/);
     assert.match(rendered.text, /candidatos recebidos: 12/);
     assert.match(rendered.text, /7× IDENTITY_MISSING/);
     assert.match(rendered.text, /3× SOURCE_IDENTITY_ALREADY_OWNED/);
     assert.match(rendered.text, /2× IMAGE_HTTPS_MISSING/);
-    assert.match(rendered.text, /peça atual continua publicada/i);
+    assert.match(rendered.text, /não precisa tentar novamente/i);
+    assert.equal(rendered.text.includes("ROTAÇÃO SEM CANDIDATO APROVADO"), false);
+    assert.equal(telegramProductRotationInternals.isAutomaticRotationRetry(error), true);
   });
 
-  it("falha ao persistir candidato é distinguida de ausência de candidato", () => {
-    const rendered = telegramProductRotationInternals.rotationSearchFailureMessage(
-      new ProductRotationSearchError("ROTATION_CANDIDATE_PERSIST_FAILED", diagnostics()),
-    );
+  it("falha ao persistir candidato vira retry automático sem encerrar a busca", () => {
+    const error = new ProductRotationSearchError("ROTATION_CANDIDATE_PERSIST_FAILED", diagnostics());
+    const rendered = telegramProductRotationInternals.rotationSearchFailureMessage(error);
 
-    assert.match(rendered.text, /CANDIDATO NÃO PERSISTIDO/);
+    assert.match(rendered.text, /NOVA TENTATIVA DE PERSISTÊNCIA/);
+    assert.match(rendered.text, /busca continuará automaticamente/i);
     assert.equal(rendered.text.includes("ROTAÇÃO SEM CANDIDATO APROVADO"), false);
+    assert.equal(telegramProductRotationInternals.isAutomaticRotationRetry(error), true);
   });
 });

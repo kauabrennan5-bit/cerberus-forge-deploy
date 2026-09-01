@@ -42,9 +42,14 @@ import {
 const AUTO_QUEUE_CREATED_BY = "autonomous_curator_queue";
 const ROTATION_CANDIDATE_CREATED_BY = "telegram_rotation_candidate";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
-const ROTATION_VERSION = "2";
+const ROTATION_VERSION = "3";
 const ROTATION_SEARCH_MAX_PAGES = 3;
 const ROTATION_SEARCH_PAGE_LIMIT = 10;
+const ROTATION_RETRYABLE_PROVIDER_CODES = new Set<ShopeeProviderErrorCode>([
+  "SHOPEE_PROVIDER_RATE_LIMITED",
+  "SHOPEE_PROVIDER_TIMEOUT",
+  "SHOPEE_PROVIDER_UNAVAILABLE",
+]);
 
 export type ProductRotationStatus =
   | "searching"
@@ -204,6 +209,15 @@ function safeReason(value: unknown): string {
     .slice(0, 180);
 }
 
+function metadataNumber(metadata: Record<string, unknown>, key: string): number {
+  const value = Number(metadata[key]);
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function requestSearchRound(request: ProductRotationRequest): number {
+  return metadataNumber(request.metadata, "search_round");
+}
+
 function newDiagnostics(): RotationSearchDiagnostics {
   return {
     correlationId: newShopeeCorrelationId("rotation"),
@@ -255,6 +269,26 @@ export async function getProductRotationRequest(id: string): Promise<ProductRota
   return getRequest(id);
 }
 
+export async function listRecoverableProductRotations(limit = 25): Promise<ProductRotationRequest[]> {
+  const { data, error } = await requireSupabase()
+    .from("product_rotation_requests")
+    .select("*")
+    .in("status", ["searching", "failed"])
+    .order("updated_at", { ascending: true })
+    .limit(Math.max(1, Math.min(100, limit)));
+  if (error) throw error;
+  const retryableFailureReasons = new Set([
+    "NO_QUALIFIED_REPLACEMENT_FOUND",
+    "ROTATION_CANDIDATE_PERSIST_FAILED",
+    "SHOPEE_PROVIDER_RATE_LIMITED",
+    "SHOPEE_PROVIDER_TIMEOUT",
+    "SHOPEE_PROVIDER_UNAVAILABLE",
+  ]);
+  return (data || [])
+    .map(mapRequest)
+    .filter(request => request.status === "searching" || retryableFailureReasons.has(String(request.reason || "")));
+}
+
 export async function startProductRotation(input: {
   sourceProductId: string;
   requestedBy: string | number;
@@ -284,6 +318,9 @@ export async function startProductRotation(input: {
     telegram_chat_id: String(input.telegramChatId),
     metadata: {
       rotation_version: ROTATION_VERSION,
+      search_round: 0,
+      total_candidates_received: 0,
+      total_candidates_examined: 0,
       source_snapshot: {
         id: source.id,
         ref: source.ref || null,
@@ -608,17 +645,26 @@ async function discoverLiveCandidate(input: {
   client: ShopeeApiClient;
   env: NodeJS.ProcessEnv;
   diagnostics: RotationSearchDiagnostics;
+  searchRound: number;
 }): Promise<EvaluatedCandidate | null> {
   const config = await curatorRepo.getAutonomousCuratorConfig();
   const products = await productsRepository.getProducts();
   const seen = new Set<string>();
   const pool: Array<{ query: string; shopId: string; itemId: string; name: string; price: number; imageUrl: string; productLink: string; cheap: number }> = [];
-  const poolTarget = Math.max(12, Math.min(30, Number(config.maxSearchCandidates) || 20));
+  const poolTarget = Math.max(30, Math.min(60, Number(config.maxSearchCandidates) || 40));
+  const configuredQueries = input.profile.queries.slice(0, 8);
+  const queries = configuredQueries.length > 0
+    ? configuredQueries
+    : [input.source.displayTitle || input.source.produto];
+  const queryOffset = input.searchRound % queries.length;
+  const pageBlock = Math.floor(input.searchRound / queries.length);
+  const pageStart = pageBlock * ROTATION_SEARCH_MAX_PAGES + 1;
+  const orderedQueries = [...queries.slice(queryOffset), ...queries.slice(0, queryOffset)];
 
-  for (const query of input.profile.queries.slice(0, 8)) {
+  for (const query of orderedQueries) {
     if (pool.length >= poolTarget) break;
     input.diagnostics.queriesAttempted += 1;
-    for (let page = 1; page <= ROTATION_SEARCH_MAX_PAGES && pool.length < poolTarget; page += 1) {
+    for (let page = pageStart; page < pageStart + ROTATION_SEARCH_MAX_PAGES && pool.length < poolTarget; page += 1) {
       input.diagnostics.providerQueriesExecuted += 1;
       const search = await searchShopeeOffersWithRetry({
         client: input.client,
@@ -660,8 +706,10 @@ async function discoverLiveCandidate(input: {
 
   input.diagnostics.candidatesInPool = pool.length;
   pool.sort((a, b) => b.cheap - a.cheap || a.itemId.localeCompare(b.itemId));
-  const enrichBudget = Math.max(6, Math.min(12, (Number(config.maxEnrichPerCategory) || 4) * 2));
-  for (const item of pool.slice(0, enrichBudget)) {
+  // Manual rotation is an operator-requested replacement contract. Every retained
+  // candidate in the current search window is evaluated before advancing the
+  // cursor; no valid candidate can be silently skipped by an enrichment budget.
+  for (const item of pool) {
     input.diagnostics.candidatesExamined += 1;
     const evaluated = await evaluateIdentity({
       profile: input.profile,
@@ -682,18 +730,20 @@ async function discoverLiveCandidate(input: {
 }
 
 async function markProviderFailure(request: ProductRotationRequest, error: ShopeeProviderRuntimeError, diagnostics: RotationSearchDiagnostics): Promise<never> {
+  const retryable = ROTATION_RETRYABLE_PROVIDER_CODES.has(error.code);
   await patchRequest(request.id, {
-    status: "failed",
+    status: retryable ? "searching" : "failed",
     reason: error.code,
     metadata: {
       ...request.metadata,
       last_search_diagnostics: diagnostics,
-      failure_type: error.code === "SHOPEE_PROVIDER_NOT_CONFIGURED" ? "provider_not_configured" : "provider_failure",
+      failure_type: retryable ? "provider_retry_pending" : error.code === "SHOPEE_PROVIDER_NOT_CONFIGURED" ? "provider_not_configured" : "provider_failure",
     },
   }).catch(() => undefined);
   safeShopeeLog("rotation_provider_failure", {
     correlationId: diagnostics.correlationId,
     errorCode: error.code,
+    retryable,
     queries: diagnostics.providerQueriesExecuted,
     candidatesReceived: diagnostics.candidatesReceived,
   });
@@ -709,6 +759,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
   const profile = profileFor(source.categoria);
   if (!profile || profile.category !== request.category) throw new Error("ROTATION_CATEGORY_CHANGED");
   const diagnostics = newDiagnostics();
+  const searchRound = requestSearchRound(request);
 
   let client: ShopeeApiClient;
   try {
@@ -756,7 +807,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       return { request, source, candidate: refreshed, score: evaluated.candidate.score };
     }
 
-    const discovered = await discoverLiveCandidate({ profile, source, rejected, client, env, diagnostics });
+    const discovered = await discoverLiveCandidate({ profile, source, rejected, client, env, diagnostics, searchRound });
     if (discovered) {
       try {
         const persisted = await persistCandidate(discovered, new Date(), env);
@@ -770,10 +821,13 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
               candidate_origin: ROTATION_CANDIDATE_CREATED_BY,
               candidate_score: discovered.score,
               last_search_diagnostics: diagnostics,
+              total_candidates_received: metadataNumber(request.metadata, "total_candidates_received") + diagnostics.candidatesReceived,
+              total_candidates_examined: metadataNumber(request.metadata, "total_candidates_examined") + diagnostics.candidatesExamined,
             },
           });
           safeShopeeLog("rotation_candidate_ready", {
             correlationId: diagnostics.correlationId,
+            searchRound,
             candidatesReceived: diagnostics.candidatesReceived,
             candidatesExamined: diagnostics.candidatesExamined,
           });
@@ -782,9 +836,9 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
         bump(diagnostics, "IDENTITY_CLAIM_CONFLICT");
       } catch (error) {
         await patchRequest(request.id, {
-          status: "failed",
+          status: "searching",
           reason: "ROTATION_CANDIDATE_PERSIST_FAILED",
-          metadata: { ...request.metadata, last_search_diagnostics: diagnostics, failure_type: "candidate_persistence" },
+          metadata: { ...request.metadata, last_search_diagnostics: diagnostics, failure_type: "candidate_persistence_retry_pending" },
         }).catch(() => undefined);
         throw new ProductRotationSearchError("ROTATION_CANDIDATE_PERSIST_FAILED", diagnostics);
       }
@@ -795,22 +849,31 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
     throw error;
   }
 
+  const nextSearchRound = searchRound + 1;
   await patchRequest(request.id, {
-    status: "failed",
-    reason: "NO_QUALIFIED_REPLACEMENT_FOUND",
+    status: "searching",
+    reason: "SEARCH_CONTINUING",
     metadata: {
       ...request.metadata,
+      rotation_version: ROTATION_VERSION,
+      search_round: nextSearchRound,
       last_search_diagnostics: diagnostics,
-      failure_type: "qualified_candidates_exhausted",
+      total_candidates_received: metadataNumber(request.metadata, "total_candidates_received") + diagnostics.candidatesReceived,
+      total_candidates_examined: metadataNumber(request.metadata, "total_candidates_examined") + diagnostics.candidatesExamined,
+      failure_type: "search_window_exhausted_continuing",
     },
   });
-  safeShopeeLog("rotation_no_qualified_candidate", {
+  safeShopeeLog("rotation_search_window_exhausted", {
     correlationId: diagnostics.correlationId,
+    searchRound,
+    nextSearchRound,
     providerQueriesExecuted: diagnostics.providerQueriesExecuted,
     candidatesReceived: diagnostics.candidatesReceived,
     candidatesInPool: diagnostics.candidatesInPool,
     candidatesExamined: diagnostics.candidatesExamined,
   });
+  // This error is now an internal continuation signal. It must never be treated
+  // as a terminal "no replacement" outcome by the Telegram worker.
   throw new ProductRotationSearchError("NO_QUALIFIED_REPLACEMENT_FOUND", diagnostics);
 }
 
@@ -947,10 +1010,12 @@ export const productRotationInternals = {
   ROTATION_CANDIDATE_CREATED_BY,
   QUEUE_NOTE_PREFIX,
   ROTATION_VERSION,
+  ROTATION_RETRYABLE_PROVIDER_CODES,
   queueNote,
   parseQueueNote,
   profileFor,
   sourceIdentityMatches,
   safeReason,
+  requestSearchRound,
   newDiagnostics,
 };
