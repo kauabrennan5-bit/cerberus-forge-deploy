@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { AUTONOMOUS_CURATOR_PROFILES, AUTONOMOUS_CURATOR_PROFILE_VERSION, profileForCategory } from "../server/services/autonomousCuratorProfiles";
 import { inferPublicProductCategory } from "../src/lib/productCategory";
 
-test("curator 1.8 combines broad marketplace recall with precise category coverage", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.8");
+test("curator 1.9 combines broad marketplace recall with precise category coverage", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.9");
   assert.equal(AUTONOMOUS_CURATOR_PROFILES.length, 10);
 
   for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
@@ -19,13 +19,16 @@ test("curator 1.8 combines broad marketplace recall with precise category covera
   }
 });
 
-test("Infantil 1.8 recognizes legitimate wooden and Montessori archetypes without removing safety blocks", () => {
+test("Infantil 1.9 mirrors manual Shopee recall without removing safety blocks", () => {
   const infant = profileForCategory("Infantil");
-  for (const query of ["brinquedo madeira", "brinquedo montessori", "brinquedo encaixe madeira", "arco iris madeira"]) {
+  for (const query of ["infantil", "brinquedo infantil", "calcado infantil", "babuch infantil", "brinquedo madeira", "brinquedo montessori"]) {
     assert.ok(infant.queries.includes(query), `Infantil precisa buscar ${query}`);
   }
-  for (const term of ["brinquedo madeira", "blocos madeira", "montessori", "waldorf", "brinquedo encaixe madeira"]) {
+  for (const term of ["brinquedo madeira", "montessori", "babuch infantil", "calcado infantil", "country infantil"]) {
     assert.ok(infant.strongStyleTerms.includes(term), `Infantil precisa reconhecer ${term}`);
+  }
+  for (const themed of ["tematico", "temática", "tematica", "caminhao", "caminhão"]) {
+    assert.ok(!infant.blockedTerms.includes(themed), `Infantil não deve bloquear tema lúdico por si só: ${themed}`);
   }
   for (const blocked of ["arma brinquedo", "pistola", "laser forte", "personagem"]) {
     assert.ok(infant.blockedTerms.includes(blocked), `Infantil deve continuar bloqueando ${blocked}`);
