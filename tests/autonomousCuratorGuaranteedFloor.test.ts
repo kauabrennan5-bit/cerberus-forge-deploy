@@ -35,7 +35,7 @@ test("best-of-lot fallback keeps an editorially rejected image rankable when the
 
 test("guaranteed fallback keeps only factual publication failures as hard gates", async () => {
   const source = await readFile(new URL("../server/services/autonomousCuratorCatalogFloorFallback.ts", import.meta.url), "utf8");
-  assert.match(source, /Editorial decisions are deliberately NOT a hard gate here/);
+  assert.match(source, /decisions are deliberately NOT a hard gate here/);
   assert.match(source, /if \(!qualification\.probe\.ok\)/);
   assert.doesNotMatch(source, /if \(qualification\.state === "HARD_REJECT"\)\s*\{?\s*return null/);
   assert.match(source, /SOURCE_IDENTITY_ALREADY_OWNED/);
