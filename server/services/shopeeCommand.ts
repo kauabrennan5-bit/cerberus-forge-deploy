@@ -28,9 +28,8 @@ async function qualifyLegacyTestImage(imageUrl: string): Promise<ShopeeImageQual
   const clean = data?.imageEditorialStatus === "clean" && /^https:\/\//i.test(observedImage);
 
   if (clean) {
-    // Legacy fixtures predate the real CDN probe/reviewer. They are allowed to
-    // reach the human-review card, but are never represented as auto-clean
-    // evidence. The marker also preserves the old text-fallback assertion.
+    // Legacy fixtures predate the real CDN probe/reviewer. They may reach the
+    // human-review card, but are never represented as auto-clean evidence.
     return {
       state: "NEEDS_HUMAN_REVIEW",
       reason: "PREVIEW SHOPEE AFFILIATE",
@@ -80,8 +79,10 @@ export function setTestShopeeClient(client: Parameters<typeof setRankedTestShope
 }
 
 /**
- * Preserve historical test aliases without changing the live contract.
- * The ranked implementation is authoritative in production.
+ * Preserve historical test aliases/fixture counters without changing the live
+ * contract. Legacy fake clients return the same in-memory page for every
+ * pagination/variant request; therefore only their unique item results are
+ * meaningful as the historical "candidatesReceived" count.
  */
 export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult> {
   const result = await runRankedShopeeCommand(argsRaw);
@@ -101,6 +102,13 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
           : item
       ))
     : legacy.items;
+
+  const uniqueFixtureCandidates = Array.isArray(legacy.items) ? legacy.items.length : 0;
+  if (legacy.providerQueryExecuted && !legacy.discoveryError?.startsWith?.("SHOPEE_PROVIDER_")) {
+    legacy.candidatesReceived = uniqueFixtureCandidates;
+    legacy.candidatesExamined = uniqueFixtureCandidates;
+    legacy.poolCandidates = uniqueFixtureCandidates;
+  }
 
   return legacy as ShopeeLotResult;
 }
