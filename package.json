@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node scripts/build-cerberus-preview-model.mjs && node --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "node --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit",
@@ -33,6 +33,7 @@
     "react-dom": "^19.0.1",
     "sharp": "^0.35.3",
     "tailwindcss": "^4.1.14",
+    "three": "^0.185.1",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"

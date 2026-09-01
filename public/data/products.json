@@ -1,23 +1,5 @@
 [
   {
-    "id": "prod-1788223179301-290999e75d",
-    "ref": "AUTOQ-290999E75D",
-    "slug": "luminaria-cogumelo-retro-290999",
-    "produto": "Luminária Cogumelo Retrô",
-    "displayTitle": "Luminária Cogumelo Retrô",
-    "preco": 299,
-    "imagens": [
-      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mrjxtm6ly611fc"
-    ],
-    "link": "https://s.shopee.com.br/7AdAHCeCV3",
-    "categoria": "Iluminação",
-    "descricao": "Luminária de mesa com cúpula arredondada em tom âmbar, haste central e base escura de aparência amadeirada. O conjunto tem linguagem visual retrô e geométrica, adequada para iluminação decorativa em ambientes internos.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T00:40:56.213676+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788219849993-f1bc11884e",
     "ref": "AUTOQ-F1BC11884E",
     "slug": "kit-de-organizadores-acrilicos-modulares-f1bc11",

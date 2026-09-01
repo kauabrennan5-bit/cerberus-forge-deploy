@@ -8,8 +8,8 @@ import {
 } from "../server/services/autonomousCuratorProfiles";
 import { cheapProfileScore } from "../server/services/autonomousCuratorScoring";
 
-test("profile 1.7 uses broad plus concrete Shopee-calibrated discovery anchors", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.7");
+test("profile 1.8 uses broad plus concrete Shopee-calibrated discovery anchors", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.8");
 
   const lighting = profileForCategory("Iluminação");
   assert.ok(lighting.queries.includes("luminaria cogumelo cromada space age"));
@@ -21,6 +21,11 @@ test("profile 1.7 uses broad plus concrete Shopee-calibrated discovery anchors",
   assert.ok(technology.queries.includes("radio bluetooth retro madeira vintage"));
   assert.ok(technology.queries.includes("radio retro portatil bluetooth madeira"));
   assert.equal(technology.queries.includes("tecnologia anos 70 design"), false);
+
+  const infant = profileForCategory("Infantil");
+  assert.ok(infant.queries.includes("brinquedo montessori"));
+  assert.ok(infant.queries.includes("brinquedo encaixe madeira"));
+  assert.ok(cheapProfileScore(infant, "Brinquedo Montessori de Madeira com Encaixe Geométrico") > -1000);
 });
 
 test("iconic category archetypes outrank generic recall without weakening the final gates", () => {

@@ -86,13 +86,15 @@ test("display_title ausente ou raw marketplace fallback é proibido", () => {
 
 test("curador contínuo persiste fingerprint e renova provas ao trocar conteúdo", () => {
   const v1 = readFileSync(new URL("../server/services/autonomousCuratorContinuous.ts", import.meta.url), "utf8");
-  const v2 = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
-  for (const source of [v1, v2]) {
+  const v2Coordinator = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+  const v2Base = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
+  for (const source of [v1, v2Base]) {
     assert.match(source, /image_review_fingerprint:\s*imageCurationFingerprint\(candidate\.imageCuration\)/);
     assert.match(source, /display_title_reviewed_at:\s*now\.toISOString\(\)/);
     assert.match(source, /display_title_review_version:\s*DISPLAY_TITLE_REVIEW_VERSION/);
   }
-  assert.match(v2, /image_review_version:\s*IMAGE_REVIEW_VERSION/);
+  assert.match(v2Base, /image_review_version:\s*IMAGE_REVIEW_VERSION/);
+  assert.match(v2Coordinator, /runAutonomousCuratorContinuousV2Base/);
 });
 
 test("backfill legado persiste prova Gemini e falha fechado sem usar raw_title", async () => {
