@@ -257,6 +257,514 @@ html.product-detail-view button[aria-label="Ver próxima recomendação"] {
   display: none !important;
 }
 
+/* NEXBOT home hero ---------------------------------------------------------
+   The GLB is rendered by the app bundle itself. The surrounding layer keeps
+   the scene editorial, legible and useful even while WebGL is still loading. */
+.nexbot-hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-areas:
+    "copy model"
+    "credit credit";
+  grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
+  grid-template-rows: minmax(650px, 1fr) auto;
+  min-height: calc(100svh - 7rem);
+  margin-bottom: clamp(2.5rem, 7vw, 5.5rem);
+  overflow: hidden;
+  border: 1px solid rgba(58, 52, 46, 0.86);
+  background:
+    radial-gradient(circle at 71% 44%, rgba(215, 166, 75, 0.13), transparent 32%),
+    radial-gradient(circle at 12% 12%, rgba(138, 31, 31, 0.13), transparent 38%),
+    linear-gradient(138deg, rgba(20, 18, 16, 0.98), rgba(11, 9, 8, 0.99));
+}
+
+.nexbot-hero::before,
+.nexbot-hero::after {
+  position: absolute;
+  z-index: -1;
+  content: '';
+  pointer-events: none;
+}
+
+.nexbot-hero::before {
+  top: 9%;
+  right: -8%;
+  width: min(54vw, 720px);
+  aspect-ratio: 1;
+  border: 1px solid rgba(215, 166, 75, 0.11);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 48px rgba(215, 166, 75, 0.018),
+    0 0 0 96px rgba(215, 166, 75, 0.012);
+}
+
+.nexbot-hero::after {
+  inset: 0;
+  background: linear-gradient(90deg, transparent 49.93%, rgba(232, 225, 211, 0.035) 50%, transparent 50.07%);
+}
+
+.nexbot-hero__grid {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  opacity: 0.58;
+  background-image:
+    linear-gradient(rgba(232, 225, 211, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(232, 225, 211, 0.022) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black, transparent 92%);
+}
+
+.nexbot-hero__copy {
+  grid-area: copy;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(2rem, 5.5vw, 5.5rem);
+}
+
+.nexbot-hero__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: clamp(1.25rem, 2.4vw, 2rem);
+  color: #D7A64B;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+
+.nexbot-hero__eyebrow span {
+  width: 0.52rem;
+  height: 0.52rem;
+  border: 1px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.nexbot-hero__eyebrow p {
+  margin: 0;
+}
+
+.nexbot-hero__copy h1 {
+  max-width: 12ch;
+  margin: 0;
+  color: #F1EBDD;
+  font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  font-size: clamp(2.75rem, 5.25vw, 5.5rem);
+  font-weight: 500;
+  letter-spacing: -0.065em;
+  line-height: 0.94;
+  text-wrap: balance;
+}
+
+.nexbot-hero__description {
+  max-width: 37rem;
+  margin: clamp(1.5rem, 3vw, 2.3rem) 0 0;
+  color: rgba(232, 225, 211, 0.68);
+  font-size: clamp(0.95rem, 1.45vw, 1.1rem);
+  line-height: 1.72;
+}
+
+.nexbot-hero__cta {
+  display: inline-flex;
+  min-height: 3.45rem;
+  align-items: center;
+  justify-content: center;
+  gap: 1.3rem;
+  margin-top: clamp(1.65rem, 3vw, 2.5rem);
+  border: 1px solid #D7A64B;
+  background: #D7A64B;
+  color: #0B0908;
+  padding: 0.95rem 1.2rem 0.95rem 1.45rem;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+  transition: color 180ms ease, background-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.nexbot-hero__cta:hover {
+  background: #E5BC70;
+  box-shadow: 0 12px 44px rgba(215, 166, 75, 0.17);
+  transform: translateY(-2px);
+}
+
+.nexbot-hero__cta:focus-visible,
+.nexbot-hero__controls button:focus-visible {
+  outline: 2px solid #F1EBDD;
+  outline-offset: 3px;
+}
+
+.nexbot-hero__cta svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 1.5;
+}
+
+.nexbot-hero__meta {
+  display: flex;
+  width: min(100%, 31rem);
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: clamp(2rem, 4.5vw, 3.5rem);
+  color: rgba(232, 225, 211, 0.38);
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.nexbot-hero__meta-line {
+  height: 1px;
+  min-width: 1.5rem;
+  flex: 1;
+  background: rgba(232, 225, 211, 0.17);
+}
+
+.nexbot-hero__model-column {
+  grid-area: model;
+  z-index: 1;
+  min-width: 0;
+  min-height: 650px;
+}
+
+.nexbot-hero__stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 54% 43%, rgba(215, 166, 75, 0.12), transparent 43%),
+    linear-gradient(90deg, rgba(11, 9, 8, 0.18), transparent 22%);
+}
+
+.nexbot-hero__stage::before {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  bottom: 7%;
+  width: 67%;
+  height: 11%;
+  content: '';
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  filter: blur(26px);
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.nexbot-hero__stage::after {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  content: '';
+  background:
+    linear-gradient(to right, rgba(11, 9, 8, 0.76), transparent 15%),
+    linear-gradient(to top, rgba(11, 9, 8, 0.48), transparent 24%);
+  pointer-events: none;
+}
+
+.nexbot-hero__canvas {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+}
+
+.nexbot-hero__canvas canvas {
+  width: 100%;
+  height: 100%;
+  animation: nexbotCanvasReveal 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  cursor: grab;
+  outline: none;
+}
+
+.nexbot-hero__canvas canvas:active {
+  cursor: grabbing;
+}
+
+.nexbot-hero__canvas canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px #D7A64B;
+}
+
+@keyframes nexbotCanvasReveal {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.nexbot-hero__loading {
+  position: absolute;
+  z-index: 5;
+  top: 1.2rem;
+  left: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid rgba(232, 225, 211, 0.12);
+  background: rgba(11, 9, 8, 0.72);
+  color: rgba(232, 225, 211, 0.58);
+  padding: 0.6rem 0.72rem;
+  font-size: 0.56rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  backdrop-filter: blur(12px);
+}
+
+.nexbot-hero__loading-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: #D7A64B;
+  box-shadow: 0 0 14px rgba(215, 166, 75, 0.65);
+  animation: nexbotLoadingPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes nexbotLoadingPulse {
+  50% { opacity: 0.35; transform: scale(0.78); }
+}
+
+.nexbot-hero__fallback {
+  position: absolute;
+  z-index: 4;
+  inset: 15%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(215, 166, 75, 0.2);
+  color: rgba(232, 225, 211, 0.64);
+  text-align: center;
+}
+
+.nexbot-hero__fallback-mark {
+  color: #D7A64B;
+  font-family: 'Cinzel', serif;
+  font-size: clamp(3.4rem, 7vw, 6.5rem);
+  letter-spacing: 0.18em;
+}
+
+.nexbot-hero__fallback p {
+  max-width: 24rem;
+  margin: 1.1rem 1rem 0.45rem;
+  color: #E8E1D3;
+  font-size: 0.9rem;
+}
+
+.nexbot-hero__fallback > span:last-child {
+  font-size: 0.58rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.nexbot-hero__controls {
+  position: absolute;
+  z-index: 4;
+  top: 1.2rem;
+  right: 1.2rem;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.nexbot-hero__controls button {
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgba(232, 225, 211, 0.15);
+  background: rgba(11, 9, 8, 0.7);
+  color: rgba(232, 225, 211, 0.72);
+  padding: 0.58rem 0.7rem;
+  font-size: 0.52rem;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  backdrop-filter: blur(12px);
+  transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
+}
+
+.nexbot-hero__controls button:hover {
+  border-color: rgba(215, 166, 75, 0.7);
+  background: rgba(11, 9, 8, 0.9);
+  color: #F1EBDD;
+}
+
+.nexbot-hero__controls svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.nexbot-hero__interaction-hint {
+  position: absolute;
+  z-index: 4;
+  right: 1.2rem;
+  bottom: 1.2rem;
+  margin: 0;
+  color: rgba(232, 225, 211, 0.38);
+  font-size: 0.52rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.nexbot-hero__credit {
+  grid-area: credit;
+  z-index: 4;
+  margin: 0;
+  border-top: 1px solid rgba(58, 52, 46, 0.72);
+  background: rgba(11, 9, 8, 0.68);
+  color: rgba(232, 225, 211, 0.32);
+  padding: 0.72rem 1rem;
+  font-size: 0.48rem;
+  letter-spacing: 0.1em;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+@media (max-width: 959px) {
+  .nexbot-hero {
+    grid-template-areas:
+      "model"
+      "copy"
+      "credit";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: clamp(340px, 48svh, 470px) auto auto;
+    min-height: 0;
+  }
+
+  .nexbot-hero::before {
+    top: -5%;
+    right: 50%;
+    width: min(94vw, 600px);
+    transform: translateX(50%);
+  }
+
+  .nexbot-hero::after {
+    background: linear-gradient(180deg, transparent 46%, rgba(232, 225, 211, 0.045) 46.1%, transparent 46.2%);
+  }
+
+  .nexbot-hero__model-column {
+    min-height: 0;
+  }
+
+  .nexbot-hero__stage {
+    min-height: 0;
+  }
+
+  .nexbot-hero__stage::after {
+    background: linear-gradient(to top, rgba(11, 9, 8, 0.58), transparent 28%);
+  }
+
+  .nexbot-hero__copy {
+    align-items: center;
+    padding: clamp(1.8rem, 7vw, 3.4rem) clamp(1.15rem, 6vw, 3rem) clamp(2.2rem, 8vw, 3.5rem);
+    text-align: center;
+  }
+
+  .nexbot-hero__copy h1 {
+    max-width: 13ch;
+    font-size: clamp(2.55rem, 10.6vw, 4.7rem);
+  }
+
+  .nexbot-hero__description {
+    max-width: 34rem;
+  }
+
+  .nexbot-hero__meta {
+    justify-content: center;
+  }
+
+  .nexbot-hero__credit {
+    text-align: center;
+  }
+}
+
+@media (max-width: 560px) {
+  .nexbot-hero {
+    grid-template-rows: clamp(330px, 45svh, 400px) auto auto;
+    margin-right: -0.25rem;
+    margin-left: -0.25rem;
+  }
+
+  .nexbot-hero__copy h1 {
+    font-size: clamp(2.4rem, 11.6vw, 3.65rem);
+    letter-spacing: -0.055em;
+    line-height: 0.97;
+  }
+
+  .nexbot-hero__eyebrow {
+    margin-bottom: 1rem;
+    font-size: 0.59rem;
+  }
+
+  .nexbot-hero__description {
+    margin-top: 1.25rem;
+    font-size: 0.91rem;
+    line-height: 1.62;
+  }
+
+  .nexbot-hero__cta {
+    width: 100%;
+    margin-top: 1.5rem;
+  }
+
+  .nexbot-hero__meta {
+    gap: 0.55rem;
+    margin-top: 1.7rem;
+    font-size: 0.46rem;
+    letter-spacing: 0.13em;
+  }
+
+  .nexbot-hero__loading {
+    top: 0.75rem;
+    left: 0.75rem;
+  }
+
+  .nexbot-hero__controls {
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+
+  .nexbot-hero__controls button span {
+    display: none;
+  }
+
+  .nexbot-hero__controls button {
+    width: 2.5rem;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .nexbot-hero__interaction-hint {
+    right: 50%;
+    bottom: 0.8rem;
+    width: max-content;
+    max-width: calc(100% - 2rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transform: translateX(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nexbot-hero__canvas canvas,
+  .nexbot-hero__loading-dot {
+    animation: none;
+  }
+
+  .nexbot-hero__cta {
+    transition: none;
+  }
+}
+
 /* Product previews should feel image-led rather than like a photo floating
    inside a large black mat. Cards crop only the preview; the complete image
    remains available on the product page/lightbox. */
