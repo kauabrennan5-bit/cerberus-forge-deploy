@@ -1,7 +1,9 @@
 import * as core from "./telegramBotCore";
 import * as productsRepository from "../repositories/productsRepository";
+import { requireSupabase } from "../repositories/productsRepository";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { resolvePublicSiteUrl } from "./newsletterInstitutional";
+import { syncCatalogAndDeploy } from "./catalogSync";
 import {
   approveProductRotation,
   cancelProductRotation,
@@ -20,6 +22,7 @@ const ROTATION_PROVIDER_RETRY_MS = 15_000;
 const ROTATION_SUPERVISOR_INTERVAL_MS = 60_000;
 const ROTATION_HARD_TIMEOUT_MS = 4 * 60_000;
 const activeRotationSearchWorkers = new Set<string>();
+const activeRotationApplyRecoveries = new Set<string>();
 let rotationSupervisorTimer: ReturnType<typeof setInterval> | null = null;
 let rotationSupervisorStarted = false;
 
@@ -267,14 +270,132 @@ function ensureRotationSearchWorker(requestId: string, chatId: string | number):
   });
 }
 
-async function recoverSearchingRotations(): Promise<void> {
+async function recoverApplyingRotation(requestId: string, chatId: string | number): Promise<void> {
+  if (activeRotationApplyRecoveries.has(requestId)) return;
+  activeRotationApplyRecoveries.add(requestId);
+  try {
+    const request = await getProductRotationRequest(requestId);
+    if (!request || request.status !== "applying" || !request.candidateProductId) return;
+    const source = await productsRepository.getProductByIdOrSlug(request.sourceProductId);
+    const candidate = await productsRepository.getProductByIdOrSlug(request.candidateProductId);
+    if (!source || !candidate) {
+      const { error } = await requireSupabase().from("product_rotation_requests").update({
+        status: "failed",
+        reason: "APPLY_RECOVERY_PRODUCTS_MISSING",
+        updated_at: new Date().toISOString(),
+      }).eq("id", request.id).eq("status", "applying");
+      if (error) throw error;
+      return;
+    }
+
+    const sourcePublished = source.status === "published" && source.ativo !== false;
+    const sourceArchived = source.status === "archived" && source.ativo === false;
+    const candidatePublished = candidate.status === "published" && candidate.ativo !== false;
+    const candidatePaused = candidate.status === "paused" && candidate.ativo === false;
+
+    if (candidatePublished) {
+      if (sourcePublished) {
+        const { error } = await requireSupabase().from("products").update({ ativo: false, status: "archived" })
+          .eq("id", source.id).eq("status", "published");
+        if (error) throw error;
+      } else if (!sourceArchived) {
+        throw new Error(`APPLY_RECOVERY_SOURCE_STATE:${source.status}:${String(source.ativo)}`);
+      }
+
+      const sync = await syncCatalogAndDeploy(`manual product rotation recovery ${request.id}`);
+      if (!sync.success) throw new Error(`ROTATION_CATALOG_SYNC_RECOVERY_FAILED:${sync.error || "unknown"}`);
+
+      const completedAt = new Date().toISOString();
+      const { data, error } = await requireSupabase().from("product_rotation_requests").update({
+        status: "replaced",
+        replacement_product_id: candidate.id,
+        reason: "ROTATED_BY_USER",
+        completed_at: completedAt,
+        updated_at: completedAt,
+        metadata: {
+          ...request.metadata,
+          archive_reason: "ROTATED_BY_USER",
+          recovered_after_restart: true,
+          replaced_at: completedAt,
+        },
+      }).eq("id", request.id).eq("status", "applying").select("id").maybeSingle();
+      if (error) throw error;
+      if (data) {
+        await core.sendTelegramMessage(
+          chatId,
+          "✅ <b>ROTAÇÃO CONCLUÍDA</b>\n\n" +
+            `${escapeHtml(source.displayTitle || source.produto)}\n⬇️ substituído por\n` +
+            `<b>${escapeHtml(candidate.displayTitle || candidate.produto)}</b>\n\n` +
+            "✅ Nova peça publicada\n✅ Catálogo público sincronizado\n✅ Recuperação pós-restart concluída",
+          { inline_keyboard: [[{ text: "👁️ Ver nova peça", callback_data: `product_view:${candidate.id}` }], [{ text: "📦 Produtos", callback_data: "products_list:0" }]] },
+        );
+      }
+      return;
+    }
+
+    if (candidatePaused) {
+      if (sourceArchived) {
+        const { error } = await requireSupabase().from("products").update({ ativo: true, status: "published" })
+          .eq("id", source.id).eq("status", "archived");
+        if (error) throw error;
+      } else if (!sourcePublished) {
+        throw new Error(`APPLY_RECOVERY_SOURCE_STATE:${source.status}:${String(source.ativo)}`);
+      }
+      const recoveredAt = new Date().toISOString();
+      const { data, error } = await requireSupabase().from("product_rotation_requests").update({
+        status: "candidate_ready",
+        reason: "APPLY_RECOVERED_TO_REVIEW",
+        updated_at: recoveredAt,
+        metadata: { ...request.metadata, recovered_after_restart: true, recovered_at: recoveredAt },
+      }).eq("id", request.id).eq("status", "applying").select("id").maybeSingle();
+      if (error) throw error;
+      if (data) {
+        await core.sendTelegramMessage(
+          chatId,
+          "↩️ <b>ROTAÇÃO RECUPERADA</b>\n\nO backend reiniciou durante a sincronização. A peça anterior foi restaurada e o candidato continua disponível para sua decisão.",
+          rotationKeyboard(request.id),
+        );
+      }
+      return;
+    }
+
+    if (sourceArchived) {
+      await requireSupabase().from("products").update({ ativo: true, status: "published" }).eq("id", source.id).eq("status", "archived");
+    }
+    const { error } = await requireSupabase().from("product_rotation_requests").update({
+      status: "failed",
+      reason: `APPLY_RECOVERY_CANDIDATE_STATE:${candidate.status}:${String(candidate.ativo)}`,
+      updated_at: new Date().toISOString(),
+    }).eq("id", request.id).eq("status", "applying");
+    if (error) throw error;
+  } catch (error) {
+    console.error(`[ROTATION] apply_recovery_failed request=${requestId} error=${safeError(error)}`);
+  } finally {
+    activeRotationApplyRecoveries.delete(requestId);
+  }
+}
+
+function ensureRotationApplyRecovery(requestId: string, chatId: string | number): void {
+  if (activeRotationApplyRecoveries.has(requestId)) return;
+  void recoverApplyingRotation(requestId, chatId);
+}
+
+async function recoverDurableRotations(): Promise<void> {
   const requests = await listRecoverableProductRotations(50);
   for (const request of requests) {
-    // Legacy terminal failures are not revived indiscriminately. The one-time
-    // production repair may move the operator's current request back to searching;
-    // from then on the durable supervisor owns restart recovery.
     if (request.status !== "searching") continue;
     ensureRotationSearchWorker(request.id, request.telegramChatId);
+  }
+
+  const { data, error } = await requireSupabase()
+    .from("product_rotation_requests")
+    .select("id,telegram_chat_id")
+    .eq("status", "applying")
+    .order("updated_at", { ascending: true })
+    .limit(25);
+  if (error) throw error;
+  for (const row of data || []) {
+    ensureRotationApplyRecovery(String(row.id), String(row.telegram_chat_id));
   }
 }
 
@@ -283,11 +404,11 @@ export function startProductRotationSupervisor(env: NodeJS.ProcessEnv = process.
   if (env.ROTATION_SEARCH_SUPERVISOR_ENABLED !== "true") return false;
   rotationSupervisorStarted = true;
   const initial = setTimeout(() => {
-    void recoverSearchingRotations().catch(error => console.error(`[ROTATION] supervisor_initial_failed error=${safeError(error)}`));
+    void recoverDurableRotations().catch(error => console.error(`[ROTATION] supervisor_initial_failed error=${safeError(error)}`));
   }, 1_000);
   initial.unref?.();
   rotationSupervisorTimer = setInterval(() => {
-    void recoverSearchingRotations().catch(error => console.error(`[ROTATION] supervisor_tick_failed error=${safeError(error)}`));
+    void recoverDurableRotations().catch(error => console.error(`[ROTATION] supervisor_tick_failed error=${safeError(error)}`));
   }, ROTATION_SUPERVISOR_INTERVAL_MS);
   rotationSupervisorTimer.unref?.();
   console.info(`[ROTATION] supervisor.on intervalMs=${ROTATION_SUPERVISOR_INTERVAL_MS}`);
@@ -403,17 +524,26 @@ export async function handleProductRotationCallback(update: any): Promise<void> 
     if (messageId) await core.editTelegramMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
     try {
       const current = await getProductRotationRequest(requestId);
-      if (!current || ["cancelled", "replaced", "applying"].includes(current.status)) throw new Error(`ROTATION_NOT_RETRYABLE:${current?.status || "missing"}`);
-      const request = current.status === "candidate_ready" && current.candidateProductId
-        ? await rejectRotationCandidateAndSearchAgain(requestId)
-        : current;
-      await core.sendTelegramMessage(
-        chatId,
-        current.status === "candidate_ready"
-          ? "🔎 <b>OUTRA OPÇÃO SOLICITADA</b>\n\nO candidato anterior foi descartado. A peça atual continua publicada enquanto o Cerberus busca a próxima opção."
-          : "🔎 <b>BUSCA DE ROTAÇÃO ATIVA</b>\n\nO Cerberus está buscando a próxima opção. A peça atual continua publicada.",
-        searchingKeyboard(request.id),
-      );
+      if (!current) throw new Error("ROTATION_NOT_RETRYABLE:missing");
+
+      let request = current;
+      let message = "🔎 <b>BUSCA DE ROTAÇÃO ATIVA</b>\n\nO Cerberus está buscando a próxima opção. A peça atual continua publicada.";
+      if (current.status === "cancelled" && current.reason === "ROTATION_SUPERSEDED_V5") {
+        request = await startProductRotation({
+          sourceProductId: current.sourceProductId,
+          requestedBy: senderId,
+          telegramChatId: chatId,
+        });
+        message = "🔎 <b>NOVA ROTAÇÃO V5 INICIADA</b>\n\nO pedido antigo foi encerrado pela atualização V5. Uma busca nova e rápida foi criada automaticamente para a mesma peça.";
+      } else {
+        if (["cancelled", "replaced", "applying"].includes(current.status)) throw new Error(`ROTATION_NOT_RETRYABLE:${current.status}`);
+        if (current.status === "candidate_ready" && current.candidateProductId) {
+          request = await rejectRotationCandidateAndSearchAgain(requestId);
+          message = "🔎 <b>OUTRA OPÇÃO SOLICITADA</b>\n\nO candidato anterior foi descartado. A peça atual continua publicada enquanto o Cerberus busca a próxima opção.";
+        }
+      }
+
+      await core.sendTelegramMessage(chatId, message, searchingKeyboard(request.id));
       ensureRotationSearchWorker(request.id, chatId);
     } catch (error) {
       await core.sendTelegramMessage(chatId, `⚠️ <b>NÃO FOI POSSÍVEL BUSCAR OUTRA OPÇÃO</b>\n\n<code>${escapeHtml(safeError(error))}</code>`);
@@ -449,4 +579,5 @@ export const telegramProductRotationInternals = {
   isAutomaticRotationRetry,
   automaticRotationRetryDelay,
   activeRotationSearchWorkers,
+  activeRotationApplyRecoveries,
 };
