@@ -65,7 +65,7 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
  * vocabulário de calçados/temas infantis só ajuda o ranking depois da categoria ser
  * validada. Segurança, imagem, pipeline, similaridade, preço e threshold final seguem ativos.
  */
-const AUTONOMOUS_CURATOR_PROFILE_DEFINITIONS: readonly AutonomousCuratorCategoryProfile[] = [
+export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
     category: "Iluminação",
     queries: [
@@ -265,21 +265,6 @@ const AUTONOMOUS_CURATOR_PROFILE_DEFINITIONS: readonly AutonomousCuratorCategory
     maxReviewPrice: 500,
   }),
 ] as const;
-
-// Categories with the deepest production deficit must get the first share of
-// external-call budget. All remaining categories preserve their original stable
-// order, so this is a starvation fix rather than a scoring or quality bypass.
-const RECOVERY_FIRST_CATEGORIES = new Map<PublicProductCategory, number>([
-  ["Infantil", -2],
-  ["Calçados & Acessórios", -1],
-]);
-
-export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
-  ...AUTONOMOUS_CURATOR_PROFILE_DEFINITIONS,
-].sort((a, b) =>
-  (RECOVERY_FIRST_CATEGORIES.get(a.category) ?? 0)
-  - (RECOVERY_FIRST_CATEGORIES.get(b.category) ?? 0),
-);
 
 if (AUTONOMOUS_CURATOR_PROFILES.length !== PUBLIC_PRODUCT_CATEGORIES.length) {
   throw new Error("AUTONOMOUS_CURATOR_PROFILE_COVERAGE_INVALID");
