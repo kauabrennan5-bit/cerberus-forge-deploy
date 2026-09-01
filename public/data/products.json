@@ -1,5 +1,41 @@
 [
   {
+    "id": "prod-1788223179301-290999e75d",
+    "ref": "AUTOQ-290999E75D",
+    "slug": "luminaria-cogumelo-retro-290999",
+    "produto": "Luminária Cogumelo Retrô",
+    "displayTitle": "Luminária Cogumelo Retrô",
+    "preco": 299,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mrjxtm6ly611fc"
+    ],
+    "link": "https://s.shopee.com.br/7AdAHCeCV3",
+    "categoria": "Iluminação",
+    "descricao": "Luminária de mesa com cúpula arredondada em tom âmbar, haste central e base escura de aparência amadeirada. O conjunto tem linguagem visual retrô e geométrica, adequada para iluminação decorativa em ambientes internos.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-01T00:40:56.213676+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788219849993-f1bc11884e",
+    "ref": "AUTOQ-F1BC11884E",
+    "slug": "kit-de-organizadores-acrilicos-modulares-f1bc11",
+    "produto": "Kit de Organizadores Acrílicos Modulares",
+    "displayTitle": "Kit de Organizadores Acrílicos Modulares",
+    "preco": 29.9,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-81z1k-mfslf1kjohz9d7"
+    ],
+    "link": "https://s.shopee.com.br/AAGngZO07m",
+    "categoria": "Organização",
+    "descricao": "Conjunto com dez organizadores modulares em acrílico fumê para otimização de espaços. A peça apresenta design versátil e transparente para uso multiuso em gavetas e bancadas.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-08-31T23:49:43.776776+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788211884791-90e54ca0be",
     "ref": "AUTOQ-90E54CA0BE",
     "slug": "organizador-de-cassetes-modular-90e54c",
