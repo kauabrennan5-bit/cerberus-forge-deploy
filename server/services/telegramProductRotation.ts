@@ -152,7 +152,7 @@ function rotationSearchFailureMessage(error: unknown): { text: string; retryable
     text:
       "🔄 <b>ROTAÇÃO CONTINUA EM BUSCA</b>\n\n" +
       `Diagnóstico do lote atual: ${diagnostic}.\n\n` +
-      "O lote atual não trouxe uma opção utilizável. O Cerberus vai para a próxima consulta automaticamente; você não precisa iniciar outra rotação.",
+      "Os candidatos deste lote não passaram pelos gates. O Cerberus avançará automaticamente para novas consultas e páginas da Shopee; você não precisa tentar novamente.",
     retryable: true,
   };
 }
