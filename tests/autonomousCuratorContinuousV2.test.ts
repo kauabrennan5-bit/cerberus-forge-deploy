@@ -18,10 +18,11 @@ const {
   activePublishedCount,
   inventoryDeficit,
   dueForCycle,
-  LIVE_TARGET_PER_CATEGORY,
   categoryCounts,
+  categoryDeficits,
   totalDeficit,
-  retirementCandidates,
+  autonomousGrowthStartDate,
+  dailyTargetPerCategory,
 } = autonomousCuratorContinuousV2Internals;
 
 test("Shopee discovery accepts an explicit page and returns official imageUrl evidence", async () => {
@@ -143,7 +144,7 @@ test("continuous v2 never persists a no_candidate attempt over the daily categor
   assert.match(source, /failedThisCycle \+= 1/);
 });
 
-test("continuous route is wired to balanced v2 coordinator", async () => {
+test("continuous route is wired to the progressive v2 coordinator", async () => {
   const source = await readFile(new URL("../server/routes/autonomousCuratorRoutes.ts", import.meta.url), "utf8");
   assert.match(source, /runAutonomousCuratorContinuousV2/);
   assert.doesNotMatch(source, /runAutonomousCuratorContinuous\s*\(/);
@@ -179,8 +180,27 @@ test("legacy emergency refill primitive still overrides cooldown only while its 
   assert.equal(dueForCycle(justPublished, now, false, 0), false);
 });
 
-test("balanced coordinator requires exactly two active pieces in every public category", () => {
-  assert.equal(LIVE_TARGET_PER_CATEGORY, 2);
+test("progressive coordinator derives day 3 target from the first autonomous publication", () => {
+  const first: Product = {
+    id: "auto-first",
+    produto: "Primeiro find",
+    categoria: "Decoração",
+    preco: 100,
+    imagens: ["https://example.com/a.jpg"],
+    link: "https://example.com/auto-first",
+    ativo: false,
+    destaque: false,
+    status: "archived",
+    createdBy: "autonomous_curator_queue",
+    createdAt: "2026-08-30T14:23:16.000Z",
+  };
+  const now = new Date("2026-09-01T16:30:00.000Z");
+  assert.equal(autonomousGrowthStartDate([first], now, {} as NodeJS.ProcessEnv), "2026-08-30");
+  assert.equal(dailyTargetPerCategory([first], now, {} as NodeJS.ProcessEnv), 3);
+  assert.equal(dailyTargetPerCategory([first], now, { AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-29" } as NodeJS.ProcessEnv), 4);
+});
+
+test("category deficits use today's cumulative target instead of an exact-two cap", () => {
   const product = (id: string, category: Product["categoria"], status: Product["status"] = "published", ativo = true): Product => ({
     id,
     produto: id,
@@ -199,29 +219,19 @@ test("balanced coordinator requires exactly two active pieces in every public ca
     product("shoe-archived", "Calçados & Acessórios", "archived", false),
   ];
   const counts = categoryCounts(products);
+  const deficits = categoryDeficits(counts, 3);
   assert.equal(counts["Iluminação"], 2);
   assert.equal(counts["Decoração"], 1);
   assert.equal(counts["Calçados & Acessórios"], 0);
-  assert.equal(totalDeficit(counts), 17);
+  assert.equal(deficits["Iluminação"], 1);
+  assert.equal(deficits["Decoração"], 2);
+  assert.equal(deficits["Calçados & Acessórios"], 3);
+  assert.equal(totalDeficit(counts, 3), 27);
 });
 
-test("daily rotation keeps the new piece and retires the oldest prior curator item", () => {
-  const item = (id: string, createdAt: string, createdBy = "autonomous_curator_queue"): Product => ({
-    id,
-    produto: id,
-    categoria: "Tecnologia",
-    preco: 100,
-    imagens: ["https://example.com/a.jpg"],
-    link: `https://example.com/${id}`,
-    ativo: true,
-    destaque: false,
-    status: "published",
-    createdBy,
-    createdAt,
-  });
-  const old = item("old", "2026-08-28T00:00:00Z");
-  const middle = item("middle", "2026-08-29T00:00:00Z");
-  const newest = item("new", "2026-08-31T00:00:00Z");
-  const retire = retirementCandidates([old, middle, newest], "Tecnologia", new Set(["new"]));
-  assert.deepEqual(retire.map(product => product.id), ["old"]);
+test("healthy publications accumulate instead of being selected for retirement", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /function retirementCandidates/);
+  assert.doesNotMatch(source, /category_balance_retired_ids/);
+  assert.match(source, /never archived merely because a category crossed a fixed cap/);
 });
