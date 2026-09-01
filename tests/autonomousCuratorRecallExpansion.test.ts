@@ -14,8 +14,8 @@ const recoveryCategories = [
   "Infantil",
 ] as const;
 
-test("profile 1.8 expands recall for categories that can fall behind the cumulative daily floor", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.8");
+test("profile 1.9 expands recall for categories that can fall behind the cumulative daily floor", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.9");
   for (const category of recoveryCategories) {
     const profile = profileForCategory(category);
     assert.ok(profile.queries.length >= 12, `${category} must expose at least twelve discovery queries`);

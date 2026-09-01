@@ -1,6 +1,6 @@
 import { PUBLIC_PRODUCT_CATEGORIES, type PublicProductCategory } from "../../src/lib/productCategory";
 
-export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.8";
+export const AUTONOMOUS_CURATOR_PROFILE_VERSION = "1.9";
 
 export type AutonomousCuratorCategoryProfile = {
   category: PublicProductCategory;
@@ -31,6 +31,8 @@ const COMMON_BLOCKED = [
   "kawaii", "geek", "gamer rgb", "tematico", "temática", "tematica",
 ] as const;
 
+const INFANTIL_COMMON_BLOCKED = COMMON_BLOCKED.filter(term => !["tematico", "temática", "tematica"].includes(term));
+
 const BROAD_RECALL_QUERIES: Partial<Record<PublicProductCategory, readonly string[]>> = {
   "Iluminação": ["luminaria bauhaus", "abajur cogumelo", "luminaria retro", "abajur vintage"],
   "Decoração": ["decoracao bauhaus", "decoracao vintage", "vaso vintage", "espelho retro"],
@@ -42,8 +44,8 @@ const BROAD_RECALL_QUERIES: Partial<Record<PublicProductCategory, readonly strin
   "Tecnologia": ["radio retro", "caixa som retro", "relogio retro mesa", "teclado vintage"],
   "Beleza & Bem-estar": ["espelho maquiagem retro", "necessaire vintage", "porta perfume vintage", "espelho maquiagem"],
   "Infantil": [
-    "brinquedo madeira", "blocos madeira", "brinquedo geometrico", "mobile infantil",
-    "brinquedo montessori", "brinquedo encaixe madeira", "brinquedo empilhavel madeira", "arco iris madeira",
+    "infantil", "brinquedo infantil", "quarto infantil",
+    "brinquedo madeira", "brinquedo montessori", "mobile infantil",
   ],
 };
 
@@ -58,10 +60,10 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
 }
 
 /**
- * Perfil 1.8: mantém os gates de qualidade e amplia recall onde a produção real
- * mostrou falso-negativos sistemáticos, sobretudo Infantil. Arquétipos legítimos
- * de brinquedo de madeira/Montessori agora contam como evidência estética forte;
- * image review, pipeline, similaridade, preço e threshold final continuam iguais.
+ * Perfil 1.9: preserva os gates técnicos e torna o recall Infantil compatível com
+ * a busca manual /shopee. A query ampla `infantil` abre o mesmo universo do operador;
+ * vocabulário de calçados/temas infantis só ajuda o ranking depois da categoria ser
+ * validada. Segurança, imagem, pipeline, similaridade, preço e threshold final seguem ativos.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
@@ -245,13 +247,20 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "brinquedo equilibrio madeira", "brinquedo equilíbrio madeira",
       "mobile geometrico", "mobile geométrico", "mobile madeira",
       "brinquedo empilhavel madeira", "brinquedo empilhável madeira",
+      "babuch infantil", "calcado infantil", "calçado infantil", "sandalia infantil", "sandália infantil",
+      "country infantil", "cowgirl infantil", "fazendinha infantil",
     ],
     signatureTerms: [
       "geométrico", "geometrico", "formas", "cores primarias", "cores primárias", "madeira natural",
       "madeira", "montessori", "waldorf", "encaixe", "empilhavel", "empilhável",
       "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage",
+      "country", "cowgirl", "fazendinha", "rodeio", "babuch", "sandalia", "sandália",
     ],
-    blockedTerms: [...COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte", "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem"],
+    blockedTerms: [
+      ...INFANTIL_COMMON_BLOCKED,
+      "arma brinquedo", "pistola", "municao", "laser forte",
+      "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem",
+    ],
     maxAutoPrice: 300,
     maxReviewPrice: 500,
   }),
