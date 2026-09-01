@@ -14,8 +14,8 @@ const recoveryCategories = [
   "Infantil",
 ] as const;
 
-test("profile 1.7 expands recall specifically for categories still below the 2/2 floor", () => {
-  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.7");
+test("profile 1.8 expands recall for categories that can fall behind the cumulative daily floor", () => {
+  assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.8");
   for (const category of recoveryCategories) {
     const profile = profileForCategory(category);
     assert.ok(profile.queries.length >= 12, `${category} must expose at least twelve discovery queries`);
@@ -29,7 +29,7 @@ test("sparse-category recovery uses concrete Cerberus archetypes without changin
     ["Organização", ["porta revistas cromado", "gaveteiro modular"]],
     ["Calçados & Acessórios", ["oculos acetato", "mocassim camurca"]],
     ["Beleza & Bem-estar", ["espelho mesa cromado", "porta perfume vintage"]],
-    ["Infantil", ["blocos bauhaus", "brinquedo equilibrio madeira"]],
+    ["Infantil", ["brinquedo madeira", "montessori", "brinquedo encaixe madeira"]],
   ] as const);
 
   for (const [category, archetypes] of expected) {
