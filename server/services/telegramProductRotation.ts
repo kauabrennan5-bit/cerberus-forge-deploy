@@ -152,7 +152,7 @@ function rotationSearchFailureMessage(error: unknown): { text: string; retryable
     text:
       "🔄 <b>ROTAÇÃO CONTINUA EM BUSCA</b>\n\n" +
       `Diagnóstico do lote atual: ${diagnostic}.\n\n` +
-      "Os candidatos deste lote não passaram pelos gates. O Cerberus avançará automaticamente para novas consultas e páginas da Shopee; você não precisa tentar novamente.",
+      "O lote atual não trouxe uma opção utilizável. O Cerberus vai para a próxima consulta automaticamente; você não precisa iniciar outra rotação.",
     retryable: true,
   };
 }
@@ -172,11 +172,11 @@ async function sendRotationProposal(proposal: RotationProposal): Promise<void> {
     `• ${escapeHtml(candidate.ref || candidate.id)}`,
     `• ${money(candidate.preco)}`,
     `• Categoria: ${escapeHtml(candidate.categoria)}`,
-    `• Score Cerberus: <b>${Math.round(score)}/100</b>`,
+    `• Compatibilidade rápida: <b>${Math.round(score)}/100</b>`,
     "",
-    "✅ Identidade Shopee, disponibilidade, link afiliado, imagem, título editorial, preço, categoria e pipeline foram revalidados.",
+    "✅ Identidade Shopee, disponibilidade, link afiliado, preço, categoria e imagem do anúncio foram conferidos.",
     "",
-    "<i>A peça atual continua publicada. Nada será substituído até você aprovar.</i>",
+    "<i>A escolha estética final é sua. Não gostou? Toque em Buscar outra opção. A peça atual continua publicada até você aprovar.</i>",
   ].join("\n");
   const image = resolveCanonicalProductImage(candidate).primaryImageUrl;
   if (image && /^https:\/\//i.test(image)) {
@@ -296,8 +296,8 @@ async function applyRotationAndNotify(requestId: string, chatId: string | number
       chatId,
       "❌ <b>ROTAÇÃO NÃO APLICADA</b>\n\n" +
         `Motivo: <code>${escapeHtml(safeError(error))}</code>\n\n` +
-        "O Cerberus executou o rollback quando necessário. A peça anterior não deve ser removida sem uma sincronização pública confirmada.",
-      { inline_keyboard: [[{ text: "🔁 Tentar aprovação novamente", callback_data: `rotation_approve:${requestId}` }], [{ text: "❌ Cancelar rotação", callback_data: `rotation_cancel:${requestId}` }]] },
+        "A peça anterior permanece publicada. Se o candidato ficou inválido, a busca pode continuar pela próxima opção.",
+      { inline_keyboard: [[{ text: "🔁 Buscar outra opção", callback_data: `rotation_retry:${requestId}` }], [{ text: "❌ Cancelar rotação", callback_data: `rotation_cancel:${requestId}` }]] },
     );
   }
 }
@@ -364,8 +364,8 @@ export async function handleProductRotationCallback(update: any): Promise<void> 
   if (data.startsWith("product_rotate:")) {
     try {
       const request = await startProductRotation({ sourceProductId: data.slice("product_rotate:".length), requestedBy: senderId, telegramChatId: chatId });
-      await core.answerCallbackQuery(callbackId, "Buscando substituto...");
-      await core.sendTelegramMessage(chatId, "🔄 <b>ROTAÇÃO INICIADA</b>\n\nO produto atual continuará no site enquanto o Cerberus procura e revalida substitutos da mesma categoria. A busca continuará automaticamente por novos lotes até uma opção qualificada chegar para sua aprovação.", searchingKeyboard(request.id));
+      await core.answerCallbackQuery(callbackId, "Buscando uma opção...");
+      await core.sendTelegramMessage(chatId, "🔄 <b>ROTAÇÃO INICIADA</b>\n\nA peça atual continua no site. O Cerberus vai buscar uma opção da mesma categoria para você decidir. Se não gostar, toque em <b>Buscar outra opção</b> e ele traz a próxima.", searchingKeyboard(request.id));
       ensureRotationSearchWorker(request.id, chatId);
     } catch (error) {
       await core.answerCallbackQuery(callbackId, "Não foi possível iniciar a rotação.", true);
@@ -387,8 +387,8 @@ export async function handleProductRotationCallback(update: any): Promise<void> 
       await core.sendTelegramMessage(
         chatId,
         current.status === "candidate_ready"
-          ? "🔎 <b>OUTRA OPÇÃO SOLICITADA</b>\n\nO candidato anterior foi rejeitado. A peça atual continua publicada enquanto a busca automática segue até outra opção qualificada."
-          : "🔎 <b>BUSCA DE ROTAÇÃO ATIVA</b>\n\nO Cerberus seguirá procurando automaticamente. A peça atual continua publicada.",
+          ? "🔎 <b>OUTRA OPÇÃO SOLICITADA</b>\n\nO candidato anterior foi descartado. A peça atual continua publicada enquanto o Cerberus busca a próxima opção."
+          : "🔎 <b>BUSCA DE ROTAÇÃO ATIVA</b>\n\nO Cerberus está buscando a próxima opção. A peça atual continua publicada.",
         searchingKeyboard(request.id),
       );
       ensureRotationSearchWorker(request.id, chatId);
@@ -410,9 +410,9 @@ export async function handleProductRotationCallback(update: any): Promise<void> 
     return;
   }
 
-  await core.answerCallbackQuery(callbackId, "Revalidando e aplicando substituição...");
+  await core.answerCallbackQuery(callbackId, "Conferindo e aplicando substituição...");
   if (messageId) await core.editTelegramMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
-  await core.sendTelegramMessage(chatId, "🚀 <b>APROVAÇÃO RECEBIDA</b>\n\nO candidato será revalidado novamente antes da troca. O produto antigo só sai depois da sincronização segura do catálogo.");
+  await core.sendTelegramMessage(chatId, "🚀 <b>APROVAÇÃO RECEBIDA</b>\n\nA identidade, disponibilidade e o link Shopee serão conferidos antes da troca. O produto antigo só sai depois da sincronização segura do catálogo.");
   void applyRotationAndNotify(requestId, chatId);
 }
 
