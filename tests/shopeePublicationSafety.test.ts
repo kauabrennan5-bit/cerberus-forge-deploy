@@ -170,7 +170,7 @@ describe("contrato positivo da rotação", () => {
     assert.match(source, /const searchRound = requestSearchRound\(request\)/);
     assert.match(source, /const pageBlock = Math\.floor\(input\.searchRound \/ queries\.length\)/);
     assert.match(source, /const pageStart = pageBlock \* ROTATION_SEARCH_MAX_PAGES \+ 1/);
-    assert.match(source, /for \(const item of pool\)/);
+    assert.match(source, /for \(const item of pool(?:\.slice\(0, ROTATION_FAST_MAX_EVALUATIONS\))?\)/);
     assert.match(source, /status:\s*"searching",[\s\S]*reason:\s*"SEARCH_CONTINUING"[\s\S]*search_round:\s*nextSearchRound/);
     assert.doesNotMatch(source, /status:\s*"failed",\s*reason:\s*"NO_QUALIFIED_REPLACEMENT_FOUND"/);
   });
