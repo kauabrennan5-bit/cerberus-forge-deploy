@@ -1,21 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Product } from "../../src/types";
-import type { PublicProductCategory } from "../../src/lib/productCategory";
-import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
+import { resolvePublicProductCategory, type PublicProductCategory } from "../../src/lib/productCategory";
 import { generateSlug } from "../../src/data/initialProducts";
 import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
 import type { ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
 import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
-import { extractProductForReview } from "./productAutomation";
-import { createProductionProductPipeline, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
-import {
-  DISPLAY_TITLE_REVIEW_VERSION,
-  IMAGE_REVIEW_VERSION,
-  imageCurationFingerprint,
-} from "./productEditorialReview";
 import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
@@ -24,8 +16,6 @@ import {
 import {
   cheapProfileScore,
   hasBlockedProfileTerm,
-  scoreAutonomousCandidate,
-  type AutonomousCuratorScoreBreakdown,
 } from "./autonomousCuratorScoring";
 import {
   buildConfiguredShopeeClient,
@@ -42,17 +32,14 @@ import {
 const AUTO_QUEUE_CREATED_BY = "autonomous_curator_queue";
 const ROTATION_CANDIDATE_CREATED_BY = "telegram_rotation_candidate";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
-const ROTATION_VERSION = "4";
-// Manual rotation is an operator-facing browse loop, not an autonomous publication
-// tournament. Keep every pass deliberately small so a card arrives quickly and the
-// operator can reject it and immediately ask for the next option.
+const ROTATION_VERSION = "5";
+// A manual rotation is a browse loop controlled by the operator. It must not run
+// the autonomous curator's deep AI tournament before showing each option.
 const ROTATION_SEARCH_MAX_PAGES = 1;
 const ROTATION_SEARCH_PAGE_LIMIT = 10;
 const ROTATION_FAST_POOL_TARGET = 10;
 const ROTATION_FAST_MAX_EVALUATIONS = 4;
 const ROTATION_FAST_QUEUED_EVALUATIONS = 1;
-// Autonomous publication can remain selective. A human-requested rotation only
-// needs a reasonable, fully valid option because the operator is the final taste gate.
 const ROTATION_PROPOSAL_MIN_SCORE = 60;
 const ROTATION_RETRYABLE_PROVIDER_CODES = new Set<ShopeeProviderErrorCode>([
   "SHOPEE_PROVIDER_RATE_LIMITED",
@@ -104,17 +91,14 @@ type EvaluatedCandidate = {
   itemId: string;
   sourceProductUrl: string;
   affiliateUrl: string;
-  sourceImageUrl: string | null;
+  sourceImageUrl: string;
   rawTitle: string;
   displayTitle: string;
   description: string;
   category: PublicProductCategory;
   price: number;
   images: string[];
-  imageCuration: NonNullable<Product["imageCuration"]>;
   score: number;
-  breakdown: AutonomousCuratorScoreBreakdown;
-  lifecycle: LifecycleRecord;
 };
 
 export type RotationSearchDiagnostics = {
@@ -199,15 +183,6 @@ function sourceIdentityMatches(url: string, shopId: string, itemId: string): boo
   return identity.shopId === shopId && identity.itemId === itemId;
 }
 
-function similarityUniverse(products: readonly Product[], excludedCandidateId?: string): Product[] {
-  return products.filter(product =>
-    product.id !== excludedCandidateId && (
-      (product.status === "published" && product.ativo !== false)
-      || (product.createdBy === AUTO_QUEUE_CREATED_BY && product.status === "paused" && product.ativo === false)
-    ),
-  );
-}
-
 function buildShopeeClient(env: NodeJS.ProcessEnv): ShopeeApiClient {
   return buildConfiguredShopeeClient(env);
 }
@@ -251,6 +226,21 @@ function providerErrorFromLookup(errorKind: string | null | undefined): ShopeePr
     errorKind || "lookup_error",
     code === "SHOPEE_PROVIDER_RATE_LIMITED" || code === "SHOPEE_PROVIDER_TIMEOUT" || code === "SHOPEE_PROVIDER_UNAVAILABLE",
   );
+}
+
+function fastDisplayTitle(value: string): string {
+  const normalized = value
+    .replace(/[|｜]+/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^\s*[\[【(].{0,32}[\]】)]\s*/g, "")
+    .trim();
+  return (normalized || "Produto selecionado").slice(0, 120);
+}
+
+function fastCandidateScore(profile: AutonomousCuratorCategoryProfile, title: string): number {
+  const cheap = cheapProfileScore(profile, title);
+  if (cheap <= -1000) return -1000;
+  return Math.max(ROTATION_PROPOSAL_MIN_SCORE, Math.min(90, 70 + Math.round(cheap)));
 }
 
 async function getRequest(id: string): Promise<ProductRotationRequest | null> {
@@ -353,9 +343,7 @@ async function evaluateIdentity(input: {
   discoveryName: string;
   discoveryPrice: number | null;
   sourceImageUrl: string | null;
-  products: Product[];
   client: ShopeeApiClient;
-  env: NodeJS.ProcessEnv;
   allowedProductId?: string | null;
 }): Promise<{ candidate: EvaluatedCandidate | null; reason: string }> {
   const existingIdentity = await curatorRepo.findProductSourceIdentity("Shopee", input.shopId, input.itemId);
@@ -388,79 +376,29 @@ async function evaluateIdentity(input: {
     return { candidate: null, reason: "AFFILIATE_IDENTITY_MISMATCH" };
   }
 
-  const evidenceProduct: Record<string, unknown> = {
-    "@context": "https://schema.org",
-    "@type": "Product",
-    name: String(acquisition.name || input.discoveryName || "").replace(/\s+/g, " ").trim().slice(0, 300),
-  };
-  if (input.sourceImageUrl && /^https:\/\//i.test(input.sourceImageUrl)) evidenceProduct.image = [input.sourceImageUrl];
-  const evidence = `<script type="application/ld+json">${JSON.stringify(evidenceProduct).replace(/</g, "\\u003c")}</script>`;
-  const extracted = await extractProductForReview(acquisition.productLink, evidence);
-  if (!extracted.success || !extracted.data) return { candidate: null, reason: `EXTRACTION_${extracted.error || "failed"}` };
-  const data = extracted.data;
-  if (!sourceIdentityMatches(data.normalizedUrl, input.shopId, input.itemId)) return { candidate: null, reason: "SCRAPER_IDENTITY_MISMATCH" };
+  const rawTitle = String(acquisition.name || lookup.name || input.discoveryName || "").replace(/\s+/g, " ").trim();
+  if (!rawTitle) return { candidate: null, reason: "TITLE_MISSING" };
+  const blocked = hasBlockedProfileTerm(input.profile, rawTitle);
+  if (blocked) return { candidate: null, reason: `PROFILE_BLOCKED_TERM:${blocked}` };
+  const score = fastCandidateScore(input.profile, rawTitle);
+  if (score < ROTATION_PROPOSAL_MIN_SCORE) return { candidate: null, reason: "PROFILE_REJECTED" };
 
-  const rawTitle = String(data.rawTitle || data.produto || acquisition.name || input.discoveryName || "").trim();
-  const displayTitle = String(data.displayTitle || "").trim();
-  const description = String(data.descricao || "").trim();
-  const category = data.categoria as PublicProductCategory;
-  const scrapedPrice = Number(data.preco);
+  const inferredCategory = resolvePublicProductCategory("", { title: rawTitle, description: "" });
+  if (inferredCategory && inferredCategory !== input.profile.category) {
+    return { candidate: null, reason: `CATEGORY_MISMATCH:${inferredCategory}` };
+  }
+
   const acquisitionPrice = Number(acquisition.price);
   const discoveryPrice = Number(input.discoveryPrice);
-  const price = Number.isFinite(scrapedPrice) && scrapedPrice > 0
-    ? scrapedPrice
-    : Number.isFinite(acquisitionPrice) && acquisitionPrice > 0
-      ? acquisitionPrice
-      : discoveryPrice;
-  const imageCuration = data.imageCuration;
-  const image = resolveCanonicalProductImage({ imagens: data.imagens, imageCuration, imageEditorialStatus: data.imageEditorialStatus });
-
-  const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
-  if (blocked) return { candidate: null, reason: `PROFILE_BLOCKED_TERM:${blocked}` };
-  if (!displayTitle || displayTitle === rawTitle || description.length < 24) return { candidate: null, reason: "EDITORIAL_COPY_INCOMPLETE" };
-  if (category !== input.profile.category) return { candidate: null, reason: `CATEGORY_MISMATCH:${category || "unknown"}` };
+  const price = Number.isFinite(acquisitionPrice) && acquisitionPrice > 0
+    ? acquisitionPrice
+    : discoveryPrice;
   if (!Number.isFinite(price) || price <= 0) return { candidate: null, reason: "PRICE_UNVERIFIED" };
-  if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl || !/^https:\/\//i.test(image.primaryImageUrl)) {
-    return { candidate: null, reason: "IMAGE_REVIEW_NOT_CLEAN" };
-  }
+  const sourceImageUrl = String(input.sourceImageUrl || "").trim();
+  if (!/^https:\/\//i.test(sourceImageUrl)) return { candidate: null, reason: "IMAGE_HTTPS_MISSING" };
 
-  // Never derive a Shopee URL from ids. The exact official productLink returned
-  // by the provider is the canonical source URL carried into persistence.
   const sourceProductUrl = acquisition.productLink;
-  const lifecycle = await createProductionProductPipeline().evaluate({
-    normalizedUrl: sourceProductUrl,
-    link: acquisition.affiliateUrl,
-    marketplace: "Shopee",
-    produto: displayTitle,
-    rawTitle,
-    displayTitle,
-    categoria: category,
-    preco: price,
-    imagens: image.publicHttpsImageUrls,
-    imagensOriginais: imageCuration.rawImageUrls,
-    imageCuration,
-    imagemPrincipal: image.primaryImageUrl,
-    imagensGaleria: image.galleryImageUrls,
-    imageEditorialStatus: "clean",
-    descricao: description,
-  });
-  if (lifecycle.validation.outcome !== "PASS" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED" || lifecycle.curation.recommendation !== "PUBLISH") {
-    return { candidate: null, reason: `PIPELINE_NOT_PUBLISHABLE:${lifecycle.validation.errors.join("|") || lifecycle.curation.recommendation}` };
-  }
-
-  const breakdown = scoreAutonomousCandidate({
-    profile: input.profile,
-    rawTitle,
-    displayTitle,
-    description,
-    category,
-    price,
-    imageCuration,
-    pipelineScore: lifecycle.curation.score,
-    existingProducts: similarityUniverse(input.products, input.allowedProductId || undefined),
-  });
-  if (breakdown.maximumCatalogSimilarity >= 0.82) return { candidate: null, reason: `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}` };
-  if (breakdown.finalScore < ROTATION_PROPOSAL_MIN_SCORE) return { candidate: null, reason: `BELOW_ROTATION_PROPOSAL_THRESHOLD:${breakdown.finalScore}` };
+  if (!sourceIdentityMatches(sourceProductUrl, input.shopId, input.itemId)) return { candidate: null, reason: "SCRAPER_IDENTITY_MISMATCH" };
 
   return {
     candidate: {
@@ -470,19 +408,16 @@ async function evaluateIdentity(input: {
       itemId: input.itemId,
       sourceProductUrl,
       affiliateUrl: acquisition.affiliateUrl,
-      sourceImageUrl: input.sourceImageUrl,
+      sourceImageUrl,
       rawTitle,
-      displayTitle,
-      description,
-      category,
+      displayTitle: fastDisplayTitle(rawTitle),
+      description: `Opção encontrada na Shopee para rotação manual em ${input.profile.category}.`,
+      category: input.profile.category,
       price,
-      images: image.publicHttpsImageUrls,
-      imageCuration,
-      score: breakdown.finalScore,
-      breakdown,
-      lifecycle,
+      images: [sourceImageUrl],
+      score,
     },
-    reason: "QUALIFIED",
+    reason: "QUALIFIED_FAST_OPERATOR_REVIEW",
   };
 }
 
@@ -503,7 +438,7 @@ async function claimIdentity(candidate: EvaluatedCandidate, productId: string): 
   throw error;
 }
 
-async function persistCandidate(candidate: EvaluatedCandidate, now: Date, env: NodeJS.ProcessEnv): Promise<Product | null> {
+async function persistCandidate(candidate: EvaluatedCandidate, now: Date): Promise<Product | null> {
   const suffix = randomUUID().replace(/-/g, "").slice(0, 10);
   const productId = `prod-${now.getTime()}-${suffix}`;
   if (!(await claimIdentity(candidate, productId))) return null;
@@ -519,8 +454,6 @@ async function persistCandidate(candidate: EvaluatedCandidate, now: Date, env: N
     imageUrl: candidate.sourceImageUrl,
   };
   const slug = `${generateSlug(candidate.displayTitle)}-${suffix.slice(0, 6)}`;
-  const imageModel = env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite";
-  const titleModel = env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite";
   const { error } = await requireSupabase().from("products").insert({
     id: productId,
     ref: `ROTA-${suffix.toUpperCase()}`,
@@ -540,31 +473,25 @@ async function persistCandidate(candidate: EvaluatedCandidate, now: Date, env: N
     raw_title: candidate.rawTitle,
     display_title: candidate.displayTitle,
     curator_note: queueNote(meta),
-    image_editorial_status: "clean",
-    image_curation: candidate.imageCuration,
-    image_reviewed_at: now.toISOString(),
-    image_review_model: imageModel,
-    image_review_version: IMAGE_REVIEW_VERSION,
-    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
-    display_title_status: "reviewed",
-    display_title_reviewed_at: now.toISOString(),
-    display_title_review_model: titleModel,
-    display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
+    image_editorial_status: "unreviewed",
+    image_curation: null,
+    image_reviewed_at: null,
+    image_review_model: null,
+    image_review_version: null,
+    image_review_fingerprint: null,
+    display_title_status: "unreviewed",
+    display_title_reviewed_at: null,
+    display_title_review_model: null,
+    display_title_review_version: null,
   });
   if (error) {
     await requireSupabase().from("product_source_identities").delete().eq("product_id", productId);
     throw error;
   }
-  await curatorRepo.saveProductImageEditorialReview({
-    productId,
-    curation: candidate.imageCuration,
-    model: imageModel,
-    reviewVersion: "1.2",
-  });
   return await productsRepository.getProductByIdOrSlug(productId);
 }
 
-async function refreshCandidateProduct(product: Product, candidate: EvaluatedCandidate, published: boolean, env: NodeJS.ProcessEnv): Promise<void> {
+async function refreshCandidateProduct(product: Product, candidate: EvaluatedCandidate, published: boolean): Promise<void> {
   const previous = parseQueueNote(product.curatorNote);
   const now = new Date();
   const meta: QueueMetadata = {
@@ -588,16 +515,16 @@ async function refreshCandidateProduct(product: Product, candidate: EvaluatedCan
     raw_title: candidate.rawTitle,
     display_title: candidate.displayTitle,
     curator_note: queueNote(meta),
-    image_editorial_status: "clean",
-    image_curation: candidate.imageCuration,
-    image_reviewed_at: now.toISOString(),
-    image_review_model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
-    image_review_version: IMAGE_REVIEW_VERSION,
-    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
-    display_title_status: "reviewed",
-    display_title_reviewed_at: now.toISOString(),
-    display_title_review_model: env.GEMINI_AUTONOMOUS_CURATOR_COPY_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
-    display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
+    image_editorial_status: "unreviewed",
+    image_curation: null,
+    image_reviewed_at: null,
+    image_review_model: null,
+    image_review_version: null,
+    image_review_fingerprint: null,
+    display_title_status: "unreviewed",
+    display_title_reviewed_at: null,
+    display_title_review_model: null,
+    display_title_review_version: null,
     created_by: published ? AUTO_QUEUE_CREATED_BY : ROTATION_CANDIDATE_CREATED_BY,
     ativo: published,
     status: published ? "published" : "paused",
@@ -605,7 +532,7 @@ async function refreshCandidateProduct(product: Product, candidate: EvaluatedCan
   if (error) throw error;
 }
 
-async function evaluateStoredProduct(product: Product, source: Product, profile: AutonomousCuratorCategoryProfile, client: ShopeeApiClient, env: NodeJS.ProcessEnv): Promise<{ candidate: EvaluatedCandidate | null; reason: string }> {
+async function evaluateStoredProduct(product: Product, source: Product, profile: AutonomousCuratorCategoryProfile, client: ShopeeApiClient): Promise<{ candidate: EvaluatedCandidate | null; reason: string }> {
   const { data: identity, error } = await requireSupabase()
     .from("product_source_identities")
     .select("shop_id,item_id,source_product_url")
@@ -617,7 +544,6 @@ async function evaluateStoredProduct(product: Product, source: Product, profile:
     return { candidate: null, reason: "SOURCE_PRODUCT_URL_NOT_OFFICIAL" };
   }
   const meta = parseQueueNote(product.curatorNote);
-  const products = await productsRepository.getProducts();
   return evaluateIdentity({
     profile,
     query: meta?.query || profile.queries[0] || source.produto,
@@ -626,9 +552,7 @@ async function evaluateStoredProduct(product: Product, source: Product, profile:
     discoveryName: product.rawTitle || product.produto,
     discoveryPrice: product.preco,
     sourceImageUrl: meta?.imageUrl || product.imagens?.[0] || null,
-    products,
     client,
-    env,
     allowedProductId: product.id,
   });
 }
@@ -652,11 +576,9 @@ async function discoverLiveCandidate(input: {
   source: Product;
   rejected: ReadonlySet<string>;
   client: ShopeeApiClient;
-  env: NodeJS.ProcessEnv;
   diagnostics: RotationSearchDiagnostics;
   searchRound: number;
 }): Promise<EvaluatedCandidate | null> {
-  const products = await productsRepository.getProducts();
   const seen = new Set<string>();
   const pool: Array<{ query: string; shopId: string; itemId: string; name: string; price: number; imageUrl: string; productLink: string; cheap: number }> = [];
   const poolTarget = ROTATION_FAST_POOL_TARGET;
@@ -714,9 +636,8 @@ async function discoverLiveCandidate(input: {
 
   input.diagnostics.candidatesInPool = pool.length;
   pool.sort((a, b) => b.cheap - a.cheap || a.itemId.localeCompare(b.itemId));
-  // Do not spend tens of minutes trying to find a mythical "perfect" product.
-  // Evaluate a tiny best-first batch; if it does not yield an option, advance the
-  // durable cursor and immediately try the next query/page block.
+  // Provider-only evaluation is intentionally bounded and inexpensive. The user
+  // is the taste gate: show a valid option, then let reject/accept drive the loop.
   for (const item of pool.slice(0, ROTATION_FAST_MAX_EVALUATIONS)) {
     input.diagnostics.candidatesExamined += 1;
     const evaluated = await evaluateIdentity({
@@ -727,9 +648,7 @@ async function discoverLiveCandidate(input: {
       discoveryName: item.name,
       discoveryPrice: item.price,
       sourceImageUrl: item.imageUrl,
-      products,
       client: input.client,
-      env: input.env,
     });
     if (evaluated.candidate) return evaluated.candidate;
     bump(input.diagnostics, evaluated.reason);
@@ -785,9 +704,9 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       const currentCandidate = await productsRepository.getProductByIdOrSlug(request.candidateProductId);
       if (currentCandidate && currentCandidate.status === "paused" && currentCandidate.ativo === false) {
         diagnostics.candidatesExamined += 1;
-        const evaluated = await evaluateStoredProduct(currentCandidate, source, profile, client, env);
+        const evaluated = await evaluateStoredProduct(currentCandidate, source, profile, client);
         if (evaluated.candidate) {
-          await refreshCandidateProduct(currentCandidate, evaluated.candidate, false, env);
+          await refreshCandidateProduct(currentCandidate, evaluated.candidate, false);
           request = await patchRequest(request.id, { status: "candidate_ready", reason: null });
           const refreshed = await productsRepository.getProductByIdOrSlug(currentCandidate.id);
           if (!refreshed) throw new Error("ROTATION_CANDIDATE_REFRESH_MISSING");
@@ -801,9 +720,9 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       if (queued.id === source.id) continue;
       diagnostics.candidatesExamined += 1;
       const origin = queued.createdBy || AUTO_QUEUE_CREATED_BY;
-      const evaluated = await evaluateStoredProduct(queued, source, profile, client, env);
+      const evaluated = await evaluateStoredProduct(queued, source, profile, client);
       if (!evaluated.candidate) { bump(diagnostics, evaluated.reason); continue; }
-      await refreshCandidateProduct(queued, evaluated.candidate, false, env);
+      await refreshCandidateProduct(queued, evaluated.candidate, false);
       request = await patchRequest(request.id, {
         status: "candidate_ready",
         candidate_product_id: queued.id,
@@ -815,10 +734,10 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       return { request, source, candidate: refreshed, score: evaluated.candidate.score };
     }
 
-    const discovered = await discoverLiveCandidate({ profile, source, rejected, client, env, diagnostics, searchRound });
+    const discovered = await discoverLiveCandidate({ profile, source, rejected, client, diagnostics, searchRound });
     if (discovered) {
       try {
-        const persisted = await persistCandidate(discovered, new Date(), env);
+        const persisted = await persistCandidate(discovered, new Date());
         if (persisted) {
           request = await patchRequest(request.id, {
             status: "candidate_ready",
@@ -883,8 +802,6 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
     candidatesInPool: diagnostics.candidatesInPool,
     candidatesExamined: diagnostics.candidatesExamined,
   });
-  // Internal continuation only; Telegram must keep advancing the cursor without
-  // asking the operator to start over.
   throw new ProductRotationSearchError("NO_QUALIFIED_REPLACEMENT_FOUND", diagnostics);
 }
 
@@ -949,10 +866,8 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
   if (!profile) throw new Error("ROTATION_CATEGORY_NOT_SUPPORTED");
 
   const client = buildShopeeClient(env);
-  const revalidated = await evaluateStoredProduct(candidateProduct, source, profile, client, env);
+  const revalidated = await evaluateStoredProduct(candidateProduct, source, profile, client);
   if (!revalidated.candidate) {
-    // A failed preflight is recoverable: preserve the current source and continue
-    // looking for the next option instead of terminating the operator's rotation.
     request = await patchRequest(request.id, {
       status: "searching",
       candidate_product_id: null,
@@ -963,7 +878,7 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
     await requireSupabase().from("products").update({ ativo: false, status: "archived" }).eq("id", candidateProduct.id);
     throw new Error(`ROTATION_PREFLIGHT_REJECTED:${revalidated.reason}`);
   }
-  await refreshCandidateProduct(candidateProduct, revalidated.candidate, false, env);
+  await refreshCandidateProduct(candidateProduct, revalidated.candidate, false);
   request = await patchRequest(request.id, { status: "applying", reason: null });
 
   const clientDb = requireSupabase();
@@ -1044,4 +959,6 @@ export const productRotationInternals = {
   safeReason,
   requestSearchRound,
   newDiagnostics,
+  fastDisplayTitle,
+  fastCandidateScore,
 };
