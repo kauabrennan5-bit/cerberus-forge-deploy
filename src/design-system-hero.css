@@ -1,5 +1,11 @@
 /* Hero-specific completion for the Cerberus redesign system. */
 
+/* Keep opacity-style legacy text utilities in the single approved warm-gray
+   secondary role. This rule intentionally loads after the generic cream map. */
+[class*="text-[#E8E1D3]/"] {
+  color: var(--cerberus-warm-gray) !important;
+}
+
 ::-webkit-scrollbar-track {
   background: var(--cerberus-black) !important;
 }
@@ -81,6 +87,14 @@
   .nexbot-hero__model-column,
   .nexbot-hero__stage {
     min-height: 320px !important;
+  }
+
+  .nexbot-hero__model-column {
+    opacity: 0.6 !important;
+  }
+
+  .nexbot-hero__interaction-hint {
+    display: none !important;
   }
 }
 
