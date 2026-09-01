@@ -44,8 +44,8 @@ const BROAD_RECALL_QUERIES: Partial<Record<PublicProductCategory, readonly strin
   "Tecnologia": ["radio retro", "caixa som retro", "relogio retro mesa", "teclado vintage"],
   "Beleza & Bem-estar": ["espelho maquiagem retro", "necessaire vintage", "porta perfume vintage", "espelho maquiagem"],
   "Infantil": [
-    "infantil", "brinquedo infantil", "calcado infantil", "babuch infantil",
-    "decoracao infantil", "brinquedo madeira", "brinquedo montessori", "mobile infantil",
+    "infantil", "brinquedo infantil", "quarto infantil",
+    "brinquedo madeira", "brinquedo montessori", "mobile infantil",
   ],
 };
 
@@ -61,10 +61,9 @@ function profile(input: Omit<AutonomousCuratorCategoryProfile, "strongStyleTerms
 
 /**
  * Perfil 1.9: preserva os gates técnicos e torna o recall Infantil compatível com
- * a busca manual /shopee. A categoria pode descobrir calçados, decoração e outros
- * objetos infantis além do recorte Montessori/madeira. Tema lúdico deixa de ser
- * bloqueio lexical por si só; segurança, imagem, pipeline, similaridade, preço e
- * threshold final continuam ativos.
+ * a busca manual /shopee. A query ampla `infantil` abre o mesmo universo do operador;
+ * vocabulário de calçados/temas infantis só ajuda o ranking depois da categoria ser
+ * validada. Segurança, imagem, pipeline, similaridade, preço e threshold final seguem ativos.
  */
 export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProfile[] = [
   profile({
@@ -238,7 +237,6 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "mobile madeira formas geometricas", "brinquedo empilhavel madeira geometrico",
       "brinquedo montessori madeira", "brinquedo waldorf madeira",
       "brinquedo encaixe madeira montessori", "brinquedo empilhavel montessori",
-      "babuch infantil design", "sandalia infantil design", "calcado infantil retro",
     ],
     strongStyleTerms: [
       ...STRONG_STYLE_TERMS,
@@ -258,7 +256,11 @@ export const AUTONOMOUS_CURATOR_PROFILES: readonly AutonomousCuratorCategoryProf
       "equilibrio", "equilíbrio", "design escandinavo", "retro", "vintage",
       "country", "cowgirl", "fazendinha", "rodeio", "babuch", "sandalia", "sandália",
     ],
-    blockedTerms: [...INFANTIL_COMMON_BLOCKED, "arma brinquedo", "pistola", "municao", "laser forte", "carro plastico", "carro plástico", "personagem"],
+    blockedTerms: [
+      ...INFANTIL_COMMON_BLOCKED,
+      "arma brinquedo", "pistola", "municao", "laser forte",
+      "caminhao", "caminhão", "carro plastico", "carro plástico", "personagem",
+    ],
     maxAutoPrice: 300,
     maxReviewPrice: 500,
   }),
