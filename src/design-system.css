@@ -1,0 +1,454 @@
+/* Cerberus Finds redesign system — GAZU discipline + Reload atmosphere.
+   This layer intentionally centralizes public visual rules without changing catalog behavior. */
+
+:root {
+  --cerberus-black: #0A0605;
+  --cerberus-red: #8C1A1A;
+  --cerberus-cream: #F2EDE4;
+  --cerberus-warm-gray: #6B6558;
+  --cerberus-border: 1px solid var(--cerberus-warm-gray);
+  --cerberus-radius: 0px;
+}
+
+/* -------------------------------------------------------------------------
+   Palette lock. Existing Tailwind arbitrary-color utilities are normalized
+   here so legacy screens cannot reintroduce competing accents. */
+
+[class*="text-[#8A1F1F]"],
+[class*="text-[#D7A64B]"],
+[class*="text-[#E5BC70]"] {
+  color: var(--cerberus-red) !important;
+}
+
+[class*="bg-[#8A1F1F]"],
+[class*="bg-[#D7A64B]"],
+[class*="bg-[#E5BC70]"] {
+  background-color: var(--cerberus-red) !important;
+}
+
+[class*="border-[#8A1F1F]"],
+[class*="border-[#D7A64B]"],
+[class*="border-[#E5BC70]"] {
+  border-color: var(--cerberus-red) !important;
+}
+
+[class*="outline-[#8A1F1F]"],
+[class*="outline-[#D7A64B]"],
+[class*="outline-[#E5BC70]"] {
+  outline-color: var(--cerberus-red) !important;
+}
+
+[class*="text-[#E8E1D3]/"] {
+  color: var(--cerberus-warm-gray) !important;
+}
+
+[class*="text-[#E8E1D3]"] {
+  color: var(--cerberus-cream) !important;
+}
+
+[class*="border-[#3A342E]"] {
+  border-color: var(--cerberus-warm-gray) !important;
+}
+
+[class*="bg-[#0B0908]"],
+[class*="bg-[#141210]"],
+[class*="bg-[#181512]"],
+[class*="bg-[#2A2622]"],
+[class*="bg-[#1C1815]"],
+[class*="bg-[#211C18]"],
+[class*="bg-[#090807]"],
+[class*="bg-[#100E0D]"] {
+  background-color: var(--cerberus-black) !important;
+}
+
+html,
+body,
+#root {
+  background: var(--cerberus-black);
+  color: var(--cerberus-cream);
+}
+
+body {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--cerberus-warm-gray) 9%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--cerberus-warm-gray) 9%, transparent) 1px, transparent 1px);
+}
+
+.bg-noise {
+  background-color: var(--cerberus-black) !important;
+  background-image:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--cerberus-red) 14%, transparent) 0%, transparent 65%),
+    linear-gradient(to right, color-mix(in srgb, var(--cerberus-cream) 2%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--cerberus-cream) 2%, transparent) 1px, transparent 1px) !important;
+}
+
+/* -------------------------------------------------------------------------
+   Shared primitives */
+
+.stamp-badge,
+.cerberus-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  border: 0 !important;
+  border-radius: var(--cerberus-radius);
+  background: color-mix(in srgb, var(--cerberus-red) 72%, var(--cerberus-black)) !important;
+  color: var(--cerberus-cream) !important;
+  box-shadow: none !important;
+  padding: 0.25rem 0.5rem;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.cerberus-button-primary,
+.nexbot-hero__cta,
+footer form button[type="submit"],
+[data-testid="product-card"] button[class*="mt-1.5"][class*="w-full"] {
+  border: 1px solid var(--cerberus-red) !important;
+  border-radius: var(--cerberus-radius) !important;
+  background: var(--cerberus-red) !important;
+  color: var(--cerberus-cream) !important;
+  box-shadow: none !important;
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.cerberus-button-primary:hover,
+.nexbot-hero__cta:hover,
+footer form button[type="submit"]:hover,
+[data-testid="product-card"] button[class*="mt-1.5"][class*="w-full"]:hover {
+  background: color-mix(in srgb, var(--cerberus-red) 82%, var(--cerberus-black)) !important;
+  border-color: var(--cerberus-red) !important;
+  color: var(--cerberus-cream) !important;
+  transform: translateY(-1px);
+}
+
+.cerberus-button-outline,
+.nexbot-hero__controls button,
+#nav-catalog-btn,
+#nav-favorites-btn {
+  border: 1px solid var(--cerberus-cream) !important;
+  border-radius: var(--cerberus-radius) !important;
+  background: transparent !important;
+  color: var(--cerberus-cream) !important;
+  box-shadow: none !important;
+}
+
+.cerberus-button-outline:hover,
+.nexbot-hero__controls button:hover,
+#nav-catalog-btn:hover,
+#nav-favorites-btn:hover {
+  border-color: var(--cerberus-red) !important;
+  color: var(--cerberus-cream) !important;
+  background: color-mix(in srgb, var(--cerberus-red) 16%, transparent) !important;
+}
+
+input,
+select,
+textarea,
+[data-testid="product-card"],
+footer a[aria-label] {
+  border-radius: var(--cerberus-radius) !important;
+}
+
+/* -------------------------------------------------------------------------
+   Header */
+
+header {
+  background: color-mix(in srgb, var(--cerberus-black) 95%, transparent) !important;
+  border-color: var(--cerberus-warm-gray) !important;
+}
+
+#brand-logo-btn p {
+  color: var(--cerberus-warm-gray) !important;
+  font-size: 0.48rem !important;
+  letter-spacing: 0.28em !important;
+}
+
+#nav-catalog-btn,
+#nav-favorites-btn {
+  min-height: 2.5rem;
+}
+
+#nav-catalog-btn > span:last-child,
+#nav-favorites-btn > span:last-child {
+  background: var(--cerberus-red) !important;
+  border: 1px solid var(--cerberus-red) !important;
+  color: var(--cerberus-cream) !important;
+  padding: 0.1rem 0.3rem;
+}
+
+/* -------------------------------------------------------------------------
+   Hero: the 3D object becomes atmosphere, not a second competing section. */
+
+.nexbot-hero {
+  grid-template-areas: "copy model" !important;
+  grid-template-columns: minmax(0, 1.18fr) minmax(300px, 0.82fr) !important;
+  grid-template-rows: minmax(570px, 1fr) !important;
+  min-height: min(760px, calc(100svh - 6rem)) !important;
+  margin-bottom: clamp(2rem, 5vw, 4rem) !important;
+  border: var(--cerberus-border) !important;
+  background:
+    radial-gradient(circle at 78% 48%, color-mix(in srgb, var(--cerberus-red) 14%, transparent), transparent 34%),
+    linear-gradient(138deg, var(--cerberus-black), var(--cerberus-black)) !important;
+}
+
+.nexbot-hero::before {
+  border-color: color-mix(in srgb, var(--cerberus-red) 18%, transparent) !important;
+  box-shadow:
+    0 0 0 48px color-mix(in srgb, var(--cerberus-red) 3%, transparent),
+    0 0 0 96px color-mix(in srgb, var(--cerberus-red) 2%, transparent) !important;
+}
+
+.nexbot-hero::after {
+  background: linear-gradient(90deg, transparent 58%, color-mix(in srgb, var(--cerberus-warm-gray) 13%, transparent) 58.1%, transparent 58.2%) !important;
+}
+
+.nexbot-hero__grid {
+  opacity: 0.38 !important;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--cerberus-warm-gray) 10%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--cerberus-warm-gray) 10%, transparent) 1px, transparent 1px) !important;
+}
+
+.nexbot-hero__copy {
+  padding: clamp(2rem, 5vw, 5rem) !important;
+}
+
+.nexbot-hero__eyebrow {
+  color: var(--cerberus-red) !important;
+  font-size: 0.6rem !important;
+  letter-spacing: 0.24em !important;
+}
+
+.nexbot-hero__copy h1 {
+  max-width: 11ch !important;
+  color: var(--cerberus-cream) !important;
+  font-family: 'Cinzel', 'Plus Jakarta Sans', serif !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.035em !important;
+  line-height: 0.96 !important;
+}
+
+.nexbot-hero__description {
+  color: var(--cerberus-warm-gray) !important;
+  max-width: 34rem !important;
+}
+
+.nexbot-hero__cta {
+  min-height: 3.25rem !important;
+  margin-top: clamp(1.4rem, 2.6vw, 2.1rem) !important;
+}
+
+.nexbot-hero__meta {
+  color: var(--cerberus-warm-gray) !important;
+  margin-top: clamp(1.4rem, 3vw, 2.5rem) !important;
+}
+
+.nexbot-hero__model-column {
+  min-height: 570px !important;
+  opacity: 0.72;
+}
+
+.nexbot-hero__stage {
+  background:
+    radial-gradient(ellipse at 55% 55%, color-mix(in srgb, var(--cerberus-red) 13%, transparent), transparent 45%),
+    transparent !important;
+}
+
+.nexbot-hero__canvas canvas {
+  filter: grayscale(1) contrast(1.06) brightness(0.86);
+}
+
+.nexbot-hero__controls {
+  opacity: 0.38;
+  transition: opacity 180ms ease;
+}
+
+.nexbot-hero__stage:hover .nexbot-hero__controls,
+.nexbot-hero__stage:focus-within .nexbot-hero__controls {
+  opacity: 0.9;
+}
+
+.nexbot-hero__controls button {
+  min-height: 2rem !important;
+  padding: 0.35rem 0.55rem !important;
+  font-size: 0.52rem !important;
+  letter-spacing: 0.12em !important;
+}
+
+.nexbot-hero__interaction-hint {
+  color: var(--cerberus-warm-gray) !important;
+  opacity: 0.45;
+  font-size: 0.52rem !important;
+}
+
+.nexbot-hero__credit {
+  display: none !important;
+}
+
+/* -------------------------------------------------------------------------
+   Catalog controls */
+
+#cerberus-acervo section > div:first-child {
+  border-color: var(--cerberus-warm-gray) !important;
+}
+
+#cerberus-acervo .stamp-badge {
+  background: transparent !important;
+  color: var(--cerberus-red) !important;
+  padding-left: 0 !important;
+}
+
+button[aria-controls="category-panel"] > span > span:first-child {
+  display: none !important;
+}
+
+button[aria-controls="category-panel"],
+#category-panel,
+#cerberus-acervo input,
+#cerberus-acervo button {
+  border-radius: var(--cerberus-radius) !important;
+}
+
+#cerberus-acervo input,
+button[aria-controls="category-panel"],
+#nav-favorites-btn {
+  border-width: 1px !important;
+}
+
+/* -------------------------------------------------------------------------
+   Product cards */
+
+[data-testid="product-card"] {
+  border: var(--cerberus-border) !important;
+  background: var(--cerberus-black) !important;
+  box-shadow: none !important;
+}
+
+[data-testid="product-card"]:hover {
+  border-color: var(--cerberus-red) !important;
+  background: var(--cerberus-black) !important;
+  box-shadow: 0 16px 38px color-mix(in srgb, var(--cerberus-black) 72%, transparent) !important;
+}
+
+[data-testid="product-card"] h3 + p {
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+  color: var(--cerberus-warm-gray) !important;
+}
+
+[data-testid="product-card"] button[class*="mt-1.5"][class*="w-full"] svg {
+  color: var(--cerberus-cream) !important;
+}
+
+/* A lone final card should never look like a broken half-row. The rule follows
+   the active 2/3/4/5-column breakpoint and only spans when exactly one card is
+   left in the final row. */
+#cerberus-acervo section > div.grid:last-of-type > :last-child:nth-child(2n + 1) {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 768px) {
+  #cerberus-acervo section > div.grid:last-of-type > :last-child {
+    grid-column: auto;
+  }
+
+  #cerberus-acervo section > div.grid:last-of-type > :last-child:nth-child(3n + 1) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1024px) {
+  #cerberus-acervo section > div.grid:last-of-type > :last-child {
+    grid-column: auto;
+  }
+
+  #cerberus-acervo section > div.grid:last-of-type > :last-child:nth-child(4n + 1) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1280px) {
+  #cerberus-acervo section > div.grid:last-of-type > :last-child {
+    grid-column: auto;
+  }
+
+  #cerberus-acervo section > div.grid:last-of-type > :last-child:nth-child(5n + 1) {
+    grid-column: 1 / -1;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Footer */
+
+footer {
+  background: var(--cerberus-black) !important;
+  border-color: var(--cerberus-warm-gray) !important;
+}
+
+footer a,
+footer button {
+  text-transform: uppercase;
+}
+
+footer a[aria-label] {
+  border: var(--cerberus-border) !important;
+  background: transparent !important;
+}
+
+footer::after {
+  content: '3D asset: NEXBOT — robot character concept, jules.sore13, CC BY 4.0.';
+  display: block;
+  max-width: 80rem;
+  margin: 1.1rem auto 0;
+  padding: 0 1rem;
+  color: var(--cerberus-warm-gray);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.52rem;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* -------------------------------------------------------------------------
+   Responsive hero */
+
+@media (max-width: 900px) {
+  .nexbot-hero {
+    grid-template-areas:
+      'copy'
+      'model' !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(320px, 45svh) !important;
+    min-height: auto !important;
+  }
+
+  .nexbot-hero__copy {
+    padding-bottom: 1.25rem !important;
+  }
+
+  .nexbot-hero__model-column {
+    min-height: 320px !important;
+    opacity: 0.6;
+  }
+
+  .nexbot-hero__interaction-hint {
+    display: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nexbot-hero__cta:hover,
+  [data-testid="product-card"]:hover {
+    transform: none !important;
+  }
+}
