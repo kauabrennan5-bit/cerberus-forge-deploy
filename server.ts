@@ -852,7 +852,7 @@ async function startServer() {
     } catch (err: any) {
       console.error("Erro no proxy /api/submit-product:", err);
       return res.status(500).json({ 
-        success: false, 
+        success: false,
         error: "Erro de servidor ao enviar produto: " + (err?.message || String(err))
       });
     }
@@ -865,7 +865,7 @@ async function startServer() {
       const { url, rawText } = req.body;
       if (!url && !rawText) {
         return res.status(400).json({ 
-          success: false, 
+          success: false,
           error: "É necessário fornecer a URL do produto ou o texto copiado." 
         });
       }
@@ -1353,48 +1353,58 @@ NUNCA modifique ou invente preços ou imagens.`,
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const publicSiteBase = (process.env.PUBLIC_SITE_URL || "https://cerberus-design-preview.onrender.com").replace(/\/+$/, "");
+    const publicDataRoot = path.resolve(process.cwd(), "public", "data");
 
-    // A SPA permanece a resposta para visitantes. Apenas robôs sociais recebem
-    // HTML mínimo, suficiente para a prévia do link sem introduzir SSR completo.
-    app.get("/produto/:slug", async (req, res, next) => {
-      if (!isSocialCrawler(req.headers["user-agent"])) return next();
+    const redirectToPublicSite = (req: express.Request, res: express.Response) => {
+      const target = new URL(req.originalUrl || req.url || "/", `${publicSiteBase}/`);
+      return res.redirect(302, target.toString());
+    };
+
+    // Product pages remain an intentional backend surface only for social crawlers.
+    // Human visitors are always sent to the public frontend while preserving path/query.
+    app.get("/produto/:slug", async (req, res) => {
+      if (!isSocialCrawler(req.headers["user-agent"])) {
+        return redirectToPublicSite(req, res);
+      }
       try {
         const product = await productsRepository.getProductByIdOrSlug(req.params.slug);
-        if (!product || product.ativo === false || product.status !== "published") return next();
-        const publicOrigin = (process.env.PUBLIC_SITE_URL || `${req.protocol}://${req.get("host")}`).replace(/\/$/, "");
+        if (!product || product.ativo === false || product.status !== "published") {
+          return res.status(404).type("html").send("<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Produto não encontrado</title><p>Produto não encontrado.</p></html>");
+        }
+        const publicOrigin = publicSiteBase;
         const title = product.displayTitle || product.produto;
         const description = (product.curatorNote || product.descricao || "Peça selecionada pela curadoria Cerberus Finds.").replace(/\s+/g, " ").trim().slice(0, 180);
         const image = Array.isArray(product.imagens) ? product.imagens[0] : "";
         const canonicalUrl = `${publicOrigin}/produto/${encodeURIComponent(product.slug || product.id)}`;
         const imageTag = image ? `<meta property="og:image" content="${escapeHtml(image)}"><meta name="twitter:image" content="${escapeHtml(image)}">` : "";
-        res.type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(canonicalUrl)}"><meta property="og:type" content="product"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonicalUrl)}">${imageTag}<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"></head><body><p>${escapeHtml(title)}</p></body></html>`);
+        return res.type("html").send(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(canonicalUrl)}"><meta property="og:type" content="product"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonicalUrl)}">${imageTag}<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"></head><body><p>${escapeHtml(title)}</p></body></html>`);
       } catch (error: any) {
         console.error("[OpenGraph] Falha ao montar prévia social:", error?.message || error);
-        next();
+        return res.status(503).type("html").send("<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Prévia indisponível</title><p>Prévia temporariamente indisponível.</p></html>");
       }
     });
-    
-    // 1. Explicit route for static data (Highest Priority)
+
+    // /data remains a backend contract, but it is served from the generated public/data
+    // projection so the backend build no longer depends on a Vite dist directory.
     app.get("/data/*", (req, res) => {
-      const dataRoot = path.resolve(distPath, "data");
-      const filePath = path.resolve(distPath, `.${req.path}`);
-      if (!filePath.startsWith(`${dataRoot}${path.sep}`)) {
+      const relativeDataPath = req.path.replace(/^\/data\/?/, "");
+      const filePath = path.resolve(publicDataRoot, relativeDataPath);
+      if (!relativeDataPath || !filePath.startsWith(`${publicDataRoot}${path.sep}`)) {
         return res.status(400).json({ error: "Caminho de arquivo inválido." });
       }
       return res.sendFile(filePath);
     });
 
-    // 2. Serve static assets
-    app.use(express.static(distPath, { index: false }));
-    
-    // 3. Fallback to public folder
-    app.use(express.static(path.join(process.cwd(), "public")));
-
-    // 4. SPA Fallback
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    // Registered API/system routes above keep their behavior. Unknown API paths must
+    // remain backend-shaped 404 responses instead of leaking into the public frontend.
+    app.all(["/api", "/api/*"], (_req, res) => {
+      return res.status(404).json({ success: false, code: "API_ROUTE_NOT_FOUND", error: "Rota de API não encontrada." });
     });
+
+    // No SPA/static frontend is served by the backend in production anymore.
+    // Every remaining human-facing GET is delegated to the public design service.
+    app.get("*", redirectToPublicSite);
   }
 
   app.listen(PORT, "0.0.0.0", () => {
