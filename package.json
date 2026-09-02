@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "node scripts/build-by-target.mjs",
+    "build:full": "node --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build:backend": "node --import tsx scripts/generate-static-catalog.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit",
