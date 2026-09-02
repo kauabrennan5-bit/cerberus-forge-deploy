@@ -40,25 +40,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788305503473-5cc807bfdd",
-    "ref": "AUTOQ-5CC807BFDD",
-    "slug": "caixa-modular-para-correspondencia-5cc807",
-    "produto": "Caixa Modular para Correspondência",
-    "displayTitle": "Caixa Modular para Correspondência",
-    "preco": 28,
-    "imagens": [
-      "https://cf.shopee.com.br/file/sg-11134201-8261o-mjfsebugrfnk6d",
-      "https://down-br.img.susercontent.com/file/sg-11134201-8261o-mjfsebugrfnk6d"
-    ],
-    "link": "https://s.shopee.com.br/1A3blc5sK",
-    "categoria": "Organização",
-    "descricao": "Organizador de mesa em acrílico fumê translúcido, com estrutura geométrica modular e compartimento para correspondências.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T23:49:46.486003+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788302572316-3229a7fbcc",
     "ref": "ROTA-3229A7FBCC",
     "slug": "cubo-sensorial-brinquedos-montessori-bebe-brinquedos-pedagogicos-brinquedo-3229a7",
@@ -235,24 +216,6 @@
     "descricao": "Descrição factual baseada no anúncio: Kit 10 Quadros Decorativo Bauhaus Geometry Nórdicos Decoração. Os demais detalhes devem ser conferidos na página oficial do produto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-09-01T21:21:49.781469+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788297386737-0536ab0139",
-    "ref": "AUTOQ-0536AB0139",
-    "slug": "lustre-bauhaus-pos-moderno-luminaria-de-teto-pendente-0536ab",
-    "produto": "Lustre Pendente Estilo Bauhaus em Ferro",
-    "displayTitle": "Lustre Pendente Estilo Bauhaus em Ferro",
-    "preco": 289,
-    "imagens": [
-      "https://cf.shopee.com.br/file/cn-11134207-7ras8-m7hsgs0rppjm5b"
-    ],
-    "link": "https://s.shopee.com.br/8fRyWxGTj7",
-    "categoria": "Iluminação",
-    "descricao": "Luminária pendente de teto com estética pós-moderna em acabamento tom nogueira. Ideal para iluminação decorativa sobre mesas de jantar.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T21:20:14.796375+00:00",
     "ativo": true,
     "status": "published"
   },
