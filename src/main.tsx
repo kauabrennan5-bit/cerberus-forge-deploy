@@ -7,6 +7,7 @@ import './design-system-hero.css';
 import './design-system-compact.css';
 import './design-system-mobile-card-fix.css';
 import './design-system-category-marquee-fix.css';
+import './design-system-product-detail.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
