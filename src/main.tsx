@@ -4,6 +4,7 @@ import App from './App.tsx';
 import './index.css';
 import './design-system.css';
 import './design-system-hero.css';
+import './design-system-compact.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
