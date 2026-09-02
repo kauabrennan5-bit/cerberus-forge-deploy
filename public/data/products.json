@@ -1,5 +1,23 @@
 [
   {
+    "id": "prod-1788349188384-ec31454620",
+    "ref": "AUTOQ-EC31454620",
+    "slug": "luminaria-led-portatil-em-forma-de-cogumelo-ec3145",
+    "produto": "Luminária LED Portátil em Forma de Cogumelo",
+    "displayTitle": "Luminária LED Portátil em Forma de Cogumelo",
+    "preco": 63.26,
+    "imagens": [
+      "https://cf.shopee.com.br/file/cn-11134207-820l4-mjtl7r529z4579"
+    ],
+    "link": "https://s.shopee.com.br/gPkq7bw1P",
+    "categoria": "Iluminação",
+    "descricao": "Esta luminária portátil possui um design em formato de cogumelo ideal para criar uma atmosfera aconchegante no ambiente. Funciona com LED integrado e oferece iluminação suave para uso noturno em diversos espaços.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T11:41:15.895365+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788318194165-257e1ea447",
     "ref": "ROTA-257E1EA447",
     "slug": "novo-estilo-retro-portatil-espelho-de-maquiagem-portatil-257e1e",
