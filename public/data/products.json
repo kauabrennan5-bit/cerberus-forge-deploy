@@ -1,22 +1,19 @@
 [
   {
-    "id": "prod-1788312047731-8f2436216d",
-    "ref": "AUTOQ-8F2436216D",
-    "slug": "carrinho-de-madeira-infantil-8f2436",
-    "produto": "Carrinho de Madeira Infantil",
-    "displayTitle": "Carrinho de Madeira Infantil",
-    "preco": 49.99,
+    "id": "prod-1788317839541-221403a906",
+    "ref": "ROTA-221403A906",
+    "slug": "brinquedos-montessori-brinquedos-sensoriais-de-seis-lados-interativo-221403",
+    "produto": "Brinquedos Montessori brinquedos sensoriais de seis lados Interativo",
+    "displayTitle": "Brinquedos Montessori brinquedos sensoriais de seis lados Interativo",
+    "preco": 35.49,
     "imagens": [
-      "https://down-br.img.susercontent.com/file/0b64726eb090fae57933923e1f5479b1",
-      "https://down-br.img.susercontent.com/file/4e5ff112db4c265932bbdac06a3e49ab",
-      "https://down-br.img.susercontent.com/file/9a8426eabcc3037b1db7a2e072c4548c",
-      "https://down-br.img.susercontent.com/file/5fc4796e2a5d04485bd1831365a4ba63"
+      "https://cf.shopee.com.br/file/br-11134207-820m7-mo81b5ieyku8e2"
     ],
-    "link": "https://s.shopee.com.br/70JnpqIa1n",
+    "link": "https://s.shopee.com.br/50YjSAhejJ",
     "categoria": "Infantil",
-    "descricao": "Brinquedo infantil em formato de veículo, com formas arredondadas, rodas destacadas e acabamento natural aparente. O visual é simples e minimalista, com diferentes variações de carroceria mostradas nas imagens.",
+    "descricao": "Descrição factual baseada no anúncio: Brinquedos Montessori brinquedos sensoriais de seis lados Interativo. Os demais detalhes devem ser conferidos na página oficial do produto.",
     "paginaPonteUrl": "",
-    "createdAt": "2026-09-02T01:50:46.61287+00:00",
+    "createdAt": "2026-09-02T02:57:19.595176+00:00",
     "ativo": true,
     "status": "published"
   },
