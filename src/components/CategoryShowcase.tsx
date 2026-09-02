@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import type { Product } from '../types';
 import { getProductDisplayCategory } from '../lib/productPresentation';
@@ -162,7 +163,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
     }, 1200);
   };
 
-  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     pause();
     const rail = railRef.current;
     if (rail) scrollPositionRef.current = rail.scrollLeft;
@@ -176,14 +177,14 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (!dragRef.current.active || !railRef.current) return;
     const distance = event.clientX - dragRef.current.startX;
     railRef.current.scrollLeft = dragRef.current.startScrollLeft - distance;
     scrollPositionRef.current = railRef.current.scrollLeft;
   };
 
-  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerUp = (event: PointerEvent<HTMLDivElement>) => {
     if (dragRef.current.active) {
       dragRef.current.active = false;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
