@@ -1,5 +1,88 @@
 [
   {
+    "id": "prod-1788312047731-8f2436216d",
+    "ref": "AUTOQ-8F2436216D",
+    "slug": "carrinho-de-madeira-infantil-8f2436",
+    "produto": "Carrinho de Madeira Infantil",
+    "displayTitle": "Carrinho de Madeira Infantil",
+    "preco": 49.99,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/0b64726eb090fae57933923e1f5479b1",
+      "https://down-br.img.susercontent.com/file/4e5ff112db4c265932bbdac06a3e49ab",
+      "https://down-br.img.susercontent.com/file/9a8426eabcc3037b1db7a2e072c4548c",
+      "https://down-br.img.susercontent.com/file/5fc4796e2a5d04485bd1831365a4ba63"
+    ],
+    "link": "https://s.shopee.com.br/70JnpqIa1n",
+    "categoria": "Infantil",
+    "descricao": "Brinquedo infantil em formato de veículo, com formas arredondadas, rodas destacadas e acabamento natural aparente. O visual é simples e minimalista, com diferentes variações de carroceria mostradas nas imagens.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T01:50:46.61287+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788312047731-de753d40f9",
+    "ref": "AUTOQ-DE753D40F9",
+    "slug": "estojo-compacto-retro-com-espelho-de753d",
+    "produto": "Estojo Compacto Retrô com Espelho",
+    "displayTitle": "Estojo Compacto Retrô com Espelho",
+    "preco": 85,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-lpuo20zjzbxbbc",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lpuo20zjzbxbbc"
+    ],
+    "link": "https://s.shopee.com.br/6fgtBn9DSJ",
+    "categoria": "Beleza & Bem-estar",
+    "descricao": "Estojo compacto retangular com estrutura translúcida, espelho interno e compartimento para pó ou maquiagem. A composição visual combina moldura em camadas e aparência inspirada em acessórios retrô.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T01:48:47.063561+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788312047731-687df0f06a",
+    "ref": "AUTOQ-687DF0F06A",
+    "slug": "radio-retro-com-lanterna-687df0",
+    "produto": "Rádio Retrô com Lanterna",
+    "displayTitle": "Rádio Retrô com Lanterna",
+    "preco": 78,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-7r98o-md23496ia8mqf6",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-md23496ia8mqf6",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-md23496ipovm8d",
+      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-md23496ippfldd"
+    ],
+    "link": "https://s.shopee.com.br/1gIDLr0OZv",
+    "categoria": "Tecnologia",
+    "descricao": "Rádio portátil de formato arredondado, com alça superior, mostrador analógico, acabamento bicolor e lanterna lateral integrada. O visual combina referências retrô com detalhes contrastantes e uso contemporâneo.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T01:45:37.448774+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788312047731-3a975529fa",
+    "ref": "AUTOQ-3A975529FA",
+    "slug": "luminaria-cogumelo-metalica-3a9755",
+    "produto": "Luminária Cogumelo Metálica",
+    "displayTitle": "Luminária Cogumelo Metálica",
+    "preco": 47.92,
+    "imagens": [
+      "https://down-br.img.susercontent.com/file/br-11134207-820lm-mmn4mvcvk7wkfd",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l9-mmn4mvcvlmh066",
+      "https://down-br.img.susercontent.com/file/br-11134207-820lf-mmn4mvcvn11g5d",
+      "https://down-br.img.susercontent.com/file/br-11134207-820l7-mmn4mvcvoflw4c",
+      "https://down-br.img.susercontent.com/file/br-11134207-820mg-mpy6nv87qepu2d"
+    ],
+    "link": "https://s.shopee.com.br/2gAkBTySZ8",
+    "categoria": "Iluminação",
+    "descricao": "Luminária de mesa com silhueta arredondada e cúpula em formato de cogumelo, apresentada em acabamento metálico dourado ou prateado. O desenho compacto e minimalista é adequado para mesas laterais, criados-mudos ou escrivaninhas.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T01:24:14.8536+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788305503473-ab1901f542",
     "ref": "AUTOQ-AB1901F542",
     "slug": "achado-brinquedo-montessori-educativo-de-madeira-waldorf-ab1901",
