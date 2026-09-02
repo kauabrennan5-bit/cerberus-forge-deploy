@@ -76,7 +76,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
       window.requestAnimationFrame(() => {
         const expectedTestId = `category-option-${category}`;
         const option = [...document.querySelectorAll<HTMLButtonElement>('[data-testid^="category-option-"]')]
-          .find((element) => element.dataset.testid === expectedTestId || element.getAttribute('data-testid') === expectedTestId);
+          .find((element) => element.getAttribute('data-testid') === expectedTestId);
         option?.click();
       });
     });
