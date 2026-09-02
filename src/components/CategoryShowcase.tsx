@@ -22,6 +22,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
   const railRef = useRef<HTMLDivElement>(null);
   const pausedRef = useRef(false);
   const loopWidthRef = useRef(0);
+  const scrollPositionRef = useRef(0);
   const resumeTimerRef = useRef<number | null>(null);
   const dragRef = useRef({ active: false, startX: 0, startScrollLeft: 0 });
 
@@ -85,6 +86,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
       const firstDuplicate = rail.querySelector<HTMLElement>('[data-loop-copy="1"][data-loop-index="0"]');
       if (!firstOriginal || !firstDuplicate) return;
       loopWidthRef.current = Math.max(0, firstDuplicate.offsetLeft - firstOriginal.offsetLeft);
+      scrollPositionRef.current = rail.scrollLeft;
     };
 
     measureLoop();
@@ -103,23 +105,34 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
 
     let frameId = 0;
     let previous = performance.now();
+    const speedPxPerMs = 0.055;
 
     const animate = (now: number) => {
-      const delta = Math.min(34, now - previous);
+      const delta = Math.min(50, now - previous);
       previous = now;
 
       if (!pausedRef.current && document.visibilityState === 'visible') {
-        rail.scrollLeft += delta * 0.04;
-
         const loopWidth = loopWidthRef.current;
-        if (loopWidth > 0 && rail.scrollLeft >= loopWidth) {
-          rail.scrollLeft -= loopWidth;
+        if (loopWidth > 0) {
+          let nextPosition = scrollPositionRef.current + delta * speedPxPerMs;
+
+          while (nextPosition >= loopWidth) {
+            nextPosition -= loopWidth;
+          }
+
+          while (nextPosition < 0) {
+            nextPosition += loopWidth;
+          }
+
+          scrollPositionRef.current = nextPosition;
+          rail.scrollLeft = Math.floor(nextPosition);
         }
       }
 
       frameId = window.requestAnimationFrame(animate);
     };
 
+    scrollPositionRef.current = rail.scrollLeft;
     frameId = window.requestAnimationFrame(animate);
     return () => window.cancelAnimationFrame(frameId);
   }, [categories.length, reduceMotion]);
@@ -142,6 +155,8 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
     if (reduceMotion) return;
     if (resumeTimerRef.current !== null) window.clearTimeout(resumeTimerRef.current);
     resumeTimerRef.current = window.setTimeout(() => {
+      const rail = railRef.current;
+      if (rail) scrollPositionRef.current = rail.scrollLeft;
       pausedRef.current = false;
       resumeTimerRef.current = null;
     }, 1200);
@@ -149,11 +164,14 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     pause();
-    if (event.pointerType !== 'mouse' || !railRef.current) return;
+    const rail = railRef.current;
+    if (rail) scrollPositionRef.current = rail.scrollLeft;
+
+    if (event.pointerType !== 'mouse' || !rail) return;
     dragRef.current = {
       active: true,
       startX: event.clientX,
-      startScrollLeft: railRef.current.scrollLeft,
+      startScrollLeft: rail.scrollLeft,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -162,6 +180,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
     if (!dragRef.current.active || !railRef.current) return;
     const distance = event.clientX - dragRef.current.startX;
     railRef.current.scrollLeft = dragRef.current.startScrollLeft - distance;
+    scrollPositionRef.current = railRef.current.scrollLeft;
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -171,7 +190,14 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
     }
+
+    if (railRef.current) scrollPositionRef.current = railRef.current.scrollLeft;
     resumeLater();
+  };
+
+  const handleScroll = () => {
+    if (!pausedRef.current || !railRef.current) return;
+    scrollPositionRef.current = railRef.current.scrollLeft;
   };
 
   const selectCategory = (category: string) => {
@@ -208,8 +234,12 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onScroll={handleScroll}
         onWheel={() => {
           pause();
+          window.requestAnimationFrame(() => {
+            if (railRef.current) scrollPositionRef.current = railRef.current.scrollLeft;
+          });
           resumeLater();
         }}
       >
