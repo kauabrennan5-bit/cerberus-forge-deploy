@@ -5,7 +5,6 @@ import './index.css';
 import './design-system.css';
 import './design-system-hero.css';
 import './design-system-compact.css';
-import './design-system-reference.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
