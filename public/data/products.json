@@ -1,5 +1,23 @@
 [
   {
+    "id": "prod-1788318194165-257e1ea447",
+    "ref": "ROTA-257E1EA447",
+    "slug": "novo-estilo-retro-portatil-espelho-de-maquiagem-portatil-257e1e",
+    "produto": "Novo estilo Retro portátil espelho de maquiagem portátil",
+    "displayTitle": "Novo estilo Retro portátil espelho de maquiagem portátil",
+    "preco": 20.62,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-825a4-mrxjq35l2o791a"
+    ],
+    "link": "https://s.shopee.com.br/3B71uCZ6Be",
+    "categoria": "Beleza & Bem-estar",
+    "descricao": "Descrição factual baseada no anúncio: Novo estilo Retro portátil espelho de maquiagem portátil. Os demais detalhes devem ser conferidos na página oficial do produto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T03:03:14.262569+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788317839541-221403a906",
     "ref": "ROTA-221403A906",
     "slug": "brinquedos-montessori-brinquedos-sensoriais-de-seis-lados-interativo-221403",
@@ -14,25 +32,6 @@
     "descricao": "Descrição factual baseada no anúncio: Brinquedos Montessori brinquedos sensoriais de seis lados Interativo. Os demais detalhes devem ser conferidos na página oficial do produto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-09-02T02:57:19.595176+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788312047731-de753d40f9",
-    "ref": "AUTOQ-DE753D40F9",
-    "slug": "estojo-compacto-retro-com-espelho-de753d",
-    "produto": "Estojo Compacto Retrô com Espelho",
-    "displayTitle": "Estojo Compacto Retrô com Espelho",
-    "preco": 85,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-7r98o-lpuo20zjzbxbbc",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-lpuo20zjzbxbbc"
-    ],
-    "link": "https://s.shopee.com.br/6fgtBn9DSJ",
-    "categoria": "Beleza & Bem-estar",
-    "descricao": "Estojo compacto retangular com estrutura translúcida, espelho interno e compartimento para pó ou maquiagem. A composição visual combina moldura em camadas e aparência inspirada em acessórios retrô.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-02T01:48:47.063561+00:00",
     "ativo": true,
     "status": "published"
   },
