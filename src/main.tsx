@@ -5,6 +5,7 @@ import './index.css';
 import './design-system.css';
 import './design-system-hero.css';
 import './design-system-compact.css';
+import './design-system-mobile-card-fix.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
