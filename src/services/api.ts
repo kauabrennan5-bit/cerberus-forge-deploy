@@ -30,23 +30,30 @@ export interface ApiResponse<T = any> {
 }
 
 const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
+const PRODUCTION_BACKEND_HOSTS = new Set([
+  'cerberusfinds.com',
+  'www.cerberusfinds.com',
+  'cerberus-design-preview.onrender.com',
+]);
 
 function getApiUrl(path: string): string {
+  const normalizedPath = path.startsWith('/') ? path : '/' + path;
   try {
     if (typeof window !== 'undefined' && window.location) {
-      const hostname = window.location.hostname;
-      // Se estivermos no domínio estático de produção, usa o Web Service do Render
-      if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-static-catalog')) {
-        return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+      const hostname = window.location.hostname.toLowerCase();
+      // The surviving design site is frontend-only from the product perspective:
+      // all live catalog/API traffic must come from the canonical backend service.
+      if (PRODUCTION_BACKEND_HOSTS.has(hostname) || hostname.includes('cerberus-static-catalog')) {
+        return `${PRODUCTION_API_BASE}${normalizedPath}`;
       }
       if (window.location.origin && window.location.origin !== 'null' && !window.location.origin.startsWith('blob:')) {
-        return `${window.location.origin}${path.startsWith('/') ? path : '/' + path}`;
+        return `${window.location.origin}${normalizedPath}`;
       }
     }
   } catch {
     // Fallback
   }
-  return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+  return `${PRODUCTION_API_BASE}${normalizedPath}`;
 }
 
 /**
@@ -74,7 +81,8 @@ export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
 }
 
 export async function getProducts(): Promise<any[]> {
-  const catalogUrl = `/data/products.json?v=${Date.now()}`;
+  const catalogPath = `/data/products.json?v=${Date.now()}`;
+  const catalogUrl = getApiUrl(catalogPath);
   const response = await fetch(catalogUrl, { cache: 'no-store' });
 
   if (!response.ok) {
