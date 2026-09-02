@@ -4,6 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Cerberus Finds Archive</title>
+    <script>
+      (() => {
+        const legacyRenderHosts = new Set([
+          'cerberus-forge-deploy-backend.onrender.com',
+          'cerberus-forge-deploy.onrender.com',
+        ]);
+        if (legacyRenderHosts.has(window.location.hostname.toLowerCase())) {
+          const target = new URL(
+            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+            'https://cerberus-design-preview.onrender.com',
+          );
+          window.location.replace(target.toString());
+        }
+      })();
+    </script>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-KQT4GLD14X"></script>
     <script>
