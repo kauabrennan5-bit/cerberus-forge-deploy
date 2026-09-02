@@ -1,12 +1,12 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import type { Product } from '../types';
 import { getProductDisplayCategory } from '../lib/productPresentation';
 import { resolveCanonicalProductImage } from '../lib/productCanonical';
+import { getProducts } from '../services/api';
 
 interface CategoryShowcaseProps {
-  products: Product[];
-  onSelectCategory: (category: string) => void;
+  onEnterCatalog: () => void;
 }
 
 const CATEGORY_PRIORITY = [
@@ -20,7 +20,23 @@ const CATEGORY_PRIORITY = [
   'Infantil',
 ];
 
-export function CategoryShowcase({ products, onSelectCategory }: CategoryShowcaseProps) {
+export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
+  const [products, setProducts] = useState<Product[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void getProducts()
+      .then((items) => {
+        if (active) setProducts(items);
+      })
+      .catch(() => {
+        if (active) setProducts([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const categories = useMemo(() => {
     const grouped = new Map<string, Product[]>();
 
@@ -50,6 +66,22 @@ export function CategoryShowcase({ products, onSelectCategory }: CategoryShowcas
       .slice(0, 4);
   }, [products]);
 
+  const selectCategory = (category: string) => {
+    onEnterCatalog();
+
+    window.requestAnimationFrame(() => {
+      const toggle = document.querySelector<HTMLButtonElement>('button[aria-controls="category-panel"]');
+      if (toggle?.getAttribute('aria-expanded') !== 'true') toggle?.click();
+
+      window.requestAnimationFrame(() => {
+        const expectedTestId = `category-option-${category}`;
+        const option = [...document.querySelectorAll<HTMLButtonElement>('[data-testid^="category-option-"]')]
+          .find((element) => element.dataset.testid === expectedTestId || element.getAttribute('data-testid') === expectedTestId);
+        option?.click();
+      });
+    });
+  };
+
   if (categories.length === 0) return null;
 
   return (
@@ -65,7 +97,7 @@ export function CategoryShowcase({ products, onSelectCategory }: CategoryShowcas
             type="button"
             key={category.name}
             className="category-showcase__item"
-            onClick={() => onSelectCategory(category.name)}
+            onClick={() => selectCategory(category.name)}
             aria-label={`Explorar ${category.name}: ${category.count} ${category.count === 1 ? 'achado' : 'achados'}`}
           >
             <div className="category-showcase__image-wrap">
