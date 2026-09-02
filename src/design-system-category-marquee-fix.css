@@ -1,0 +1,30 @@
+/* Category marquee refinement — show the next card and keep the loop visually continuous. */
+.category-showcase__viewport {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  overscroll-behavior-inline: contain;
+  touch-action: pan-x pan-y;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.category-showcase__viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.category-showcase__track {
+  width: max-content !important;
+}
+
+@media (max-width: 760px) {
+  .category-showcase__item {
+    flex: 0 0 54vw !important;
+    max-width: 14.5rem !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .category-showcase__item {
+    flex-basis: 57vw !important;
+  }
+}
