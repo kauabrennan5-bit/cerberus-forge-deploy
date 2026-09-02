@@ -133,6 +133,7 @@
 
 .category-showcase {
   padding: clamp(2rem, 4vw, 3.2rem) 0 clamp(2.7rem, 5vw, 4.5rem);
+  border-top: 1px solid color-mix(in srgb, var(--cerberus-warm-gray) 24%, transparent);
   background: var(--cerberus-black);
   color: var(--cerberus-cream);
 }
@@ -283,6 +284,7 @@
 }
 
 #cerberus-acervo input {
+  min-height: 2.65rem !important;
   border: 0 !important;
   border-bottom: 1px solid color-mix(in srgb, var(--cerberus-black) 38%, transparent) !important;
   background: transparent !important;
