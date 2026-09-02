@@ -1,5 +1,25 @@
 [
   {
+    "id": "prod-1788375331787-3395ca9600",
+    "ref": "AUTOQ-3395CA9600",
+    "slug": "luminaria-de-mesa-cogumelo-led-recarregavel-3395ca",
+    "produto": "Luminária de Mesa Cogumelo LED Recarregável",
+    "displayTitle": "Luminária de Mesa Cogumelo LED Recarregável",
+    "preco": 69.9,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-81z1k-mfms1k4045c701",
+      "https://down-br.img.susercontent.com/file/br-11134207-81z1k-mfms1k4045c701",
+      "https://down-br.img.susercontent.com/file/br-11134207-81z1k-mfms1k3zzxmv34"
+    ],
+    "link": "https://s.shopee.com.br/qjB2QbIgQ",
+    "categoria": "Iluminação",
+    "descricao": "Luminária de mesa com design em formato de cogumelo e controle touch. É um modelo recarregável via USB, ideal para compor a iluminação de quartos e salas de estar.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T19:00:13.223645+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788318194165-257e1ea447",
     "ref": "ROTA-257E1EA447",
     "slug": "novo-estilo-retro-portatil-espelho-de-maquiagem-portatil-257e1e",
