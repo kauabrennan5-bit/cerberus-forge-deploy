@@ -40,49 +40,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788312047731-687df0f06a",
-    "ref": "AUTOQ-687DF0F06A",
-    "slug": "radio-retro-com-lanterna-687df0",
-    "produto": "Rádio Retrô com Lanterna",
-    "displayTitle": "Rádio Retrô com Lanterna",
-    "preco": 78,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-7r98o-md23496ia8mqf6",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-md23496ia8mqf6",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-md23496ipovm8d",
-      "https://down-br.img.susercontent.com/file/br-11134207-7r98o-md23496ippfldd"
-    ],
-    "link": "https://s.shopee.com.br/1gIDLr0OZv",
-    "categoria": "Tecnologia",
-    "descricao": "Rádio portátil de formato arredondado, com alça superior, mostrador analógico, acabamento bicolor e lanterna lateral integrada. O visual combina referências retrô com detalhes contrastantes e uso contemporâneo.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-02T01:45:37.448774+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788312047731-3a975529fa",
-    "ref": "AUTOQ-3A975529FA",
-    "slug": "luminaria-cogumelo-metalica-3a9755",
-    "produto": "Luminária Cogumelo Metálica",
-    "displayTitle": "Luminária Cogumelo Metálica",
-    "preco": 47.92,
-    "imagens": [
-      "https://down-br.img.susercontent.com/file/br-11134207-820lm-mmn4mvcvk7wkfd",
-      "https://down-br.img.susercontent.com/file/br-11134207-820l9-mmn4mvcvlmh066",
-      "https://down-br.img.susercontent.com/file/br-11134207-820lf-mmn4mvcvn11g5d",
-      "https://down-br.img.susercontent.com/file/br-11134207-820l7-mmn4mvcvoflw4c",
-      "https://down-br.img.susercontent.com/file/br-11134207-820mg-mpy6nv87qepu2d"
-    ],
-    "link": "https://s.shopee.com.br/2gAkBTySZ8",
-    "categoria": "Iluminação",
-    "descricao": "Luminária de mesa com silhueta arredondada e cúpula em formato de cogumelo, apresentada em acabamento metálico dourado ou prateado. O desenho compacto e minimalista é adequado para mesas laterais, criados-mudos ou escrivaninhas.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-02T01:24:14.8536+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788305503473-ab1901f542",
     "ref": "AUTOQ-AB1901F542",
     "slug": "achado-brinquedo-montessori-educativo-de-madeira-waldorf-ab1901",
