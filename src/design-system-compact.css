@@ -1,6 +1,59 @@
 /* Cerberus Finds compact scale pass.
    Keeps the approved palette and editorial system while reducing visual mass. */
 
+/* Quieter page texture: retain a faint Cerberus-red atmosphere without the
+   dashboard-like full-page grid competing with products. */
+body {
+  background-image: none !important;
+}
+
+.bg-noise {
+  background-image:
+    radial-gradient(circle at 50% -10%, color-mix(in srgb, var(--cerberus-red) 10%, transparent) 0%, transparent 48%) !important;
+}
+
+/* Editorial shell */
+header > div {
+  max-width: 78rem !important;
+}
+
+header:has(#brand-logo-btn) > div {
+  height: 3.75rem !important;
+}
+
+#brand-logo-btn > div:first-child {
+  width: 2.5rem !important;
+  height: 2.5rem !important;
+}
+
+#brand-logo-btn > div:first-child svg,
+#brand-logo-btn > div:first-child img {
+  width: 1.75rem !important;
+  height: 1.75rem !important;
+}
+
+#brand-logo-btn > div:last-child > div:first-child > span:first-child {
+  font-size: clamp(0.95rem, 2.2vw, 1.4rem) !important;
+  letter-spacing: 0.1em !important;
+}
+
+/* The edition chip duplicates the archival tone already established elsewhere. */
+#brand-logo-btn .stamp-badge {
+  display: none !important;
+}
+
+#nav-catalog-btn,
+#nav-favorites-btn {
+  min-height: 2.25rem !important;
+  padding: 0.35rem 0.6rem !important;
+  font-size: 0.65rem !important;
+}
+
+main:has(#cerberus-acervo) {
+  max-width: 78rem !important;
+  padding-top: 0.9rem !important;
+}
+
 /* The previous redesign intentionally stretched a lone final card across the
    whole row. The new direction keeps every product at the same compact width. */
 #cerberus-acervo section > div.grid:last-of-type > * {
@@ -13,8 +66,51 @@
   max-width: 78rem;
 }
 
+#cerberus-acervo section {
+  gap: 0 !important;
+}
+
 #cerberus-acervo section > * + * {
-  margin-top: 1rem !important;
+  margin-top: 0.85rem !important;
+}
+
+/* Catalog intro becomes a compact editorial masthead instead of another hero. */
+#cerberus-acervo section > div:first-child {
+  padding-bottom: 0.8rem !important;
+  gap: 0.75rem !important;
+}
+
+#cerberus-acervo h1 {
+  margin-top: 0.35rem !important;
+  font-size: clamp(1.85rem, 4vw, 2.6rem) !important;
+  line-height: 0.98 !important;
+  letter-spacing: 0.01em !important;
+}
+
+#cerberus-acervo h1 + p {
+  margin-top: 0.4rem !important;
+  max-width: 42rem !important;
+  font-size: 0.65rem !important;
+  line-height: 1.55 !important;
+  letter-spacing: 0.08em !important;
+}
+
+#cerberus-acervo input {
+  min-height: 2.35rem !important;
+  padding-top: 0.45rem !important;
+  padding-bottom: 0.45rem !important;
+}
+
+button[aria-controls="category-panel"] {
+  min-height: 3rem !important;
+  padding-top: 0.45rem !important;
+  padding-bottom: 0.45rem !important;
+}
+
+button[aria-controls="category-panel"] + button {
+  min-height: 3rem !important;
+  padding-top: 0.45rem !important;
+  padding-bottom: 0.45rem !important;
 }
 
 /* Product cards: less height, less motion, more catalogue-like density. */
@@ -29,47 +125,100 @@
 }
 
 [data-testid="product-card"] > div > div:first-child {
-  min-height: 3rem !important;
-  padding: 0.35rem 0.5rem !important;
+  min-height: 2.6rem !important;
+  padding: 0.3rem 0.45rem !important;
+}
+
+[data-testid="product-card"] > div > div:first-child button {
+  min-width: 2.1rem !important;
+  min-height: 2.1rem !important;
+  padding: 0.35rem !important;
 }
 
 [data-testid="product-card"] > div > div:nth-child(2) {
   aspect-ratio: 4 / 3 !important;
-  padding: 0.4rem !important;
+  padding: 0.35rem !important;
 }
 
 [data-testid="product-card"] > div > div:nth-child(3) {
-  padding: 0.55rem !important;
+  padding: 0.5rem !important;
+}
+
+[data-testid="product-card"] h3 {
+  font-size: 0.72rem !important;
+  letter-spacing: 0.045em !important;
 }
 
 [data-testid="product-card"] h3 + p {
-  height: 1.2rem !important;
+  height: 1.15rem !important;
+  margin-top: 0.2rem !important;
   -webkit-line-clamp: 1 !important;
 }
 
+[data-testid="product-card"] button[class~="w-full"][class~="mt-1.5"] {
+  min-height: 2.25rem !important;
+  margin-top: 0.35rem !important;
+  padding-top: 0.35rem !important;
+  padding-bottom: 0.35rem !important;
+  font-size: 0.58rem !important;
+  letter-spacing: 0.13em !important;
+}
+
 /* Category controls should read like navigation, not oversized feature cards. */
+#category-panel {
+  padding: 0.6rem !important;
+}
+
 #category-panel button {
-  min-height: 4.5rem !important;
-  padding: 0.65rem !important;
+  min-height: 3.9rem !important;
+  padding: 0.55rem !important;
+}
+
+#category-panel button .font-gothic {
+  font-size: 0.92rem !important;
 }
 
 /* The hero remains present, but no longer consumes most of the first viewport. */
 .nexbot-hero {
-  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr) !important;
-  grid-template-rows: minmax(480px, 1fr) !important;
-  min-height: min(620px, calc(100svh - 7rem)) !important;
-  margin-bottom: clamp(1.5rem, 3.5vw, 3rem) !important;
+  grid-template-columns: minmax(0, 1.22fr) minmax(270px, 0.78fr) !important;
+  grid-template-rows: minmax(440px, 1fr) !important;
+  min-height: min(560px, calc(100svh - 7rem)) !important;
+  margin-bottom: clamp(1.25rem, 3vw, 2.5rem) !important;
 }
 
 .nexbot-hero__copy {
-  padding: clamp(1.5rem, 3.5vw, 3.5rem) !important;
+  padding: clamp(1.4rem, 3vw, 3rem) !important;
+}
+
+.nexbot-hero__copy h1 {
+  font-size: clamp(3rem, 5.6vw, 5.4rem) !important;
+}
+
+.nexbot-hero__description {
+  max-width: 31rem !important;
+}
+
+.nexbot-hero__cta {
+  min-height: 2.8rem !important;
+  padding: 0.65rem 0.9rem !important;
 }
 
 .nexbot-hero__model-column {
-  min-height: 480px !important;
+  min-height: 440px !important;
 }
 
 @media (min-width: 640px) {
+  #brand-logo-btn > div:first-child {
+    width: 2.75rem !important;
+    height: 2.75rem !important;
+  }
+
+  #brand-logo-btn > div:first-child svg,
+  #brand-logo-btn > div:first-child img {
+    width: 2rem !important;
+    height: 2rem !important;
+  }
+
   #cerberus-acervo section > div.grid:last-of-type {
     grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     gap: 0.85rem !important;
@@ -98,11 +247,25 @@
 @media (max-width: 900px) {
   .nexbot-hero {
     grid-template-columns: minmax(0, 1fr) !important;
-    grid-template-rows: auto minmax(260px, 38svh) !important;
+    grid-template-rows: auto minmax(250px, 36svh) !important;
     min-height: auto !important;
   }
 
   .nexbot-hero__model-column {
-    min-height: 260px !important;
+    min-height: 250px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  header:has(#brand-logo-btn) > div {
+    height: 3.5rem !important;
+  }
+
+  #cerberus-acervo h1 {
+    font-size: clamp(1.7rem, 9vw, 2.15rem) !important;
+  }
+
+  .nexbot-hero__copy h1 {
+    font-size: clamp(2.2rem, 10vw, 3rem) !important;
   }
 }
