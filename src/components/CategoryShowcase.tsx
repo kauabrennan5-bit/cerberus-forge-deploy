@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import type { Product } from '../types';
 import { getProductDisplayCategory } from '../lib/productPresentation';
 import { resolveCanonicalProductImage } from '../lib/productCanonical';
-import { getProducts } from '../services/api';
 
 interface CategoryShowcaseProps {
+  products: Product[];
   onEnterCatalog: () => void;
 }
 
@@ -20,23 +20,7 @@ const CATEGORY_PRIORITY = [
   'Infantil',
 ];
 
-export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
-  const [products, setProducts] = useState<Product[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    void getProducts()
-      .then((items) => {
-        if (active) setProducts(items);
-      })
-      .catch(() => {
-        if (active) setProducts([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
+export function CategoryShowcase({ products, onEnterCatalog }: CategoryShowcaseProps) {
   const categories = useMemo(() => {
     const grouped = new Map<string, Product[]>();
 
