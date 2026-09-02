@@ -21,6 +21,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
   const [reduceMotion, setReduceMotion] = useState(false);
   const railRef = useRef<HTMLDivElement>(null);
   const pausedRef = useRef(false);
+  const loopWidthRef = useRef(0);
   const resumeTimerRef = useRef<number | null>(null);
   const dragRef = useRef({ active: false, startX: 0, startScrollLeft: 0 });
 
@@ -74,6 +75,30 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
 
   useEffect(() => {
     const rail = railRef.current;
+    if (!rail || reduceMotion || categories.length < 2) {
+      loopWidthRef.current = 0;
+      return;
+    }
+
+    const measureLoop = () => {
+      const firstOriginal = rail.querySelector<HTMLElement>('[data-loop-copy="0"][data-loop-index="0"]');
+      const firstDuplicate = rail.querySelector<HTMLElement>('[data-loop-copy="1"][data-loop-index="0"]');
+      if (!firstOriginal || !firstDuplicate) return;
+      loopWidthRef.current = Math.max(0, firstDuplicate.offsetLeft - firstOriginal.offsetLeft);
+    };
+
+    measureLoop();
+
+    const resizeObserver = new ResizeObserver(measureLoop);
+    resizeObserver.observe(rail);
+    const track = rail.firstElementChild;
+    if (track instanceof HTMLElement) resizeObserver.observe(track);
+
+    return () => resizeObserver.disconnect();
+  }, [categories.length, reduceMotion]);
+
+  useEffect(() => {
+    const rail = railRef.current;
     if (!rail || reduceMotion || categories.length < 2) return;
 
     let frameId = 0;
@@ -84,10 +109,11 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
       previous = now;
 
       if (!pausedRef.current && document.visibilityState === 'visible') {
-        rail.scrollLeft += delta * 0.026;
-        const midpoint = rail.scrollWidth / 2;
-        if (midpoint > 0 && rail.scrollLeft >= midpoint) {
-          rail.scrollLeft -= midpoint;
+        rail.scrollLeft += delta * 0.04;
+
+        const loopWidth = loopWidthRef.current;
+        if (loopWidth > 0 && rail.scrollLeft >= loopWidth) {
+          rail.scrollLeft -= loopWidth;
         }
       }
 
@@ -118,7 +144,7 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
     resumeTimerRef.current = window.setTimeout(() => {
       pausedRef.current = false;
       resumeTimerRef.current = null;
-    }, 1400);
+    }, 1200);
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -182,9 +208,6 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onPointerLeave={() => {
-          if (!dragRef.current.active) resumeLater();
-        }}
         onWheel={() => {
           pause();
           resumeLater();
@@ -193,11 +216,14 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
         <div className="category-showcase__track">
           {loopCategories.map((category, index) => {
             const duplicate = !reduceMotion && index >= categories.length;
+            const loopIndex = duplicate ? index - categories.length : index;
             return (
               <button
                 type="button"
                 key={`${category.name}-${index}`}
                 className="category-showcase__item"
+                data-loop-copy={duplicate ? '1' : '0'}
+                data-loop-index={loopIndex}
                 onClick={() => selectCategory(category.name)}
                 aria-label={duplicate ? undefined : `Explorar ${category.name}: ${category.count} ${category.count === 1 ? 'achado' : 'achados'}`}
                 aria-hidden={duplicate ? 'true' : undefined}
