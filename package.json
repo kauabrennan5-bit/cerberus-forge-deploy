@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "node --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
+    "build": "node --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js",
+    "start": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit",
     "test": "node --import tsx/esm --test --test-concurrency=1 --test-reporter=spec tests/*.test.ts"
