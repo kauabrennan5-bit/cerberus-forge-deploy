@@ -1,0 +1,45 @@
+name: Backend Boundary Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-boundary-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Backend boundary contract
+        run: node --import tsx/esm --test tests/backendFrontendBoundary.test.ts
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Backend-only production build
+        env:
+          CERBERUS_BUILD_TARGET: backend
+        run: npm run build
+
+      - name: Verify backend artifact has no SPA
+        run: |
+          test -f dist/server.cjs
+          test ! -f dist/index.html
+          test ! -d dist/assets
+
+      - name: Diff check
+        run: git diff --check
