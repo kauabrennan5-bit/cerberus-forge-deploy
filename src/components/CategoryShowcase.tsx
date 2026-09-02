@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUpRight } from 'lucide-react';
 import type { Product } from '../types';
 import { getProductDisplayCategory } from '../lib/productPresentation';
+import { PUBLIC_PRODUCT_CATEGORIES } from '../lib/productCategory';
 import { resolveCanonicalProductImage } from '../lib/productCanonical';
 import { getProducts } from '../services/api';
 
@@ -9,19 +10,19 @@ interface CategoryShowcaseProps {
   onEnterCatalog: () => void;
 }
 
-const CATEGORY_PRIORITY = [
-  'Iluminação',
-  'Decoração',
-  'Móveis',
-  'Vestuário',
-  'Casa',
-  'Cozinha & Mesa',
-  'Calçados & Acessórios',
-  'Infantil',
-];
+interface CategoryEntry {
+  name: string;
+  count: number;
+  imageUrl: string;
+}
 
 export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
   const [products, setProducts] = useState<Product[]>([]);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const railRef = useRef<HTMLDivElement>(null);
+  const pausedRef = useRef(false);
+  const resumeTimerRef = useRef<number | null>(null);
+  const dragRef = useRef({ active: false, startX: 0, startScrollLeft: 0 });
 
   useEffect(() => {
     let active = true;
@@ -37,7 +38,15 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
     };
   }, []);
 
-  const categories = useMemo(() => {
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setReduceMotion(media.matches);
+    sync();
+    media.addEventListener?.('change', sync);
+    return () => media.removeEventListener?.('change', sync);
+  }, []);
+
+  const categories = useMemo<CategoryEntry[]>(() => {
     const grouped = new Map<string, Product[]>();
 
     for (const product of products) {
@@ -48,23 +57,96 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
       grouped.set(category, group);
     }
 
-    return [...grouped.entries()]
-      .map(([name, items]) => {
-        const representative = items.find((product) => resolveCanonicalProductImage(product).publicHttpsImageUrls.length > 0) ?? items[0];
+    return PUBLIC_PRODUCT_CATEGORIES
+      .map((name) => {
+        const items = grouped.get(name) ?? [];
+        const representative =
+          items.find((product) => product.destaque && resolveCanonicalProductImage(product).publicHttpsImageUrls.length > 0)
+          ?? items.find((product) => resolveCanonicalProductImage(product).publicHttpsImageUrls.length > 0)
+          ?? items[0];
         const imageUrl = representative
           ? resolveCanonicalProductImage(representative).publicHttpsImageUrls[0] ?? ''
           : '';
         return { name, count: items.length, imageUrl };
       })
-      .sort((a, b) => {
-        const ai = CATEGORY_PRIORITY.indexOf(a.name);
-        const bi = CATEGORY_PRIORITY.indexOf(b.name);
-        const aRank = ai === -1 ? Number.MAX_SAFE_INTEGER : ai;
-        const bRank = bi === -1 ? Number.MAX_SAFE_INTEGER : bi;
-        return aRank - bRank || b.count - a.count || a.name.localeCompare(b.name, 'pt-BR');
-      })
-      .slice(0, 4);
+      .filter((category) => category.count > 0);
   }, [products]);
+
+  useEffect(() => {
+    const rail = railRef.current;
+    if (!rail || reduceMotion || categories.length < 2) return;
+
+    let frameId = 0;
+    let previous = performance.now();
+
+    const animate = (now: number) => {
+      const delta = Math.min(34, now - previous);
+      previous = now;
+
+      if (!pausedRef.current && document.visibilityState === 'visible') {
+        rail.scrollLeft += delta * 0.026;
+        const midpoint = rail.scrollWidth / 2;
+        if (midpoint > 0 && rail.scrollLeft >= midpoint) {
+          rail.scrollLeft -= midpoint;
+        }
+      }
+
+      frameId = window.requestAnimationFrame(animate);
+    };
+
+    frameId = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [categories.length, reduceMotion]);
+
+  useEffect(() => {
+    return () => {
+      if (resumeTimerRef.current !== null) window.clearTimeout(resumeTimerRef.current);
+    };
+  }, []);
+
+  const pause = () => {
+    pausedRef.current = true;
+    if (resumeTimerRef.current !== null) {
+      window.clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = null;
+    }
+  };
+
+  const resumeLater = () => {
+    if (reduceMotion) return;
+    if (resumeTimerRef.current !== null) window.clearTimeout(resumeTimerRef.current);
+    resumeTimerRef.current = window.setTimeout(() => {
+      pausedRef.current = false;
+      resumeTimerRef.current = null;
+    }, 1400);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    pause();
+    if (event.pointerType !== 'mouse' || !railRef.current) return;
+    dragRef.current = {
+      active: true,
+      startX: event.clientX,
+      startScrollLeft: railRef.current.scrollLeft,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current.active || !railRef.current) return;
+    const distance = event.clientX - dragRef.current.startX;
+    railRef.current.scrollLeft = dragRef.current.startScrollLeft - distance;
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current.active) {
+      dragRef.current.active = false;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    }
+    resumeLater();
+  };
 
   const selectCategory = (category: string) => {
     onEnterCatalog();
@@ -84,6 +166,8 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
 
   if (categories.length === 0) return null;
 
+  const loopCategories = reduceMotion ? categories : [...categories, ...categories];
+
   return (
     <section className="category-showcase" aria-labelledby="category-showcase-title">
       <div className="category-showcase__heading">
@@ -91,31 +175,54 @@ export function CategoryShowcase({ onEnterCatalog }: CategoryShowcaseProps) {
         <span>Cada seleção abre um universo.</span>
       </div>
 
-      <div className="category-showcase__grid">
-        {categories.map((category) => (
-          <button
-            type="button"
-            key={category.name}
-            className="category-showcase__item"
-            onClick={() => selectCategory(category.name)}
-            aria-label={`Explorar ${category.name}: ${category.count} ${category.count === 1 ? 'achado' : 'achados'}`}
-          >
-            <div className="category-showcase__image-wrap">
-              {category.imageUrl ? (
-                <img src={category.imageUrl} alt="" loading="lazy" decoding="async" />
-              ) : (
-                <div className="category-showcase__placeholder" aria-hidden="true" />
-              )}
-            </div>
-            <span className="category-showcase__meta">
-              <span>
-                {category.name} —<br />
-                {category.count.toString().padStart(2, '0')} {category.count === 1 ? 'achado' : 'achados'}
-              </span>
-              <ArrowUpRight aria-hidden="true" />
-            </span>
-          </button>
-        ))}
+      <div
+        ref={railRef}
+        className="category-showcase__viewport"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={() => {
+          if (!dragRef.current.active) resumeLater();
+        }}
+        onWheel={() => {
+          pause();
+          resumeLater();
+        }}
+      >
+        <div className="category-showcase__track">
+          {loopCategories.map((category, index) => {
+            const duplicate = !reduceMotion && index >= categories.length;
+            return (
+              <button
+                type="button"
+                key={`${category.name}-${index}`}
+                className="category-showcase__item"
+                onClick={() => selectCategory(category.name)}
+                aria-label={duplicate ? undefined : `Explorar ${category.name}: ${category.count} ${category.count === 1 ? 'achado' : 'achados'}`}
+                aria-hidden={duplicate ? 'true' : undefined}
+                tabIndex={duplicate ? -1 : 0}
+              >
+                <div className="category-showcase__image-wrap">
+                  {category.imageUrl ? (
+                    <img src={category.imageUrl} alt="" loading="lazy" decoding="async" />
+                  ) : (
+                    <div className="category-showcase__placeholder" aria-hidden="true" />
+                  )}
+                </div>
+                <span className="category-showcase__meta">
+                  <span>
+                    <strong>{category.name}</strong>
+                    <small>
+                      {category.count.toString().padStart(2, '0')} {category.count === 1 ? 'achado' : 'achados'}
+                    </small>
+                  </span>
+                  <ArrowUpRight aria-hidden="true" />
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
