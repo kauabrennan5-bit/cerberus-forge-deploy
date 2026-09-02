@@ -1,5 +1,41 @@
 [
   {
+    "id": "prod-1788318194165-257e1ea447",
+    "ref": "ROTA-257E1EA447",
+    "slug": "novo-estilo-retro-portatil-espelho-de-maquiagem-portatil-257e1e",
+    "produto": "Novo estilo Retro portátil espelho de maquiagem portátil",
+    "displayTitle": "Novo estilo Retro portátil espelho de maquiagem portátil",
+    "preco": 20.62,
+    "imagens": [
+      "https://cf.shopee.com.br/file/sg-11134201-825a4-mrxjq35l2o791a"
+    ],
+    "link": "https://s.shopee.com.br/3B71uCZ6Be",
+    "categoria": "Beleza & Bem-estar",
+    "descricao": "Descrição factual baseada no anúncio: Novo estilo Retro portátil espelho de maquiagem portátil. Os demais detalhes devem ser conferidos na página oficial do produto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T03:03:14.262569+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
+    "id": "prod-1788317839541-221403a906",
+    "ref": "ROTA-221403A906",
+    "slug": "brinquedos-montessori-brinquedos-sensoriais-de-seis-lados-interativo-221403",
+    "produto": "Brinquedos Montessori brinquedos sensoriais de seis lados Interativo",
+    "displayTitle": "Brinquedos Montessori brinquedos sensoriais de seis lados Interativo",
+    "preco": 35.49,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-820m7-mo81b5ieyku8e2"
+    ],
+    "link": "https://s.shopee.com.br/50YjSAhejJ",
+    "categoria": "Infantil",
+    "descricao": "Descrição factual baseada no anúncio: Brinquedos Montessori brinquedos sensoriais de seis lados Interativo. Os demais detalhes devem ser conferidos na página oficial do produto.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-02T02:57:19.595176+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788305503473-ab1901f542",
     "ref": "AUTOQ-AB1901F542",
     "slug": "achado-brinquedo-montessori-educativo-de-madeira-waldorf-ab1901",
