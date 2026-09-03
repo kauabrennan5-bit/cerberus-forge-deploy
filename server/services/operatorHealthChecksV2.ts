@@ -5,8 +5,9 @@ import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
 import { inspectShopeeProviderEnv } from "./shopeeProviderRuntime";
 import type { ComponentObservation, OperationalStatus } from "./operatorAutonomy";
 
-export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-preview.onrender.com";
+export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-static.onrender.com";
 export const DEFAULT_PUBLIC_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
+export const DEFAULT_PUBLIC_CATALOG_URL = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products";
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 export type OperatorHealthComponentName =
@@ -52,7 +53,7 @@ function normalizeBaseUrl(value: string): string {
 export function resolveOperatorHealthUrls(env: NodeJS.ProcessEnv = process.env) {
   const publicSiteUrl = normalizeBaseUrl(String(env.PUBLIC_SITE_URL || DEFAULT_PUBLIC_SITE_URL).trim());
   const publicBackendUrl = normalizeBaseUrl(String(env.PUBLIC_BACKEND_URL || DEFAULT_PUBLIC_BACKEND_URL).trim());
-  const catalogProjectionUrl = String(env.PUBLIC_CATALOG_URL || `${publicSiteUrl}/data/products.json`).trim();
+  const catalogProjectionUrl = normalizeBaseUrl(String(env.PUBLIC_CATALOG_URL || env.PUBLIC_CATALOG_API_URL || DEFAULT_PUBLIC_CATALOG_URL).trim());
   return { publicSiteUrl, publicBackendUrl, catalogProjectionUrl };
 }
 
@@ -94,6 +95,7 @@ function normalizeProductsPayload(payload: unknown): Array<Record<string, unknow
   if (Array.isArray(payload)) return payload.filter(item => item && typeof item === "object") as Array<Record<string, unknown>>;
   if (payload && typeof payload === "object") {
     const record = payload as Record<string, unknown>;
+    if (record.source && record.source !== "supabase-edge") return null;
     if (Array.isArray(record.products)) return record.products.filter(item => item && typeof item === "object") as Array<Record<string, unknown>>;
     if (Array.isArray(record.data)) return record.data.filter(item => item && typeof item === "object") as Array<Record<string, unknown>>;
   }
@@ -112,7 +114,7 @@ function productIsPublic(row: Record<string, unknown>): boolean {
 
 function statusForAi(value: string): OperationalStatus {
   if (value === "healthy") return "HEALTHY";
-  if (["disabled", "not_configured", "rate_limited", "timeout", "provider_unavailable", "model_unavailable"].includes(value)) return "DEGRADED";
+  if (["disabled", "not_configured", "rate_limited", "timeout", "provider_unavailable", "model_unavailable", "quota_exhausted"].includes(value)) return "DEGRADED";
   return "DOWN";
 }
 
@@ -141,20 +143,20 @@ async function checkBackend(fetchImpl: typeof fetch, baseUrl: string, timeoutMs:
   }
 }
 
-async function checkProductsApi(fetchImpl: typeof fetch, baseUrl: string, timeoutMs: number): Promise<{ observation: OperatorHealthObservation; products: Array<Record<string, unknown>> | null }> {
+async function checkProductsApi(fetchImpl: typeof fetch, url: string, timeoutMs: number): Promise<{ observation: OperatorHealthObservation; products: Array<Record<string, unknown>> | null }> {
   const startedAt = Date.now();
   try {
-    const response = await fetchWithTimeout(fetchImpl, `${baseUrl}/api/products`, timeoutMs);
+    const response = await fetchWithTimeout(fetchImpl, url, timeoutMs);
     let payload: unknown = null;
     try { payload = await response.json(); } catch { payload = null; }
     const products = normalizeProductsPayload(payload);
     const valid = response.ok && products !== null;
     return {
-      observation: observation({ name: "Produtos/API", status: valid ? "HEALTHY" : response.ok ? "DEGRADED" : "DOWN", startedAt, httpStatus: response.status, error: valid ? undefined : response.ok ? "PRODUCTS_COLLECTION_INVALID" : `HTTP_${response.status}`, diagnostic: { urlRole: "backend_products_api", collectionSize: products?.length ?? null } }),
+      observation: observation({ name: "Produtos/API", status: valid ? "HEALTHY" : response.ok ? "DEGRADED" : "DOWN", startedAt, httpStatus: response.status, error: valid ? undefined : response.ok ? "PRODUCTS_COLLECTION_INVALID" : `HTTP_${response.status}`, diagnostic: { urlRole: "supabase_edge_products_api", collectionSize: products?.length ?? null } }),
       products,
     };
   } catch (error) {
-    return { observation: observation({ name: "Produtos/API", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "PRODUCTS_API_TIMEOUT" : "PRODUCTS_API_FETCH_FAILED", diagnostic: { urlRole: "backend_products_api" } }), products: null };
+    return { observation: observation({ name: "Produtos/API", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "PRODUCTS_API_TIMEOUT" : "PRODUCTS_API_FETCH_FAILED", diagnostic: { urlRole: "supabase_edge_products_api" } }), products: null };
   }
 }
 
@@ -179,10 +181,10 @@ async function checkCatalogProjection(input: {
     try { payload = await response.json(); } catch { payload = null; }
     const projected = normalizeProductsPayload(payload);
     if (!response.ok || !projected) {
-      return observation({ name: "Catálogo/Projection", status: response.ok ? "DEGRADED" : "DOWN", startedAt, httpStatus: response.status, error: response.ok ? "CATALOG_PROJECTION_INVALID" : `HTTP_${response.status}`, diagnostic: { urlRole: "public_catalog_projection" } });
+      return observation({ name: "Catálogo/Projection", status: response.ok ? "DEGRADED" : "DOWN", startedAt, httpStatus: response.status, error: response.ok ? "CATALOG_PROJECTION_INVALID" : `HTTP_${response.status}`, diagnostic: { urlRole: "supabase_edge_catalog_projection" } });
     }
     if (!input.supabaseRows) {
-      return observation({ name: "Catálogo/Projection", status: "UNKNOWN", startedAt, httpStatus: response.status, error: "SUPABASE_COMPARISON_UNAVAILABLE", diagnostic: { projectedCount: projected.length, urlRole: "public_catalog_projection" } });
+      return observation({ name: "Catálogo/Projection", status: "UNKNOWN", startedAt, httpStatus: response.status, error: "SUPABASE_COMPARISON_UNAVAILABLE", diagnostic: { projectedCount: projected.length, urlRole: "supabase_edge_catalog_projection" } });
     }
     const expectedIds = input.supabaseRows.filter(productIsPublic).map(productId).filter(Boolean).sort();
     const projectedIds = projected.filter(productIsPublic).map(productId).filter(Boolean).sort();
@@ -195,10 +197,10 @@ async function checkCatalogProjection(input: {
       startedAt,
       httpStatus: response.status,
       error: coherent ? undefined : "CATALOG_PROJECTION_DIVERGENCE",
-      diagnostic: { urlRole: "public_catalog_projection", expectedCount: expectedIds.length, projectedCount: projectedIds.length, missingCount: missing.length, extraCount: extra.length, missingIds: missing.slice(0, 20), extraIds: extra.slice(0, 20) },
+      diagnostic: { urlRole: "supabase_edge_catalog_projection", expectedCount: expectedIds.length, projectedCount: projectedIds.length, missingCount: missing.length, extraCount: extra.length, missingIds: missing.slice(0, 20), extraIds: extra.slice(0, 20) },
     });
   } catch (error) {
-    return observation({ name: "Catálogo/Projection", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "CATALOG_TIMEOUT" : "CATALOG_FETCH_FAILED", diagnostic: { urlRole: "public_catalog_projection" } });
+    return observation({ name: "Catálogo/Projection", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "CATALOG_TIMEOUT" : "CATALOG_FETCH_FAILED", diagnostic: { urlRole: "supabase_edge_catalog_projection" } });
   }
 }
 
@@ -231,12 +233,10 @@ export async function runOperatorHealthChecksV2(options: HealthOptions = {}): Pr
   const checkedAt = new Date().toISOString();
   const observations: OperatorHealthObservation[] = [];
 
-  // Components are measured independently. A Site failure cannot change the
-  // Backend/API/Catalog observation, and a Catalog failure cannot synthesize a Site incident.
   const [site, backend, productsResult] = await Promise.all([
     checkSite(fetchImpl, urls.publicSiteUrl, timeoutMs),
     checkBackend(fetchImpl, urls.publicBackendUrl, timeoutMs),
-    checkProductsApi(fetchImpl, urls.publicBackendUrl, timeoutMs),
+    checkProductsApi(fetchImpl, urls.catalogProjectionUrl, timeoutMs),
   ]);
   observations.push(site, backend, productsResult.observation);
 

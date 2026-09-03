@@ -1,0 +1,35 @@
+-- Reconstructed from the historical schema artifact; intentionally outside live migrations.
+
+create table if not exists public.policy_evaluations (
+  evaluation_id text primary key,
+  agent_id text not null,
+  agent_version text not null,
+  policy_version text not null,
+  policy_engine_version text not null,
+  policy_reason_code_version text not null default '1.0',
+  decision text not null,
+  reason_code text not null,
+  reason text not null default '',
+  tool text not null,
+  action text not null,
+  risk text not null,
+  target_table text not null,
+  memory_scope text not null,
+  context text,
+  approval_state text,
+  correlation_id text,
+  causation_id text,
+  request_fingerprint text not null,
+  decision_fingerprint text not null,
+  checks jsonb not null default '{}'::jsonb,
+  evaluated_at timestamptz not null,
+  metadata jsonb not null default '{}'::jsonb,
+  schema_version text not null default '1.0',
+  created_at timestamptz not null default now(),
+  constraint policy_evaluations_decision_check check (decision in ('ALLOW','DENY','REQUIRES_APPROVAL')),
+  constraint policy_evaluations_risk_check check (risk in ('LOW','MEDIUM','HIGH','CRITICAL')),
+  constraint policy_evaluations_approval_state_check check (approval_state in ('NONE','PENDING','APPROVED','REJECTED','EXPIRED')),
+  constraint policy_evaluations_checks_check check (jsonb_typeof(checks)='object'),
+  constraint policy_evaluations_metadata_check check (jsonb_typeof(metadata)='object')
+);
+alter table public.policy_evaluations enable row level security;

@@ -644,10 +644,7 @@ function tryStrategy2InternalData(content: string): number | null {
     // tem precedência sobre `price`. Aceita número, string decimal e JSON
     // escapado; valores sem forma numérica continuam inválidos.
     const shopeePriceMatch = scriptBody.match(/(?:\\?"price_min\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i) ||
-      scriptBody.match(/(?:\\?"price\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i) ||
-      // Sem preço promocional/atual no estado, o preço regular ainda é uma
-      // observação real do anúncio e é preferível à ausência total de valor.
-      scriptBody.match(/(?:\\?"price_before_discount\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i);
+      scriptBody.match(/(?:\\?"price\\?")\s*:\s*\\?"?(\d+(?:\.\d+)?)"?/i);
     if (shopeePriceMatch?.[1]) {
       const rawNum = normalizeShopeePriceScale(shopeePriceMatch[1]);
 

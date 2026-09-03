@@ -4,7 +4,7 @@ import fs from "node:fs";
 
 const repositorySource = fs.readFileSync("server/repositories/autonomousCuratorRepository.ts", "utf8");
 const telegramRepositorySource = fs.readFileSync("server/repositories/telegramRepository.ts", "utf8");
-const migrationSource = fs.readFileSync("supabase/migrations/20260829212000_autonomous_curator.sql", "utf8");
+const migrationSource = fs.readFileSync("supabase/migrations/20260830012309_autonomous_curator.sql", "utf8");
 
 test("review humana reserva identidade Shopee e publicação/rejeição fecha o lifecycle", () => {
   assert.match(migrationSource, /review_id text/);

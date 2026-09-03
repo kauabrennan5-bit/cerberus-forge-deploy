@@ -1,0 +1,985 @@
+/* CERBERUS / QUIET ARCHIVE
+   Direction: GAZU discipline + Reload atmosphere + Cerberus archival identity.
+   Approved palette only: #0A0605 / #8C1A1A / #F2EDE4 / #6B6558. */
+
+body {
+  background: #0A0605 !important;
+  background-image: none !important;
+}
+
+.bg-noise {
+  background: #0A0605 !important;
+  background-image:
+    radial-gradient(circle at 70% 5%, color-mix(in srgb, #8C1A1A 11%, transparent) 0%, transparent 34%) !important;
+}
+
+/* ------------------------------------------------------------
+   HEADER — brand masthead, not application chrome
+   ------------------------------------------------------------ */
+header:has(#brand-logo-btn) {
+  border-color: color-mix(in srgb, #6B6558 28%, transparent) !important;
+  background: color-mix(in srgb, #0A0605 94%, transparent) !important;
+  backdrop-filter: blur(14px) !important;
+  box-shadow: none !important;
+}
+
+header:has(#brand-logo-btn) > div {
+  max-width: 82rem !important;
+  height: 4.15rem !important;
+  padding-inline: clamp(0.9rem, 3vw, 2rem) !important;
+}
+
+#brand-logo-btn {
+  flex: 0 1 auto !important;
+  gap: 0.7rem !important;
+}
+
+#brand-logo-btn > div:first-child {
+  width: 2.35rem !important;
+  height: 2.35rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  clip-path: none !important;
+  transform: none !important;
+}
+
+#brand-logo-btn .tech-frame::before,
+#brand-logo-btn .tech-frame::after {
+  display: none !important;
+}
+
+#brand-logo-btn > div:first-child svg,
+#brand-logo-btn > div:first-child img {
+  width: 2rem !important;
+  height: 2rem !important;
+}
+
+#brand-logo-btn > div:last-child > div:first-child > span:first-child {
+  font-size: clamp(1rem, 2.1vw, 1.35rem) !important;
+  letter-spacing: 0.1em !important;
+  color: #F2EDE4 !important;
+}
+
+#brand-logo-btn > div:last-child > p {
+  margin-top: 0.18rem !important;
+  color: #6B6558 !important;
+  font-size: 0.48rem !important;
+  letter-spacing: 0.22em !important;
+}
+
+#brand-logo-btn .stamp-badge {
+  display: none !important;
+}
+
+#nav-catalog-btn,
+#nav-favorites-btn {
+  min-height: 2rem !important;
+  padding: 0.25rem 0.15rem !important;
+  gap: 0.3rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #F2EDE4 !important;
+  font-size: 0.58rem !important;
+  letter-spacing: 0.14em !important;
+}
+
+#nav-catalog-btn:hover,
+#nav-favorites-btn:hover {
+  background: transparent !important;
+  color: #F2EDE4 !important;
+}
+
+#nav-catalog-btn svg,
+#nav-favorites-btn svg {
+  display: none !important;
+}
+
+#nav-catalog-btn > span.hidden,
+#nav-favorites-btn > span.hidden {
+  display: inline !important;
+}
+
+#nav-catalog-btn .font-mono,
+#nav-favorites-btn .font-mono {
+  border: 0 !important;
+  background: transparent !important;
+  padding: 0 !important;
+  color: #8C1A1A !important;
+  font-size: 0.58rem !important;
+  font-weight: 500 !important;
+}
+
+header:has(#brand-logo-btn) > div > div:last-child {
+  gap: clamp(0.75rem, 2.6vw, 1.8rem) !important;
+}
+
+/* ------------------------------------------------------------
+   HOME SHELL
+   ------------------------------------------------------------ */
+main:has(#cerberus-acervo) {
+  max-width: none !important;
+  width: 100% !important;
+  padding: 0 !important;
+}
+
+/* ------------------------------------------------------------
+   HERO — editorial cover, no technical viewer language
+   ------------------------------------------------------------ */
+.quiet-hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(320px, 1.08fr);
+  width: min(100%, 82rem);
+  min-height: min(650px, calc(100svh - 4.15rem));
+  margin: 0 auto;
+  overflow: hidden;
+  background: #0A0605;
+}
+
+.quiet-hero::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0;
+  height: 1px;
+  background: color-mix(in srgb, #6B6558 26%, transparent);
+}
+
+.quiet-hero__copy {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(3rem, 7vw, 6.75rem) clamp(1rem, 4.5vw, 3.75rem);
+}
+
+.quiet-hero__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  margin-bottom: clamp(1.3rem, 3vw, 2.25rem);
+}
+
+.quiet-hero__eyebrow > span {
+  width: 0.34rem;
+  height: 0.34rem;
+  transform: rotate(45deg);
+  border: 1px solid #8C1A1A;
+}
+
+.quiet-hero__eyebrow p {
+  margin: 0;
+  color: #8C1A1A;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.27em;
+  text-transform: uppercase;
+}
+
+.quiet-hero h1 {
+  max-width: 9ch;
+  margin: 0;
+  color: #F2EDE4;
+  font-family: var(--font-gothic, Georgia, 'Times New Roman', serif);
+  font-size: clamp(3.15rem, 5.8vw, 5.9rem);
+  font-weight: 400;
+  line-height: 0.94;
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.quiet-hero__description {
+  max-width: 31rem;
+  margin: clamp(1.6rem, 3.4vw, 2.5rem) 0 0;
+  color: #6B6558;
+  font-size: clamp(0.82rem, 1.15vw, 0.98rem);
+  line-height: 1.65;
+}
+
+.quiet-hero__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-height: 2.7rem;
+  margin-top: clamp(1.8rem, 3.5vw, 2.7rem);
+  padding: 0.65rem 0 0.5rem;
+  border: 0 !important;
+  border-bottom: 1px solid #8C1A1A !important;
+  background: transparent !important;
+  color: #F2EDE4 !important;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  box-shadow: none !important;
+}
+
+.quiet-hero__cta svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  color: #F2EDE4;
+  transition: transform 180ms ease;
+}
+
+.quiet-hero__cta:hover svg {
+  transform: translateX(0.22rem);
+}
+
+.quiet-hero__guardian {
+  position: relative;
+  z-index: 1;
+  min-height: 100%;
+}
+
+.quiet-hero__guardian-aura {
+  position: absolute;
+  top: 5%;
+  right: -9%;
+  width: 82%;
+  height: 92%;
+  background:
+    radial-gradient(circle at 78% 54%, color-mix(in srgb, #8C1A1A 34%, transparent) 0%, transparent 40%),
+    radial-gradient(circle at 58% 40%, color-mix(in srgb, #F2EDE4 7%, transparent) 0%, transparent 48%);
+  filter: blur(24px);
+  opacity: 0.8;
+}
+
+.quiet-hero__guardian-plinth {
+  position: absolute;
+  right: clamp(-2rem, -1vw, 0rem);
+  bottom: 0;
+  width: min(92%, 580px);
+  height: 91%;
+  overflow: hidden;
+  background:
+    linear-gradient(118deg, #17110f 0%, #0D0908 43%, #050303 70%),
+    #0A0605;
+  clip-path: polygon(18% 7%, 86% 0, 100% 14%, 100% 100%, 8% 100%, 0 68%, 6% 20%);
+  box-shadow: inset -34px 0 58px color-mix(in srgb, #8C1A1A 28%, transparent);
+}
+
+.quiet-hero__guardian-plinth::before,
+.quiet-hero__guardian-plinth::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+
+.quiet-hero__guardian-plinth::before {
+  inset: 0;
+  background:
+    linear-gradient(96deg, transparent 0 61%, color-mix(in srgb, #8C1A1A 55%, transparent) 83%, transparent 100%),
+    repeating-linear-gradient(112deg, color-mix(in srgb, #6B6558 8%, transparent) 0 1px, transparent 1px 7px);
+  mix-blend-mode: screen;
+  opacity: 0.45;
+}
+
+.quiet-hero__guardian-plinth::after {
+  left: 8%;
+  right: 0;
+  bottom: 0;
+  height: 17%;
+  background: linear-gradient(180deg, transparent, #050303 50%);
+}
+
+.quiet-hero__guardian-relief {
+  position: absolute;
+  top: 12%;
+  left: 2%;
+  width: 92%;
+  aspect-ratio: 1;
+  opacity: 0.74;
+  transform: scale(1.05);
+}
+
+.quiet-hero__guardian-relief img {
+  filter:
+    grayscale(1)
+    brightness(0.5)
+    contrast(1.8)
+    drop-shadow(18px 20px 0 color-mix(in srgb, #0A0605 82%, transparent))
+    drop-shadow(18px 0 22px color-mix(in srgb, #8C1A1A 48%, transparent));
+}
+
+/* ------------------------------------------------------------
+   CATEGORY MARQUEE — the main motion on the page
+   ------------------------------------------------------------ */
+.category-showcase {
+  width: min(100%, 82rem);
+  margin: 0 auto;
+  padding: clamp(2.1rem, 5vw, 4.4rem) 0 clamp(2.7rem, 6vw, 5rem);
+  overflow: hidden;
+  background: #0A0605;
+}
+
+.category-showcase__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0 clamp(1rem, 4.5vw, 3.75rem) 1.25rem;
+}
+
+.category-showcase__heading p {
+  margin: 0;
+  color: #F2EDE4;
+  font-family: var(--font-gothic, Georgia, 'Times New Roman', serif);
+  font-size: clamp(0.98rem, 1.5vw, 1.2rem);
+  font-weight: 400;
+  letter-spacing: 0.19em;
+  text-transform: uppercase;
+}
+
+.category-showcase__heading span {
+  color: #6B6558;
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.category-showcase__viewport {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  cursor: grab;
+  -webkit-overflow-scrolling: touch;
+}
+
+.category-showcase__viewport:active {
+  cursor: grabbing;
+}
+
+.category-showcase__viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.category-showcase__track {
+  display: flex;
+  width: max-content;
+  gap: clamp(0.45rem, 1vw, 0.8rem);
+  padding-inline: clamp(1rem, 4.5vw, 3.75rem);
+}
+
+.category-showcase__item {
+  position: relative;
+  flex: 0 0 clamp(13.2rem, 21vw, 18rem);
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #F2EDE4 !important;
+  text-align: left;
+  box-shadow: none !important;
+}
+
+.category-showcase__image-wrap {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  background: #120D0B;
+}
+
+.category-showcase__image-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, transparent 48%, color-mix(in srgb, #0A0605 35%, transparent) 100%),
+    linear-gradient(120deg, color-mix(in srgb, #8C1A1A 10%, transparent), transparent 50%);
+  pointer-events: none;
+}
+
+.category-showcase__image-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: saturate(0.35) brightness(0.72) contrast(1.12);
+  transform: scale(1.01);
+  transition: transform 500ms cubic-bezier(.22,.61,.36,1), filter 300ms ease;
+}
+
+.category-showcase__item:hover .category-showcase__image-wrap img {
+  transform: scale(1.035);
+  filter: saturate(0.42) brightness(0.77) contrast(1.13);
+}
+
+.category-showcase__placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(145deg, #16100E, #0A0605);
+}
+
+.category-showcase__meta {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.8rem;
+}
+
+.category-showcase__meta > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.category-showcase__meta strong {
+  color: #F2EDE4;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
+.category-showcase__meta small {
+  color: #6B6558;
+  font-size: 0.54rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.category-showcase__meta svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+  color: #8C1A1A;
+}
+
+/* ------------------------------------------------------------
+   ACERVO COMPLETO — cream editorial catalogue
+   ------------------------------------------------------------ */
+#cerberus-acervo {
+  width: 100%;
+  margin: 0 !important;
+  padding: clamp(2.6rem, 6vw, 5.5rem) clamp(1rem, 4.5vw, 3.75rem) clamp(4rem, 8vw, 7rem);
+  background: #F2EDE4 !important;
+  color: #0A0605 !important;
+  scroll-margin-top: 4.15rem !important;
+}
+
+#cerberus-acervo > section {
+  width: min(100%, 82rem);
+  margin: 0 auto !important;
+  padding: 0 !important;
+  gap: 0 !important;
+}
+
+#cerberus-acervo section > * + * {
+  margin-top: clamp(1.2rem, 2.7vw, 2.2rem) !important;
+}
+
+#cerberus-acervo section > div:first-child {
+  align-items: end !important;
+  gap: 1.5rem !important;
+  padding-bottom: 0.5rem !important;
+  border: 0 !important;
+}
+
+#cerberus-acervo section > div:first-child > div:first-child::before {
+  content: 'TODOS OS ACHADOS SELECIONADOS';
+  display: block;
+  margin-bottom: 0.75rem;
+  color: #8C1A1A;
+  font-size: 0.52rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+#cerberus-acervo .stamp-badge {
+  display: none !important;
+}
+
+#cerberus-acervo h1 {
+  position: relative;
+  min-height: 1em;
+  margin: 0 !important;
+  color: transparent !important;
+  font-size: clamp(2.35rem, 5.2vw, 4.7rem) !important;
+  font-weight: 400 !important;
+  line-height: 0.95 !important;
+  letter-spacing: -0.03em !important;
+}
+
+#cerberus-acervo h1::after {
+  content: 'ACERVO COMPLETO';
+  position: absolute;
+  inset: 0;
+  color: #0A0605;
+  font: inherit;
+  letter-spacing: inherit;
+}
+
+#cerberus-acervo h1 + p {
+  display: none !important;
+}
+
+#cerberus-acervo input[type='text'] {
+  min-height: 2.65rem !important;
+  padding-top: 0.6rem !important;
+  padding-bottom: 0.55rem !important;
+  border: 0 !important;
+  border-bottom: 1px solid color-mix(in srgb, #0A0605 42%, transparent) !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+  font-size: 0.61rem !important;
+  letter-spacing: 0.15em !important;
+  box-shadow: none !important;
+}
+
+#cerberus-acervo input[type='text']::placeholder {
+  color: #6B6558 !important;
+  opacity: 1 !important;
+}
+
+#cerberus-acervo input[type='text']:focus {
+  border-color: #8C1A1A !important;
+}
+
+#cerberus-acervo input[type='text'] ~ svg,
+#cerberus-acervo .relative > svg {
+  color: #6B6558 !important;
+}
+
+#cerberus-acervo section > div:nth-child(2) {
+  border: 0 !important;
+  background: transparent !important;
+}
+
+#cerberus-acervo section > div:nth-child(2) > div:first-child {
+  padding: 0 !important;
+  gap: 1rem !important;
+}
+
+button[aria-controls='category-panel'] {
+  min-height: 2.65rem !important;
+  padding: 0.4rem 0 !important;
+  border: 0 !important;
+  border-bottom: 1px solid color-mix(in srgb, #0A0605 42%, transparent) !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+}
+
+button[aria-controls='category-panel'] span,
+button[aria-controls='category-panel'] svg {
+  color: #0A0605 !important;
+}
+
+button[aria-controls='category-panel'] > span:first-child > span:first-child {
+  color: #6B6558 !important;
+  font-size: 0.5rem !important;
+}
+
+button[aria-controls='category-panel'] + button {
+  min-height: 2.65rem !important;
+  padding: 0.4rem 0.25rem !important;
+  border: 0 !important;
+  border-bottom: 1px solid color-mix(in srgb, #0A0605 42%, transparent) !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+}
+
+button[aria-controls='category-panel'] + button svg {
+  color: #8C1A1A !important;
+}
+
+#category-panel {
+  margin-top: 0.75rem !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+#category-panel > div:first-child {
+  border-color: color-mix(in srgb, #0A0605 22%, transparent) !important;
+}
+
+#category-panel > div:last-child {
+  border-color: color-mix(in srgb, #0A0605 22%, transparent) !important;
+}
+
+#category-panel button {
+  min-height: 4rem !important;
+  padding: 0.65rem !important;
+  border-color: color-mix(in srgb, #0A0605 18%, transparent) !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+}
+
+#category-panel button:hover {
+  background: color-mix(in srgb, #6B6558 7%, transparent) !important;
+}
+
+#category-panel button svg,
+#category-panel button span {
+  color: inherit !important;
+}
+
+/* Product rail becomes editorial catalogue entries instead of mini apps. */
+#cerberus-acervo section > div.grid:last-of-type {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 1.35rem !important;
+  max-width: none !important;
+}
+
+#cerberus-acervo section > div.grid:last-of-type > * {
+  grid-column: auto !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] {
+  overflow: visible !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card']:hover {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div {
+  display: grid !important;
+  grid-template-columns: minmax(0, 42%) minmax(0, 1fr) !important;
+  grid-template-rows: auto 1fr !important;
+  column-gap: clamp(0.9rem, 2vw, 1.25rem) !important;
+  min-height: 100% !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:first-child {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+  min-height: 1.5rem !important;
+  padding: 0 0 0.35rem !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:first-child > span {
+  color: #8C1A1A !important;
+  font-size: 0.48rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.15em !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:first-child > span > span:first-child {
+  display: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:first-child button {
+  min-width: 1.9rem !important;
+  min-height: 1.9rem !important;
+  padding: 0.25rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #6B6558 !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:first-child button svg {
+  color: inherit !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(2) {
+  grid-column: 1 !important;
+  grid-row: 1 / span 2 !important;
+  width: 100% !important;
+  min-height: 100% !important;
+  aspect-ratio: 1 / 1.05 !important;
+  padding: 0.45rem !important;
+  border: 0 !important;
+  background: color-mix(in srgb, #6B6558 10%, #F2EDE4) !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(2) img {
+  filter: saturate(0.72) contrast(0.98) !important;
+  transform: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(2) button {
+  display: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) {
+  position: relative;
+  grid-column: 2 !important;
+  grid-row: 2 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:first-child > p:first-child {
+  display: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] h3 {
+  height: auto !important;
+  margin: 0 !important;
+  color: #0A0605 !important;
+  font-family: var(--font-gothic, Georgia, 'Times New Roman', serif) !important;
+  font-size: clamp(1.04rem, 2.3vw, 1.3rem) !important;
+  font-weight: 400 !important;
+  line-height: 1.05 !important;
+  letter-spacing: -0.015em !important;
+  text-transform: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] h3 + p {
+  height: auto !important;
+  max-height: 2.55rem !important;
+  margin-top: 0.55rem !important;
+  color: #6B6558 !important;
+  font-size: 0.62rem !important;
+  line-height: 1.4 !important;
+  -webkit-line-clamp: 2 !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child {
+  margin-top: 0.72rem !important;
+  padding-top: 0 !important;
+  border: 0 !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child > div {
+  height: auto !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child > div > span:first-child,
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child > div > span:last-child,
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child > p {
+  display: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child > div > span:nth-child(2) {
+  height: auto !important;
+  color: #0A0605 !important;
+  font-family: inherit !important;
+  font-size: 0.8rem !important;
+  font-weight: 500 !important;
+  line-height: 1.25 !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] button[class~='w-full'][class~='mt-1.5'] {
+  display: none !important;
+}
+
+#cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3)::after {
+  content: 'VER PEÇA  →';
+  display: block;
+  width: max-content;
+  margin-top: 0.9rem;
+  padding-bottom: 0.28rem;
+  border-bottom: 1px solid #8C1A1A;
+  color: #0A0605;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+/* Keep loading/error states legible in the cream catalogue. */
+#cerberus-acervo .skeleton-shimmer,
+#cerberus-acervo [role='status'] {
+  border-color: color-mix(in srgb, #0A0605 18%, transparent) !important;
+}
+
+/* ------------------------------------------------------------
+   RESPONSIVE / MOBILE-FIRST REFINEMENT
+   ------------------------------------------------------------ */
+@media (min-width: 820px) {
+  #cerberus-acervo section > div.grid:last-of-type {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 1.8rem 2.2rem !important;
+  }
+}
+
+@media (min-width: 1280px) {
+  #cerberus-acervo section > div.grid:last-of-type {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 760px) {
+  header:has(#brand-logo-btn) > div {
+    height: 3.85rem !important;
+    padding-inline: 0.8rem !important;
+  }
+
+  #brand-logo-btn > div:first-child {
+    width: 2rem !important;
+    height: 2rem !important;
+  }
+
+  #brand-logo-btn > div:first-child svg,
+  #brand-logo-btn > div:first-child img {
+    width: 1.7rem !important;
+    height: 1.7rem !important;
+  }
+
+  #brand-logo-btn > div:last-child > div:first-child > span:first-child {
+    font-size: 0.9rem !important;
+  }
+
+  #brand-logo-btn > div:last-child > p {
+    font-size: 0.4rem !important;
+    letter-spacing: 0.16em !important;
+  }
+
+  #nav-catalog-btn,
+  #nav-favorites-btn,
+  #nav-catalog-btn .font-mono,
+  #nav-favorites-btn .font-mono {
+    font-size: 0.48rem !important;
+    letter-spacing: 0.11em !important;
+  }
+
+  header:has(#brand-logo-btn) > div > div:last-child {
+    gap: 0.6rem !important;
+  }
+
+  .quiet-hero {
+    display: block;
+    min-height: 590px;
+  }
+
+  .quiet-hero__copy {
+    min-height: 590px;
+    justify-content: flex-start;
+    padding: 3.2rem 1rem 3.5rem;
+  }
+
+  .quiet-hero h1 {
+    max-width: 8.5ch;
+    font-size: clamp(2.8rem, 12.8vw, 4.15rem);
+    line-height: 0.94;
+  }
+
+  .quiet-hero__description {
+    max-width: 20rem;
+    margin-top: 1.35rem;
+    padding-right: 22%;
+    font-size: 0.72rem;
+    line-height: 1.58;
+  }
+
+  .quiet-hero__cta {
+    margin-top: 1.4rem;
+    font-size: 0.55rem;
+  }
+
+  .quiet-hero__guardian {
+    position: absolute;
+    z-index: 1;
+    top: 6.5rem;
+    right: -3.6rem;
+    bottom: 0;
+    width: 58%;
+    min-height: 0;
+    pointer-events: none;
+  }
+
+  .quiet-hero__guardian-plinth {
+    right: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.9;
+  }
+
+  .quiet-hero__guardian-relief {
+    top: 24%;
+    left: -3%;
+    width: 108%;
+    opacity: 0.6;
+  }
+
+  .category-showcase {
+    padding-top: 2rem;
+    padding-bottom: 3.3rem;
+  }
+
+  .category-showcase__heading {
+    padding-inline: 1rem;
+  }
+
+  .category-showcase__track {
+    gap: 0.45rem;
+    padding-inline: 1rem;
+  }
+
+  .category-showcase__item {
+    flex-basis: 58vw;
+    max-width: 15rem;
+  }
+
+  #cerberus-acervo {
+    padding: 2.8rem 1rem 4.5rem;
+    scroll-margin-top: 3.85rem !important;
+  }
+
+  #cerberus-acervo h1 {
+    font-size: clamp(2.15rem, 10vw, 3.2rem) !important;
+  }
+
+  #cerberus-acervo section > div:first-child {
+    align-items: stretch !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] > div {
+    grid-template-columns: minmax(0, 43%) minmax(0, 1fr) !important;
+    column-gap: 0.85rem !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] h3 {
+    font-size: 1rem !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] h3 + p {
+    font-size: 0.58rem !important;
+  }
+}
+
+@media (max-width: 390px) {
+  #brand-logo-btn > div:last-child > p {
+    display: none !important;
+  }
+
+  .quiet-hero__copy {
+    min-height: 560px;
+  }
+
+  .quiet-hero h1 {
+    font-size: clamp(2.6rem, 13vw, 3.45rem);
+  }
+
+  .quiet-hero__description {
+    padding-right: 26%;
+  }
+
+  .category-showcase__item {
+    flex-basis: 61vw;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quiet-hero__cta svg,
+  .category-showcase__image-wrap img {
+    transition: none !important;
+  }
+
+  .category-showcase__viewport {
+    scroll-snap-type: x proximity;
+  }
+
+  .category-showcase__item {
+    scroll-snap-align: start;
+  }
+}
