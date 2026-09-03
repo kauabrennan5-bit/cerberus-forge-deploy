@@ -47,7 +47,7 @@ jobs:
       - name: Validate baseline and deterministic migration order
         run: node scripts/validate-supabase-migrations.mjs
 
-      - name: Bootstrap Supabase database roles
+      - name: Bootstrap Supabase platform dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -65,6 +65,20 @@ jobs:
             END IF;
           END
           $$;
+
+          -- Supabase Storage is a platform-managed schema, not part of this
+          -- repository's public-schema migration contract. Provide only the
+          -- interface touched by our historical migration so an otherwise
+          -- empty PostgreSQL 17 instance can replay the application history.
+          CREATE SCHEMA IF NOT EXISTS storage;
+          CREATE TABLE IF NOT EXISTS storage.buckets (
+            id text PRIMARY KEY,
+            name text NOT NULL,
+            public boolean NOT NULL DEFAULT false,
+            file_size_limit bigint,
+            allowed_mime_types text[],
+            updated_at timestamptz NOT NULL DEFAULT now()
+          );
           SQL
 
       - name: Rebuild public schema from zero
