@@ -43,7 +43,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: cerberus-autonomous-curator
+  # Read-only deployment verification must never queue behind a production curator cycle.
+  group: ${{ github.event_name == 'push' && 'cerberus-autonomous-curator-status' || 'cerberus-autonomous-curator-production' }}
   cancel-in-progress: false
 
 jobs:
