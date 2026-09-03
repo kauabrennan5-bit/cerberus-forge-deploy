@@ -17,7 +17,7 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      - name: Materialize local-only pre-history baseline
+      - name: Materialize local-only baseline and LIVE reconciliation
         shell: bash
         run: |
           set -euo pipefail
@@ -27,6 +27,9 @@ jobs:
             printf -v version '%014d' "$i"
             cp "$fragment" "supabase/migrations/${version}_baseline_fragment.sql"
             i=$((i + 1))
+          done
+          for reconciliation in $(find supabase/baseline/post_history -maxdepth 1 -type f -name '*.sql' | sort); do
+            cp "$reconciliation" "supabase/migrations/$(basename "$reconciliation")"
           done
       - name: Start local Supabase and replay exact migration ledger
         run: |
