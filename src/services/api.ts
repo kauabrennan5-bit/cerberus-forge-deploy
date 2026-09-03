@@ -56,12 +56,14 @@ function getApiUrl(path: string): string {
   return `${PRODUCTION_API_BASE}${normalizedPath}`;
 }
 
+function getPublicCatalogApiUrl(): string {
+  return `${PRODUCTION_API_BASE}/api/products?t=${Date.now()}`;
+}
+
 /**
- * Carrega a projeção pública do catálogo.
- *
- * public/data/products.json é derivado de public.products durante a sincronização
- * e é a única fonte usada pela vitrine para renderizar produtos. Operações
- * administrativas continuam usando os endpoints do backend abaixo.
+ * Carrega a projeção pública dinâmica diretamente da API canônica do backend.
+ * O design-preview permanece frontend-only e não depende da sua própria branch
+ * para receber cada nova publicação/arquivamento do Curator.
  */
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   try {
@@ -81,20 +83,25 @@ export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
 }
 
 export async function getProducts(): Promise<any[]> {
-  const catalogPath = `/data/products.json?v=${Date.now()}`;
-  const catalogUrl = getApiUrl(catalogPath);
-  const response = await fetch(catalogUrl, { cache: 'no-store' });
+  const response = await fetch(getPublicCatalogApiUrl(), { cache: 'no-store' });
 
   if (!response.ok) {
-    throw new Error(`Catálogo indisponível: /data/products.json retornou HTTP ${response.status}.`);
+    throw new Error(`Catálogo indisponível: API pública retornou HTTP ${response.status}.`);
   }
 
-  const list = await response.json();
-  if (!Array.isArray(list)) {
-    throw new Error('Catálogo indisponível: /data/products.json não contém uma lista válida.');
+  const payload = await response.json();
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.products)
+      ? payload.products
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : null;
+  if (!list) {
+    throw new Error('Catálogo indisponível: API pública não contém uma lista válida.');
   }
 
-  console.log(`[Catalog] ${list.length} produtos carregados de /data/products.json.`);
+  console.log(`[Catalog] ${list.length} registros carregados da API pública canônica.`);
   const normalized = list.map((p: any) => ({
     ...p,
     id: String(p.id || ''),
@@ -114,9 +121,13 @@ export async function getProducts(): Promise<any[]> {
     ativo: p.ativo !== false,
     status: p.status || 'published'
   }));
-  const publicProducts = normalized.filter((product: any) => Boolean(product.categoria));
+  const publicProducts = normalized.filter((product: any) =>
+    product.ativo !== false
+    && product.status === 'published'
+    && Boolean(product.categoria)
+  );
   if (publicProducts.length !== normalized.length) {
-    console.warn(`[Catalog] ${normalized.length - publicProducts.length} produto(s) omitido(s): PUBLIC_CATEGORY_REVIEW_REQUIRED.`);
+    console.warn(`[Catalog] ${normalized.length - publicProducts.length} registro(s) omitido(s): não publicados/ativos ou PUBLIC_CATEGORY_REVIEW_REQUIRED.`);
   }
   return publicProducts;
 }
@@ -272,3 +283,8 @@ export async function verifyPasswordApi(password: string): Promise<boolean> {
 export async function fetchProxyCsv(url: string): Promise<string> {
   return '';
 }
+
+export const publicCatalogApiInternals = {
+  PRODUCTION_API_BASE,
+  getPublicCatalogApiUrl,
+};
