@@ -59,26 +59,18 @@ test("Shopee discovery accepts an explicit page and returns official imageUrl ev
   assert.match(requestBody, /imageUrl/);
 });
 
-test("cycle pagination expands through all ten official result pages", () => {
+test("cycle pagination rotates exploration through all ten official result pages", () => {
   const pages = new Set<number>();
   for (let cycle = 1; cycle <= 10; cycle += 1) pages.add(discoveryPage(cycle, "Tecnologia", 0));
   assert.deepEqual([...pages].sort((a, b) => a - b), [1,2,3,4,5,6,7,8,9,10]);
 });
 
-test("every query starts from relevance page 1 and deep exploration remains bounded", () => {
-  for (let cycle = 1; cycle <= 10; cycle += 1) {
-    let deep = 0;
-    for (let queryIndex = 0; queryIndex < 12; queryIndex += 1) {
-      const pages = discoveryPages(cycle, "Iluminação", queryIndex);
-      assert.equal(pages[0], 1);
-      assert.ok(pages.length === 1 || pages.length === 2);
-      if (pages.length === 2) {
-        deep += 1;
-        assert.ok(pages[1] >= 2 && pages[1] <= 10);
-      }
-    }
-    assert.ok(deep <= 4);
-  }
+test("discovery depth expands progressively instead of repeating page 1 forever", () => {
+  assert.deepEqual(discoveryPages(1, "Iluminação", 0), [1]);
+  assert.deepEqual(discoveryPages(2, "Iluminação", 0), [1, 2]);
+  assert.deepEqual(discoveryPages(4, "Iluminação", 3), [1, 2, 3, 4]);
+  assert.deepEqual(discoveryPages(10, "Iluminação", 8), [1,2,3,4,5,6,7,8,9,10]);
+  assert.deepEqual(discoveryPages(99, "Iluminação", 0), [1,2,3,4,5,6,7,8,9,10]);
 });
 
 test("continuous discovery compares qualified finalists instead of publishing the first passing item", async () => {
@@ -87,6 +79,17 @@ test("continuous discovery compares qualified finalists instead of publishing th
   assert.match(source, /BEST_OF_\$\{qualified\.length\}_QUALIFIED_CANDIDATES/);
   assert.doesNotMatch(source, /if \(evaluated\.candidate\) return \{ candidate: evaluated\.candidate/);
   assert.match(source, /for \(const query of queries\) await collectPage\(query, 1\)/);
+  assert.match(source, /for \(const page of pages\.slice\(1\)\)/);
+});
+
+test("deficit recovery skips complete categories before expensive work and rechecks before publication", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
+  const saturationIndex = source.indexOf('result.reason = "CATEGORY_TARGET_ALREADY_SATISFIED_WHILE_DEFICITS_EXIST"');
+  const attemptIndex = source.indexOf("metrics.attemptedCategories += 1");
+  assert.ok(saturationIndex >= 0);
+  assert.ok(attemptIndex > saturationIndex);
+  assert.match(source, /assertFreshCategoryPublicationAllowed\(profile\.category, env\)/);
+  assert.match(source, /categoryStillNeedsRecovery\(profile\.category, env\)/);
 });
 
 test("official image evidence is injected only as data and still goes through canonical image review", () => {
@@ -142,6 +145,42 @@ test("continuous v2 never persists a no_candidate attempt over the daily categor
   assert.doesNotMatch(source, /decision:\s*["']no_candidate["']/);
   assert.match(source, /continuous_cycles/);
   assert.match(source, /failedThisCycle \+= 1/);
+});
+
+test("technical visual provider failure persists REVIEW_RECOVERY_PENDING instead of editorial rejection", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
+  assert.match(source, /REVIEW_RECOVERY_PENDING:/);
+  assert.match(source, /persistReviewRecovery/);
+  assert.match(source, /decision: "review_required"/);
+  assert.match(source, /recoverySeedFromStored/);
+  assert.match(source, /if \(recoverySeed && budgetRemaining > 0\)/);
+});
+
+test("run metrics distinguish real publications from categories processed", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
+  assert.match(source, /attempted_categories:/);
+  assert.match(source, /queries_executed:/);
+  assert.match(source, /candidates_discovered:/);
+  assert.match(source, /candidates_examined:/);
+  assert.match(source, /candidates_enriched:/);
+  assert.match(source, /candidates_rejected:/);
+  assert.match(source, /publication_attempts:/);
+  assert.match(source, /published_this_cycle:/);
+  assert.match(source, /published_this_run:/);
+  assert.match(source, /published_active_now:/);
+  assert.match(source, /archived_after_publication:/);
+  assert.match(source, /technical_failures:/);
+  assert.match(source, /autoPublished: publishedThisRun/);
+  assert.doesNotMatch(source, /autoPublished: fulfilledCategories/);
+});
+
+test("exception path closes continuous cycle with completion timestamp", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
+  assert.match(source, /catch \(error\)/);
+  assert.match(source, /continuous_cycle_completed_at: interruptedAt/);
+  assert.match(source, /cycle_interrupted: true/);
+  assert.match(source, /finally \{/);
+  assert.match(source, /cycle closure could not be persisted/);
 });
 
 test("continuous route is wired to the progressive v2 coordinator", async () => {
@@ -229,9 +268,11 @@ test("category deficits use today's cumulative target instead of an exact-two ca
   assert.equal(totalDeficit(counts, 3), 27);
 });
 
-test("healthy publications accumulate instead of being selected for retirement", async () => {
+test("healthy publications accumulate instead of being retired to correct over-target growth", async () => {
   const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /function retirementCandidates/);
   assert.doesNotMatch(source, /category_balance_retired_ids/);
-  assert.match(source, /never archived merely because a category crossed a fixed cap/);
+  assert.doesNotMatch(source, /autonomous curator progressive growth correction/);
+  assert.doesNotMatch(source, /const overTargetPublicationIds: string\[\]/);
+  assert.match(source, /category_growth_over_target_publication_ids: \[\]/);
 });
