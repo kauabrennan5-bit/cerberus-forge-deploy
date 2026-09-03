@@ -4,7 +4,7 @@ import { createShopeeApiClient, type ShopeeApiClient } from "../commercial/affil
 import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepository from "../repositories/autonomousCuratorRepository";
-import { syncCatalogAndDeploy } from "./catalogSync";
+import { syncCatalogAndDeploy, type PublicCatalogValidation } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
 import { AUTONOMOUS_CURATOR_PROFILES } from "./autonomousCuratorProfiles";
 import {
@@ -44,6 +44,7 @@ export type {
  */
 const CATEGORY_GROWTH_VERSION = "3";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "1";
+const DAILY_INVARIANT_VERSION = "1";
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -54,6 +55,16 @@ type BeforeProduct = {
   title: string;
   ref: string;
   category: string;
+};
+
+type DailyCategoryInvariant = {
+  version: string;
+  met: boolean;
+  targetPerCategory: number;
+  categoriesMet: number;
+  categoriesTotal: number;
+  counts: CategoryCounts;
+  deficits: ReturnType<typeof categoryDeficits>;
 };
 
 function isActivePublished(product: Product): boolean {
@@ -109,6 +120,20 @@ function totalDeficit(counts: CategoryCounts, target: number): number {
   return totalCategoryDeficit(categoryDeficits(counts, target));
 }
 
+function evaluateDailyInvariant(counts: CategoryCounts, target: number): DailyCategoryInvariant {
+  const deficits = categoryDeficits(counts, target);
+  const categoriesMet = fulfilledCategoryCount(counts, target);
+  return {
+    version: DAILY_INVARIANT_VERSION,
+    met: categoriesMet === AUTONOMOUS_CURATOR_PROFILES.length && totalCategoryDeficit(deficits) === 0,
+    targetPerCategory: target,
+    categoriesMet,
+    categoriesTotal: AUTONOMOUS_CURATOR_PROFILES.length,
+    counts,
+    deficits,
+  };
+}
+
 async function setProductVisibility(productId: string, published: boolean): Promise<void> {
   const { error } = await requireSupabase()
     .from("products")
@@ -149,6 +174,18 @@ async function archiveUnavailableProducts(ids: readonly string[]): Promise<void>
   throw new Error(`PUBLISHED_PRODUCT_HEALTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
 }
 
+async function readRunMetadata(runId: string): Promise<Record<string, unknown>> {
+  const { data, error } = await requireSupabase()
+    .from("autonomous_curator_runs")
+    .select("metadata")
+    .eq("id", runId)
+    .single();
+  if (error) throw error;
+  return data?.metadata && typeof data.metadata === "object"
+    ? data.metadata as Record<string, unknown>
+    : {};
+}
+
 async function persistGrowthMetadata(input: {
   result: ContinuousCuratorResultV2;
   recoveryMode: boolean;
@@ -158,6 +195,9 @@ async function persistGrowthMetadata(input: {
   countsAfter: CategoryCounts;
   deficitCategoriesBefore: PublicProductCategory[];
   health: PublishedProductHealthResult;
+  invariant: DailyCategoryInvariant;
+  publicValidationSuccess: boolean;
+  publicValidation?: PublicCatalogValidation;
 }): Promise<void> {
   if (!input.result.runId) return;
   const client = requireSupabase();
@@ -193,6 +233,11 @@ async function persistGrowthMetadata(input: {
       total_deficit_before: totalDeficit(input.countsBefore, input.dailyTarget),
       total_deficit_after: totalCategoryDeficit(deficitsAfter),
       fulfilled_categories: fulfilledCategoryCount(input.countsAfter, input.dailyTarget),
+      daily_category_invariant_version: DAILY_INVARIANT_VERSION,
+      daily_category_invariant_met: input.invariant.met,
+      daily_category_invariant: input.invariant,
+      post_cycle_public_validation_success: input.publicValidationSuccess,
+      post_cycle_public_validation: input.publicValidation || null,
       category_growth_over_target_publication_ids: [],
       published_product_health_version: PUBLISHED_HEALTH_COORDINATOR_VERSION,
       published_product_health_checked_ids: input.health.checkedIds,
@@ -282,6 +327,17 @@ async function notifyConfirmedUnavailableTransitions(
   }
 }
 
+function blockerLabel(reason: string): string {
+  const upper = String(reason || "").toUpperCase();
+  if (upper.includes("IMAGE")) return "imagem";
+  if (upper.includes("SCORE")) return "score";
+  if (["OPENAI", "GEMINI", "MODEL", "QUOTA", "RATE_LIMIT", "TIMEOUT", "AI_"].some(marker => upper.includes(marker))) return "AI indisponível";
+  if (upper.includes("MISMATCH") || upper.includes("CATEGORY")) return "mismatch";
+  if (upper.includes("DUPLICATE") || upper.includes("SIMILAR")) return "duplicidade/similaridade";
+  if (upper.includes("SHOPEE")) return "Shopee";
+  return reason ? reason.slice(0, 80) : "sem candidato aprovado";
+}
+
 async function notifyGrowth(
   result: ContinuousCuratorResultV2,
   counts: CategoryCounts,
@@ -289,28 +345,40 @@ async function notifyGrowth(
   growthStartDate: string,
   env: NodeJS.ProcessEnv,
   health: PublishedProductHealthResult,
+  invariant: DailyCategoryInvariant,
+  publicValidationSuccess: boolean,
+  cycleMetadata: Record<string, unknown>,
 ): Promise<void> {
   const chatId = adminChatId(env);
   if (!chatId) return;
-  const covered = fulfilledCategoryCount(counts, dailyTarget);
+  const covered = invariant.categoriesMet;
+  const candidatesExamined = Math.max(0, Number(cycleMetadata.candidates_examined || 0));
   const lines = AUTONOMOUS_CURATOR_PROFILES.map(profile => {
     const count = counts[profile.category] || 0;
     return `${count >= dailyTarget ? "✅" : "🔎"} <b>${profile.category}</b>: ${count}/${dailyTarget}`;
   });
+  const shortfalls = result.categories
+    .filter(item => (invariant.deficits[item.category] || 0) > 0)
+    .map(item => `⚠️ <b>${item.category}</b>: déficit ${invariant.deficits[item.category]} · bloqueio: ${escapeHtml(blockerLabel(item.reason))}`);
   const text = [
-    "📈 <b>CERBERUS — CRESCIMENTO DIÁRIO DO ACERVO</b>",
+    invariant.met && publicValidationSuccess
+      ? "📈 <b>CERBERUS — CRESCIMENTO DIÁRIO DO ACERVO</b>"
+      : "🚨 <b>CERBERUS — META DE CATEGORIA NÃO CUMPRIDA</b>",
     "",
     `Dia de crescimento: <b>${dailyTarget}</b> · início: <code>${growthStartDate}</code>`,
     `Meta mínima hoje: <b>${dailyTarget} peças por categoria</b>`,
     `Categorias na meta: <b>${covered}/${AUTONOMOUS_CURATOR_PROFILES.length}</b>`,
     `Novos publicados neste ciclo: <b>${result.publishedThisCycle}</b>`,
+    `Candidatos examinados no ciclo: <b>${candidatesExamined}</b>`,
+    `Validação pública pós-ciclo: <b>${publicValidationSuccess ? "OK" : "FALHOU"}</b>`,
     `Links Shopee indisponíveis removidos: <b>${health.unavailableIds.length}</b>`,
     "",
     ...lines,
+    ...(shortfalls.length ? ["", "<b>Déficits e bloqueios</b>", ...shortfalls] : []),
     "",
-    covered === AUTONOMOUS_CURATOR_PROFILES.length
-      ? `Meta do dia cumprida. Amanhã o piso sobe automaticamente para ${dailyTarget + 1} peças por categoria; nenhuma peça saudável é removida só para manter limite.`
-      : "Categorias abaixo da meta continuam em recuperação automática nos próximos ciclos de hoje, sem afrouxar identidade, imagem, pipeline, similaridade ou score final.",
+    invariant.met && publicValidationSuccess
+      ? `Meta do dia cumprida e confirmada publicamente. Amanhã o piso sobe automaticamente para ${dailyTarget + 1} peças por categoria; nenhuma peça saudável é removida só para manter limite.`
+      : "O run permanece sem status de meta cumprida. Categorias abaixo da meta continuam em recuperação automática, sem afrouxar identidade, imagem, pipeline, similaridade ou score final.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
 }
@@ -372,13 +440,26 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   });
   if (result.status === "disabled" || !result.runId) return result;
 
+  // Always close a cycle by rebuilding the backend runtime projection and proving
+  // that Supabase -> /data -> /api -> current frontend are mutually observable.
+  // This is intentionally independent of whether this specific cycle published
+  // anything, so stale archives/publications cannot be hidden by a no-op cycle.
+  const postCycleSync = await syncCatalogAndDeploy("continuous autonomous curator v2 post-cycle validation").catch(error => ({
+    success: false,
+    validation: undefined,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+
   const productsAfter = await productsRepository.getProducts();
   const afterPolicy = calculateCategoryPolicy(productsAfter, dailyTarget);
   const countsAfter = afterPolicy.categoryCounts;
-  const coveredCategories = afterPolicy.fulfilledCategories;
+  const invariant = evaluateDailyInvariant(countsAfter, dailyTarget);
+  const coveredCategories = invariant.categoriesMet;
+  const publicValidationSuccess = postCycleSync.success === true;
+  const cycleMetadata = await readRunMetadata(result.runId).catch(() => ({}));
 
   result.fulfilledCategories = coveredCategories;
-  result.status = afterPolicy.totalDeficit === 0 && result.failedThisCycle === 0
+  result.status = invariant.met && result.failedThisCycle === 0 && publicValidationSuccess
     ? "completed"
     : result.failedThisCycle > 0 && coveredCategories === 0
       ? "failed"
@@ -393,9 +474,24 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     countsAfter,
     deficitCategoriesBefore: beforePolicy.deficitCategories,
     health,
+    invariant,
+    publicValidationSuccess,
+    publicValidation: postCycleSync.validation,
   }).catch(error => console.warn("[Autonomous Curator Growth] metadata update failed", error));
 
-  if (options.notify !== false) await notifyGrowth(result, countsAfter, dailyTarget, growthStartDate, env, health);
+  if (options.notify !== false) {
+    await notifyGrowth(
+      result,
+      countsAfter,
+      dailyTarget,
+      growthStartDate,
+      env,
+      health,
+      invariant,
+      publicValidationSuccess,
+      cycleMetadata,
+    );
+  }
   return result;
 }
 
@@ -403,6 +499,7 @@ export const autonomousCuratorContinuousV2Internals = {
   ...baseInternals,
   CATEGORY_GROWTH_VERSION,
   PUBLISHED_HEALTH_COORDINATOR_VERSION,
+  DAILY_INVARIANT_VERSION,
   GROWTH_TIME_ZONE,
   activePublishedForCategory,
   categoryCounts,
@@ -413,6 +510,7 @@ export const autonomousCuratorContinuousV2Internals = {
   categoryDeficits,
   deficitCategories,
   totalDeficit,
+  evaluateDailyInvariant,
   calculateCategoryPolicy,
   resolveShopeeClient,
 };
