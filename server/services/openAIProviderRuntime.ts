@@ -69,6 +69,7 @@ type CircuitState = {
 
 type RuntimeHealth = {
   status: OpenAIProviderHealthStatus;
+  model: string | null;
   httpStatus: number | null;
   errorCode: string | null;
   errorParam: string | null;
@@ -87,10 +88,12 @@ const QUOTA_ERROR_CODES = new Set([
 ]);
 
 const singleFlight = new Map<string, Promise<unknown>>();
-const circuits = new Map<string, CircuitState>();
+const providerCircuits = new Map<string, CircuitState>();
+const modelCircuits = new Map<string, CircuitState>();
 let activeCalls = 0;
 const concurrencyWaiters: Array<() => void> = [];
 let lastHealth: RuntimeHealth | null = null;
+const modelHealth = new Map<string, RuntimeHealth>();
 
 function positiveInt(value: unknown, fallback: number, max: number): number {
   const parsed = Number.parseInt(String(value ?? ""), 10);
@@ -211,18 +214,77 @@ function healthStatus(error: OpenAIProviderError): OpenAIProviderHealthStatus {
 
 function circuitDuration(error: OpenAIProviderError): number {
   if (error.code === "OPENAI_QUOTA_EXHAUSTED") return 10 * 60 * 1000;
-  if (error.code === "OPENAI_AUTH_ERROR" || error.code === "OPENAI_MODEL_UNAVAILABLE") return 5 * 60 * 1000;
+  if (error.code === "OPENAI_AUTH_ERROR") return 5 * 60 * 1000;
+  if (error.code === "OPENAI_MODEL_UNAVAILABLE") return 5 * 60 * 1000;
   if (error.code === "OPENAI_RATE_LIMITED") return Math.max(60_000, error.retryAfterMs || 0);
   if (error.code === "OPENAI_PROVIDER_UNAVAILABLE" || error.code === "OPENAI_TIMEOUT") return 30_000;
   return 15_000;
 }
 
-function circuitKey(apiKey: string): string {
+function providerKey(apiKey: string): string {
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
 }
 
+function requestModel(request: Record<string, unknown>): string {
+  const model = String(request.model || "").trim();
+  return model || "unknown-model";
+}
+
+function modelKey(apiKey: string, model: string): string {
+  return `${providerKey(apiKey)}:${model.toLowerCase()}`;
+}
+
 function requestKey(request: Record<string, unknown>, apiKey: string): string {
-  return `${circuitKey(apiKey)}:${createHash("sha256").update(JSON.stringify(request)).digest("hex")}`;
+  return `${providerKey(apiKey)}:${createHash("sha256").update(JSON.stringify(request)).digest("hex")}`;
+}
+
+function circuitScope(error: OpenAIProviderError): "provider" | "model" {
+  return error.code === "OPENAI_MODEL_UNAVAILABLE" || error.code === "OPENAI_INVALID_RESPONSE" ? "model" : "provider";
+}
+
+function activeCircuit(apiKey: string, model: string, nowMs: number): CircuitState | null {
+  const pKey = providerKey(apiKey);
+  const providerCircuit = providerCircuits.get(pKey);
+  if (providerCircuit && providerCircuit.until > nowMs) return providerCircuit;
+  if (providerCircuit) providerCircuits.delete(pKey);
+
+  const mKey = modelKey(apiKey, model);
+  const modelCircuit = modelCircuits.get(mKey);
+  if (modelCircuit && modelCircuit.until > nowMs) return modelCircuit;
+  if (modelCircuit) modelCircuits.delete(mKey);
+  return null;
+}
+
+function setCircuit(apiKey: string, model: string, error: OpenAIProviderError, nowMs: number): void {
+  const state = { until: nowMs + circuitDuration(error), error };
+  if (circuitScope(error) === "model") modelCircuits.set(modelKey(apiKey, model), state);
+  else providerCircuits.set(providerKey(apiKey), state);
+}
+
+function clearSuccessfulModelCircuit(apiKey: string, model: string): void {
+  modelCircuits.delete(modelKey(apiKey, model));
+}
+
+function updateHealth(error: OpenAIProviderError | null, model: string, nowMs: number): void {
+  const health: RuntimeHealth = error
+    ? {
+        status: healthStatus(error),
+        model,
+        httpStatus: error.httpStatus,
+        errorCode: error.errorCode,
+        errorParam: error.errorParam,
+        updatedAt: new Date(nowMs).toISOString(),
+      }
+    : {
+        status: "ok",
+        model,
+        httpStatus: 200,
+        errorCode: null,
+        errorParam: null,
+        updatedAt: new Date(nowMs).toISOString(),
+      };
+  lastHealth = health;
+  modelHealth.set(model.toLowerCase(), health);
 }
 
 async function defaultDelay(ms: number): Promise<void> {
@@ -285,11 +347,9 @@ async function fetchOnce(input: RuntimeOptions, nowMs: number): Promise<unknown>
 
 async function execute(input: RuntimeOptions): Promise<unknown> {
   const now = input.now || Date.now;
-  const nowMs = now();
-  const key = circuitKey(input.apiKey);
-  const existingCircuit = circuits.get(key);
-  if (existingCircuit && existingCircuit.until > nowMs) throw existingCircuit.error;
-  if (existingCircuit) circuits.delete(key);
+  const model = requestModel(input.request);
+  const existingCircuit = activeCircuit(input.apiKey, model, now());
+  if (existingCircuit) throw existingCircuit.error;
 
   const maxAttempts = positiveInt(input.maxAttempts, 4, 6);
   const concurrency = positiveInt(input.maxConcurrency ?? process.env.OPENAI_GLOBAL_MAX_CONCURRENCY, 2, 8);
@@ -299,29 +359,19 @@ async function execute(input: RuntimeOptions): Promise<unknown> {
   try {
     let lastError: OpenAIProviderError | null = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const midCircuit = activeCircuit(input.apiKey, model, now());
+      if (midCircuit) throw midCircuit.error;
       try {
         const payload = await fetchOnce(input, now());
-        lastHealth = {
-          status: "ok",
-          httpStatus: 200,
-          errorCode: null,
-          errorParam: null,
-          updatedAt: new Date(now()).toISOString(),
-        };
-        circuits.delete(key);
+        updateHealth(null, model, now());
+        clearSuccessfulModelCircuit(input.apiKey, model);
         return payload;
       } catch (error) {
         const providerError = error instanceof OpenAIProviderError
           ? error
           : new OpenAIProviderError({ code: "OPENAI_PROVIDER_UNAVAILABLE", retryable: true });
         lastError = providerError;
-        lastHealth = {
-          status: healthStatus(providerError),
-          httpStatus: providerError.httpStatus,
-          errorCode: providerError.errorCode,
-          errorParam: providerError.errorParam,
-          updatedAt: new Date(now()).toISOString(),
-        };
+        updateHealth(providerError, model, now());
         if (!providerError.retryable || attempt >= maxAttempts) break;
         const exponential = 1000 * 2 ** (attempt - 1);
         const jitter = Math.floor(exponential * 0.25 * Math.max(0, Math.min(1, randomImpl())));
@@ -330,7 +380,7 @@ async function execute(input: RuntimeOptions): Promise<unknown> {
       }
     }
     const finalError = lastError || new OpenAIProviderError({ code: "OPENAI_PROVIDER_UNAVAILABLE", retryable: false });
-    circuits.set(key, { until: now() + circuitDuration(finalError), error: finalError });
+    setCircuit(input.apiKey, model, finalError, now());
     throw finalError;
   } finally {
     releaseConcurrency();
@@ -351,8 +401,26 @@ export async function callOpenAIResponses(input: RuntimeOptions): Promise<unknow
   return operation;
 }
 
-export function getOpenAIRuntimeHealth(): RuntimeHealth | null {
+export function getOpenAIRuntimeHealth(model?: string | null): RuntimeHealth | null {
+  if (model) {
+    const health = modelHealth.get(String(model).toLowerCase());
+    return health ? { ...health } : null;
+  }
   return lastHealth ? { ...lastHealth } : null;
+}
+
+export function getOpenAIRuntimeCircuitStatus(input: { apiKey: string; model: string; nowMs?: number }) {
+  const nowMs = input.nowMs ?? Date.now();
+  const provider = providerCircuits.get(providerKey(input.apiKey));
+  const model = modelCircuits.get(modelKey(input.apiKey, input.model));
+  return {
+    providerOpen: Boolean(provider && provider.until > nowMs),
+    providerReason: provider && provider.until > nowMs ? provider.error.code : null,
+    providerRetryAfterMs: provider && provider.until > nowMs ? provider.until - nowMs : null,
+    modelOpen: Boolean(model && model.until > nowMs),
+    modelReason: model && model.until > nowMs ? model.error.code : null,
+    modelRetryAfterMs: model && model.until > nowMs ? model.until - nowMs : null,
+  };
 }
 
 export const openAIProviderRuntimeInternals = {
@@ -363,10 +431,17 @@ export const openAIProviderRuntimeInternals = {
   classifyHttpFailure,
   healthStatus,
   circuitDuration,
+  circuitScope,
+  providerKey,
+  requestModel,
+  modelKey,
   requestKey,
+  activeCircuit,
   reset: () => {
     singleFlight.clear();
-    circuits.clear();
+    providerCircuits.clear();
+    modelCircuits.clear();
+    modelHealth.clear();
     activeCalls = 0;
     concurrencyWaiters.splice(0, concurrencyWaiters.length);
     lastHealth = null;
