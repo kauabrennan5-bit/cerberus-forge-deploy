@@ -1,0 +1,44 @@
+name: Design Runtime Validation
+
+on:
+  push:
+    branches:
+      - fix/design-runtime-catalog-2026-09-03
+
+permissions:
+  contents: read
+
+jobs:
+  design-runtime-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Frontend-only invariant
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const pkg=require('./package.json');
+          const start=String(pkg.scripts?.start||'');
+          if (!start.includes('vite preview')) throw new Error('DESIGN_START_NOT_VITE_PREVIEW');
+          if (/server\.(ts|js|cjs)|tsx\s+server/i.test(start)) throw new Error('DESIGN_STARTS_BACKEND');
+          const fs=require('fs');
+          const api=fs.readFileSync('src/services/api.ts','utf8');
+          if (api.includes('/data/products.json')) throw new Error('DESIGN_USES_BRANCH_LOCAL_CATALOG');
+          if (!api.includes('cerberus-forge-deploy-backend.onrender.com')) throw new Error('DESIGN_CANONICAL_BACKEND_MISSING');
+          const manifest=JSON.parse(fs.readFileSync('public/catalog-runtime.json','utf8'));
+          if (manifest.frontendOnly !== true || manifest.mode !== 'runtime') throw new Error('DESIGN_RUNTIME_MANIFEST_INVALID');
+          if (manifest.catalogApiUrl !== 'https://cerberus-forge-deploy-backend.onrender.com/api/products') throw new Error('DESIGN_RUNTIME_API_MISMATCH');
+          NODE
+      - name: TypeScript
+        run: npm run lint
+      - name: Production build
+        run: npm run build
+      - name: Diff check
+        run: git diff --check HEAD^
