@@ -40,7 +40,7 @@ create table public.product_clicks (
   product_id text not null,
   product_slug text,
   product_name text,
-  product_price numeric default 0.00,
+  product_price numeric(10,2) default 0.00,
   utm_source text,
   utm_medium text,
   utm_campaign text,
