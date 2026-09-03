@@ -28,6 +28,16 @@ jobs:
           mv supabase/migrations/20260816_job_queue.sql supabase/migrations/20260816230000_job_queue.sql
           mv supabase/migrations/20260816_policy_evaluations.sql supabase/migrations/20260816231000_policy_evaluations.sql
           mv supabase/migrations/20260816_product_observations.sql supabase/migrations/20260816232000_product_observations.sql
+
+          mv supabase/migrations/20260820_governance_candidates.sql supabase/migrations/20260819142113_governance_candidates.sql
+          mv supabase/migrations/20260820_publication_executions.sql supabase/migrations/20260819173857_publication_executions.sql
+
+          mv supabase/migrations/20260822_newsletter_subscribers.sql supabase/migrations/20260822010000_newsletter_subscribers.sql
+          mv supabase/migrations/20260822_product_curator_note.sql supabase/migrations/20260822020000_product_curator_note.sql
+          mv supabase/migrations/20260822_product_display_title.sql supabase/migrations/20260822030000_product_display_title.sql
+          mv supabase/migrations/20260822_product_promotion_offer.sql supabase/migrations/20260822040000_product_promotion_offer.sql
+          mv supabase/migrations/20260822_newsletter_consent_suppression.sql supabase/migrations/20260822224450_newsletter_consent_suppression.sql
+
           node - <<'NODE'
           const fs = require('fs');
           const files = fs.readdirSync('supabase/migrations').filter(f => f.endsWith('.sql'));
@@ -37,6 +47,7 @@ jobs:
             if (versions.has(version)) throw new Error(`duplicate migration version ${version}: ${versions.get(version)}, ${file}`);
             versions.set(version, file);
           }
+          console.log(`Validated ${files.length} unique migration versions.`);
           NODE
           rm .github/workflows/reconcile-migration-versions.yml
       - name: Commit reconciliation
