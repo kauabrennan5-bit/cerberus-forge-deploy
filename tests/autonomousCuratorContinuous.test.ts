@@ -83,6 +83,8 @@ test("production workflow runs scheduled quarter-hour cycles while deployment pu
   assert.match(workflow, /github\.event_name == 'push' && 'status'/);
   assert.doesNotMatch(workflow, /github\.event_name == 'push' && 'continuous'/);
   assert.doesNotMatch(workflow, /github\.event_name == 'push' && 'dry_run'/);
+  assert.match(workflow, /cerberus-autonomous-curator-status/);
+  assert.match(workflow, /cerberus-autonomous-curator-production/);
   assert.match(workflow, /Wait for exact Render SHA after deployment/);
   assert.match(workflow, /api\/internal\/autonomous-curator\/status/);
   assert.match(workflow, /api\/internal\/autonomous-curator\/continuous/);
