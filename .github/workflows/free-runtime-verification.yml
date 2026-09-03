@@ -18,15 +18,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          body="$(curl --fail --silent --show-error --max-time 20 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/health')"
-          node -e 'const b=JSON.parse(process.argv[1]); if(b.status!=="ok"||b.runtime!=="supabase-edge") process.exit(1); console.log("EDGE_HEALTH=PASS")' "$body"
+          curl --fail --silent --show-error --max-time 20 \
+            -o /tmp/edge-health.json \
+            'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/health'
+          node -e 'const fs=require("fs");const b=JSON.parse(fs.readFileSync("/tmp/edge-health.json","utf8")); if(b.status!=="ok"||b.runtime!=="supabase-edge") process.exit(1); console.log("EDGE_HEALTH=PASS")'
 
       - name: Verify Supabase Edge catalog
         shell: bash
         run: |
           set -euo pipefail
-          body="$(curl --fail --silent --show-error --max-time 30 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products')"
-          node -e 'const b=JSON.parse(process.argv[1]); const p=Array.isArray(b.products)?b.products:[]; if(b.success!==true||p.length<1||p.some(x=>x.ativo===false||x.status!=="published")) process.exit(1); console.log(`EDGE_CATALOG=PASS count=${p.length}`)' "$body"
+          curl --fail --silent --show-error --max-time 30 \
+            -o /tmp/edge-products.json \
+            'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products'
+          node -e 'const fs=require("fs");const b=JSON.parse(fs.readFileSync("/tmp/edge-products.json","utf8"));const p=Array.isArray(b.products)?b.products:[];if(b.success!==true||p.length<1||p.some(x=>x.ativo===false||x.status!=="published"))process.exit(1);console.log(`EDGE_CATALOG=PASS count=${p.length}`)'
 
       - name: Verify static storefront home
         shell: bash
