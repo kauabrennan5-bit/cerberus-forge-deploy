@@ -1,6 +1,5 @@
 import { exportStaticProductsJson } from "./exportProductsJson";
 import { getProducts } from "../repositories/productsRepository";
-import { syncCatalogToGitHub } from "./githubCatalogSync";
 import {
   createOperationId,
   createOperationalDiagnostic,
@@ -9,6 +8,16 @@ import {
 } from "./operationalDiagnostics";
 import { createOperationalEvent, emitOperationalEvent } from "./operationalEvents";
 import { persistOperationalEvent, persistOperationalOperation } from "../repositories/operationalMemoryRepository";
+
+export interface PublicCatalogValidation {
+  backendDataValidated: boolean;
+  backendApiValidated: boolean;
+  frontendReachable: boolean;
+  productRouteReachable: boolean;
+  expectedPublicCount: number;
+  backendDataCount: number;
+  backendApiCount: number;
+}
 
 export interface SyncLogResult {
   success: boolean;
@@ -20,6 +29,10 @@ export interface SyncLogResult {
   publicJsonCount?: number;
   productFoundPublic?: boolean;
   staticSiteUrl: string;
+  backendUrl?: string;
+  validation?: PublicCatalogValidation;
+  // Kept for backwards compatibility with existing callers. Runtime sync no longer
+  // creates a GitHub catalog commit or waits for a frontend deploy.
   commitSha?: string;
   diagnostic?: OperationalDiagnostic;
   error?: string;
@@ -35,20 +48,61 @@ async function acquireCatalogSyncLock(): Promise<() => void> {
   return release;
 }
 
-async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ status: number; body: unknown }> {
+async function fetchWithTimeout(url: string, timeoutMs = 15_000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "cerberus-catalog-sync" } });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      cache: "no-store",
+      headers: { "User-Agent": "cerberus-catalog-sync" },
+    });
     if (!response.ok) {
       const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
       error.status = response.status;
       throw error;
     }
-    return { status: response.status, body: await response.json() };
+    return response;
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ status: number; body: unknown }> {
+  const response = await fetchWithTimeout(url, timeoutMs);
+  return { status: response.status, body: await response.json() };
+}
+
+function publicProductsFromApiBody(body: unknown): any[] {
+  if (Array.isArray(body)) return body;
+  if (!body || typeof body !== "object") return [];
+  const envelope = body as { products?: unknown; data?: unknown };
+  if (Array.isArray(envelope.products)) return envelope.products;
+  if (Array.isArray(envelope.data)) return envelope.data;
+  return [];
+}
+
+function activePublished(products: any[]): any[] {
+  return products.filter(product => product?.ativo !== false && product?.status === "published");
+}
+
+function compareCatalogIdentity(expected: any[], actual: any[]): {
+  ok: boolean;
+  missingIds: string[];
+  unexpectedIds: string[];
+  hasInvalidIdentity: boolean;
+} {
+  const expectedIds = new Set(expected.map(product => String(product?.id || "")).filter(Boolean));
+  const actualIds = new Set(actual.map(product => String(product?.id || "")).filter(Boolean));
+  const missingIds = [...expectedIds].filter(id => !actualIds.has(id));
+  const unexpectedIds = [...actualIds].filter(id => !expectedIds.has(id));
+  const hasInvalidIdentity = actual.some(product => !product?.id || !product?.slug || !product?.produto || !product?.link);
+  return {
+    ok: missingIds.length === 0 && unexpectedIds.length === 0 && !hasInvalidIdentity,
+    missingIds,
+    unexpectedIds,
+    hasInvalidIdentity,
+  };
 }
 
 function diagnosticForFailure(
@@ -70,18 +124,18 @@ function diagnosticForFailure(
     },
     CATALOG_EXPORT: {
       code: "CATALOG_GENERATION_ERROR",
-      message: "A projeção local do catálogo não foi gerada.",
+      message: "A projeção runtime do catálogo não foi gerada.",
       likelyCause: "Filtro de publicação, serialização ou gravação de products.json falhou.",
-      impact: "Não existe artefato consistente para versionar no GitHub.",
+      impact: "O backend não pode servir a projeção pública mais recente.",
       recoverability: "AUTO",
       retryable: true,
     },
     PUBLIC_CATALOG_VALIDATION: {
       code: "PUBLIC_CATALOG_VALIDATION_ERROR",
-      message: "O catálogo público não confirmou a projeção versionada dentro do prazo.",
-      likelyCause: "Build pendente/falho no Static Site, propagação de CDN ou divergência entre o artefato público e o commit gerado.",
-      impact: "A publicação não pode ser declarada concluída para o administrador.",
-      recoverability: "ADMIN_APPROVAL",
+      message: "Backend, API e frontend público não confirmaram a mesma projeção dentro do prazo.",
+      likelyCause: "Projeção runtime divergente, API indisponível, frontend indisponível ou produto ainda não observável publicamente.",
+      impact: "A publicação não pode ser declarada PUBLISHED_AND_PUBLICLY_VALIDATED.",
+      recoverability: "AUTO",
       retryable: true,
     },
   };
@@ -98,13 +152,99 @@ function diagnosticForFailure(
   });
 }
 
+export async function validateCatalogPublicly(
+  canonicalProducts: any[],
+  productId?: string,
+): Promise<{ ok: boolean; validation: PublicCatalogValidation; error?: Error }> {
+  const backendUrl = (
+    process.env.PUBLIC_BACKEND_URL
+    || process.env.RENDER_EXTERNAL_URL
+    || "https://cerberus-forge-deploy-backend.onrender.com"
+  ).replace(/\/+$/, "");
+  const frontendUrl = (
+    process.env.PUBLIC_SITE_URL
+    || "https://cerberus-design-preview.onrender.com"
+  ).replace(/\/+$/, "");
+  const expected = activePublished(canonicalProducts);
+  const expectedProduct = productId ? expected.find(product => String(product?.id) === String(productId)) : undefined;
+
+  let backendDataValidated = false;
+  let backendApiValidated = false;
+  let frontendReachable = false;
+  let productRouteReachable = !expectedProduct;
+  let backendDataCount = 0;
+  let backendApiCount = 0;
+  let lastError: Error | undefined;
+
+  try {
+    const [{ body: dataBody }, { body: apiBody }] = await Promise.all([
+      fetchJsonWithTimeout(`${backendUrl}/data/products.json?t=${Date.now()}`, 10_000),
+      fetchJsonWithTimeout(`${backendUrl}/api/products?t=${Date.now()}`, 10_000),
+    ]);
+
+    if (!Array.isArray(dataBody)) throw new Error("products.json runtime não contém uma lista.");
+    const backendData = dataBody as any[];
+    const apiProducts = activePublished(publicProductsFromApiBody(apiBody));
+    backendDataCount = backendData.length;
+    backendApiCount = apiProducts.length;
+
+    const dataDiff = compareCatalogIdentity(expected, backendData);
+    const apiDiff = compareCatalogIdentity(expected, apiProducts);
+    backendDataValidated = dataDiff.ok;
+    backendApiValidated = apiDiff.ok;
+
+    if (!dataDiff.ok) {
+      throw new Error(`Runtime data divergente: missing=${dataDiff.missingIds.length} unexpected=${dataDiff.unexpectedIds.length} invalidIdentity=${dataDiff.hasInvalidIdentity}.`);
+    }
+    if (!apiDiff.ok) {
+      throw new Error(`API divergente: missing=${apiDiff.missingIds.length} unexpected=${apiDiff.unexpectedIds.length} invalidIdentity=${apiDiff.hasInvalidIdentity}.`);
+    }
+
+    await fetchWithTimeout(`${frontendUrl}/?catalog_probe=${Date.now()}`, 10_000);
+    frontendReachable = true;
+
+    if (expectedProduct?.slug) {
+      await fetchWithTimeout(`${frontendUrl}/produto/${encodeURIComponent(expectedProduct.slug)}?catalog_probe=${Date.now()}`, 10_000);
+      productRouteReachable = true;
+    }
+
+    const publicIds = new Set(backendData.map(product => String(product?.id || "")).filter(Boolean));
+    if (productId && !publicIds.has(String(productId))) {
+      throw new Error(`Produto ${productId} não está presente na projeção pública runtime.`);
+    }
+  } catch (error) {
+    lastError = error instanceof Error ? error : new Error(String(error));
+  }
+
+  const validation: PublicCatalogValidation = {
+    backendDataValidated,
+    backendApiValidated,
+    frontendReachable,
+    productRouteReachable,
+    expectedPublicCount: expected.length,
+    backendDataCount,
+    backendApiCount,
+  };
+  return {
+    ok: backendDataValidated && backendApiValidated && frontendReachable && productRouteReachable && !lastError,
+    validation,
+    error: lastError,
+  };
+}
+
 /**
- * Pipeline canônico: public.products → products.json local → GitHub/main → Static Site público.
- * Uma operação só retorna sucesso após identidade e contagem compatíveis no catálogo público.
+ * Pipeline canônico runtime: public.products → products.json do backend → API → frontend atual.
+ * Não cria commit de catálogo nem espera deploy. Uma operação só retorna sucesso depois que
+ * a projeção pública runtime, a API e a aplicação frontend atual estão observáveis.
  */
 export async function syncCatalogAndDeploy(productTitle?: string, productId?: string, operationId = createOperationId("SYNC")): Promise<SyncLogResult> {
   const release = await acquireCatalogSyncLock();
-  const staticSiteUrl = (process.env.STATIC_CATALOG_URL || "https://cerberus-static-catalog.onrender.com").replace(/\/+$/, "");
+  const backendUrl = (
+    process.env.PUBLIC_BACKEND_URL
+    || process.env.RENDER_EXTERNAL_URL
+    || "https://cerberus-forge-deploy-backend.onrender.com"
+  ).replace(/\/+$/, "");
+  const staticSiteUrl = (process.env.PUBLIC_SITE_URL || "https://cerberus-design-preview.onrender.com").replace(/\/+$/, "");
   let supabaseCount = 0;
   let jsonCount = 0;
   let publicJsonCount = 0;
@@ -124,118 +264,87 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
   }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
 
   try {
-    let canonicalProducts;
+    let canonicalProducts: any[];
     try {
       canonicalProducts = await getProducts();
       supabaseCount = canonicalProducts.length;
     } catch (error) {
       const diagnostic = diagnosticForFailure(operationId, "SUPABASE_READ", "Supabase", error);
-      return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, diagnostic, error: diagnostic.code };
+      return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, backendUrl, diagnostic, error: diagnostic.code };
     }
 
     try {
       jsonCount = await exportStaticProductsJson();
     } catch (error) {
       const diagnostic = diagnosticForFailure(operationId, "CATALOG_EXPORT", "Exportador", error);
-      return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, diagnostic, error: diagnostic.code };
+      return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, backendUrl, diagnostic, error: diagnostic.code };
     }
 
-    const github = await syncCatalogToGitHub(
-      productTitle ? `update: catalog ${productTitle}` : "update: manual catalog sync",
-      { operationId },
-    );
-    if (!github.success) {
-      return {
-        success: false,
-        operationId,
-        product: productTitle,
-        productId,
-        supabaseCount,
-        jsonCount,
-        publicJsonCount,
-        productFoundPublic,
-        staticSiteUrl,
-        diagnostic: github.diagnostic,
-        error: github.diagnostic?.code || "GITHUB_SYNC_ERROR",
-      };
-    }
-
-    const expectedPublicIds = new Set(
-      canonicalProducts
-        .filter(product => product.ativo !== false && product.status === "published")
-        .map(product => product.id),
-    );
-    let lastFailure: unknown = new Error("O Static Site ainda não forneceu a projeção esperada.");
-    // Protected catalog PRs may trigger a fresh Render static-site build only after
-    // the required repository gate completes, so allow up to ~3 minutes of
-    // propagation after the protected merge before declaring publication failed.
-    const maxAttempts = 36;
+    let lastFailure: unknown = new Error("Catálogo runtime ainda não confirmou a projeção esperada.");
+    let lastValidation: PublicCatalogValidation | undefined;
+    const maxAttempts = 6;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const { body } = await fetchJsonWithTimeout(`${staticSiteUrl}/data/products.json?t=${Date.now()}`, 10_000);
-        if (!Array.isArray(body)) throw new Error("products.json público não contém uma lista.");
-        publicJsonCount = body.length;
-        const publicIds = new Set(body.map((product: any) => product?.id).filter(Boolean));
-        const missingIds = [...expectedPublicIds].filter(id => !publicIds.has(id));
-        const unexpectedIds = [...publicIds].filter(id => !expectedPublicIds.has(id));
-        const hasInvalidIdentity = body.some((product: any) => !product?.id || !product?.slug || !product?.produto || !product?.link);
-        productFoundPublic = productId ? publicIds.has(productId) : missingIds.length === 0;
+      const checked = await validateCatalogPublicly(canonicalProducts, productId);
+      lastValidation = checked.validation;
+      publicJsonCount = checked.validation.backendDataCount;
+      productFoundPublic = !productId || checked.ok;
 
-        if (missingIds.length === 0 && unexpectedIds.length === 0 && !hasInvalidIdentity && productFoundPublic) {
-          const completionEvent = createOperationalEvent({
-            eventType: "catalog.build.completed",
-            source: "catalogSync",
-            actor: "system",
-            correlationId: operationId,
-            severity: "INFO",
-            outcome: "SUCCESS",
-            payload: {
-              productId: productId || undefined,
-              supabaseCount,
-              jsonCount,
-              publicJsonCount,
-              expectedPublicCount: expectedPublicIds.size,
-              commitShortSha: github.commitSha?.slice(0, 7),
-            },
-          });
-          emitOperationalEvent(completionEvent);
-          void persistOperationalEvent(completionEvent).catch(error => console.warn(`[MEMORY] memory.persistence.failed eventId=${completionEvent.eventId} reason=${sanitizeOperationalText(error)}`));
-          void persistOperationalOperation({
-            operationId,
-            operationType: "CATALOG_SYNC",
-            status: "SUCCEEDED",
-            actor: "system",
-            correlationId: operationId,
-            attempt: 1,
-            createdAt: operationStartedAt,
-            startedAt: operationStartedAt,
-            completedAt: new Date().toISOString(),
-            resultCode: "CATALOG_BUILD_COMPLETED",
-            metadata: { productId: productId || undefined, publicJsonCount },
-            schemaVersion: "1.0",
-          }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
-          return {
-            success: true,
-            operationId,
-            product: productTitle,
-            productId,
+      if (checked.ok) {
+        const completionEvent = createOperationalEvent({
+          eventType: "catalog.build.completed",
+          source: "catalogSync",
+          actor: "system",
+          correlationId: operationId,
+          severity: "INFO",
+          outcome: "SUCCESS",
+          payload: {
+            productId: productId || undefined,
             supabaseCount,
             jsonCount,
             publicJsonCount,
-            productFoundPublic,
-            staticSiteUrl,
-            commitSha: github.commitSha,
-          };
-        }
-        lastFailure = new Error(`Divergência de catálogo: ${missingIds.length} ID(s) ausente(s), ${unexpectedIds.length} ID(s) órfão(s), identidade inválida=${hasInvalidIdentity}.`);
-      } catch (error) {
-        lastFailure = error;
+            expectedPublicCount: checked.validation.expectedPublicCount,
+            backendApiCount: checked.validation.backendApiCount,
+            frontendReachable: checked.validation.frontendReachable,
+            syncMode: "RUNTIME_NO_DEPLOY",
+          },
+        });
+        emitOperationalEvent(completionEvent);
+        void persistOperationalEvent(completionEvent).catch(error => console.warn(`[MEMORY] memory.persistence.failed eventId=${completionEvent.eventId} reason=${sanitizeOperationalText(error)}`));
+        void persistOperationalOperation({
+          operationId,
+          operationType: "CATALOG_SYNC",
+          status: "SUCCEEDED",
+          actor: "system",
+          correlationId: operationId,
+          attempt: 1,
+          createdAt: operationStartedAt,
+          startedAt: operationStartedAt,
+          completedAt: new Date().toISOString(),
+          resultCode: "CATALOG_RUNTIME_VALIDATED",
+          metadata: { productId: productId || undefined, publicJsonCount, validation: checked.validation },
+          schemaVersion: "1.0",
+        }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
+        return {
+          success: true,
+          operationId,
+          product: productTitle,
+          productId,
+          supabaseCount,
+          jsonCount,
+          publicJsonCount,
+          productFoundPublic: true,
+          staticSiteUrl,
+          backendUrl,
+          validation: checked.validation,
+        };
       }
-      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, 5_000));
+
+      lastFailure = checked.error || lastFailure;
+      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, 2_000));
     }
 
-    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", lastFailure);
+    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Public Runtime", lastFailure);
     console.warn(`[Catalog Sync] operation=${operationId} code=${diagnostic.code} cause=${sanitizeOperationalText(lastFailure)}`);
     return {
       success: false,
@@ -247,7 +356,8 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       publicJsonCount,
       productFoundPublic,
       staticSiteUrl,
-      commitSha: github.commitSha,
+      backendUrl,
+      validation: lastValidation,
       diagnostic,
       error: diagnostic.code,
     };
