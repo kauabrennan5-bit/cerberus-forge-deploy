@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   callOpenAIResponses,
+  getOpenAIRuntimeCircuitStatus,
   OpenAIProviderError,
   openAIProviderRuntimeInternals,
 } from "../server/services/openAIProviderRuntime";
@@ -44,7 +45,7 @@ test("OpenAI rate limit honors Retry-After and bounded exponential retry", async
   assert.deepEqual(waits, [3000, 2000]);
 });
 
-test("OpenAI insufficient quota does not retry and opens a circuit breaker", async () => {
+test("OpenAI insufficient quota does not retry and opens a provider-wide circuit breaker", async () => {
   openAIProviderRuntimeInternals.reset();
   let calls = 0;
   const fetchImpl = async () => {
@@ -68,7 +69,45 @@ test("OpenAI insufficient quota does not retry and opens a circuit breaker", asy
     callOpenAIResponses({ ...input, request: { model: "other-model", input: "different" } }),
     (error: unknown) => error instanceof OpenAIProviderError && error.code === "OPENAI_QUOTA_EXHAUSTED",
   );
-  assert.equal(calls, 1, "circuit breaker must prevent another provider call");
+  assert.equal(calls, 1, "provider circuit must prevent another call on a different model");
+});
+
+test("model unavailable circuit is isolated and does not block a fallback model", async () => {
+  openAIProviderRuntimeInternals.reset();
+  const calls: string[] = [];
+  const apiKey = "test-key-model-fallback";
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body || "{}")) as { model?: string };
+    calls.push(String(body.model));
+    if (body.model === "missing-primary") return errorResponse(404, "model_not_found");
+    return okResponse({ output_text: "fallback-ok" });
+  };
+
+  await assert.rejects(
+    callOpenAIResponses({
+      apiKey,
+      request: { model: "missing-primary", input: "image" },
+      timeoutMs: 1000,
+      fetchImpl: fetchImpl as typeof fetch,
+      maxAttempts: 1,
+    }),
+    (error: unknown) => error instanceof OpenAIProviderError && error.code === "OPENAI_MODEL_UNAVAILABLE",
+  );
+
+  const circuit = getOpenAIRuntimeCircuitStatus({ apiKey, model: "missing-primary" });
+  assert.equal(circuit.providerOpen, false);
+  assert.equal(circuit.modelOpen, true);
+  assert.equal(circuit.modelReason, "OPENAI_MODEL_UNAVAILABLE");
+
+  const fallback = await callOpenAIResponses({
+    apiKey,
+    request: { model: "working-fallback", input: "image" },
+    timeoutMs: 1000,
+    fetchImpl: fetchImpl as typeof fetch,
+    maxAttempts: 1,
+  }) as { output_text?: string };
+  assert.equal(fallback.output_text, "fallback-ok");
+  assert.deepEqual(calls, ["missing-primary", "working-fallback"]);
 });
 
 test("identical concurrent OpenAI requests are single-flight deduplicated", async () => {
