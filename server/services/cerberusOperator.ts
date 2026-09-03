@@ -21,6 +21,7 @@ export {
   getOperatorStateHistory,
   getPendingApprovals,
   getRecentCorrections,
+  initializeOperatorState,
   requestOperatorApproval,
   runSafeAutoHeal,
   setOperatorMode,
