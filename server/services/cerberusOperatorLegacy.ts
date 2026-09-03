@@ -683,7 +683,7 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   const now = new Date().toISOString();
   const timeStr = new Date().toLocaleTimeString("pt-BR");
   lastCheckTimestamp = timeStr;
-  
+
   const nextDate = new Date(Date.now() + CONFIG.checkIntervalMs);
   nextCheckTimestamp = nextDate.toLocaleTimeString("pt-BR");
 
