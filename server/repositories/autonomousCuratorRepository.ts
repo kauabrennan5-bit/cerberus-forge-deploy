@@ -57,7 +57,22 @@ export type ProductSourceIdentity = {
   reservedUntil: string | null;
 };
 
+function positiveBudget(value: unknown, fallback: number, max: number): number {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return fallback;
+  return Math.min(max, parsed);
+}
+
 function mapConfig(row: any): AutonomousCuratorConfig {
+  // Score/review thresholds remain exactly database-controlled. Only the amount of
+  // expensive enrichment work is bounded here so a permissive DB value cannot
+  // fan out into dozens of Gemini/OpenAI/image-review calls per category/cycle.
+  const configuredEnrich = positiveBudget(row?.max_enrich_per_category, 1, 100);
+  const expensiveEnrichCap = positiveBudget(
+    process.env.AUTONOMOUS_CURATOR_MAX_EXPENSIVE_CANDIDATES_PER_CATEGORY,
+    4,
+    20,
+  );
   return {
     enabled: row?.enabled === true,
     autoPublishEnabled: row?.auto_publish_enabled === true,
@@ -65,7 +80,7 @@ function mapConfig(row: any): AutonomousCuratorConfig {
     reviewThreshold: Number(row?.review_threshold ?? 72),
     maxDailyPerCategory: Number(row?.max_daily_per_category ?? 1),
     maxSearchCandidates: Number(row?.max_search_candidates ?? 10),
-    maxEnrichPerCategory: Number(row?.max_enrich_per_category ?? 1),
+    maxEnrichPerCategory: Math.min(configuredEnrich, expensiveEnrichCap),
   };
 }
 
