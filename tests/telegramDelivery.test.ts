@@ -56,7 +56,7 @@ describe("Telegram truthful delivery", () => {
     globalThis.fetch = async () => { throw new DOMException("request timeout", "AbortError"); };
     const result = await sendTelegramPhoto(1, "https://img.test/photo.webp", "teste");
     assert.equal(result.ok, false);
-    assert.match(result.failureReason ?? "", /request timeout/i);
+    assert.equal(result.failureReason, "TELEGRAM_TIMEOUT");
   });
 
   it("não registra chat_id não numérico no log", async () => {

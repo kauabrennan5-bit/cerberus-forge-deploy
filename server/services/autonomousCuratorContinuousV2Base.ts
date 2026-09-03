@@ -318,7 +318,9 @@ function safeCategoryFailureReason(error: unknown): string {
     const record = error as Record<string, unknown>;
     const code = safeFailureScalar(record.code, 36);
     const message = safeFailureScalar(record.message, 100);
-    return [code && `code=${code}`, message && `message=${message}`].filter(Boolean).join("|") || "CONTINUOUS_CATEGORY_FAILED";
+    return [code && `code=${code}`, message && `message=${message}`].filter(Boolean).length > 0
+      ? `CONTINUOUS_CATEGORY_FAILED:${[code && `code=${code}`, message && `message=${message}`].filter(Boolean).join("|")}`
+      : "CONTINUOUS_CATEGORY_FAILED";
   }
   return "CONTINUOUS_CATEGORY_FAILED";
 }
@@ -484,7 +486,7 @@ async function discoverQualifiedCandidate(input: {
   type SearchOfferItem = Awaited<ReturnType<ShopeeApiClient["searchOffers"]>>["items"][number];
   type PoolEntry = { query: string; page: number; item: SearchOfferItem; cheap: number };
   const candidatePool: PoolEntry[] = [];
-  const seen = new Set<string>();
+  const seenIdentities = new Set<string>();
 
   const collectPage = async (query: string, page: number) => {
     searchedPages.push(page);
@@ -500,16 +502,17 @@ async function discoverQualifiedCandidate(input: {
     for (const item of search.items) {
       if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
       if (hasBlockedProfileTerm(input.profile, item.name)) { metrics.candidatesRejected += 1; continue; }
-      const key = `${item.shopId}:${item.itemId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const identityKey = `${item.shopId}:${item.itemId}`;
+      if (seenIdentities.has(identityKey)) continue;
+      seenIdentities.add(identityKey);
       candidatePool.push({ query, page, item, cheap: cheapProfileScore(input.profile, item.name) });
     }
   };
 
   for (const query of queries) await collectPage(query, 1);
   const recallTarget = Math.max(24, input.budget * 2);
-  const lexicalRecallCount = () => candidatePool.filter(entry => entry.cheap > -1000).length;
+  const lexicalEntries = candidatePool;
+  const lexicalRecallCount = () => lexicalEntries.filter(entry => entry.cheap > -1000).length;
   if (lexicalRecallCount() < recallTarget) {
     for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
       const pages = discoveryPages(input.cycleNumber, input.profile.category, queryIndex);
@@ -533,8 +536,9 @@ async function discoverQualifiedCandidate(input: {
   const categoryThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100);
   const rankedPool = candidatePool.filter(entry => {
     if (entry.cheap > -1000) return true;
+    if (semantic.status !== "ok") return false;
     const decision = semanticByIdentity.get(`${entry.item.shopId}:${entry.item.itemId}`);
-    return semantic.status === "ok" && Boolean(decision?.worthEnriching && decision.fitScore >= rescueThreshold && decision.categoryFit >= categoryThreshold);
+    return Boolean(decision?.worthEnriching && decision.fitScore >= rescueThreshold && decision.categoryFit >= categoryThreshold);
   });
   rankedPool.sort((a, b) => semanticEntryScore(b.cheap, b.page, semanticByIdentity.get(`${b.item.shopId}:${b.item.itemId}`)) - semanticEntryScore(a.cheap, a.page, semanticByIdentity.get(`${a.item.shopId}:${a.item.itemId}`)));
 

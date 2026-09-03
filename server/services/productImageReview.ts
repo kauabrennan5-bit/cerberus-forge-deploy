@@ -436,16 +436,24 @@ function extractOpenAIOutputText(value: unknown): string {
 }
 
 async function openaiReviewWithResponsesApi(input: OpenAIReviewInput): Promise<ProductImageAssessment[]> {
-  const payload = await callOpenAIResponses({
-    apiKey: input.apiKey,
-    request: buildOpenAIReviewRequest(input.downloaded, input.title, input.model),
-    timeoutMs: input.timeoutMs,
-    fetchImpl: input.fetchImpl || fetch,
-    maxAttempts: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_MAX_ATTEMPTS, 4),
-    maxConcurrency: positiveInt(process.env.OPENAI_GLOBAL_MAX_CONCURRENCY, 2),
-    singleFlightKey: `image-review:${input.model}:${input.title}:${input.downloaded.map(image => image.url).join("|")}`,
-  });
-  return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(extractOpenAIOutputText(payload)));
+  try {
+    const payload = await callOpenAIResponses({
+      apiKey: input.apiKey,
+      request: buildOpenAIReviewRequest(input.downloaded, input.title, input.model),
+      timeoutMs: input.timeoutMs,
+      fetchImpl: input.fetchImpl || fetch,
+      maxAttempts: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_MAX_ATTEMPTS, 4),
+      maxConcurrency: positiveInt(process.env.OPENAI_GLOBAL_MAX_CONCURRENCY, 2),
+      singleFlightKey: `image-review:${input.model}:${input.title}:${input.downloaded.map(image => image.url).join("|")}`,
+    });
+    return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(extractOpenAIOutputText(payload)));
+  } catch (error) {
+    if (error instanceof OpenAIProviderError && error.httpStatus !== null) {
+      const code = safeOpenAIErrorCode(error.errorCode);
+      throw new Error(`OPENAI_IMAGE_REVIEW_HTTP_${error.httpStatus}${code ? `_${code.toUpperCase()}` : ""}`);
+    }
+    throw error;
+  }
 }
 
 async function reviewWithProvider(input: {

@@ -345,7 +345,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   const dailyTarget = dailyTargetPerCategory(productsBefore, now, env);
   const beforePolicy = calculateCategoryPolicy(productsBefore, dailyTarget);
   const countsBefore = beforePolicy.categoryCounts;
-  const recoveryMode = beforePolicy.totalDeficit > 0;
+  const recoveryMode = totalDeficit(countsBefore, dailyTarget) > 0;
   const activeBefore = productsBefore.filter(isActivePublished).length;
 
   // Deficit categories are now a hard pre-enrichment scope. Complete categories
@@ -363,6 +363,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     ),
   };
 
+  // Growth is cumulative: never archived merely because a category crossed a fixed cap.
   const result = await runAutonomousCuratorContinuousV2Base({
     ...options,
     ...(shopeeClient ? { shopeeClient } : {}),
