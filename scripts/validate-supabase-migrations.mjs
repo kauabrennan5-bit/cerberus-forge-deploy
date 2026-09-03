@@ -6,6 +6,20 @@ const files = fs.readdirSync(migrationsDir)
   .filter((name) => name.endsWith('.sql'))
   .sort((a, b) => a.localeCompare(b));
 
+const expectedLiveTables = new Set([
+  'affiliate_links', 'affiliate_providers', 'agent_executions',
+  'autonomous_curator_candidates', 'autonomous_curator_config', 'autonomous_curator_runs',
+  'candidate_assessment', 'candidate_evidence', 'candidates', 'catalog_categories',
+  'commercial_artifacts', 'commercial_cycle_steps', 'commercial_cycles', 'commercial_decisions', 'commercial_signals',
+  'email_campaign_products', 'email_campaign_recipients', 'email_campaign_telegram_cards', 'email_campaigns',
+  'experiments', 'filter_definitions', 'job_queue', 'newsletter_outbox', 'newsletter_subscribers',
+  'newsletter_weekly_runtime_config', 'operational_events', 'operational_incidents', 'operational_operations',
+  'operational_recovery_attempts', 'operator_state', 'policy_evaluations', 'product_availability_observed',
+  'product_clicks', 'product_image_editorial_reviews', 'product_image_observed', 'product_price_observed',
+  'product_publication_authorizations', 'product_rotation_requests', 'product_source_identities',
+  'product_source_observed', 'products', 'publication_executions', 'social_links', 'telegram_pending_reviews',
+]);
+
 const errors = [];
 const versions = new Map();
 
@@ -61,9 +75,14 @@ for (const item of missingReferences.values()) {
   errors.push(`missing bootstrap table public.${item.table}: first ${item.kind} seen in ${item.file} before any tracked CREATE TABLE`);
 }
 
+const absentFromTrackedMigrations = [...expectedLiveTables]
+  .filter((table) => !createdTables.has(table))
+  .sort();
+
 console.log(`Supabase migration files: ${files.length}`);
 console.log(`Unique migration versions: ${versions.size}`);
 console.log(`Tracked CREATE TABLE objects: ${createdTables.size}`);
+console.log(`LIVE tables absent from tracked CREATE TABLE statements: ${absentFromTrackedMigrations.join(', ') || '(none)'}`);
 
 if (errors.length) {
   console.error('\nMigration integrity errors:');
