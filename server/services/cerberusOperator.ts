@@ -1,1131 +1,144 @@
-import fs from "fs";
-import path from "path";
-import { supabase, getProducts } from "../repositories/productsRepository";
-import { exportStaticProductsJson } from "./exportProductsJson";
-import { syncCatalogAndDeploy } from "./catalogSync";
-import { getProductPipelineTelemetry } from "./productPipeline";
+import type {
+  ComponentHealth,
+  HealthStatus,
+  HistoryRecord,
+  OperatorSystemReport,
+} from "./cerberusOperatorLegacy";
 import {
-  type AutoHealActionResult,
-  type AutoHealMode,
-  type AutoHealContext,
-  type AutoHealRisk,
-  type SafeAction,
-  SafeAutoHealEngine,
-} from "./safeAutoHealEngine";
+  getOperatorMode,
+  getOperatorPersistenceState,
+  getRecentCorrections,
+} from "./cerberusOperatorLegacy";
+export {
+  AVAILABLE_OPERATOR_ACTIONS,
+  approveOperatorAction,
+  getAutoHealAuditLog,
+  getEscalatedIncidents,
+  getIncidents,
+  getOperationalState,
+  getOperatorMode,
+  getOperatorPersistenceState,
+  getOperatorStateHistory,
+  getPendingApprovals,
+  getRecentCorrections,
+  requestOperatorApproval,
+  runSafeAutoHeal,
+  setOperatorMode,
+} from "./cerberusOperatorLegacy";
+export type {
+  ComponentHealth,
+  HealthStatus,
+  HistoryRecord,
+  Incident,
+  IncidentSeverity,
+  IncidentStatus,
+  OperatorActionView,
+  OperatorMode,
+  OperatorSystemReport,
+  PendingApproval,
+} from "./cerberusOperatorLegacy";
 import {
-  decideRecovery,
-  OperationalStateStore,
   OperatorStateMachine,
-  type OperationalStateSnapshot,
-  type StateTransition,
+  OperationalStateStore,
+  type ComponentObservation,
 } from "./operatorAutonomy";
 import {
-  getOperatorPersistenceStatus,
-  loadPersistedOperatorState,
-  persistOperatorState,
-} from "./operatorStateStore";
-import {
-  createOperationId,
-  createOperationalDiagnostic,
-  sanitizeOperationalText,
-  type DependencyName,
-  type OperationalDiagnostic,
-} from "./operationalDiagnostics";
-import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
-import {
-  persistOperationalIncident,
-  persistOperationalOperation,
-  persistOperationalRecoveryAttempt,
-  type OperationalIncident,
-  type OperationalOperation,
-  type OperationalMemoryOutcome,
-} from "../repositories/operationalMemoryRepository";
+  runOperatorHealthChecksV2,
+  type OperatorHealthObservation,
+} from "./operatorHealthChecksV2";
+import { synchronizeOperatorIncidents } from "./operatorIncidentRecovery";
 
-export type HealthStatus = "HEALTHY" | "DEGRADED" | "DOWN" | "UNKNOWN";
-export type IncidentSeverity = "INFO" | "WARNING" | "ERROR" | "CRITICAL";
-export type IncidentStatus = "OPEN" | "INVESTIGATING" | "AUTO_FIXING" | "RESOLVED" | "FAILED" | "REQUIRES_APPROVAL" | "ESCALATED";
-export type OperatorMode = AutoHealMode;
-
-export interface ComponentHealth {
-  name: string;
-  status: HealthStatus;
-  latencyMs: number;
-  timestamp: string;
-  details?: string;
-  version?: string;
-  error?: string;
-  httpStatus?: number;
-  operationId?: string;
-  diagnostic?: OperationalDiagnostic;
-}
-
-export interface OperatorSystemReport {
-  overallStatus: HealthStatus;
-  mode: OperatorMode;
-  components: Record<string, ComponentHealth>;
-  activeIncidentsCount: number;
-  recentCorrectionsCount: number;
-  lastCheckAt: string;
-  nextCheckAt?: string;
-  autonomyLevel?: 0 | 1 | 2 | 3;
-  operatorState?: string;
-  escalationCount?: number;
-  persistenceStatus?: "UNKNOWN" | "READY" | "SAFE_MODE";
-  persistenceReason?: string;
-}
-
-export interface Incident {
-  id: string;
-  fingerprint: string;
-  type: string;
-  severity: IncidentSeverity;
-  component: string;
-  detection: string;
-  diagnosis: string;
-  status: IncidentStatus;
-  actionTaken: string;
-  result: string;
-  timestamp: string;
-  operationId: string;
-  operation: "HEALTH_CHECK" | "AUTO_HEAL";
-  stage: OperationalDiagnostic["stage"];
-  dependency: DependencyName;
-  likelyCause: string;
-  impact: string;
-  recoverability: OperationalDiagnostic["recoverability"];
-  httpStatus?: number;
-  recoveredAt?: string;
-  durationMs?: number;
-}
-
-export interface HistoryRecord {
-  timestamp: string;
-  component: string;
-  status: HealthStatus;
-  latencyMs: number;
-  error?: string;
-}
-
-export interface OperatorActionView {
-  id: string;
-  name: string;
-  description: string;
-  risk: AutoHealRisk;
-  requiresApproval: boolean;
-}
-
-export interface PendingApproval {
-  id: string;
-  actionId: string;
-  incidentId?: string;
-  requestedBy: string;
-  createdAt: string;
-  expiresAt: number;
-}
-
-// Estado em memória e configuração do Operator (Bloco 4)
-let currentMode: OperatorMode = "OBSERVE";
-let incidents: Incident[] = [];
-let healthHistory: HistoryRecord[] = [];
-let recentCorrectionsLog: Array<{ timestamp: string; action: string; result: string }> = [];
-let lastReportCache: OperatorSystemReport | null = null;
-let lastCheckTimestamp: string = "Nunca executado";
-let nextCheckTimestamp: string = "Agendado";
+const CHECK_INTERVAL_MS = 10 * 60 * 1000;
+const MAX_HISTORY_RECORDS = 100;
+const machine = new OperatorStateMachine();
+const stateStore = new OperationalStateStore();
 let schedulerTimer: NodeJS.Timeout | null = null;
-let consecutiveFailures: Record<string, number> = {};
-let pendingApprovals: PendingApproval[] = [];
-let operatorPersistenceReady = false;
-let operatorPersistenceReason = "Persistência ainda não inicializada.";
-const operatorStateMachine = new OperatorStateMachine();
-const operationalStateStore = new OperationalStateStore();
+let lastReport: OperatorSystemReport | null = null;
+let healthHistory: HistoryRecord[] = [];
 
-const CONFIG = {
-  checkIntervalMs: 10 * 60 * 1000, // 10 minutos (conservador para evitar cold start excessivo no Render)
-  maxHistoryRecords: 100,
-  maxIncidents: 50,
-  failureThresholdForError: 3 // 3 falhas consecutivas elevam para ERROR persistente
-};
-
-const BACKEND_PRODUCTS_URL = process.env.CATALOG_API_URL || "https://cerberus-forge-deploy-backend.onrender.com/api/products";
-const STATIC_CATALOG_URL = "https://cerberus-static-catalog.onrender.com/data/products.json";
-const GITHUB_MAIN_URL = "https://api.github.com/repos/kauabrennan5-bit/cerberus-forge-deploy/branches/main";
-
-async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<any> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { "User-Agent": "cerberus-operator" } });
-    if (!response.ok) {
-      const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
-      error.status = response.status;
-      throw error;
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+function healthStatus(status: OperatorHealthObservation["status"]): HealthStatus {
+  if (status === "RECOVERING") return "DEGRADED";
+  return status;
 }
 
-async function fetchResponseWithTimeout(url: string, timeoutMs = 15_000): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { method: "HEAD", signal: controller.signal, headers: { "User-Agent": "cerberus-operator" } });
-    if (!response.ok) {
-      const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
-      error.status = response.status;
-      throw error;
-    }
-    return response;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function diagnosticForComponent(component: string, operationId: string, error?: unknown, httpStatus?: number): OperationalDiagnostic {
-  const dependencyMap: Record<string, DependencyName> = {
-    Backend: "Backend", Supabase: "Supabase", Produtos: "Supabase", "Catálogo": "Render Static Site",
-    Tracking: "Supabase", Analytics: "Supabase", Telegram: "Telegram", Site: "Render Static Site",
-    Deploy: "Render Static Site", GitHub: "GitHub",
-  };
-  const dependency = dependencyMap[component] || "Backend";
-  const code = dependency === "Supabase"
-    ? "SUPABASE_PERSISTENCE_ERROR"
-    : dependency === "Render Static Site"
-      ? "PUBLIC_CATALOG_VALIDATION_ERROR"
-      : "UNKNOWN_OPERATION_ERROR";
-  const likelyCause = dependency === "Supabase"
-    ? "Conexão, credencial, RLS ou schema do Supabase não confirmou a operação de leitura."
-    : dependency === "Render Static Site"
-      ? "Artefato público, deploy do Static Site ou propagação CDN não confirmou o estado esperado."
-      : dependency === "Telegram"
-        ? "Token, conectividade ou API do Telegram não confirmou a verificação."
-        : dependency === "GitHub"
-          ? "A branch main ou a API pública do GitHub não respondeu como esperado."
-          : "A dependência não confirmou a operação de health check.";
-  return createOperationalDiagnostic({
-    operationId,
-    operation: "HEALTH_CHECK",
-    stage: "HEALTH_CHECK",
-    dependency,
-    code,
-    message: error ? sanitizeOperationalText(error) : `A verificação de ${component} não confirmou saúde operacional.`,
-    likelyCause,
-    impact: `O componente ${component} não pode ser considerado operacional até nova validação.`,
-    recoverability: component === "Catálogo" ? "ADMIN_APPROVAL" : "AUTO",
-    retryable: true,
-    httpStatus,
-    cause: error,
-  });
-}
-
-function operationalReportIsHealthy(report: OperatorSystemReport): boolean {
-  const critical = ["Backend", "Supabase", "Produtos", "Catálogo", "Tracking", "Analytics", "Telegram", "Site"];
-  return critical.every(name => report.components[name]?.status === "HEALTHY");
-}
-
-export function setOperatorMode(mode: OperatorMode): void {
-  if (mode !== "OBSERVE" && !operatorPersistenceReady) {
-    currentMode = "OBSERVE";
-    console.warn(`[OPERATOR] ${mode} bloqueado: estado crítico não persistido. Motivo: ${operatorPersistenceReason}`);
-    return;
-  }
-  currentMode = mode;
-  console.log(`[OPERATOR] Modo operacional alterado para: ${mode}`);
-}
-
-export function getOperatorMode(): OperatorMode {
-  return currentMode;
-}
-
-export function getIncidents(): Incident[] {
-  return incidents;
-}
-
-export function getHealthHistory(): HistoryRecord[] {
-  return healthHistory;
-}
-
-export function getRecentCorrections(): Array<{ timestamp: string; action: string; result: string }> {
-  return recentCorrectionsLog;
-}
-
-export function getOperationalState(): OperationalStateSnapshot {
-  return operationalStateStore.snapshot(currentMode, operatorStateMachine);
-}
-
-export function getOperatorPersistenceState(): { ready: boolean; status: "UNKNOWN" | "READY" | "SAFE_MODE"; reason: string } {
-  const status = getOperatorPersistenceStatus();
-  return { ready: operatorPersistenceReady, status: status.status, reason: operatorPersistenceReason || status.reason };
-}
-
-export function getOperatorStateHistory(): StateTransition[] {
-  return operatorStateMachine.getHistory();
-}
-
-export function getEscalatedIncidents(): Incident[] {
-  return incidents.filter(incident => incident.status === "ESCALATED");
-}
-
-function moveOperatorState(to: Parameters<OperatorStateMachine["transition"]>[0], reason: string): StateTransition | undefined {
-  try {
-    return operatorStateMachine.transition(to, reason);
-  } catch (error) {
-    // O estado é fail-safe: não força transição inválida nem interrompe funções fundamentais.
-    console.warn(`[OPERATOR STATE] Transição ignorada: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
-  }
-}
-
-function catalogOutputPath(): string {
-  return path.join(process.cwd(), "public", "data", "products.json");
-}
-
-async function readCatalogSnapshot(): Promise<string | null> {
-  try {
-    return await fs.promises.readFile(catalogOutputPath(), "utf-8");
-  } catch {
-    return null;
-  }
-}
-
-async function restoreCatalogSnapshot(snapshot: string | null | undefined): Promise<void> {
-  if (typeof snapshot !== "string") return;
-  await fs.promises.mkdir(path.dirname(catalogOutputPath()), { recursive: true });
-  await fs.promises.writeFile(catalogOutputPath(), snapshot, "utf-8");
-}
-
-async function canonicalProductsAvailable(): Promise<{ ok: boolean; details: string }> {
-  if (!supabase) return { ok: false, details: "Supabase não inicializado." };
-  const products = await getProducts();
-  if (!Array.isArray(products) || products.length === 0) {
-    return { ok: false, details: "Fonte canônica não retornou produtos válidos." };
-  }
-  return { ok: true, details: `${products.length} produtos canônicos disponíveis.` };
-}
-
-const SAFE_ACTIONS: SafeAction<any, any>[] = [
-  {
-    id: "REVALIDATE_SERVICES",
-    name: "🔄 Revalidar serviços",
-    description: "Repete os health checks sem alterar infraestrutura ou dados.",
-    risk: "LOW",
-    allowed: true,
-    timeoutMs: 30_000,
-    cooldownMs: 60_000,
-    maxRetries: 1,
-    retryable: true,
-    preconditions: async () => ({ ok: true, details: "Diagnóstico não invasivo permitido." }),
-    execute: async () => runSystemHealthCheck(),
-    validate: async report => ({
-      ok: operationalReportIsHealthy(report),
-      details: `Health check crítico retornou ${report.overallStatus}.`,
-    }),
-  },
-  {
-    id: "REGENERATE_STATIC_CATALOG",
-    name: "📦 Regenerar catálogo estático",
-    description: "Regenera a projeção local a partir de public.products e valida IDs, slugs e quantidade.",
-    risk: "LOW",
-    allowed: true,
-    timeoutMs: 30_000,
-    cooldownMs: 10 * 60_000,
-    maxRetries: 0,
-    retryable: false,
-    preconditions: async () => canonicalProductsAvailable(),
-    snapshot: async () => readCatalogSnapshot(),
-    execute: async () => {
-      const canonical = await getProducts();
-      const exportedCount = await exportStaticProductsJson();
-      const json = JSON.parse(await fs.promises.readFile(catalogOutputPath(), "utf-8"));
-      return { canonical, exportedCount, json };
-    },
-    validate: async result => {
-      if (!Array.isArray(result.json) || result.json.length === 0) {
-        return { ok: false, details: "A projeção gerada está vazia." };
-      }
-      if (result.exportedCount !== result.json.length) {
-        return { ok: false, details: "Contagem exportada difere do arquivo gerado." };
-      }
-      const canonicalValid = result.canonical.filter(product => product.ativo !== false && product.status === "published");
-      const jsonIds = new Set(result.json.map((product: any) => product.id));
-      const missing = canonicalValid.filter(product => !jsonIds.has(product.id));
-      const unexpected = result.json.filter((product: any) => !canonicalValid.some(item => item.id === product.id));
-      const invalidIdentity = result.json.some((product: any) => !product.id || !product.slug || !product.produto || !product.link);
-      return {
-        ok: missing.length === 0 && unexpected.length === 0 && !invalidIdentity,
-        details: missing.length > 0 || unexpected.length > 0
-          ? `Projeção divergente: ${missing.length} produto(s) ausente(s) e ${unexpected.length} órfão(s).`
-          : `${result.json.length}/${canonicalValid.length} produtos, IDs e slugs validados.`,
-      };
-    },
-    rollback: async snapshot => restoreCatalogSnapshot(snapshot as string | null | undefined),
-  },
-  {
-    id: "REVALIDATE_TRACKING",
-    name: "🔎 Revalidar tracking",
-    description: "Valida acesso a products e product_clicks sem gerar clique artificial.",
-    risk: "LOW",
-    allowed: true,
-    timeoutMs: 15_000,
-    cooldownMs: 5 * 60_000,
-    maxRetries: 1,
-    retryable: true,
-    preconditions: async () => ({ ok: Boolean(supabase), details: "Cliente Supabase disponível." }),
-    execute: async () => {
-      if (!supabase) throw new Error("Supabase indisponível.");
-      const [productsResult, clicksResult] = await Promise.all([
-        supabase.from("products").select("id").limit(1),
-        supabase.from("product_clicks").select("id").limit(1),
-      ]);
-      if (productsResult.error || clicksResult.error) {
-        throw new Error(productsResult.error?.message || clicksResult.error?.message || "Falha de diagnóstico do tracking.");
-      }
-      return true;
-    },
-    validate: async ok => ({ ok, details: "Tabelas products e product_clicks acessíveis sem inserir dados." }),
-  },
-  {
-    id: "REVALIDATE_ANALYTICS",
-    name: "📊 Revalidar analytics",
-    description: "Executa consulta de diagnóstico em public.product_clicks sem alterar registros.",
-    risk: "LOW",
-    allowed: true,
-    timeoutMs: 15_000,
-    cooldownMs: 5 * 60_000,
-    maxRetries: 1,
-    retryable: true,
-    preconditions: async () => ({ ok: Boolean(supabase), details: "Cliente Supabase disponível." }),
-    execute: async () => {
-      if (!supabase) throw new Error("Supabase indisponível.");
-      const { error } = await supabase.from("product_clicks").select("id, product_id, created_at").limit(1);
-      if (error) throw error;
-      return true;
-    },
-    validate: async ok => ({ ok, details: "Consulta de analytics validada sem alterar dados." }),
-  },
-  {
-    id: "REVALIDATE_GITHUB_SYNC",
-    name: "🔐 Sincronizar catálogo com GitHub",
-    description: "Executa o fluxo canônico versionado de sincronização e valida a projeção pública.",
-    risk: "MEDIUM",
-    allowed: true,
-    requiresApproval: true,
-    timeoutMs: 120_000,
-    cooldownMs: 30 * 60_000,
-    maxRetries: 0,
-    retryable: false,
-    preconditions: async () => canonicalProductsAvailable(),
-    execute: async () => syncCatalogAndDeploy(),
-    validate: async result => ({
-      ok: result.success && result.publicJsonCount >= result.supabaseCount,
-      details: result.success
-        ? `Sincronização validada: ${result.publicJsonCount}/${result.supabaseCount} produtos públicos.`
-        : result.error || "A sincronização não foi validada.",
-    }),
-  },
-];
-
-function toOperationalIncident(incident: Incident): OperationalIncident {
-  const status: OperationalIncident["status"] =
-    incident.status === "RESOLVED" ? "RESOLVED" :
-    incident.status === "AUTO_FIXING" ? "RECOVERING" :
-    ["REQUIRES_APPROVAL", "ESCALATED", "FAILED"].includes(incident.status) ? "BLOCKED" :
-    incident.status === "INVESTIGATING" ? "ACKNOWLEDGED" : "OPEN";
+function componentHealth(observation: OperatorHealthObservation): ComponentHealth {
+  const diagnostic = observation.diagnostic || {};
   return {
-    incidentId: incident.id,
-    incidentType: incident.type,
-    fingerprint: incident.fingerprint,
-    severity: incident.severity,
-    status,
-    createdAt: incident.timestamp,
-    updatedAt: new Date().toISOString(),
-    source: "cerberusOperator",
-    correlationId: incident.operationId,
-    operationId: incident.operationId,
-    summary: incident.diagnosis,
-    errorCode: incident.type,
-    impact: incident.impact,
-    recoverability: incident.recoverability,
-    metadata: {
-      component: incident.component,
-      detection: incident.detection,
-      actionTaken: incident.actionTaken,
-      result: incident.result,
-      stage: incident.stage,
-      dependency: incident.dependency,
-      httpStatus: incident.httpStatus,
-    },
+    name: observation.name,
+    status: healthStatus(observation.status),
+    latencyMs: observation.latencyMs,
+    timestamp: observation.timestamp,
+    error: observation.error,
+    httpStatus: observation.httpStatus,
+    details: Object.keys(diagnostic).length > 0 ? JSON.stringify(diagnostic) : undefined,
   };
 }
 
-function persistIncidentSnapshot(incident: Incident): void {
-  void persistOperationalIncident(toOperationalIncident(incident)).catch(error => {
-    console.warn(`[MEMORY] memory.persistence.failed incidentId=${incident.id} reason=${sanitizeOperationalText(error)}`);
-  });
+function overallStatus(components: Record<string, ComponentHealth>): HealthStatus {
+  const statuses = Object.values(components).map(component => component.status);
+  if (statuses.includes("DOWN")) return "DOWN";
+  if (statuses.includes("DEGRADED") || statuses.includes("UNKNOWN")) return "DEGRADED";
+  return "HEALTHY";
 }
 
-async function persistCriticalAutoHealState(state: import("./safeAutoHealEngine").PersistedAutoHealState): Promise<void> {
-  const persisted = await persistOperatorState({
-    stateKey: state.stateKey,
-    actionId: state.actionId,
-    incidentId: state.incidentId,
-    circuitState: state.circuitOpenUntil && state.circuitOpenUntil > Date.now() ? "OPEN" : "CLOSED",
-    failureCount: state.failureCount,
-    retryCount: state.retryCount,
-    lastExecutionAt: state.lastExecutionAt,
-    cooldownUntil: state.cooldownUntil,
-    circuitOpenUntil: state.circuitOpenUntil,
-    lastTransitionAt: Date.now(),
-  });
-  if (!persisted) {
-    operatorPersistenceReady = false;
-    operatorPersistenceReason = "Falha ao persistir o estado de auto-heal; modo OBSERVE imposto por segurança.";
-    currentMode = "OBSERVE";
-    throw new Error("OPERATOR_STATE_PERSISTENCE_ERROR");
-  }
-}
-
-const autoHealEngine = new SafeAutoHealEngine(
-  SAFE_ACTIONS,
-  undefined,
-  undefined,
-  undefined,
-  undefined,
-  persistCriticalAutoHealState,
-);
-
-export async function initializeOperatorState(): Promise<{ ready: boolean; reason: string }> {
-  const loaded = await loadPersistedOperatorState();
-  if (!loaded.ok) {
-    operatorPersistenceReady = false;
-    operatorPersistenceReason = loaded.reason || "Persistência não confirmada.";
-    currentMode = "OBSERVE";
-    console.warn(`[OPERATOR] Boot recovery em SAFE_MODE: ${operatorPersistenceReason}`);
-    return { ready: false, reason: operatorPersistenceReason };
-  }
-
-  autoHealEngine.hydrate(loaded.states);
-  operatorPersistenceReady = true;
-  operatorPersistenceReason = `${loaded.states.length} estados críticos restaurados.`;
-  currentMode = "OBSERVE";
-  console.log(`[OPERATOR] Boot recovery concluído: ${operatorPersistenceReason}`);
-  return { ready: true, reason: operatorPersistenceReason };
-}
-
-function suggestedActionFor(component: string): string | null {
-  const map: Record<string, string> = {
-    "Catálogo": "REVALIDATE_GITHUB_SYNC",
-    "Tracking": "REVALIDATE_TRACKING",
-    "Analytics": "REVALIDATE_ANALYTICS",
-    "Site": "REVALIDATE_SERVICES",
-    "Deploy": "REVALIDATE_SERVICES",
+function toStateObservation(observation: OperatorHealthObservation): ComponentObservation {
+  return {
+    name: observation.name,
+    status: observation.status,
+    timestamp: observation.timestamp,
+    latencyMs: observation.latencyMs,
+    error: observation.error,
   };
-  return map[component] || null;
 }
 
-export const AVAILABLE_OPERATOR_ACTIONS: OperatorActionView[] = SAFE_ACTIONS.map(action => ({
-  id: action.id,
-  name: action.name,
-  description: action.description,
-  risk: action.risk,
-  requiresApproval: Boolean(action.requiresApproval),
-}));
-
-export function getAutoHealAuditLog() {
-  return autoHealEngine.getAuditLog();
-}
-
-export function getPendingApprovals(): PendingApproval[] {
-  const now = Date.now();
-  pendingApprovals = pendingApprovals.filter(approval => approval.expiresAt > now);
-  return pendingApprovals;
-}
-
-export function requestOperatorApproval(actionId: string, incidentId: string | undefined, requestedBy: string): PendingApproval | null {
-  const action = SAFE_ACTIONS.find(item => item.id === actionId);
-  if (!action || !action.allowed) return null;
-  const approval: PendingApproval = {
-    id: `APR-${Date.now().toString(36)}`,
-    actionId,
-    incidentId,
-    requestedBy,
-    createdAt: new Date().toISOString(),
-    expiresAt: Date.now() + 15 * 60_000,
-  };
-  pendingApprovals.unshift(approval);
-  return approval;
-}
-
-export async function approveOperatorAction(approvalId: string, adminId: string): Promise<AutoHealActionResult | null> {
-  const approval = getPendingApprovals().find(item => item.id === approvalId);
-  if (!approval) return null;
-  pendingApprovals = pendingApprovals.filter(item => item.id !== approvalId);
-  const previousMode = currentMode;
-  currentMode = "ADMIN_APPROVAL";
-  try {
-    return await runSafeAutoHeal(approval.actionId, { incidentId: approval.incidentId, actor: "ADMIN", adminId });
-  } finally {
-    currentMode = previousMode;
-  }
-}
-
-function recoveryOutcomeFor(status: AutoHealActionResult["status"]): OperationalMemoryOutcome {
-  if (status === "SUCCESS") return "SUCCESS";
-  if (["FAILED", "TIMEOUT", "CIRCUIT_OPEN", "BUDGET_EXCEEDED", "FORBIDDEN"].includes(status)) return "FAILED";
-  if (["APPROVAL_REQUIRED", "COOLDOWN"].includes(status)) return "BLOCKED";
-  return "SKIPPED";
-}
-
-function operationStatusFor(status: AutoHealActionResult["status"]): OperationalOperation["status"] {
-  return recoveryOutcomeFor(status) === "SUCCESS" ? "SUCCEEDED" :
-    recoveryOutcomeFor(status) === "BLOCKED" ? "BLOCKED" :
-    recoveryOutcomeFor(status) === "FAILED" ? "FAILED" : "CANCELLED";
-}
-
-export async function runSafeAutoHeal(actionId: string, context: AutoHealContext): Promise<AutoHealActionResult> {
-  const operationId = createOperationId("HEAL");
-  const startedAt = new Date().toISOString();
-  const operation: OperationalOperation = {
-    operationId,
-    operationType: "SAFE_AUTO_HEAL",
-    status: "RUNNING",
-    actor: context.actor === "ADMIN" ? "human" : "operator",
-    correlationId: operationId,
-    attempt: 1,
-    createdAt: startedAt,
-    startedAt,
-    metadata: { actionId, incidentId: context.incidentId },
-    schemaVersion: "1.0",
-  };
-  void persistOperationalOperation(operation).catch(error => {
-    console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`);
-  });
-  moveOperatorState("HEALING", `Ação registrada selecionada: ${actionId}.`);
-  const result = await autoHealEngine.run(actionId, currentMode, context);
-  const completedAt = new Date().toISOString();
-  const recoveryOutcome = recoveryOutcomeFor(result.status);
-  void persistOperationalOperation({
-    ...operation,
-    status: operationStatusFor(result.status),
-    completedAt,
-    resultCode: result.status,
-    errorCode: recoveryOutcome === "FAILED" ? result.status : undefined,
-  }).catch(error => {
-    console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`);
-  });
-  if (context.incidentId) {
-    void persistOperationalRecoveryAttempt({
-      attemptId: `${operationId}-ATT-1`,
-      incidentId: context.incidentId,
-      operationId,
-      attemptNumber: 1,
-      strategy: actionId,
-      startedAt,
-      completedAt,
-      outcome: recoveryOutcome,
-      errorCode: recoveryOutcome === "FAILED" ? result.status : undefined,
-      metadata: { actor: context.actor, adminId: context.adminId },
-    }).catch(error => {
-      console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`);
-    });
-  }
-
-  const incident = context.incidentId ? incidents.find(item => item.id === context.incidentId) : undefined;
-  if (incident) {
-    incident.actionTaken = actionId;
-    incident.result = result.message;
-    if (result.status === "SUCCESS") {
-      moveOperatorState("VALIDATING", `Validação pós-ação: ${actionId}.`);
-      const postActionReport = await runSystemHealthCheck();
-      const component = postActionReport.components[incident.component];
-      if (component?.status === "HEALTHY") {
-        moveOperatorState("RECOVERING", `Recuperação confirmada: ${actionId}.`);
-        incident.status = "RESOLVED";
-        incident.recoveredAt = new Date().toISOString();
-        incident.result = `Recuperado após health check pós-ação. ${result.message}`;
-        moveOperatorState("RESOLVED", `Incidente ${incident.id} validado como recuperado.`);
-      } else {
-        incident.status = "ESCALATED";
-        incident.result = `Ação terminou, mas ${incident.component} permanece ${component?.status || "UNKNOWN"} após validação pós-ação.`;
-        operationalStateStore.markEscalated();
-        moveOperatorState("ESCALATED", `Recuperação não confirmada para incidente ${incident.id}.`);
-      }
-    }
-    if (result.status === "FAILED" || result.status === "TIMEOUT" || result.status === "CIRCUIT_OPEN") {
-      incident.status = "ESCALATED";
-      incident.result = `${result.message} Escalado para administrador.`;
-      operationalStateStore.markEscalated();
-      moveOperatorState("ESCALATED", `Ação ${actionId} falhou ou atingiu proteção contra loops.`);
-    }
-    if (result.status === "APPROVAL_REQUIRED") {
-      incident.status = "REQUIRES_APPROVAL";
-      moveOperatorState("WAITING_APPROVAL", `Ação ${actionId} requer aprovação explícita.`);
-    }
-    persistIncidentSnapshot(incident);
-  }
-  recentCorrectionsLog.unshift({
-    timestamp: new Date().toLocaleTimeString("pt-BR"),
-    action: actionId,
-    result: `${result.status}: ${result.message}`,
-  });
-  if (recentCorrectionsLog.length > 50) recentCorrectionsLog.length = 50;
-  console.log(`[ACTION] ${actionId} => ${result.status}`);
-  return result;
-}
-
-/**
- * Executa o ciclo completo de monitoramento contínuo (Heartbeat & Anomaly Detection)
- */
 export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
-  moveOperatorState("CHECKING", "Início de health check periódico ou manual.");
-  const operationId = createOperationId("HC");
-  const now = new Date().toISOString();
-  const timeStr = new Date().toLocaleTimeString("pt-BR");
-  lastCheckTimestamp = timeStr;
-  
-  const nextDate = new Date(Date.now() + CONFIG.checkIntervalMs);
-  nextCheckTimestamp = nextDate.toLocaleTimeString("pt-BR");
-
-  const components: Record<string, ComponentHealth> = {};
-
-  // 1. Backend: endpoint canônico responde com coleção válida.
-  const t0Backend = Date.now();
-  try {
-    const backendJson = await fetchJsonWithTimeout(BACKEND_PRODUCTS_URL);
-    const backendProducts = backendJson.products || backendJson.data || backendJson;
-    if (!Array.isArray(backendProducts)) throw new Error("Resposta não contém coleção de produtos.");
-    components["Backend"] = {
-      name: "Backend",
-      status: "HEALTHY",
-      latencyMs: Date.now() - t0Backend,
-      timestamp: now,
-      details: `API respondeu ${backendProducts.length} produtos.`,
-      operationId,
-    };
-  } catch (err: any) {
-    components["Backend"] = {
-      name: "Backend",
-      status: "DOWN",
-      latencyMs: Date.now() - t0Backend,
-      timestamp: now,
-      error: err?.message || "Endpoint de backend indisponível.",
-      httpStatus: err?.status,
-      operationId,
-      diagnostic: diagnosticForComponent("Backend", operationId, err, err?.status),
-    };
+  machine.beginHealthCheck("Início de health check V2 periódico ou manual.");
+  const result = await runOperatorHealthChecksV2();
+  if (machine.getState() === "CHECKING") {
+    machine.transition("DIAGNOSING", "Health V2 coletado; reconciliando incidentes persistidos.");
   }
-
-  // 2. Supabase
-  const t0Supabase = Date.now();
-  try {
-    if (!supabase) throw new Error("Cliente Supabase não inicializado.");
-    const { error } = await supabase.from("products").select("id").limit(1);
-    const latency = Date.now() - t0Supabase;
-    if (error) throw error;
-    components["Supabase"] = {
-      name: "Supabase",
-      status: latency > 4000 ? "DEGRADED" : "HEALTHY",
-      latencyMs: latency,
-      timestamp: now,
-      operationId,
-    };
-  } catch (err: any) {
-    components["Supabase"] = {
-      name: "Supabase",
-      status: "DOWN",
-      latencyMs: Date.now() - t0Supabase,
-      timestamp: now,
-      error: err?.message || String(err),
-      operationId,
-      diagnostic: diagnosticForComponent("Supabase", operationId, err),
-    };
+  const incidentSync = await synchronizeOperatorIncidents(result.observations);
+  const components = Object.fromEntries(result.observations.map(observation => [observation.name, componentHealth(observation)] as const));
+  const failing = result.observations.filter(observation => observation.status === "DOWN" || observation.status === "DEGRADED");
+  const incidentsByComponent = Object.fromEntries(failing.map(observation => [observation.name, `health:${observation.name}`] as const));
+  let transition;
+  if (failing.length === 0 && machine.getState() === "DIAGNOSING") {
+    transition = machine.transition("RESOLVED", "Todos os componentes independentes estão saudáveis.");
   }
-
-  // 3. Produtos: fonte canônica e integridade mínima.
-  let canonicalProducts: any[] = [];
-  const t0Products = Date.now();
-  try {
-    canonicalProducts = await getProducts();
-    const invalidProducts = canonicalProducts.filter(product => !product.id || !product.produto || !product.link);
-    components["Produtos"] = {
-      name: "Produtos",
-      status: canonicalProducts.length > 0 && invalidProducts.length === 0 ? "HEALTHY" : "DEGRADED",
-      latencyMs: Date.now() - t0Products,
-      timestamp: now,
-      details: `${canonicalProducts.length} produtos canônicos; ${invalidProducts.length} inválidos.`,
-      operationId,
-    };
-  } catch (err: any) {
-    components["Produtos"] = {
-      name: "Produtos",
-      status: "DOWN",
-      latencyMs: Date.now() - t0Products,
-      timestamp: now,
-      error: err?.message || "Consulta de produtos falhou.",
-      operationId,
-      diagnostic: diagnosticForComponent("Produtos", operationId, err),
-    };
+  stateStore.update(result.observations.map(toStateObservation), incidentsByComponent, transition);
+  const state = stateStore.snapshot(getOperatorMode(), machine);
+  const next = new Date(Date.now() + CHECK_INTERVAL_MS);
+  for (const observation of result.observations) {
+    healthHistory.unshift({ timestamp: observation.timestamp, component: observation.name, status: healthStatus(observation.status), latencyMs: observation.latencyMs, error: observation.error });
   }
-
-  // 4. Catálogo: projeção pública versus produtos canônicos, sem modificar arquivo algum.
-  const t0Catalog = Date.now();
-  try {
-    const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
-    if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("products.json ausente, vazio ou inválido.");
-    const canonicalActive = canonicalProducts.filter(product => product.ativo !== false && product.status === "published");
-    const jsonIds = new Set(staticCatalog.map((product: any) => product.id));
-    const missing = canonicalActive.filter(product => !jsonIds.has(product.id));
-    const unexpected = staticCatalog.filter((product: any) => !canonicalActive.some(item => item.id === product.id));
-    const invalidIdentity = staticCatalog.some((product: any) => !product.id || !product.slug || !product.produto || !product.link);
-    components["Catálogo"] = {
-      name: "Catálogo",
-      status: missing.length === 0 && unexpected.length === 0 && !invalidIdentity ? "HEALTHY" : "DEGRADED",
-      latencyMs: Date.now() - t0Catalog,
-      timestamp: now,
-      details: `${staticCatalog.length}/${canonicalActive.length} produtos projetados; ${missing.length} ausentes; ${unexpected.length} órfãos.`,
-      operationId,
-    };
-  } catch (err: any) {
-    components["Catálogo"] = {
-      name: "Catálogo",
-      status: "DOWN",
-      latencyMs: Date.now() - t0Catalog,
-      timestamp: now,
-      error: err?.message || String(err),
-      httpStatus: err?.status,
-      operationId,
-      diagnostic: diagnosticForComponent("Catálogo", operationId, err, err?.status),
-    };
-  }
-
-  // 4. Lifecycle: observação das propostas processadas nesta instância, sem atuar sobre produtos.
-  const t0Lifecycle = Date.now();
-  const lifecycle = getProductPipelineTelemetry();
-  components["Lifecycle"] = {
-    name: "Lifecycle",
-    status: lifecycle.errors > 0 || lifecycle.pendingApproval > 25 ? "DEGRADED" : "HEALTHY",
-    latencyMs: Date.now() - t0Lifecycle,
-    timestamp: now,
-    details: `${lifecycle.pendingApproval} aguardando aprovação; ${lifecycle.errors} com erro; ${lifecycle.published} publicados no ciclo atual.`,
-    operationId,
+  if (healthHistory.length > MAX_HISTORY_RECORDS) healthHistory = healthHistory.slice(0, MAX_HISTORY_RECORDS);
+  const persistence = getOperatorPersistenceState();
+  lastReport = {
+    overallStatus: overallStatus(components), mode: getOperatorMode(), components,
+    activeIncidentsCount: incidentSync.active, recentCorrectionsCount: getRecentCorrections().length,
+    lastCheckAt: result.checkedAt, nextCheckAt: next.toISOString(), autonomyLevel: state.autonomyLevel,
+    operatorState: state.operatorState, escalationCount: state.escalations,
+    persistenceStatus: persistence.status, persistenceReason: persistence.reason,
   };
-
-  // 5. Tracking: confirma persistência sem gerar clique artificial.
-  const t0Tracking = Date.now();
-  try {
-    if (!supabase) throw new Error("Cliente Supabase não inicializado.");
-    const { error } = await supabase.from("product_clicks").select("id").limit(1);
-    if (error) throw error;
-    components["Tracking"] = { name: "Tracking", status: "HEALTHY", latencyMs: Date.now() - t0Tracking, timestamp: now, details: "public.product_clicks acessível sem inserção.", operationId };
-  } catch (err: any) {
-    components["Tracking"] = { name: "Tracking", status: "DOWN", latencyMs: Date.now() - t0Tracking, timestamp: now, error: err?.message || "Tracking não confirmou acesso à persistência.", operationId, diagnostic: diagnosticForComponent("Tracking", operationId, err) };
-  }
-
-  // 6. Analytics
-  const t0Analytics = Date.now();
-  try {
-    if (!supabase) throw new Error("Supabase inativo");
-    const { error } = await supabase.from("product_clicks").select("id").limit(1);
-    const latency = Date.now() - t0Analytics;
-    if (error) throw error;
-    components["Analytics"] = {
-      name: "Analytics",
-      status: "HEALTHY",
-      latencyMs: latency,
-      timestamp: now,
-      operationId,
-    };
-  } catch (err: any) {
-    components["Analytics"] = {
-      name: "Analytics",
-      status: "DOWN",
-      latencyMs: Date.now() - t0Analytics,
-      timestamp: now,
-      error: err?.message,
-      operationId,
-      diagnostic: diagnosticForComponent("Analytics", operationId, err),
-    };
-  }
-
-  // 7. Telegram: diferenciar token, API, webhook, URL, erros recentes e prontidão do backend.
-  const t0Telegram = Date.now();
-  try {
-    const telegram = await getTelegramWebhookDiagnostics();
-    const webhookValid = telegram.webhookConfigured && telegram.webhookMatchesExpectedUrl === true;
-    const healthy = telegram.apiHealthy && webhookValid && telegram.backendReady && !telegram.webhookLastError;
-    const status: HealthStatus = healthy ? "HEALTHY" : telegram.apiHealthy ? "DEGRADED" : "DOWN";
-    const detail = [
-      telegram.tokenConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
-      telegram.apiHealthy ? "API_OK" : "API_UNAVAILABLE",
-      telegram.webhookConfigured ? (webhookValid ? "WEBHOOK_VALID" : "WEBHOOK_INVALID") : "WEBHOOK_MISSING",
-      telegram.backendReady ? "BACKEND_READY" : "BACKEND_NOT_READY",
-      telegram.webhookLastError ? `LAST_ERROR: ${telegram.webhookLastError}` : undefined,
-    ].filter(Boolean).join(" | ");
-    components["Telegram"] = {
-      name: "Telegram",
-      status,
-      latencyMs: Date.now() - t0Telegram,
-      timestamp: now,
-      details: detail,
-      error: status === "HEALTHY" ? undefined : telegram.webhookLastError || (webhookValid ? undefined : "Webhook ausente ou divergente da URL canônica."),
-      operationId,
-      diagnostic: status === "HEALTHY" ? undefined : diagnosticForComponent("Telegram", operationId, telegram.webhookLastError || "Webhook/API do Telegram não confirmou saúde operacional."),
-    };
-  } catch (err: any) {
-    components["Telegram"] = {
-      name: "Telegram",
-      status: "DEGRADED",
-      latencyMs: Date.now() - t0Telegram,
-      timestamp: now,
-      error: "Falha ao obter diagnóstico seguro do Telegram.",
-      operationId,
-      diagnostic: diagnosticForComponent("Telegram", operationId, err, err?.status),
-    };
-  }
-
-  // 8. Site: disponibilidade HTTP independente da projeção JSON já validada acima.
-  const t0Site = Date.now();
-  try {
-    await fetchResponseWithTimeout((process.env.PUBLIC_SITE_URL || "https://cerberusfinds.com").replace(/\/+$/, ""));
-    const latency = Date.now() - t0Site;
-    components["Site"] = {
-      name: "Site",
-      status: "HEALTHY",
-      latencyMs: latency,
-      timestamp: now,
-      details: "Página pública respondeu ao health check HTTP.",
-      operationId,
-    };
-  } catch (err: any) {
-    components["Site"] = {
-      name: "Site",
-      status: "DEGRADED",
-      latencyMs: Date.now() - t0Site,
-      timestamp: now,
-      error: "Falha ao alcançar site público",
-      httpStatus: err?.status,
-      operationId,
-      diagnostic: diagnosticForComponent("Site", operationId, err, err?.status),
-    };
-  }
-
-  components["Deploy"] = {
-    name: "Deploy",
-    status: "UNKNOWN",
-    latencyMs: 0,
-    timestamp: now,
-    details: "Não verificável diretamente: nenhuma API autenticada do Render foi configurada; site e catálogo são verificados separadamente.",
-    operationId,
-  };
-
-  // 9. GitHub: branch main acessível e versão conhecida, sem escrita remota.
-  const t0GitHub = Date.now();
-  try {
-    const branch = await fetchJsonWithTimeout(GITHUB_MAIN_URL);
-    const sha = branch?.commit?.sha;
-    if (!sha) throw new Error("SHA da branch main indisponível.");
-    components["GitHub"] = {
-      name: "GitHub",
-      status: "HEALTHY",
-      latencyMs: Date.now() - t0GitHub,
-      timestamp: now,
-      version: sha.slice(0, 7),
-      details: "Branch main acessível.",
-      operationId,
-    };
-  } catch (err: any) {
-    components["GitHub"] = {
-      name: "GitHub",
-      status: "UNKNOWN",
-      latencyMs: Date.now() - t0GitHub,
-      timestamp: now,
-      error: "Não foi possível verificar a branch main.",
-      httpStatus: err?.status,
-      operationId,
-      diagnostic: diagnosticForComponent("GitHub", operationId, err, err?.status),
-    };
-  }
-
-  // Registrar histórico e limitar retenção
-  for (const [compName, comp] of Object.entries(components)) {
-    healthHistory.unshift({
-      timestamp: timeStr,
-      component: compName,
-      status: comp.status,
-      latencyMs: comp.latencyMs,
-      error: comp.error
-    });
-  }
-  if (healthHistory.length > CONFIG.maxHistoryRecords) {
-    healthHistory = healthHistory.slice(0, CONFIG.maxHistoryRecords);
-  }
-
-  // Calcular status global determinístico
-  let overallStatus: HealthStatus = "HEALTHY";
-  const statuses = Object.values(components).map(c => c.status);
-  if (statuses.includes("DOWN")) {
-    overallStatus = "DOWN";
-  } else if (statuses.includes("DEGRADED") || statuses.includes("UNKNOWN")) {
-    overallStatus = "DEGRADED";
-  }
-
-  moveOperatorState("DIAGNOSING", "Health check concluído; analisando anomalias e incidentes.");
-
-  // Gerenciamento de Incidentes, Deduplicação por Fingerprint e Recovery Detection
-  const currentlyDownOrDegraded = Object.entries(components).filter(([_, c]) => c.status === "DOWN" || c.status === "DEGRADED");
-  const currentDownNames = new Set(currentlyDownOrDegraded.map(([name]) => name));
-
-  // Verificar incidentes abertos para detectar recuperação (Recovery Detection)
-  for (const inc of incidents) {
-    if (inc.status === "OPEN" || inc.status === "INVESTIGATING") {
-      if (!currentDownNames.has(inc.component)) {
-        // O componente se recuperou!
-        inc.status = "RESOLVED";
-        inc.recoveredAt = timeStr;
-        const startMs = new Date(`${new Date().toDateString()} ${inc.timestamp}`).getTime();
-        inc.durationMs = !isNaN(startMs) ? Date.now() - startMs : 0;
-        console.log(`[RECOVERY] Componente ${inc.component} recuperado com sucesso. Incidente ${inc.id} resolvido.`);
-        persistIncidentSnapshot(inc);
-      }
-    }
-  }
-
-  // Registrar novos incidentes com Deduplicação (Fingerprint) e padrão de falha persistente
-  for (const [compName, comp] of currentlyDownOrDegraded) {
-    consecutiveFailures[compName] = (consecutiveFailures[compName] || 0) + 1;
-    const isPersistent = consecutiveFailures[compName] >= CONFIG.failureThresholdForError;
-    const severity: IncidentSeverity = isPersistent ? "ERROR" : "WARNING";
-    const fingerprint = `${compName}_${comp.status}_${comp.error || 'general'}`;
-
-    const existingOpen = incidents.find(i => i.fingerprint === fingerprint && ["OPEN", "INVESTIGATING", "AUTO_FIXING", "REQUIRES_APPROVAL", "ESCALATED"].includes(i.status));
-    if (!existingOpen) {
-      const newInc: Incident = {
-        id: `INC-${Date.now().toString().slice(-4)}`,
-        fingerprint,
-        type: `${compName}_${comp.status}`,
-        severity,
-        component: compName,
-        detection: `Health check detectou status ${comp.status} (${consecutiveFailures[compName]}ª falha consecutiva)`,
-        diagnosis: comp.diagnostic?.message || comp.error || `A operação de health check não confirmou ${compName}.`,
-        status: "OPEN",
-        actionTaken: "Nenhuma (Monitorando falha)",
-        result: "Pendente",
-        timestamp: new Date().toISOString(),
-        operationId,
-        operation: "HEALTH_CHECK",
-        stage: comp.diagnostic?.stage || "HEALTH_CHECK",
-        dependency: comp.diagnostic?.dependency || "Backend",
-        likelyCause: comp.diagnostic?.likelyCause || "A causa não pôde ser classificada sem evidência adicional.",
-        impact: comp.diagnostic?.impact || `O estado de ${compName} permanece não confirmado.`,
-        recoverability: comp.diagnostic?.recoverability || "MANUAL",
-        httpStatus: comp.httpStatus,
-      };
-        incidents.unshift(newInc);
-        persistIncidentSnapshot(newInc);
-        if (incidents.length > CONFIG.maxIncidents) {
-        incidents = incidents.slice(0, CONFIG.maxIncidents);
-      }
-      console.warn(`[INCIDENT] Novo incidente aberto: ${newInc.id} em ${compName} [${severity}]`);
-      const suggestedAction = suggestedActionFor(compName);
-      const action = suggestedAction ? AVAILABLE_OPERATOR_ACTIONS.find(item => item.id === suggestedAction) : undefined;
-      const decision = decideRecovery({
-        mode: currentMode,
-        risk: action?.risk,
-        hasRegisteredAction: Boolean(action),
-        requiresApproval: action?.requiresApproval,
-        circuitOpen: false,
-        consecutiveFailures: consecutiveFailures[compName],
-        maxFailures: CONFIG.failureThresholdForError,
-      });
-
-      if (decision === "AUTO_HEAL" && suggestedAction) {
-        newInc.status = "AUTO_FIXING";
-        void runSafeAutoHeal(suggestedAction, {
-          incidentId: newInc.id,
-          incidentFingerprint: newInc.fingerprint,
-          actor: "CERBERUS",
-        });
-      } else if (decision === "WAIT_APPROVAL") {
-        newInc.status = "REQUIRES_APPROVAL";
-        newInc.actionTaken = suggestedAction || "Nenhuma ação autorizada";
-        newInc.result = "Ação requer aprovação administrativa explícita.";
-        moveOperatorState("WAITING_APPROVAL", `Incidente ${newInc.id} aguarda aprovação.`);
-      } else if (decision === "ESCALATE") {
-        newInc.status = "ESCALATED";
-        newInc.result = "Sem ação segura disponível, falhas persistentes ou risco elevado. Escalado ao administrador.";
-        operationalStateStore.markEscalated();
-        moveOperatorState("ESCALATED", `Incidente ${newInc.id} não pode ser corrigido com segurança.`);
-        console.warn(`[ESCALATION] ${newInc.id} escalado: ${newInc.result}`);
-      }
-    }
-  }
-
-  // Zerar contador de falhas para componentes saudáveis
-  for (const compName of Object.keys(components)) {
-    if (components[compName].status === "HEALTHY") {
-      consecutiveFailures[compName] = 0;
-    }
-  }
-
-  const activeIncidents = incidents.filter(i => ["OPEN", "INVESTIGATING", "AUTO_FIXING", "REQUIRES_APPROVAL", "ESCALATED"].includes(i.status));
-  const incidentsByComponent = Object.fromEntries(activeIncidents.map(incident => [incident.component, incident.id]));
-  const stateTransition = moveOperatorState(activeIncidents.length === 0 ? "RESOLVED" : operatorStateMachine.getState(), activeIncidents.length === 0 ? "Nenhuma anomalia ativa após diagnóstico." : "Estado operacional atualizado.");
-  operationalStateStore.update(
-    Object.values(components).map(component => ({
-      name: component.name,
-      status: component.status,
-      timestamp: component.timestamp,
-      latencyMs: component.latencyMs,
-      error: component.error,
-    })),
-    incidentsByComponent,
-    stateTransition,
-  );
-  const operationalState = getOperationalState();
-
-  const report: OperatorSystemReport = {
-    overallStatus,
-    mode: currentMode,
-    components,
-    activeIncidentsCount: activeIncidents.length,
-    recentCorrectionsCount: recentCorrectionsLog.length,
-    lastCheckAt: lastCheckTimestamp,
-    nextCheckAt: nextCheckTimestamp,
-    autonomyLevel: operationalState.autonomyLevel,
-    operatorState: operationalState.operatorState,
-    escalationCount: operationalState.escalations,
-    persistenceStatus: getOperatorPersistenceState().status,
-    persistenceReason: getOperatorPersistenceState().reason,
-  };
-
-  lastReportCache = report;
-  return report;
+  return lastReport;
 }
 
-export function getLastReport(): OperatorSystemReport | null {
-  return lastReportCache;
-}
+export function getLastReport(): OperatorSystemReport | null { return lastReport; }
+export function getHealthHistory(): HistoryRecord[] { return [...healthHistory]; }
 
-/**
- * Inicializa o Scheduler em background para monitoramento contínuo
- */
 export function startOperatorScheduler(): void {
   if (schedulerTimer) return;
-  console.log(`[OPERATOR SCHEDULER] Iniciando monitoramento contínuo a cada ${CONFIG.checkIntervalMs / 60000} minutos...`);
-  schedulerTimer = setInterval(async () => {
-    try {
-      console.log("[OPERATOR HEARTBEAT] Executando verificação periódica agendada...");
-      await runSystemHealthCheck();
-    } catch (err) {
-      console.error("[OPERATOR SCHEDULER] Erro no ciclo de verificação:", err);
-    }
-  }, CONFIG.checkIntervalMs);
+  console.log(`[OPERATOR SCHEDULER V2] Health independente a cada ${CHECK_INTERVAL_MS / 60000} minutos.`);
+  schedulerTimer = setInterval(() => {
+    void runSystemHealthCheck().catch(error => {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[OPERATOR SCHEDULER V2] heartbeat failed: ${message.slice(0, 180)}`);
+    });
+  }, CHECK_INTERVAL_MS);
 }
 
 export function stopOperatorScheduler(): void {
-  if (schedulerTimer) {
-    clearInterval(schedulerTimer);
-    schedulerTimer = null;
-  }
+  if (!schedulerTimer) return;
+  clearInterval(schedulerTimer);
+  schedulerTimer = null;
 }
