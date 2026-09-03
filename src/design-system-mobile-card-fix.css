@@ -1,0 +1,61 @@
+/* Mobile catalogue card height correction.
+   Loaded after the Quiet Archive stylesheet to neutralize inherited stretch rules. */
+
+@media (max-width: 760px) {
+  #cerberus-acervo [data-testid='product-card'] {
+    align-self: start !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] > div {
+    display: grid !important;
+    grid-template-columns: minmax(0, 43%) minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+    column-gap: 0.85rem !important;
+    align-items: start !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] > div > div:first-child {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    align-self: start !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 0 0 0.35rem !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] > div > div:nth-child(2) {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+    align-self: start !important;
+    min-height: 0 !important;
+    height: auto !important;
+    aspect-ratio: 1 / 1.05 !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) {
+    grid-column: 2 !important;
+    grid-row: 1 !important;
+    align-self: start !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 1.8rem 0 0 !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:first-child,
+  #cerberus-acervo [data-testid='product-card'] > div > div:nth-child(3) > div:last-child {
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] h3 {
+    font-size: 1rem !important;
+  }
+
+  #cerberus-acervo [data-testid='product-card'] h3 + p {
+    font-size: 0.58rem !important;
+  }
+}
