@@ -3,7 +3,7 @@ import { ArrowDown, Pause, Play, RotateCcw } from 'lucide-react';
 import type { Mesh, Object3D, Texture } from 'three';
 import type { OrbitControls as OrbitControlsInstance } from 'three/examples/jsm/controls/OrbitControls.js';
 
-const NEXBOT_MODEL_URL = '/assets/3d/nexbot_robot_character_concept.glb';
+const CERBERUS_MODEL_URL = '/assets/3d/cerberus_logo.glb';
 
 type ViewerStatus = 'loading' | 'ready' | 'error' | 'unsupported';
 
@@ -92,7 +92,7 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.setClearColor(0x000000, 0);
-    renderer.domElement.setAttribute('aria-label', 'NEXBOT, guardião 3D interativo da Cerberus Finds');
+    renderer.domElement.setAttribute('aria-label', 'Cerberus, símbolo 3D interativo da Cerberus Finds');
     renderer.domElement.setAttribute('role', 'img');
     renderer.domElement.setAttribute('tabindex', '0');
     renderer.domElement.style.touchAction = 'pan-y';
@@ -161,7 +161,7 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
     };
 
     loader.load(
-      NEXBOT_MODEL_URL,
+      CERBERUS_MODEL_URL,
       (gltf) => {
         if (disposed) return;
         modelRoot = gltf.scene;
@@ -210,7 +210,7 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
         setProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
       },
       (error) => {
-        console.error('Falha ao carregar o NEXBOT:', error);
+        console.error('Falha ao carregar o modelo Cerberus:', error);
         if (!disposed) setStatus('error');
       },
     );
@@ -279,7 +279,7 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
     };
 
     void initializeViewer().catch((error) => {
-      console.error('Falha ao inicializar o visualizador NEXBOT:', error);
+      console.error('Falha ao inicializar o visualizador Cerberus:', error);
       if (!importCancelled) setStatus('error');
     });
 
@@ -319,7 +319,7 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
           {status === 'loading' && (
             <div className="nexbot-hero__loading" role="status" aria-live="polite">
               <span className="nexbot-hero__loading-dot" />
-              <span>Inicializando guardião{progress > 0 ? ` · ${progress}%` : ''}</span>
+              <span>Inicializando Cerberus{progress > 0 ? ` · ${progress}%` : ''}</span>
             </div>
           )}
 
@@ -329,7 +329,7 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
               <p>
                 {status === 'unsupported'
                   ? 'A experiência 3D não é compatível com este navegador.'
-                  : 'O guardião 3D não pôde ser carregado agora.'}
+                  : 'O símbolo 3D não pôde ser carregado agora.'}
               </p>
               <span>O acervo continua disponível abaixo.</span>
             </div>
@@ -370,12 +370,12 @@ export function NexbotHero({ onEnterCatalog }: NexbotHeroProps) {
         <div className="nexbot-hero__meta">
           <span>Scroll to discover</span>
           <span aria-hidden="true" className="nexbot-hero__meta-line" />
-          <span>Objeto 3D interativo</span>
+          <span>Símbolo 3D interativo</span>
         </div>
       </div>
 
       <p className="nexbot-hero__credit">
-        3D asset: NEXBOT — robot character concept, jules.sore13, CC BY 4.0.
+        Símbolo 3D Cerberus Finds — experiência de marca.
       </p>
     </section>
   );

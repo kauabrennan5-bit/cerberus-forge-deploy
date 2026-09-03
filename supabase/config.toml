@@ -1,0 +1,7 @@
+project_id = "juiychcfdqxgnatffnla"
+
+[functions.cerberus-public-api]
+verify_jwt = false
+
+[functions.cerberus-telegram-gateway]
+verify_jwt = false

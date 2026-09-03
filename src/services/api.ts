@@ -30,6 +30,7 @@ export interface ApiResponse<T = any> {
 }
 
 const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
+const PUBLIC_CATALOG_EDGE_BASE = 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api';
 
 function getApiUrl(path: string): string {
   try {
@@ -50,13 +51,12 @@ function getApiUrl(path: string): string {
 }
 
 function getPublicCatalogApiUrl(): string {
-  return `${PRODUCTION_API_BASE}/api/products?t=${Date.now()}`;
+  return `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}`;
 }
 
 /**
- * Carrega a projeção pública dinâmica do catálogo diretamente do backend canônico.
- * O storefront frontend-only não depende mais de public/data/products.json da sua
- * própria branch nem de um novo deploy para refletir publicação/arquivamento.
+ * Leituras públicas do catálogo são servidas exclusivamente pela Edge Function.
+ * O backend Render permanece reservado a operações administrativas e mutações.
  */
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   try {
@@ -279,5 +279,6 @@ export async function fetchProxyCsv(url: string): Promise<string> {
 
 export const publicCatalogApiInternals = {
   PRODUCTION_API_BASE,
+  PUBLIC_CATALOG_EDGE_BASE,
   getPublicCatalogApiUrl,
 };

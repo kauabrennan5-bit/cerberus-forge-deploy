@@ -48,11 +48,11 @@ async function acquireCatalogSyncLock(): Promise<() => void> {
 }
 
 function storefrontUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-design-preview.onrender.com").replace(/\/+$/, "");
+  return String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-design-static.onrender.com").replace(/\/+$/, "");
 }
 
 function publicCatalogApiUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return String(env.PUBLIC_CATALOG_API_URL || "https://cerberus-forge-deploy-backend.onrender.com/api/products").replace(/\/+$/, "");
+  return String(env.PUBLIC_CATALOG_API_URL || "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products").replace(/\/+$/, "");
 }
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ status: number; body: unknown }> {
@@ -83,7 +83,8 @@ function parseStorefrontManifest(body: unknown): StorefrontRuntimeManifest | nul
   if (!body || typeof body !== "object") return null;
   const row = body as Record<string, unknown>;
   const catalogApiUrl = normalizeApiUrl(row.catalogApiUrl);
-  if (Number(row.version) < 1 || row.mode !== "runtime" || row.frontendOnly !== true || !/^https:\/\//i.test(catalogApiUrl)) return null;
+  const canonicalEdgePrefix = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/";
+  if (Number(row.version) < 2 || row.mode !== "runtime" || row.frontendOnly !== true || !catalogApiUrl.startsWith(canonicalEdgePrefix)) return null;
   return { version: Number(row.version), mode: "runtime", frontendOnly: true, catalogApiUrl };
 }
 
@@ -128,7 +129,7 @@ function diagnosticForFailure(
 
 /**
  * Pipeline canônico de runtime:
- * public.products (Supabase) -> API pública do backend -> frontend-only storefront.
+ * public.products (Supabase) -> Supabase Edge Function -> frontend-only storefront.
  *
  * A publicação NÃO depende mais de commit de catálogo, branch catalog-sync ou deploy
  * do frontend. O arquivo local continua sendo exportado apenas como artefato de

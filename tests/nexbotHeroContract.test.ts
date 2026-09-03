@@ -9,7 +9,7 @@ const heroSource = readFileSync(resolve(repositoryRoot, 'src/components/NexbotHe
 const appSource = readFileSync(resolve(repositoryRoot, 'src/App.tsx'), 'utf8');
 const heroStyles = readFileSync(resolve(repositoryRoot, 'src/index.css'), 'utf8');
 const model = readFileSync(
-  resolve(repositoryRoot, 'public/assets/3d/nexbot_robot_character_concept.glb'),
+  resolve(repositoryRoot, 'public/assets/3d/cerberus_logo.glb'),
 );
 
 const readGlbJson = (buffer: Buffer) => {
@@ -30,21 +30,21 @@ const readGlbJson = (buffer: Buffer) => {
   throw new Error('GLB JSON chunk ausente');
 };
 
-test('NEXBOT usa o GLB validado e preserva sua estrutura glTF 2.0', () => {
+test('Cerberus usa o GLB validado e preserva sua estrutura glTF 2.0', () => {
   assert.equal(
     createHash('sha256').update(model).digest('hex'),
-    '65eb09878bc7a4e33620e8472763abcae945c43878c827260614a7175ef695a9',
+    '761e51d6506f4de0f3904060c75fca14a7ed86ee77efb6a9e82932f00511f725',
   );
 
   const gltf = readGlbJson(model);
   assert.equal(gltf.asset?.version, '2.0');
-  assert.equal(gltf.nodes?.length, 123);
-  assert.equal(gltf.meshes?.length, 43);
+  assert.ok((gltf.nodes?.length || 0) > 0);
+  assert.ok((gltf.meshes?.length || 0) > 0);
   assert.equal(gltf.scenes?.length, 1);
 });
 
 test('hero carrega o asset local sem iframe, Spline ou runtime CDN', () => {
-  assert.match(heroSource, /NEXBOT_MODEL_URL = '\/assets\/3d\/nexbot_robot_character_concept\.glb'/);
+  assert.match(heroSource, /CERBERUS_MODEL_URL = '\/assets\/3d\/cerberus_logo\.glb'/);
   assert.match(heroSource, /import\('three'\)/);
   assert.doesNotMatch(heroSource, /<iframe|spline-viewer|my\.spline\.design|prod\.spline\.design/i);
   assert.doesNotMatch(heroSource, /https?:\/\//i);
@@ -54,16 +54,16 @@ test('hero mantém conteúdo, controles, fallback, acessibilidade e atribuição
   assert.match(heroSource, /Curadoria para quem não quer encontrar o óbvio\./);
   assert.match(heroSource, /Entrar na curadoria/);
   assert.match(heroSource, /supportsWebGL/);
-  assert.match(heroSource, /aria-label', 'NEXBOT, guardião 3D interativo da Cerberus Finds'/);
+  assert.match(heroSource, /aria-label', 'Cerberus, símbolo 3D interativo da Cerberus Finds'/);
   assert.match(heroSource, /Pausar/);
   assert.match(heroSource, /Reposicionar/);
-  assert.match(heroSource, /jules\.sore13, CC BY 4\.0/);
+  assert.match(heroSource, /Símbolo 3D Cerberus Finds/);
   assert.match(heroSource, /prefers-reduced-motion: reduce/);
   assert.match(heroStyles, /@media \(max-width: 959px\)/);
   assert.match(heroStyles, /@media \(prefers-reduced-motion: reduce\)/);
 });
 
-test('home mostra NEXBOT antes do acervo e não o repete em Salvos', () => {
+test('home mostra Cerberus antes do acervo e não o repete em Salvos', () => {
   assert.match(appSource, /!showOnlyFavorites && <NexbotHero/);
   assert.match(appSource, /id="cerberus-acervo"/);
   assert.match(appSource, /scrollIntoView\(\{ behavior: reduceMotion \? 'auto' : 'smooth'/);
