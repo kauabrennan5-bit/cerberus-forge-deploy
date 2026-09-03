@@ -171,5 +171,25 @@ jobs:
           union all select 'triggers_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from trigger_lines)
           union all select 'indexes_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from index_lines);
           SQL
+            echo 'Per-table column/constraint hashes:'
+            psql "$DB_URL" -X -qAt <<'SQL'
+          with column_lines as (
+            select c.relname table_name, 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'') as line
+            from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+            where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped
+          ), constraint_lines as (
+            select c.relname table_name, 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true) as line
+            from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+          ), tables as (
+            select c.relname table_name from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')
+          )
+          select t.table_name || '|columns=' || (select md5(string_agg(line,E'\n' order by line)) from column_lines cl where cl.table_name=t.table_name) || '|constraints=' || (select md5(string_agg(line,E'\n' order by line)) from constraint_lines xl where xl.table_name=t.table_name)
+          from tables t order by t.table_name;
+          SQL
+            echo 'Per-function hashes:'
+            psql "$DB_URL" -X -qAt <<'SQL'
+          select p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || md5('FUNCTION|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || p.prokind::text || '|' || pg_get_functiondef(p.oid))
+          from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by 1;
+          SQL
             exit 1
           fi
