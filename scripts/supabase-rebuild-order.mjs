@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const migrationsDir = path.resolve('supabase/migrations');
 
@@ -46,6 +47,6 @@ export function listSupabaseMigrations() {
     });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
   for (const file of listSupabaseMigrations()) console.log(path.join('supabase/migrations', file));
 }
