@@ -23,6 +23,10 @@ import {
   type AutonomousCuratorCategoryProfile,
 } from "./autonomousCuratorProfiles";
 import {
+  assertCategoryPublicationAllowed as assertCategoryGrowthPublicationAllowed,
+  calculateCategoryPolicy,
+} from "./autonomousCuratorCategoryPolicy";
+import {
   cheapProfileScore,
   hasBlockedProfileTerm,
   scoreAutonomousCandidate,
@@ -40,9 +44,9 @@ const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEARCH_MAX_PAGE = 10;
 const MAX_CYCLE_HISTORY = 48;
-const EXPLORATION_QUERY_MODULUS = 3;
 const QUALIFIED_COMPARISON_TARGET = 4;
 const DEFAULT_LIVE_CATALOG_TARGET = 10;
+const REVIEW_RECOVERY_PREFIX = "REVIEW_RECOVERY_PENDING:";
 
 type QueueMetadata = {
   score: number;
@@ -76,11 +80,33 @@ type CuratedCandidate = {
   lifecycle: LifecycleRecord;
 };
 
+type RecoverySeed = {
+  query: string;
+  shopId: string;
+  itemId: string;
+  sourceProductUrl: string;
+  rawTitle: string;
+  price: number | null;
+  imageUrl: string | null;
+  reason: string;
+};
+
+type DiscoveryMetrics = {
+  queriesExecuted: number;
+  candidatesDiscovered: number;
+  candidatesExamined: number;
+  candidatesEnriched: number;
+  candidatesRejected: number;
+  technicalFailures: number;
+};
+
 type DiscoveryResult = {
   candidate: CuratedCandidate | null;
   reason: string;
   examined: number;
   searchedPages: number[];
+  recoverySeed: RecoverySeed | null;
+  metrics: DiscoveryMetrics;
 };
 
 export type ContinuousCuratorCategoryResultV2 = {
@@ -117,6 +143,19 @@ type ContinuousOptions = {
   extractor?: typeof extractProductForReview;
 };
 
+type CycleMetrics = {
+  attemptedCategories: number;
+  attemptedCategoryNames: PublicProductCategory[];
+  queriesExecuted: number;
+  candidatesDiscovered: number;
+  candidatesExamined: number;
+  candidatesEnriched: number;
+  candidatesRejected: number;
+  publicationAttempts: number;
+  archivedAfterPublication: number;
+  technicalFailures: number;
+};
+
 function localRunDate(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Fortaleza",
@@ -149,6 +188,27 @@ function queueTarget(env: NodeJS.ProcessEnv): number {
 
 function liveCatalogTarget(env: NodeJS.ProcessEnv): number {
   return positiveInt(env.AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET, DEFAULT_LIVE_CATALOG_TARGET, 100);
+}
+
+function dailyTargetFromEnv(env: NodeJS.ProcessEnv): number | null {
+  const parsed = Number.parseInt(String(env.AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY || ""), 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function recoveryModeFromEnv(env: NodeJS.ProcessEnv): boolean {
+  return String(env.AUTONOMOUS_CURATOR_RECOVERY_MODE || "").trim().toLowerCase() === "true";
+}
+
+function deficitCategoryScope(env: NodeJS.ProcessEnv): Set<PublicProductCategory> {
+  const requested = String(env.AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES || "")
+    .split(",")
+    .map(value => value.trim())
+    .filter(Boolean);
+  return new Set(
+    AUTONOMOUS_CURATOR_PROFILES
+      .map(profile => profile.category)
+      .filter(category => requested.includes(category)),
+  );
 }
 
 function activePublishedCount(products: readonly Product[]): number {
@@ -202,11 +262,9 @@ function discoveryPage(cycleNumber: number, category: string, queryIndex: number
   return 1 + ((Math.max(1, cycleNumber) - 1 + queryIndex + (hash % SEARCH_MAX_PAGE)) % SEARCH_MAX_PAGE);
 }
 
-function discoveryPages(cycleNumber: number, category: string, queryIndex: number): number[] {
-  const exploration = discoveryPage(cycleNumber, category, queryIndex);
-  if (exploration === 1) return [1];
-  const explorationSlot = (Math.max(1, cycleNumber) - 1) % EXPLORATION_QUERY_MODULUS;
-  return queryIndex % EXPLORATION_QUERY_MODULUS === explorationSlot ? [1, exploration] : [1];
+function discoveryPages(cycleNumber: number, _category: string, _queryIndex: number): number[] {
+  const depth = Math.min(SEARCH_MAX_PAGE, Math.max(1, Math.floor(cycleNumber)));
+  return Array.from({ length: depth }, (_, index) => index + 1);
 }
 
 function rotateQueries(profile: AutonomousCuratorCategoryProfile, cycleNumber: number): string[] {
@@ -232,8 +290,33 @@ function similarityUniverse(products: readonly Product[]): Product[] {
   );
 }
 
+function isTechnicalReviewFailure(reason: string): boolean {
+  const upper = String(reason || "").toUpperCase();
+  return [
+    "IMAGE_REVIEW_UNAVAILABLE",
+    "IMAGE_REVIEW_BUDGET_EXHAUSTED",
+    "IMAGE_REVIEW_MODEL_UNAVAILABLE",
+    "IMAGE_FETCH_UNAVAILABLE",
+    "OPENAI_RATE_LIMITED",
+    "OPENAI_QUOTA_EXHAUSTED",
+    "OPENAI_AUTH_ERROR",
+    "OPENAI_MODEL_UNAVAILABLE",
+    "OPENAI_TIMEOUT",
+    "OPENAI_PROVIDER_UNAVAILABLE",
+    "GEMINI",
+    "RESOURCE_EXHAUSTED",
+    "RATE_LIMIT",
+    "TIMEOUT",
+  ].some(marker => upper.includes(marker));
+}
+
+function reviewRecoveryReason(reason: string): string {
+  return reason.startsWith(REVIEW_RECOVERY_PREFIX) ? reason : `${REVIEW_RECOVERY_PREFIX}${reason}`;
+}
+
 function revalidationPermanentFailure(reason: string): boolean {
   const upper = reason.toUpperCase();
+  if (upper.includes("REVIEW_RECOVERY_PENDING")) return false;
   return ![
     "TIMEOUT", "RATE_LIMIT", "NETWORK", "TRANSIENT", "UNAVAILABLE", "MODEL_UNAVAILABLE",
     "IMAGE_FETCH_UNAVAILABLE", "AUTH_ERROR", "FORBIDDEN", "SHOPEE_SEARCH",
@@ -271,6 +354,26 @@ function buildShopeeClient(env: NodeJS.ProcessEnv): ShopeeApiClient | null {
   return createShopeeApiClient({ appId, secret, baseUrl: env.SHOPEE_AFFILIATE_API_BASE_URL });
 }
 
+async function assertFreshCategoryPublicationAllowed(category: PublicProductCategory, env: NodeJS.ProcessEnv): Promise<void> {
+  const dailyTarget = dailyTargetFromEnv(env);
+  if (!dailyTarget) return;
+  const freshProducts = await productsRepository.getProducts();
+  const policy = calculateCategoryPolicy(freshProducts, dailyTarget);
+  assertCategoryGrowthPublicationAllowed({
+    category,
+    counts: policy.categoryCounts,
+    dailyTargetPerCategory: dailyTarget,
+    mode: "growth",
+  });
+}
+
+async function categoryStillNeedsRecovery(category: PublicProductCategory, env: NodeJS.ProcessEnv): Promise<boolean> {
+  const dailyTarget = dailyTargetFromEnv(env);
+  if (!dailyTarget || !recoveryModeFromEnv(env)) return true;
+  const policy = calculateCategoryPolicy(await productsRepository.getProducts(), dailyTarget);
+  return policy.categoryDeficits[category] > 0;
+}
+
 async function evaluateIdentity(input: {
   profile: AutonomousCuratorCategoryProfile;
   query: string;
@@ -302,7 +405,10 @@ async function evaluateIdentity(input: {
 
   const evidence = trustedEvidenceOverride(acquisition.name || input.discoveryName, input.sourceImageUrl);
   const extracted = await input.extractor(acquisition.productLink, evidence);
-  if (!extracted.success || !extracted.data) return { candidate: null, reason: `EXTRACTION_${extracted.error || "failed"}` };
+  if (!extracted.success || !extracted.data) {
+    const reason = `EXTRACTION_${extracted.error || "failed"}`;
+    return { candidate: null, reason: isTechnicalReviewFailure(reason) ? reviewRecoveryReason(reason) : reason };
+  }
   const data = extracted.data;
   if (!sourceIdentityMatches(data.normalizedUrl, input.shopId, input.itemId)) return { candidate: null, reason: "SCRAPER_IDENTITY_MISMATCH" };
 
@@ -327,7 +433,8 @@ async function evaluateIdentity(input: {
   if (category !== input.profile.category) return { candidate: null, reason: `CATEGORY_MISMATCH:${category || "unknown"}` };
   if (!Number.isFinite(price) || price <= 0) return { candidate: null, reason: "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK" };
   if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl) {
-    return { candidate: null, reason: `IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR:${imageCuration?.reason || "unknown"}` };
+    const reason = `IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR:${imageCuration?.reason || "unknown"}`;
+    return { candidate: null, reason: isTechnicalReviewFailure(reason) ? reviewRecoveryReason(reason) : reason };
   }
 
   const sourceUrl = canonicalSourceUrl(input.shopId, input.itemId);
@@ -399,6 +506,17 @@ function semanticEntryScore(cheap: number, page: number, decision: SemanticDisco
   return lexical + semantic + confidence + (page === 1 ? 12 : 0);
 }
 
+function emptyDiscoveryMetrics(): DiscoveryMetrics {
+  return {
+    queriesExecuted: 0,
+    candidatesDiscovered: 0,
+    candidatesExamined: 0,
+    candidatesEnriched: 0,
+    candidatesRejected: 0,
+    technicalFailures: 0,
+  };
+}
+
 async function discoverQualifiedCandidate(input: {
   profile: AutonomousCuratorCategoryProfile;
   cycleNumber: number;
@@ -415,6 +533,8 @@ async function discoverQualifiedCandidate(input: {
   let blockedCount = 0;
   let visualRejected = 0;
   let scoreRejected = 0;
+  let recoverySeed: RecoverySeed | null = null;
+  const metrics = emptyDiscoveryMetrics();
   const searchedPages: number[] = [];
   const baseQueries = rotateQueries(input.profile, input.cycleNumber);
   const expandedQueries = await expandAutonomousCuratorQueries(input.profile, baseQueries, { env: input.env });
@@ -426,17 +546,21 @@ async function discoverQualifiedCandidate(input: {
 
   const collectPage = async (query: string, page: number): Promise<void> => {
     searchedPages.push(page);
+    metrics.queriesExecuted += 1;
     const search = await input.client.searchOffers({ query, limit: input.config.maxSearchCandidates, page });
     if (!search.ok) {
       lastReason = `SHOPEE_SEARCH:${search.reason || "failed"}`;
+      metrics.technicalFailures += 1;
       if (["SHOPEE_AUTH_ERROR", "SHOPEE_FORBIDDEN"].includes(String(search.reason))) throw new Error(lastReason);
       return;
     }
     shopeeReturned += search.items.length;
+    metrics.candidatesDiscovered += search.items.length;
     for (const item of search.items) {
       if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
       if (hasBlockedProfileTerm(input.profile, item.name || "")) {
         blockedCount += 1;
+        metrics.candidatesRejected += 1;
         continue;
       }
       const identityKey = `${item.shopId}:${item.itemId}`;
@@ -449,16 +573,15 @@ async function discoverQualifiedCandidate(input: {
 
   for (const query of queries) await collectPage(query, 1);
 
-  // Preserve the legacy recall fallback exactly: deep-page exploration is
-  // driven by lexical survivors. A large semantic-rescue pool may never hide
-  // the fact that the original lexical path is undersupplied or OpenAI is off.
   const recallTarget = Math.max(24, input.budget * 2);
   const lexicalRecallCount = () => candidatePool.filter(entry => entry.cheap > -1000).length;
   if (lexicalRecallCount() < recallTarget) {
     for (let queryIndex = 0; queryIndex < queries.length; queryIndex += 1) {
       const pages = discoveryPages(input.cycleNumber, input.profile.category, queryIndex);
-      if (pages.length < 2) continue;
-      await collectPage(queries[queryIndex], pages[1]);
+      for (const page of pages.slice(1)) {
+        await collectPage(queries[queryIndex], page);
+        if (lexicalRecallCount() >= recallTarget) break;
+      }
       if (lexicalRecallCount() >= recallTarget) break;
     }
   }
@@ -499,6 +622,7 @@ async function discoverQualifiedCandidate(input: {
     lexicalScore: entry.cheap,
   }));
   const semantic = await rankAutonomousCuratorCandidates(input.profile, semanticCandidates, { env: input.env });
+  if (semantic.status === "unavailable") metrics.technicalFailures += 1;
   const semanticByIdentity = new Map(semantic.decisions.map(decision => [decision.identityKey, decision] as const));
   const rescueThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_RESCUE_THRESHOLD, 68, 100);
   const categoryThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100);
@@ -527,6 +651,7 @@ async function discoverQualifiedCandidate(input: {
   const qualified: Array<{ candidate: CuratedCandidate; cheap: number; page: number; semantic?: SemanticDiscoveryDecision }> = [];
   for (const entry of rankedPool) {
     if (examined >= input.budget) break;
+    metrics.candidatesExamined += 1;
     const shopId = String(entry.item.shopId);
     const itemId = String(entry.item.itemId);
     const identityKey = `${shopId}:${itemId}`;
@@ -534,6 +659,7 @@ async function discoverQualifiedCandidate(input: {
     const reservedUntil = identity?.reservedUntil ? Date.parse(identity.reservedUntil) : 0;
     if (identity?.productId || (identity && Number.isFinite(reservedUntil) && reservedUntil > Date.now())) continue;
     examined += 1;
+    metrics.candidatesEnriched += 1;
     const evaluated = await evaluateIdentity({
       profile: input.profile,
       query: entry.query,
@@ -549,8 +675,22 @@ async function discoverQualifiedCandidate(input: {
       config: input.config,
     });
     lastReason = evaluated.reason;
-    if (evaluated.reason.startsWith("IMAGE_REVIEW_") || evaluated.reason.startsWith("EXTRACTION_IMAGE_REVIEW_")) visualRejected += 1;
+    if (evaluated.reason.startsWith(REVIEW_RECOVERY_PREFIX)) {
+      metrics.technicalFailures += 1;
+      recoverySeed = {
+        query: entry.query,
+        shopId,
+        itemId,
+        sourceProductUrl: canonicalSourceUrl(shopId, itemId),
+        rawTitle: entry.item.name || "",
+        price: entry.item.price,
+        imageUrl: entry.item.imageUrl,
+        reason: evaluated.reason,
+      };
+    }
+    if (evaluated.reason.startsWith("IMAGE_REVIEW_") || evaluated.reason.startsWith("EXTRACTION_IMAGE_REVIEW_") || evaluated.reason.startsWith(REVIEW_RECOVERY_PREFIX)) visualRejected += 1;
     if (evaluated.reason.startsWith("BELOW_AUTO_PUBLISH_THRESHOLD") || evaluated.reason.startsWith("CATALOG_SIMILARITY")) scoreRejected += 1;
+    if (!evaluated.candidate) metrics.candidatesRejected += 1;
     if (evaluated.candidate) {
       const semanticDecision = semanticByIdentity.get(identityKey);
       if (semanticDecision) {
@@ -585,11 +725,13 @@ async function discoverQualifiedCandidate(input: {
       reason: `BEST_OF_${qualified.length}_QUALIFIED_CANDIDATES`,
       examined,
       searchedPages,
+      recoverySeed,
+      metrics,
     };
   }
 
   logMetrics(0);
-  return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_SCHEDULED_CYCLE`, examined, searchedPages };
+  return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_SCHEDULED_CYCLE`, examined, searchedPages, recoverySeed, metrics };
 }
 
 function queuedForCategory(products: readonly Product[], category: PublicProductCategory): Product[] {
@@ -850,7 +992,7 @@ async function markCycleStarted(runId: string, cycleId: string, cycleNumber: num
       ...metadata,
       profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
       continuous: true,
-      continuous_version: "2",
+      continuous_version: "3",
       continuous_cycle_id: cycleId,
       continuous_cycle_count: cycleNumber,
       continuous_cycle_started_at: now.toISOString(),
@@ -878,6 +1020,54 @@ async function markPublished(runId: string, candidate: CuratedCandidate, product
   });
 }
 
+async function persistReviewRecovery(runId: string, category: PublicProductCategory, seed: RecoverySeed): Promise<void> {
+  await curatorRepo.saveAutonomousCuratorCategoryResult({
+    runId,
+    category,
+    searchQuery: seed.query,
+    shopId: seed.shopId,
+    itemId: seed.itemId,
+    sourceProductUrl: seed.sourceProductUrl,
+    rawTitle: seed.rawTitle,
+    score: null,
+    scoreBreakdown: {
+      recoverySeed: {
+        price: seed.price,
+        imageUrl: seed.imageUrl,
+      },
+    },
+    decision: "review_required",
+    reason: seed.reason,
+  });
+}
+
+function recoverySeedFromStored(result: curatorRepo.AutonomousCuratorCategoryResult | null): RecoverySeed | null {
+  if (!result || result.decision !== "review_required" || !String(result.reason || "").startsWith(REVIEW_RECOVERY_PREFIX)) return null;
+  if (!result.shopId || !result.itemId || !result.sourceProductUrl || !result.searchQuery || !result.rawTitle) return null;
+  const seed = result.scoreBreakdown?.recoverySeed;
+  const stored = seed && typeof seed === "object" ? seed as Record<string, unknown> : {};
+  const price = Number(stored.price);
+  return {
+    query: result.searchQuery,
+    shopId: result.shopId,
+    itemId: result.itemId,
+    sourceProductUrl: result.sourceProductUrl,
+    rawTitle: result.rawTitle,
+    price: Number.isFinite(price) && price > 0 ? price : null,
+    imageUrl: typeof stored.imageUrl === "string" ? stored.imageUrl : null,
+    reason: String(result.reason),
+  };
+}
+
+function mergeDiscoveryMetrics(target: CycleMetrics, source: DiscoveryMetrics): void {
+  target.queriesExecuted += source.queriesExecuted;
+  target.candidatesDiscovered += source.candidatesDiscovered;
+  target.candidatesExamined += source.candidatesExamined;
+  target.candidatesEnriched += source.candidatesEnriched;
+  target.candidatesRejected += source.candidatesRejected;
+  target.technicalFailures += source.technicalFailures;
+}
+
 function adminChatId(env: NodeJS.ProcessEnv): number | null {
   const raw = String(env.TELEGRAM_ADMIN_CHAT_ID || env.TELEGRAM_ALLOWED_USER_IDS?.split(",")[0] || "").trim();
   const parsed = Number(raw);
@@ -892,13 +1082,13 @@ async function notify(result: ContinuousCuratorResultV2, env: NodeJS.ProcessEnv)
     "🧠 <b>CERBERUS CONTINUOUS CURATOR V2</b>",
     "",
     `Ciclo: <code>${result.cycleId}</code> · #${result.cycleNumber}`,
-    `Publicados neste ciclo: <b>${result.publishedThisCycle}</b> · categorias dentro da janela: <b>${result.fulfilledCategories}/10</b>`,
+    `Publicados neste ciclo: <b>${result.publishedThisCycle}</b> · categorias na meta: <b>${result.fulfilledCategories}/10</b>`,
     `Fila pausada: <b>${result.queuedProducts}</b> · falhas técnicas: <b>${result.failedThisCycle}</b>`,
     "",
     ...lines,
     "",
     result.status === "completed"
-      ? "As 10 categorias estão cobertas; os próximos ciclos continuam abastecendo e melhorando a fila futura."
+      ? "As 10 categorias estão cobertas; os próximos ciclos respeitam a progressão cumulativa."
       : "Categorias pendentes continuam automaticamente no próximo ciclo; os gates de curadoria permanecem inalterados.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
@@ -927,230 +1117,414 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   const cycleNumber = Math.max(0, Number(baseMetadata.continuous_cycle_count || 0)) + 1;
   await markCycleStarted(runId, cycleId, cycleNumber, now, baseMetadata);
 
-  let products = await productsRepository.getProducts();
-  const liveCatalogTargetCount = liveCatalogTarget(env);
-  const liveCatalogCountBefore = activePublishedCount(products);
-  const inventoryDeficitBefore = Math.max(0, liveCatalogTargetCount - liveCatalogCountBefore);
-  const emergencyMode = inventoryDeficitBefore > 0;
-  let emergencyRefillRemaining = inventoryDeficitBefore;
-  const categories: ContinuousCuratorCategoryResultV2[] = [];
-  const pendingPublications: Array<{ product: Product; candidate: CuratedCandidate }> = [];
+  const metrics: CycleMetrics = {
+    attemptedCategories: 0,
+    attemptedCategoryNames: [],
+    queriesExecuted: 0,
+    candidatesDiscovered: 0,
+    candidatesExamined: 0,
+    candidatesEnriched: 0,
+    candidatesRejected: 0,
+    publicationAttempts: 0,
+    archivedAfterPublication: 0,
+    technicalFailures: 0,
+  };
   let failedThisCycle = 0;
+  let cycleClosed = false;
 
-  for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-    const result: ContinuousCuratorCategoryResultV2 = {
-      category: profile.category,
-      due: true,
-      published: false,
-      queued: false,
-      score: null,
-      title: null,
-      reason: "SEARCHING",
-      productId: null,
-      searchedPages: [],
-    };
-    try {
-      const last = await lastPublishedAt(profile.category, products);
-      const editorialDue = dueForPublication(last, now);
-      result.due = dueForCycle(last, now, emergencyMode, emergencyRefillRemaining);
-      result.reason = emergencyMode
-        ? result.due
-          ? `EMERGENCY_REFILL_DEFICIT_${emergencyRefillRemaining}`
-          : "INVENTORY_FLOOR_RESTORED_DEFER_EDITORIAL_CADENCE"
-        : editorialDue
-          ? "SEARCHING_FOR_DUE_PRODUCT"
-          : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;
-      let budgetRemaining = config.maxEnrichPerCategory;
+  try {
+    let products = await productsRepository.getProducts();
+    const dailyTarget = dailyTargetFromEnv(env);
+    const deficitScope = deficitCategoryScope(env);
+    const scopedRecoveryMode = recoveryModeFromEnv(env) && Boolean(dailyTarget);
+    const liveCatalogTargetCount = liveCatalogTarget(env);
+    const liveCatalogCountBefore = activePublishedCount(products);
+    const inventoryDeficitBefore = Math.max(0, liveCatalogTargetCount - liveCatalogCountBefore);
+    const emergencyMode = inventoryDeficitBefore > 0;
+    let emergencyRefillRemaining = inventoryDeficitBefore;
+    const categories: ContinuousCuratorCategoryResultV2[] = [];
+    const pendingPublications: Array<{ product: Product; candidate: CuratedCandidate }> = [];
 
-      if (result.due && config.maxDailyPerCategory > 0) {
-        for (const queuedProduct of queuedForCategory(products, profile.category)) {
-          const refreshed = await refreshQueuedCandidate({ product: queuedProduct, profile, products, client, env, extractor, config });
-          if (!refreshed.candidate) {
-            result.reason = `QUEUE_REVALIDATION_REJECTED:${refreshed.reason}`;
-            if (revalidationPermanentFailure(refreshed.reason)) await archiveQueueProduct(queuedProduct);
-            continue;
+    for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
+      const result: ContinuousCuratorCategoryResultV2 = {
+        category: profile.category,
+        due: true,
+        published: false,
+        queued: false,
+        score: null,
+        title: null,
+        reason: "SEARCHING",
+        productId: null,
+        searchedPages: [],
+      };
+
+      if (scopedRecoveryMode && !deficitScope.has(profile.category)) {
+        result.due = false;
+        result.reason = "CATEGORY_TARGET_ALREADY_SATISFIED_WHILE_DEFICITS_EXIST";
+        categories.push(result);
+        continue;
+      }
+
+      metrics.attemptedCategories += 1;
+      metrics.attemptedCategoryNames.push(profile.category);
+      try {
+        const last = await lastPublishedAt(profile.category, products);
+        const editorialDue = dueForPublication(last, now);
+        result.due = scopedRecoveryMode ? true : dueForCycle(last, now, emergencyMode, emergencyRefillRemaining);
+        result.reason = scopedRecoveryMode
+          ? `CATEGORY_DEFICIT_RECOVERY_TARGET_${dailyTarget}`
+          : emergencyMode
+            ? result.due
+              ? `EMERGENCY_REFILL_DEFICIT_${emergencyRefillRemaining}`
+              : "INVENTORY_FLOOR_RESTORED_DEFER_EDITORIAL_CADENCE"
+            : editorialDue
+              ? "SEARCHING_FOR_DUE_PRODUCT"
+              : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;
+        let budgetRemaining = config.maxEnrichPerCategory;
+
+        if (result.due && config.maxDailyPerCategory > 0) {
+          const previousCategoryResult = await curatorRepo.getAutonomousCuratorCategoryResult(runId, profile.category);
+          const recoverySeed = recoverySeedFromStored(previousCategoryResult);
+          if (recoverySeed && budgetRemaining > 0) {
+            metrics.candidatesExamined += 1;
+            metrics.candidatesEnriched += 1;
+            budgetRemaining -= 1;
+            const recovered = await evaluateIdentity({
+              profile,
+              query: recoverySeed.query,
+              shopId: recoverySeed.shopId,
+              itemId: recoverySeed.itemId,
+              discoveryName: recoverySeed.rawTitle,
+              discoveryPrice: recoverySeed.price,
+              sourceImageUrl: recoverySeed.imageUrl,
+              products,
+              client,
+              env,
+              extractor,
+              config,
+            });
+            if (recovered.candidate) {
+              const queued = await maybeQueueCandidate(recovered.candidate, products, now, env);
+              if (queued.product) {
+                await assertFreshCategoryPublicationAllowed(profile.category, env);
+                metrics.publicationAttempts += 1;
+                await updateQueuedProduct(queued.product, recovered.candidate, now, true, env);
+                pendingPublications.push({ product: queued.product, candidate: recovered.candidate });
+                result.published = true;
+                result.score = recovered.candidate.score;
+                result.title = recovered.candidate.displayTitle;
+                result.productId = queued.product.id;
+                result.reason = "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_REVIEW_RECOVERY";
+              }
+            } else if (recovered.reason.startsWith(REVIEW_RECOVERY_PREFIX)) {
+              metrics.technicalFailures += 1;
+              metrics.candidatesRejected += 1;
+              await persistReviewRecovery(runId, profile.category, { ...recoverySeed, reason: recovered.reason });
+              result.reason = recovered.reason;
+            } else {
+              metrics.candidatesRejected += 1;
+              await curatorRepo.saveAutonomousCuratorCategoryResult({
+                runId,
+                category: profile.category,
+                searchQuery: recoverySeed.query,
+                shopId: recoverySeed.shopId,
+                itemId: recoverySeed.itemId,
+                sourceProductUrl: recoverySeed.sourceProductUrl,
+                rawTitle: recoverySeed.rawTitle,
+                decision: "rejected",
+                reason: recovered.reason,
+              });
+            }
           }
-          await updateQueuedProduct(queuedProduct, refreshed.candidate, now, true, env);
-          await curatorRepo.saveProductImageEditorialReview({
-            productId: queuedProduct.id,
-            curation: refreshed.candidate.imageCuration,
-            model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
-            reviewVersion: "1.2",
-          });
-          pendingPublications.push({ product: queuedProduct, candidate: refreshed.candidate });
-          if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);
-          result.published = true;
-          result.score = refreshed.candidate.score;
-          result.title = refreshed.candidate.displayTitle;
-          result.productId = queuedProduct.id;
-          result.reason = "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_QUEUE";
-          break;
-        }
 
-        if (!result.published && budgetRemaining > 0) {
-          const discovery = await discoverQualifiedCandidate({ profile, cycleNumber, budget: budgetRemaining, products, client, env, extractor, config });
-          budgetRemaining = Math.max(0, budgetRemaining - discovery.examined);
-          result.searchedPages.push(...discovery.searchedPages);
-          if (discovery.candidate) {
-            const queued = await maybeQueueCandidate(discovery.candidate, products, now, env);
-            if (queued.product) {
-              await updateQueuedProduct(queued.product, discovery.candidate, now, true, env);
-              pendingPublications.push({ product: queued.product, candidate: discovery.candidate });
+          if (!result.published) {
+            for (const queuedProduct of queuedForCategory(products, profile.category)) {
+              const refreshed = await refreshQueuedCandidate({ product: queuedProduct, profile, products, client, env, extractor, config });
+              if (!refreshed.candidate) {
+                result.reason = refreshed.reason.startsWith(REVIEW_RECOVERY_PREFIX)
+                  ? refreshed.reason
+                  : `QUEUE_REVALIDATION_REJECTED:${refreshed.reason}`;
+                if (refreshed.reason.startsWith(REVIEW_RECOVERY_PREFIX)) metrics.technicalFailures += 1;
+                else if (revalidationPermanentFailure(refreshed.reason)) await archiveQueueProduct(queuedProduct);
+                continue;
+              }
+              await assertFreshCategoryPublicationAllowed(profile.category, env);
+              metrics.publicationAttempts += 1;
+              await updateQueuedProduct(queuedProduct, refreshed.candidate, now, true, env);
+              await curatorRepo.saveProductImageEditorialReview({
+                productId: queuedProduct.id,
+                curation: refreshed.candidate.imageCuration,
+                model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || env.GEMINI_PRODUCT_CURATOR_MODEL || "gemini-3.5-flash-lite",
+                reviewVersion: "1.2",
+              });
+              pendingPublications.push({ product: queuedProduct, candidate: refreshed.candidate });
               if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);
               result.published = true;
-              result.score = discovery.candidate.score;
-              result.title = discovery.candidate.displayTitle;
-              result.productId = queued.product.id;
-              result.reason = "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_DISCOVERY";
-            } else {
-              result.reason = queued.reason;
+              result.score = refreshed.candidate.score;
+              result.title = refreshed.candidate.displayTitle;
+              result.productId = queuedProduct.id;
+              result.reason = "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_QUEUE";
+              break;
             }
-          } else {
-            result.reason = discovery.reason;
           }
-        }
-      }
 
-      if (budgetRemaining > 0) {
-        const future = await discoverQualifiedCandidate({ profile, cycleNumber: cycleNumber + 1, budget: budgetRemaining, products, client, env, extractor, config });
-        result.searchedPages.push(...future.searchedPages);
-        if (future.candidate) {
-          const queued = await maybeQueueCandidate(future.candidate, products, now, env);
-          result.queued = queued.queued;
-          if (!result.published && queued.product) {
-            result.score = future.candidate.score;
-            result.title = future.candidate.displayTitle;
-            result.productId = queued.product.id;
+          if (!result.published && budgetRemaining > 0) {
+            const discovery = await discoverQualifiedCandidate({ profile, cycleNumber, budget: budgetRemaining, products, client, env, extractor, config });
+            mergeDiscoveryMetrics(metrics, discovery.metrics);
+            budgetRemaining = Math.max(0, budgetRemaining - discovery.examined);
+            result.searchedPages.push(...discovery.searchedPages);
+            if (discovery.recoverySeed) {
+              await persistReviewRecovery(runId, profile.category, discovery.recoverySeed);
+              result.reason = discovery.recoverySeed.reason;
+            }
+            if (discovery.candidate) {
+              const queued = await maybeQueueCandidate(discovery.candidate, products, now, env);
+              if (queued.product) {
+                await assertFreshCategoryPublicationAllowed(profile.category, env);
+                metrics.publicationAttempts += 1;
+                await updateQueuedProduct(queued.product, discovery.candidate, now, true, env);
+                pendingPublications.push({ product: queued.product, candidate: discovery.candidate });
+                if (emergencyMode) emergencyRefillRemaining = Math.max(0, emergencyRefillRemaining - 1);
+                result.published = true;
+                result.score = discovery.candidate.score;
+                result.title = discovery.candidate.displayTitle;
+                result.productId = queued.product.id;
+                result.reason = "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_DISCOVERY";
+              } else {
+                result.reason = queued.reason;
+              }
+            } else if (!discovery.recoverySeed) {
+              result.reason = discovery.reason;
+            }
           }
-          if (!result.due || result.reason.startsWith("COOLDOWN_")) result.reason = queued.reason;
-        } else if (!result.due || result.reason.startsWith("COOLDOWN_")) {
-          result.reason = future.reason;
         }
+
+        const allowFutureDiscovery = budgetRemaining > 0 && await categoryStillNeedsRecovery(profile.category, env);
+        if (allowFutureDiscovery) {
+          const future = await discoverQualifiedCandidate({ profile, cycleNumber: cycleNumber + 1, budget: budgetRemaining, products, client, env, extractor, config });
+          mergeDiscoveryMetrics(metrics, future.metrics);
+          result.searchedPages.push(...future.searchedPages);
+          if (future.recoverySeed) await persistReviewRecovery(runId, profile.category, future.recoverySeed);
+          if (future.candidate) {
+            const queued = await maybeQueueCandidate(future.candidate, products, now, env);
+            result.queued = queued.queued;
+            if (!result.published && queued.product) {
+              result.score = future.candidate.score;
+              result.title = future.candidate.displayTitle;
+              result.productId = queued.product.id;
+            }
+            if (!result.due || result.reason.startsWith("COOLDOWN_")) result.reason = queued.reason;
+          } else if ((!result.due || result.reason.startsWith("COOLDOWN_")) && !future.recoverySeed) {
+            result.reason = future.reason;
+          }
+        }
+      } catch (error) {
+        failedThisCycle += 1;
+        metrics.technicalFailures += 1;
+        result.reason = safeCategoryFailureReason(error);
       }
-    } catch (error) {
-      failedThisCycle += 1;
-      result.reason = safeCategoryFailureReason(error);
+      result.searchedPages = [...new Set(result.searchedPages)];
+      categories.push(result);
     }
-    result.searchedPages = [...new Set(result.searchedPages)];
-    categories.push(result);
-  }
 
-  if (pendingPublications.length > 0) {
-    const sync = await syncCatalogAndDeploy("continuous autonomous curator v2");
-    if (!sync.success) {
-      failedThisCycle += pendingPublications.length;
-      for (const item of pendingPublications) {
-        await updateQueuedProduct(item.product, item.candidate, now, false, env);
-        const result = categories.find(category => category.category === item.candidate.category);
-        if (result) {
-          result.published = false;
-          result.queued = true;
-          result.reason = `CATALOG_SYNC_FAILED:${sync.error || "unknown"}`;
+    if (pendingPublications.length > 0) {
+      const sync = await syncCatalogAndDeploy("continuous autonomous curator v2");
+      if (!sync.success) {
+        failedThisCycle += pendingPublications.length;
+        metrics.technicalFailures += pendingPublications.length;
+        for (const item of pendingPublications) {
+          await updateQueuedProduct(item.product, item.candidate, now, false, env);
+          const result = categories.find(category => category.category === item.candidate.category);
+          if (result) {
+            result.published = false;
+            result.queued = true;
+            result.reason = `CATALOG_SYNC_FAILED:${sync.error || "unknown"}`;
+          }
+        }
+        await syncCatalogAndDeploy("continuous autonomous curator v2 rollback").catch(() => undefined);
+      } else {
+        for (const item of pendingPublications) {
+          await markPublished(runId, item.candidate, item.product.id);
+          const result = categories.find(category => category.category === item.candidate.category);
+          if (result) result.reason = "PUBLISHED_AND_PUBLICLY_VALIDATED";
         }
       }
-      await syncCatalogAndDeploy("continuous autonomous curator v2 rollback").catch(() => undefined);
+    }
+
+    products = await productsRepository.getProducts();
+    const liveCatalogCountAfter = activePublishedCount(products);
+    const inventoryDeficitAfter = Math.max(0, liveCatalogTargetCount - liveCatalogCountAfter);
+    const categoryPolicyAfter = dailyTarget ? calculateCategoryPolicy(products, dailyTarget) : null;
+    let fulfilledCategories = 0;
+    if (categoryPolicyAfter) {
+      fulfilledCategories = categoryPolicyAfter.fulfilledCategories;
     } else {
-      for (const item of pendingPublications) {
-        await markPublished(runId, item.candidate, item.product.id);
-        const result = categories.find(category => category.category === item.candidate.category);
-        if (result) result.reason = "PUBLISHED_AND_PUBLICLY_VALIDATED";
+      for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
+        const last = await lastPublishedAt(profile.category, products);
+        if (last && !dueForPublication(last, now)) fulfilledCategories += 1;
       }
     }
+    const queuedProducts = products.filter(product => product.createdBy === QUEUE_CREATED_BY && product.status === "paused" && product.ativo === false && parseQueueNote(product.curatorNote)).length;
+    const publishedThisCycle = categories.filter(category => category.published && category.reason === "PUBLISHED_AND_PUBLICLY_VALIDATED").length;
+    const remainingDeficit = categoryPolicyAfter ? categoryPolicyAfter.totalDeficit : inventoryDeficitAfter;
+    const status: ContinuousCuratorResultV2["status"] = remainingDeficit > 0
+      ? failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial"
+      : failedThisCycle === 0 ? "completed" : "partial";
+
+    const completedAt = new Date().toISOString();
+    const priorHistory = Array.isArray(baseMetadata.continuous_cycles) ? baseMetadata.continuous_cycles : [];
+    const cycleAudit = {
+      cycleId,
+      cycleNumber,
+      startedAt: now.toISOString(),
+      completedAt,
+      status,
+      fulfilledCategories,
+      publishedThisCycle,
+      queuedProducts,
+      failedThisCycle,
+      categoryDeficits: categoryPolicyAfter?.categoryDeficits || null,
+      metrics: {
+        attemptedCategories: metrics.attemptedCategories,
+        queriesExecuted: metrics.queriesExecuted,
+        candidatesDiscovered: metrics.candidatesDiscovered,
+        candidatesExamined: metrics.candidatesExamined,
+        candidatesEnriched: metrics.candidatesEnriched,
+        candidatesRejected: metrics.candidatesRejected,
+        publicationAttempts: metrics.publicationAttempts,
+        technicalFailures: metrics.technicalFailures,
+      },
+      categories: categories.map(category => ({
+        category: category.category,
+        due: category.due,
+        published: category.published,
+        queued: category.queued,
+        score: category.score,
+        title: category.title,
+        reason: category.reason,
+        searchedPages: category.searchedPages,
+      })),
+    };
+    const continuousCycles = [...priorHistory, cycleAudit].slice(-MAX_CYCLE_HISTORY);
+    const publishedThisRun = continuousCycles.reduce((sum, cycle) => {
+      if (!cycle || typeof cycle !== "object") return sum;
+      const count = Number((cycle as Record<string, unknown>).publishedThisCycle || 0);
+      return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+    }, 0);
+    const reviewRequired = categories.filter(category => category.reason.startsWith(REVIEW_RECOVERY_PREFIX)).length;
+
+    await curatorRepo.finishAutonomousCuratorRun({
+      runId,
+      status: status === "completed" ? "completed" : status === "failed" ? "failed" : "partial",
+      categoriesProcessed: metrics.attemptedCategories,
+      autoPublished: publishedThisRun,
+      reviewRequired,
+      rejected: metrics.candidatesRejected,
+      failed: failedThisCycle,
+      metadata: {
+        ...baseMetadata,
+        profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
+        continuous: true,
+        continuous_version: "3",
+        continuous_cycle_id: cycleId,
+        continuous_cycle_count: cycleNumber,
+        continuous_cycle_started_at: now.toISOString(),
+        continuous_cycle_completed_at: completedAt,
+        fulfilled_categories: fulfilledCategories,
+        attempted_categories: metrics.attemptedCategories,
+        attempted_category_names: metrics.attemptedCategoryNames,
+        queries_executed: metrics.queriesExecuted,
+        candidates_discovered: metrics.candidatesDiscovered,
+        candidates_examined: metrics.candidatesExamined,
+        candidates_enriched: metrics.candidatesEnriched,
+        candidates_rejected: metrics.candidatesRejected,
+        publication_attempts: metrics.publicationAttempts,
+        published_this_cycle: publishedThisCycle,
+        published_this_run: publishedThisRun,
+        published_active_now: liveCatalogCountAfter,
+        archived_after_publication: metrics.archivedAfterPublication,
+        technical_failures: metrics.technicalFailures,
+        queued_products: queuedProducts,
+        failed_this_cycle: failedThisCycle,
+        queue_target_per_category: queueTarget(env),
+        live_catalog_target: liveCatalogTargetCount,
+        live_catalog_count_before: liveCatalogCountBefore,
+        live_catalog_count_after: liveCatalogCountAfter,
+        inventory_deficit_before: inventoryDeficitBefore,
+        inventory_deficit_after: inventoryDeficitAfter,
+        category_deficits_after: categoryPolicyAfter?.categoryDeficits || null,
+        deficit_categories_after: categoryPolicyAfter?.deficitCategories || null,
+        deficit_recovery_pending: Boolean(categoryPolicyAfter && categoryPolicyAfter.totalDeficit > 0),
+        discovery_attempt_index: cycleNumber,
+        emergency_refill: emergencyMode,
+        continuous_cycles: continuousCycles,
+      },
+    });
+    cycleClosed = true;
+
+    const result: ContinuousCuratorResultV2 = {
+      cycleId,
+      cycleNumber,
+      runId,
+      runDate,
+      status,
+      publishedThisCycle,
+      fulfilledCategories,
+      queuedProducts,
+      failedThisCycle,
+      categories,
+    };
+    if (options.notify !== false) await notify(result, env);
+    return result;
+  } catch (error) {
+    const interruptedAt = new Date().toISOString();
+    const reason = safeCategoryFailureReason(error);
+    const latestMetadata = await getRunMetadata(runId).catch(() => baseMetadata);
+    const publishedThisRun = Math.max(0, Number(latestMetadata.published_this_run || 0));
+    await curatorRepo.finishAutonomousCuratorRun({
+      runId,
+      status: "failed",
+      categoriesProcessed: metrics.attemptedCategories,
+      autoPublished: publishedThisRun,
+      reviewRequired: 0,
+      rejected: metrics.candidatesRejected,
+      failed: Math.max(1, failedThisCycle),
+      metadata: {
+        ...latestMetadata,
+        continuous: true,
+        continuous_version: "3",
+        continuous_cycle_id: cycleId,
+        continuous_cycle_count: cycleNumber,
+        continuous_cycle_started_at: now.toISOString(),
+        continuous_cycle_completed_at: interruptedAt,
+        cycle_interrupted: true,
+        cycle_interruption_reason: reason,
+        attempted_categories: metrics.attemptedCategories,
+        attempted_category_names: metrics.attemptedCategoryNames,
+        queries_executed: metrics.queriesExecuted,
+        candidates_discovered: metrics.candidatesDiscovered,
+        candidates_examined: metrics.candidatesExamined,
+        candidates_enriched: metrics.candidatesEnriched,
+        candidates_rejected: metrics.candidatesRejected,
+        publication_attempts: metrics.publicationAttempts,
+        technical_failures: Math.max(1, metrics.technicalFailures),
+      },
+    }).then(() => { cycleClosed = true; }).catch(finalizeError => {
+      console.error(`[Autonomous Curator] cycle finalization failed code=${safeCategoryFailureReason(finalizeError)}`);
+    });
+    throw error;
+  } finally {
+    if (!cycleClosed) {
+      console.error(`[Autonomous Curator] cycle closure could not be persisted run=${runId} cycle=${cycleId}`);
+    }
   }
-
-  products = await productsRepository.getProducts();
-  const liveCatalogCountAfter = activePublishedCount(products);
-  const inventoryDeficitAfter = Math.max(0, liveCatalogTargetCount - liveCatalogCountAfter);
-  let fulfilledCategories = 0;
-  for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-    const last = await lastPublishedAt(profile.category, products);
-    if (last && !dueForPublication(last, now)) fulfilledCategories += 1;
-  }
-  const queuedProducts = products.filter(product => product.createdBy === QUEUE_CREATED_BY && product.status === "paused" && product.ativo === false && parseQueueNote(product.curatorNote)).length;
-  const publishedThisCycle = categories.filter(category => category.published && category.reason === "PUBLISHED_AND_PUBLICLY_VALIDATED").length;
-  const status: ContinuousCuratorResultV2["status"] = inventoryDeficitAfter > 0
-    ? failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial"
-    : fulfilledCategories === AUTONOMOUS_CURATOR_PROFILES.length && failedThisCycle === 0
-      ? "completed"
-      : failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial";
-
-  const completedAt = new Date().toISOString();
-  const priorHistory = Array.isArray(baseMetadata.continuous_cycles) ? baseMetadata.continuous_cycles : [];
-  const cycleAudit = {
-    cycleId,
-    cycleNumber,
-    startedAt: now.toISOString(),
-    completedAt,
-    status,
-    fulfilledCategories,
-    publishedThisCycle,
-    queuedProducts,
-    failedThisCycle,
-    categories: categories.map(category => ({
-      category: category.category,
-      due: category.due,
-      published: category.published,
-      queued: category.queued,
-      score: category.score,
-      title: category.title,
-      reason: category.reason,
-      searchedPages: category.searchedPages,
-    })),
-  };
-  const continuousCycles = [...priorHistory, cycleAudit].slice(-MAX_CYCLE_HISTORY);
-
-  await curatorRepo.finishAutonomousCuratorRun({
-    runId,
-    status: status === "completed" ? "completed" : status === "failed" ? "failed" : "partial",
-    categoriesProcessed: AUTONOMOUS_CURATOR_PROFILES.length,
-    autoPublished: fulfilledCategories,
-    reviewRequired: 0,
-    rejected: AUTONOMOUS_CURATOR_PROFILES.length - fulfilledCategories,
-    failed: failedThisCycle,
-    metadata: {
-      ...baseMetadata,
-      profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
-      continuous: true,
-      continuous_version: "2",
-      continuous_cycle_id: cycleId,
-      continuous_cycle_count: cycleNumber,
-      continuous_cycle_started_at: now.toISOString(),
-      continuous_cycle_completed_at: completedAt,
-      fulfilled_categories: fulfilledCategories,
-      published_this_cycle: publishedThisCycle,
-      queued_products: queuedProducts,
-      failed_this_cycle: failedThisCycle,
-      queue_target_per_category: queueTarget(env),
-      live_catalog_target: liveCatalogTargetCount,
-      live_catalog_count_before: liveCatalogCountBefore,
-      live_catalog_count_after: liveCatalogCountAfter,
-      inventory_deficit_before: inventoryDeficitBefore,
-      inventory_deficit_after: inventoryDeficitAfter,
-      emergency_refill: emergencyMode,
-      continuous_cycles: continuousCycles,
-    },
-  });
-
-  const result: ContinuousCuratorResultV2 = {
-    cycleId,
-    cycleNumber,
-    runId,
-    runDate,
-    status,
-    publishedThisCycle,
-    fulfilledCategories,
-    queuedProducts,
-    failedThisCycle,
-    categories,
-  };
-  if (options.notify !== false) await notify(result, env);
-  return result;
 }
 
 export const autonomousCuratorContinuousV2Internals = {
   DAY_MS,
   QUEUE_CREATED_BY,
   QUEUE_NOTE_PREFIX,
+  REVIEW_RECOVERY_PREFIX,
   dueForPublication,
   discoveryPage,
   discoveryPages,
@@ -1161,10 +1535,15 @@ export const autonomousCuratorContinuousV2Internals = {
   parseQueueNote,
   queueTarget,
   liveCatalogTarget,
+  dailyTargetFromEnv,
+  recoveryModeFromEnv,
+  deficitCategoryScope,
   activePublishedCount,
   inventoryDeficit,
   dueForCycle,
+  isTechnicalReviewFailure,
   revalidationPermanentFailure,
   safeCategoryFailureReason,
   semanticEntryScore,
+  recoverySeedFromStored,
 };
