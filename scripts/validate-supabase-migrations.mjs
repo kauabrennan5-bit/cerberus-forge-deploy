@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { acceptedLegacyDuplicateVersions, listSupabaseMigrations } from './supabase-rebuild-order.mjs';
 
 const migrationsDir = path.resolve('supabase/migrations');
-const files = fs.readdirSync(migrationsDir)
-  .filter((name) => name.endsWith('.sql'))
-  .sort((a, b) => a.localeCompare(b));
+const baselinePath = path.resolve('supabase/baseline.sql');
+const files = listSupabaseMigrations();
 
 const expectedLiveTables = new Set([
   'affiliate_links', 'affiliate_providers', 'agent_executions',
@@ -21,7 +21,7 @@ const expectedLiveTables = new Set([
 ]);
 
 const errors = [];
-const versions = new Map();
+const rawVersions = new Map();
 
 for (const file of files) {
   const match = file.match(/^(\d{8,14})_/);
@@ -30,9 +30,15 @@ for (const file of files) {
     continue;
   }
   const version = match[1];
-  const previous = versions.get(version);
-  if (previous) errors.push(`duplicate migration version ${version}: ${previous}, ${file}`);
-  versions.set(version, file);
+  const group = rawVersions.get(version) ?? [];
+  group.push(file);
+  rawVersions.set(version, group);
+}
+
+for (const [version, group] of rawVersions) {
+  if (group.length > 1 && !acceptedLegacyDuplicateVersions.has(version)) {
+    errors.push(`unexpected duplicate migration version ${version}: ${group.join(', ')}`);
+  }
 }
 
 const stripComments = (sql) => sql
@@ -48,8 +54,8 @@ function recordMissing(table, file, kind) {
   missingReferences.set(key, { table, file, kind });
 }
 
-for (const file of files) {
-  const sql = stripComments(fs.readFileSync(path.join(migrationsDir, file), 'utf8'));
+function inspectSql(sql, file) {
+  sql = stripComments(sql);
   const events = [];
 
   const createRe = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?/gi;
@@ -71,18 +77,32 @@ for (const file of files) {
   }
 }
 
+if (!fs.existsSync(baselinePath)) {
+  errors.push('supabase/baseline.sql is required for the pre-20260814 LIVE schema');
+} else {
+  inspectSql(fs.readFileSync(baselinePath, 'utf8'), 'supabase/baseline.sql');
+}
+
+for (const file of files) {
+  inspectSql(fs.readFileSync(path.join(migrationsDir, file), 'utf8'), file);
+}
+
 for (const item of missingReferences.values()) {
   errors.push(`missing bootstrap table public.${item.table}: first ${item.kind} seen in ${item.file} before any tracked CREATE TABLE`);
 }
 
-const absentFromTrackedMigrations = [...expectedLiveTables]
+const absentFromReplay = [...expectedLiveTables]
   .filter((table) => !createdTables.has(table))
   .sort();
+if (absentFromReplay.length) {
+  errors.push(`LIVE tables absent from baseline+migrations: ${absentFromReplay.join(', ')}`);
+}
 
 console.log(`Supabase migration files: ${files.length}`);
-console.log(`Unique migration versions: ${versions.size}`);
-console.log(`Tracked CREATE TABLE objects: ${createdTables.size}`);
-console.log(`LIVE tables absent from tracked CREATE TABLE statements: ${absentFromTrackedMigrations.join(', ') || '(none)'}`);
+console.log(`Raw migration versions: ${rawVersions.size}`);
+console.log(`Tracked CREATE TABLE objects including baseline: ${createdTables.size}`);
+console.log('Replay order:');
+for (const file of files) console.log(`- ${file}`);
 
 if (errors.length) {
   console.error('\nMigration integrity errors:');
@@ -90,4 +110,4 @@ if (errors.length) {
   process.exit(1);
 }
 
-console.log('Migration filename and bootstrap-reference checks passed.');
+console.log('Baseline, migration ordering and bootstrap-reference checks passed.');
