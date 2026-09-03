@@ -53,8 +53,8 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      # Curator pushes wait for the exact deployed SHA, then run one bounded live cycle so the inventory floor self-heals immediately.
-      MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'push') && 'continuous' || inputs.mode }}
+      # Scheduled runs own production curation. Pushes are deployment verification only and must never publish.
+      MODE: ${{ github.event_name == 'schedule' && 'continuous' || github.event_name == 'push' && 'status' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
