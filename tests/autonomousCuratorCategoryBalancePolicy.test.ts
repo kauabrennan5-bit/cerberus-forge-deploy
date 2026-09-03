@@ -21,7 +21,17 @@ test("deficient categories remain in automatic recovery while already-covered ca
   assert.match(coordinator, /activeBefore \+ beforePolicy\.totalDeficit/);
   assert.match(coordinator, /beforePolicy\.deficitCategories/);
   assert.match(coordinator, /category_growth_over_target_publication_ids:\s*\[\]/);
-  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "3"/);
+  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "4"/);
+});
+
+test("daily target is fail-closed on all ten category floors plus public runtime validation", () => {
+  assert.match(coordinator, /daily_target_invariant/);
+  assert.match(coordinator, /daily_target_satisfied/);
+  assert.match(coordinator, /post_publication_category_validation/);
+  assert.match(coordinator, /public_runtime_validation/);
+  assert.match(coordinator, /afterPolicy\.totalDeficit === 0/);
+  assert.match(coordinator, /publicValidation\.success/);
+  assert.match(coordinator, /META DO DIA NÃO CUMPRIDA/);
 });
 
 test("quality gates remain in the preserved v2 discovery engine", () => {
