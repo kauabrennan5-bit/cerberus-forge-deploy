@@ -57,6 +57,28 @@ begin
     return new;
   end if;
 
+  -- Exact rollback of the source from a failed Product Rotation is handled by
+  -- the SECURITY DEFINER RPC below. The flag is transaction-local and cannot be
+  -- reached by an ordinary products update. Editorial proof is still required.
+  if tg_op = 'UPDATE'
+     and current_setting('cerberus.rotation_recovery', true) = 'on'
+     and coalesce(old.ativo, false) = false
+     and old.status = 'archived'
+     and new.ativo = true
+     and new.status = 'published' then
+    if new.display_title_status <> 'reviewed'
+       or new.image_editorial_status <> 'clean'
+       or new.image_curation is null
+       or new.image_curation ->> 'status' <> 'ready'
+       or nullif(btrim(new.image_curation ->> 'primaryImageUrl'), '') is null
+       or new.image_review_fingerprint is null
+       or new.preco is null
+       or new.preco <= 0 then
+      raise exception 'PRODUCT_PUBLICATION_BLOCKED:ROTATION_RECOVERY_EDITORIAL_PROOF_INVALID';
+    end if;
+    return new;
+  end if;
+
   if new.display_title_status <> 'reviewed'
      or nullif(btrim(new.display_title), '') is null then
     raise exception 'PRODUCT_PUBLICATION_BLOCKED:DISPLAY_TITLE_NOT_REVIEWED';
@@ -134,6 +156,65 @@ create trigger products_publication_authorization_guard
 before insert or update of ativo, status on public.products
 for each row
 execute function public.enforce_product_publication_authorization();
+
+create or replace function public.restore_product_after_failed_rotation(
+  p_request_id uuid,
+  p_source_product_id text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_request public.product_rotation_requests%rowtype;
+  v_source public.products%rowtype;
+begin
+  select * into v_request
+  from public.product_rotation_requests
+  where id = p_request_id
+    and source_product_id = p_source_product_id
+    and status = 'applying'
+  for update;
+
+  if not found then
+    raise exception 'ROTATION_RECOVERY_NOT_AUTHORIZED';
+  end if;
+
+  if coalesce(v_request.metadata -> 'source_snapshot' ->> 'status', '') <> 'published'
+     or coalesce((v_request.metadata -> 'source_snapshot' ->> 'ativo')::boolean, false) <> true then
+    raise exception 'ROTATION_RECOVERY_SOURCE_SNAPSHOT_INVALID';
+  end if;
+
+  select * into v_source
+  from public.products
+  where id = p_source_product_id
+  for update;
+
+  if not found then
+    raise exception 'ROTATION_RECOVERY_SOURCE_MISSING';
+  end if;
+  if v_source.status = 'published' and coalesce(v_source.ativo, true) = true then
+    return true;
+  end if;
+  if v_source.status <> 'archived' or coalesce(v_source.ativo, false) <> false then
+    raise exception 'ROTATION_RECOVERY_SOURCE_STATE_INVALID';
+  end if;
+
+  perform set_config('cerberus.rotation_recovery', 'on', true);
+  update public.products
+  set ativo = true,
+      status = 'published'
+  where id = p_source_product_id
+    and status = 'archived'
+    and coalesce(ativo, false) = false;
+
+  return found;
+end;
+$$;
+
+revoke all on function public.restore_product_after_failed_rotation(uuid, text) from public;
+grant execute on function public.restore_product_after_failed_rotation(uuid, text) to service_role;
 
 comment on table public.product_publication_authorizations is
   'Short-lived, single-use evidence proving a product passed the central publication gate before becoming active+published.';
