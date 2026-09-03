@@ -92,6 +92,10 @@ function toStateObservation(observation: OperatorHealthObservation): ComponentOb
   };
 }
 
+export function isExternalOperatorScheduler(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env.OPERATOR_SCHEDULER_MODE || "internal").trim().toLowerCase() === "external";
+}
+
 export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   machine.beginHealthCheck("Início de health check V2 periódico ou manual.");
   const result = await runOperatorHealthChecksV2();
@@ -128,6 +132,10 @@ export function getLastReport(): OperatorSystemReport | null { return lastReport
 export function getHealthHistory(): HistoryRecord[] { return [...healthHistory]; }
 
 export function startOperatorScheduler(): void {
+  if (isExternalOperatorScheduler()) {
+    console.log("[OPERATOR SCHEDULER V2] mode=external; internal interval disabled.");
+    return;
+  }
   if (schedulerTimer) return;
   console.log(`[OPERATOR SCHEDULER V2] Health independente a cada ${CHECK_INTERVAL_MS / 60000} minutos.`);
   schedulerTimer = setInterval(() => {
