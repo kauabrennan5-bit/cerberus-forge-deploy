@@ -8,6 +8,15 @@ import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
 import { AUTONOMOUS_CURATOR_PROFILES } from "./autonomousCuratorProfiles";
 import {
+  calculateCategoryPolicy,
+  categoryCounts,
+  categoryDeficits,
+  deficitCategories,
+  fulfilledCategoryCount,
+  totalCategoryDeficit,
+  type CategoryCounts,
+} from "./autonomousCuratorCategoryPolicy";
+import {
   auditPublishedProductHealth,
   type PublishedProductHealthResult,
 } from "./publishedProductHealth";
@@ -28,24 +37,17 @@ export type {
  *   for every local calendar day since autonomous publication began;
  * - day 1 targets 1/category, day 2 targets 2/category, day 3 targets 3/category,
  *   and so on; already-published pieces are never retired merely to keep a cap;
- * - a category below today's cumulative floor bypasses the 24h cadence on every
- *   scheduled cycle until it catches up; categories already at/above today's
- *   target do not receive bootstrap extras;
+ * - while any category is below today's target, normal growth publication is
+ *   restricted to the explicit deficit category list before enrichment starts;
  * - availability failures still archive only listings definitively unavailable
  *   on the exact Shopee identity and therefore create a refill deficit.
- *
- * The proven V2 discovery/scoring/image/pipeline implementation lives in the
- * adjacent Base module. This coordinator changes inventory growth policy,
- * never the safety, identity, image, pipeline, similarity or final score gates.
  */
-const CATEGORY_GROWTH_VERSION = "2";
+const CATEGORY_GROWTH_VERSION = "3";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "1";
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0];
-
-type CategoryCounts = Record<PublicProductCategory, number>;
 
 type BeforeProduct = {
   id: string;
@@ -60,15 +62,6 @@ function isActivePublished(product: Product): boolean {
 
 function activePublishedForCategory(products: readonly Product[], category: PublicProductCategory): Product[] {
   return products.filter(product => product.categoria === category && isActivePublished(product));
-}
-
-function categoryCounts(products: readonly Product[]): CategoryCounts {
-  return Object.fromEntries(
-    AUTONOMOUS_CURATOR_PROFILES.map(profile => [
-      profile.category,
-      activePublishedForCategory(products, profile.category).length,
-    ]),
-  ) as CategoryCounts;
 }
 
 function localDateKey(value: Date): string {
@@ -112,17 +105,8 @@ function dailyTargetPerCategory(products: readonly Product[], now: Date, env: No
   return Math.max(1, today - start + 1);
 }
 
-function categoryDeficits(counts: CategoryCounts, target: number): CategoryCounts {
-  return Object.fromEntries(
-    AUTONOMOUS_CURATOR_PROFILES.map(profile => [
-      profile.category,
-      Math.max(0, target - (counts[profile.category] || 0)),
-    ]),
-  ) as CategoryCounts;
-}
-
 function totalDeficit(counts: CategoryCounts, target: number): number {
-  return Object.values(categoryDeficits(counts, target)).reduce((sum, value) => sum + value, 0);
+  return totalCategoryDeficit(categoryDeficits(counts, target));
 }
 
 async function setProductVisibility(productId: string, published: boolean): Promise<void> {
@@ -158,6 +142,8 @@ async function archiveUnavailableProducts(ids: readonly string[]): Promise<void>
   const sync = await syncCatalogAndDeploy("published product health archive");
   if (sync.success) return;
 
+  // Rollback restores the exact products that were visible before this health
+  // transaction; it is not growth publication and never creates a new identity.
   for (const id of uniqueIds) await setProductVisibility(id, true).catch(() => undefined);
   await syncCatalogAndDeploy("published product health rollback").catch(() => undefined);
   throw new Error(`PUBLISHED_PRODUCT_HEALTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
@@ -170,7 +156,7 @@ async function persistGrowthMetadata(input: {
   growthStartDate: string;
   countsBefore: CategoryCounts;
   countsAfter: CategoryCounts;
-  overTargetPublicationIds: string[];
+  deficitCategoriesBefore: PublicProductCategory[];
   health: PublishedProductHealthResult;
 }): Promise<void> {
   if (!input.result.runId) return;
@@ -184,12 +170,15 @@ async function persistGrowthMetadata(input: {
   const metadata = data?.metadata && typeof data.metadata === "object"
     ? data.metadata as Record<string, unknown>
     : {};
+  const deficitsAfter = categoryDeficits(input.countsAfter, input.dailyTarget);
+  const deficitCategoriesAfter = deficitCategories(deficitsAfter);
   const { error } = await client.from("autonomous_curator_runs").update({
     status: input.result.status === "completed" ? "completed" : input.result.status === "failed" ? "failed" : "partial",
     metadata: {
       ...metadata,
       category_growth_version: CATEGORY_GROWTH_VERSION,
       category_growth_recovery: input.recoveryMode,
+      category_growth_saturation_gate: "hard_pre_enrichment",
       growth_start_date: input.growthStartDate,
       growth_day: input.dailyTarget,
       daily_target_per_category: input.dailyTarget,
@@ -197,8 +186,14 @@ async function persistGrowthMetadata(input: {
       live_catalog_target: input.dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length,
       category_counts_before: input.countsBefore,
       category_counts_after: input.countsAfter,
-      category_deficits_after: categoryDeficits(input.countsAfter, input.dailyTarget),
-      category_growth_over_target_publication_ids: input.overTargetPublicationIds,
+      category_deficits_before: categoryDeficits(input.countsBefore, input.dailyTarget),
+      category_deficits_after: deficitsAfter,
+      deficit_categories_before: input.deficitCategoriesBefore,
+      deficit_categories_after: deficitCategoriesAfter,
+      total_deficit_before: totalDeficit(input.countsBefore, input.dailyTarget),
+      total_deficit_after: totalCategoryDeficit(deficitsAfter),
+      fulfilled_categories: fulfilledCategoryCount(input.countsAfter, input.dailyTarget),
+      category_growth_over_target_publication_ids: [],
       published_product_health_version: PUBLISHED_HEALTH_COORDINATOR_VERSION,
       published_product_health_checked_ids: input.health.checkedIds,
       published_product_health_unavailable_ids: input.health.unavailableIds,
@@ -297,7 +292,7 @@ async function notifyGrowth(
 ): Promise<void> {
   const chatId = adminChatId(env);
   if (!chatId) return;
-  const covered = AUTONOMOUS_CURATOR_PROFILES.filter(profile => counts[profile.category] >= dailyTarget).length;
+  const covered = fulfilledCategoryCount(counts, dailyTarget);
   const lines = AUTONOMOUS_CURATOR_PROFILES.map(profile => {
     const count = counts[profile.category] || 0;
     return `${count >= dailyTarget ? "✅" : "🔎"} <b>${profile.category}</b>: ${count}/${dailyTarget}`;
@@ -329,11 +324,6 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   let health = emptyHealthResult();
   const shopeeClient = config.enabled ? resolveShopeeClient(env, options.shopeeClient) : options.shopeeClient || null;
 
-  // Published products are periodically revalidated against the exact official
-  // Shopee shopId/itemId. Only a definitive `not_found` archives a product;
-  // auth, network and provider failures are recorded as UNKNOWN and never hide
-  // a valid listing. Archiving happens before deficit calculation so the same
-  // curator cycle can refill the affected category.
   if (config.enabled && shopeeClient) {
     health = await auditPublishedProductHealth({
       products: productsBefore,
@@ -353,24 +343,27 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
 
   const growthStartDate = autonomousGrowthStartDate(productsBefore, now, env);
   const dailyTarget = dailyTargetPerCategory(productsBefore, now, env);
-  const countsBefore = categoryCounts(productsBefore);
+  const beforePolicy = calculateCategoryPolicy(productsBefore, dailyTarget);
+  const countsBefore = beforePolicy.categoryCounts;
   const recoveryMode = totalDeficit(countsBefore, dailyTarget) > 0;
   const activeBefore = productsBefore.filter(isActivePublished).length;
 
-  // The base V2 uses a global emergency floor. While at least one category is
-  // behind today's cumulative target, create a temporary global deficit large
-  // enough to make every profile eligible for one bounded attempt this cycle.
-  // The coordinator discards publications from categories already at target,
-  // while deficient categories keep their successful catch-up publication.
+  // Deficit categories are now a hard pre-enrichment scope. Complete categories
+  // cannot consume semantic ranking, visual review, affiliate acquisition or
+  // catalog publication while any lane remains below the daily cumulative floor.
   const baseEnv: NodeJS.ProcessEnv = {
     ...env,
+    AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
+    AUTONOMOUS_CURATOR_RECOVERY_MODE: recoveryMode ? "true" : "false",
+    AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: beforePolicy.deficitCategories.join(","),
     AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(
       recoveryMode
-        ? Math.min(100, activeBefore + AUTONOMOUS_CURATOR_PROFILES.length)
+        ? Math.min(100, activeBefore + beforePolicy.totalDeficit)
         : Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length),
     ),
   };
 
+  // Growth is cumulative: never archived merely because a category crossed a fixed cap.
   const result = await runAutonomousCuratorContinuousV2Base({
     ...options,
     ...(shopeeClient ? { shopeeClient } : {}),
@@ -379,54 +372,13 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   });
   if (result.status === "disabled" || !result.runId) return result;
 
-  const products = await productsRepository.getProducts();
-  const publishedIds = new Set(
-    result.categories
-      .filter(category => category.published && category.productId)
-      .map(category => String(category.productId)),
-  );
-  const overTargetPublicationIds: string[] = [];
-
-  // Recovery cycles are allowed to add only to categories that were below the
-  // cumulative floor when the cycle began. This prevents emergency mode from
-  // creating more than the intended daily progression in already-covered lanes.
-  if (recoveryMode) {
-    for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-      if ((countsBefore[profile.category] || 0) < dailyTarget) continue;
-      for (const product of activePublishedForCategory(products, profile.category)) {
-        if (!publishedIds.has(product.id)) continue;
-        await setProductVisibility(product.id, false);
-        product.status = "archived";
-        product.ativo = false;
-        overTargetPublicationIds.push(product.id);
-      }
-    }
-  }
-
-  // Unlike the retired exact-two policy, successful historical publications are
-  // never archived merely because a category crossed a fixed cap. The catalog is
-  // cumulative; only an over-target publication created by emergency eligibility
-  // in this same cycle is rolled back.
-  if (overTargetPublicationIds.length > 0) {
-    const sync = await syncCatalogAndDeploy("autonomous curator progressive growth correction");
-    if (!sync.success) {
-      for (const id of overTargetPublicationIds) {
-        await setProductVisibility(id, true).catch(() => undefined);
-      }
-      await syncCatalogAndDeploy("autonomous curator progressive growth correction rollback").catch(() => undefined);
-      throw new Error(`CATEGORY_GROWTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
-    }
-  }
-
   const productsAfter = await productsRepository.getProducts();
-  const countsAfter = categoryCounts(productsAfter);
-  const deficitAfter = totalDeficit(countsAfter, dailyTarget);
-  const coveredCategories = AUTONOMOUS_CURATOR_PROFILES.filter(
-    profile => countsAfter[profile.category] >= dailyTarget,
-  ).length;
+  const afterPolicy = calculateCategoryPolicy(productsAfter, dailyTarget);
+  const countsAfter = afterPolicy.categoryCounts;
+  const coveredCategories = afterPolicy.fulfilledCategories;
 
   result.fulfilledCategories = coveredCategories;
-  result.status = deficitAfter === 0 && result.failedThisCycle === 0
+  result.status = afterPolicy.totalDeficit === 0 && result.failedThisCycle === 0
     ? "completed"
     : result.failedThisCycle > 0 && coveredCategories === 0
       ? "failed"
@@ -439,7 +391,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     growthStartDate,
     countsBefore,
     countsAfter,
-    overTargetPublicationIds,
+    deficitCategoriesBefore: beforePolicy.deficitCategories,
     health,
   }).catch(error => console.warn("[Autonomous Curator Growth] metadata update failed", error));
 
@@ -459,6 +411,8 @@ export const autonomousCuratorContinuousV2Internals = {
   autonomousGrowthStartDate,
   dailyTargetPerCategory,
   categoryDeficits,
+  deficitCategories,
   totalDeficit,
+  calculateCategoryPolicy,
   resolveShopeeClient,
 };

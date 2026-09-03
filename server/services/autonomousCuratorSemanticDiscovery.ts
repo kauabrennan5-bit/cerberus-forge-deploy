@@ -1,5 +1,6 @@
 import type { AutonomousCuratorCategoryProfile } from "./autonomousCuratorProfiles";
 import { ExternalCallBudget, type BudgetDecision } from "./operationalGuards";
+import { callOpenAIResponses, OpenAIProviderError } from "./openAIProviderRuntime";
 
 type BudgetLike = {
   reserve(name: string, amount?: number): BudgetDecision;
@@ -102,45 +103,37 @@ async function callResponsesApi(input: {
   content: Array<Record<string, unknown>>;
   maxOutputTokens: number;
   fetchImpl: typeof fetch;
+  env: NodeJS.ProcessEnv;
 }): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs);
-  try {
-    const response = await input.fetchImpl("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        "Content-Type": "application/json",
-        "User-Agent": "CerberusFinds/1.0",
+  const request = {
+    model: input.model,
+    store: false,
+    reasoning: { effort: "none" },
+    max_output_tokens: input.maxOutputTokens,
+    input: [{ role: "user", content: input.content }],
+    text: {
+      format: {
+        type: "json_schema",
+        name: input.schemaName,
+        strict: true,
+        schema: input.schema,
       },
-      body: JSON.stringify({
-        model: input.model,
-        store: false,
-        reasoning: { effort: "none" },
-        max_output_tokens: input.maxOutputTokens,
-        input: [{ role: "user", content: input.content }],
-        text: {
-          format: {
-            type: "json_schema",
-            name: input.schemaName,
-            strict: true,
-            schema: input.schema,
-          },
-        },
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      await response.text().catch(() => "");
-      throw new Error(`OPENAI_AUTONOMOUS_DISCOVERY_HTTP_${response.status}`);
-    }
-    return parseJson(extractOutputText(await response.json()));
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("OPENAI_AUTONOMOUS_DISCOVERY_TIMEOUT");
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+    },
+  };
+  const payload = await callOpenAIResponses({
+    apiKey: input.apiKey,
+    request,
+    timeoutMs: input.timeoutMs,
+    fetchImpl: input.fetchImpl,
+    maxAttempts: positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_MAX_ATTEMPTS, 4, 6),
+    maxConcurrency: positiveInt(input.env.OPENAI_GLOBAL_MAX_CONCURRENCY, 2, 8),
+  });
+  return parseJson(extractOutputText(payload));
+}
+
+function safeProviderReason(error: unknown): string {
+  if (error instanceof OpenAIProviderError) return error.code;
+  return error instanceof Error ? error.message.slice(0, 120) : "OPENAI_PROVIDER_UNAVAILABLE";
 }
 
 function sanitizeQuery(value: unknown): string | null {
@@ -208,6 +201,7 @@ Regras: retorne no máximo ${maxQueries} consultas em português do Brasil; 2 a 
       content: [{ type: "input_text", text: prompt }],
       maxOutputTokens: 500,
       fetchImpl: options.fetchImpl || fetch,
+      env,
     }) as { queries?: unknown[] };
     const existing = new Set(existingQueries.map(item => item.toLowerCase().trim()));
     const queries = [...new Set((Array.isArray(parsed.queries) ? parsed.queries : [])
@@ -218,7 +212,7 @@ Regras: retorne no máximo ${maxQueries} consultas em português do Brasil; 2 a 
     queryExpansionCache.set(key, { expiresAt: Date.now() + QUERY_CACHE_TTL_MS, queries });
     return queries;
   } catch (error) {
-    console.warn(`[Autonomous Curator] OpenAI query expansion indisponível: ${error instanceof Error ? error.message : "unknown"}`);
+    console.warn(`[Autonomous Curator] OpenAI query expansion indisponível: ${safeProviderReason(error)}`);
     return [];
   }
 }
@@ -344,6 +338,7 @@ Candidatos JSON:\n${JSON.stringify(rows)}`;
       content,
       maxOutputTokens: Math.min(5_000, 500 + selected.length * 90),
       fetchImpl: options.fetchImpl || fetch,
+      env,
     }) as { decisions?: unknown[] };
     const allowed = new Set(identityKeys);
     const seen = new Set<string>();
@@ -357,7 +352,7 @@ Candidatos JSON:\n${JSON.stringify(rows)}`;
       });
     return { status: "ok", model, decisions };
   } catch (error) {
-    console.warn(`[Autonomous Curator] OpenAI semantic ranking indisponível: ${error instanceof Error ? error.message : "unknown"}`);
+    console.warn(`[Autonomous Curator] OpenAI semantic ranking indisponível: ${safeProviderReason(error)}`);
     return { status: "unavailable", model, decisions: [] };
   }
 }
@@ -368,6 +363,8 @@ export const autonomousCuratorSemanticDiscoveryInternals = {
   resolveModel,
   extractOutputText,
   parseJson,
+  callResponsesApi,
+  safeProviderReason,
   sanitizeQuery,
   expansionCacheKey,
   semanticRankingSchema,

@@ -9,6 +9,7 @@ import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { buildDeterministicEditorialFallback } from "./productAutomation";
+import { reviewAndPublishRotationCandidate } from "./productRotationPublication";
 import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
@@ -33,9 +34,9 @@ import {
 const AUTO_QUEUE_CREATED_BY = "autonomous_curator_queue";
 const ROTATION_CANDIDATE_CREATED_BY = "telegram_rotation_candidate";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
-const ROTATION_VERSION = "5";
-// A manual rotation is a browse loop controlled by the operator. It must not run
-// the autonomous curator's deep AI tournament before showing each option.
+const ROTATION_VERSION = "6";
+// Candidate proposals stay bounded and inexpensive. This score is never a
+// publication threshold: approval reruns the full canonical editorial pipeline.
 const ROTATION_SEARCH_MAX_PAGES = 1;
 const ROTATION_SEARCH_PAGE_LIMIT = 10;
 const ROTATION_FAST_POOL_TARGET = 10;
@@ -172,6 +173,7 @@ function parseQueueNote(value: unknown): QueueMetadata | null {
       itemId: String(parsed.itemId),
       sourceProductUrl: String(parsed.sourceProductUrl),
       imageUrl: typeof parsed.imageUrl === "string" ? parsed.imageUrl : null,
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map(String) : [],
     };
   } catch {
     return null;
@@ -215,7 +217,7 @@ async function invalidateLegacyRotation(request: ProductRotationRequest): Promis
   const now = new Date().toISOString();
   return patchRequest(request.id, {
     status: "cancelled",
-    reason: "ROTATION_SUPERSEDED_V5",
+    reason: "ROTATION_SUPERSEDED_V6",
     completed_at: now,
     metadata: { ...request.metadata, invalidated_by_rotation_version: ROTATION_VERSION, invalidated_at: now },
   });
@@ -338,7 +340,7 @@ export async function startProductRotation(input: {
     telegram_chat_id: String(input.telegramChatId),
     metadata: {
       rotation_version: ROTATION_VERSION,
-      rotation_mode: "operator_fast",
+      rotation_mode: "operator_fast_proposal_full_publication_gate",
       search_round: 0,
       total_candidates_received: 0,
       total_candidates_examined: 0,
@@ -349,6 +351,8 @@ export async function startProductRotation(input: {
         category: source.categoria,
         price: source.preco,
         link: source.link,
+        status: source.status,
+        ativo: true,
       },
     },
   }).select("*").single();
@@ -441,7 +445,7 @@ async function evaluateIdentity(input: {
       score: Math.max(ROTATION_PROPOSAL_MIN_SCORE, score),
       warnings,
     },
-    reason: "QUALIFIED_FAST_OPERATOR_REVIEW",
+    reason: "QUALIFIED_FAST_OPERATOR_PROPOSAL_ONLY",
   };
 }
 
@@ -516,7 +520,7 @@ async function persistCandidate(candidate: EvaluatedCandidate, now: Date): Promi
   return await productsRepository.getProductByIdOrSlug(productId);
 }
 
-async function refreshCandidateProduct(product: Product, candidate: EvaluatedCandidate, published: boolean): Promise<void> {
+async function refreshCandidateProduct(product: Product, candidate: EvaluatedCandidate): Promise<void> {
   const previous = parseQueueNote(product.curatorNote);
   const now = new Date();
   const meta: QueueMetadata = {
@@ -524,7 +528,7 @@ async function refreshCandidateProduct(product: Product, candidate: EvaluatedCan
     warnings: candidate.warnings,
     profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
     queuedAt: previous?.queuedAt || product.createdAt || now.toISOString(),
-    publishedAt: published ? now.toISOString() : null,
+    publishedAt: null,
     query: candidate.query,
     shopId: candidate.shopId,
     itemId: candidate.itemId,
@@ -551,9 +555,9 @@ async function refreshCandidateProduct(product: Product, candidate: EvaluatedCan
     display_title_reviewed_at: null,
     display_title_review_model: null,
     display_title_review_version: null,
-    created_by: published ? AUTO_QUEUE_CREATED_BY : ROTATION_CANDIDATE_CREATED_BY,
-    ativo: published,
-    status: published ? "published" : "paused",
+    created_by: ROTATION_CANDIDATE_CREATED_BY,
+    ativo: false,
+    status: "paused",
   }).eq("id", product.id);
   if (error) throw error;
 }
@@ -644,16 +648,7 @@ async function discoverLiveCandidate(input: {
         if (identity?.productId) { bump(input.diagnostics, "SOURCE_IDENTITY_ALREADY_OWNED"); continue; }
         const cheap = cheapProfileScore(input.profile, item.name);
         if (cheap <= -1000) { bump(input.diagnostics, "PROFILE_REJECTED"); continue; }
-        pool.push({
-          query,
-          shopId: String(item.shopId),
-          itemId: String(item.itemId),
-          name: item.name,
-          price: Number(item.price),
-          imageUrl: item.imageUrl,
-          productLink: item.productLink,
-          cheap,
-        });
+        pool.push({ query, shopId: String(item.shopId), itemId: String(item.itemId), name: item.name, price: Number(item.price), imageUrl: item.imageUrl, productLink: item.productLink, cheap });
         if (pool.length >= poolTarget) break;
       }
       if (search.items.length < ROTATION_SEARCH_PAGE_LIMIT) break;
@@ -662,8 +657,6 @@ async function discoverLiveCandidate(input: {
 
   input.diagnostics.candidatesInPool = pool.length;
   pool.sort((a, b) => b.cheap - a.cheap || a.itemId.localeCompare(b.itemId));
-  // Provider-only evaluation is intentionally bounded and inexpensive. The user
-  // is the taste gate: show a valid option, then let reject/accept drive the loop.
   for (const item of pool.slice(0, ROTATION_FAST_MAX_EVALUATIONS)) {
     input.diagnostics.candidatesExamined += 1;
     const evaluated = await evaluateIdentity({
@@ -708,7 +701,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
   if (!request) throw new Error("ROTATION_REQUEST_NOT_FOUND");
   if (isLegacyRotation(request)) {
     await invalidateLegacyRotation(request);
-    throw new Error("ROTATION_SUPERSEDED_V5");
+    throw new Error("ROTATION_SUPERSEDED_V6");
   }
   if (!["searching", "candidate_ready", "failed"].includes(request.status)) throw new Error(`ROTATION_NOT_SEARCHABLE:${request.status}`);
   const source = await productsRepository.getProductByIdOrSlug(request.sourceProductId);
@@ -736,7 +729,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
         diagnostics.candidatesExamined += 1;
         const evaluated = await evaluateStoredProduct(currentCandidate, source, profile, client);
         if (evaluated.candidate) {
-          await refreshCandidateProduct(currentCandidate, evaluated.candidate, false);
+          await refreshCandidateProduct(currentCandidate, evaluated.candidate);
           request = await patchRequest(request.id, { status: "candidate_ready", reason: null });
           const refreshed = await productsRepository.getProductByIdOrSlug(currentCandidate.id);
           if (!refreshed) throw new Error("ROTATION_CANDIDATE_REFRESH_MISSING");
@@ -752,7 +745,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
       const origin = queued.createdBy || AUTO_QUEUE_CREATED_BY;
       const evaluated = await evaluateStoredProduct(queued, source, profile, client);
       if (!evaluated.candidate) { bump(diagnostics, evaluated.reason); continue; }
-      await refreshCandidateProduct(queued, evaluated.candidate, false);
+      await refreshCandidateProduct(queued, evaluated.candidate);
       request = await patchRequest(request.id, {
         status: "candidate_ready",
         candidate_product_id: queued.id,
@@ -776,7 +769,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
             metadata: {
               ...request.metadata,
               rotation_version: ROTATION_VERSION,
-              rotation_mode: "operator_fast",
+              rotation_mode: "operator_fast_proposal_full_publication_gate",
               candidate_origin: ROTATION_CANDIDATE_CREATED_BY,
               candidate_score: discovered.score,
               last_search_diagnostics: diagnostics,
@@ -815,7 +808,7 @@ export async function proposeNextProductRotationCandidate(requestId: string, env
     metadata: {
       ...request.metadata,
       rotation_version: ROTATION_VERSION,
-      rotation_mode: "operator_fast",
+      rotation_mode: "operator_fast_proposal_full_publication_gate",
       search_round: nextSearchRound,
       last_search_diagnostics: diagnostics,
       total_candidates_received: metadataNumber(request.metadata, "total_candidates_received") + diagnostics.candidatesReceived,
@@ -847,7 +840,7 @@ export async function rejectRotationCandidateAndSearchAgain(requestId: string): 
     candidate_product_id: null,
     rejected_candidate_ids: [...new Set([...request.rejectedCandidateIds, candidateId])],
     reason: "CANDIDATE_REJECTED_BY_USER",
-    metadata: { ...request.metadata, last_rejected_candidate_id: candidateId, rotation_mode: "operator_fast" },
+    metadata: { ...request.metadata, last_rejected_candidate_id: candidateId, rotation_mode: "operator_fast_proposal_full_publication_gate" },
   });
 }
 
@@ -881,7 +874,7 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
   if (!request) throw new Error("ROTATION_REQUEST_NOT_FOUND");
   if (isLegacyRotation(request)) {
     await invalidateLegacyRotation(request);
-    throw new Error("ROTATION_SUPERSEDED_V5");
+    throw new Error("ROTATION_SUPERSEDED_V6");
   }
   if (request.status === "replaced" && request.replacementProductId) {
     const source = await productsRepository.getProductByIdOrSlug(request.sourceProductId);
@@ -907,39 +900,54 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
       candidate_product_id: null,
       rejected_candidate_ids: [...new Set([...request.rejectedCandidateIds, candidateProduct.id])],
       reason: `PREFLIGHT_REJECTED:${revalidated.reason}`,
-      metadata: { ...request.metadata, rotation_mode: "operator_fast", last_rejected_candidate_id: candidateProduct.id },
+      metadata: { ...request.metadata, rotation_mode: "operator_fast_proposal_full_publication_gate", last_rejected_candidate_id: candidateProduct.id },
     });
     await requireSupabase().from("products").update({ ativo: false, status: "archived" }).eq("id", candidateProduct.id);
     throw new Error(`ROTATION_PREFLIGHT_REJECTED:${revalidated.reason}`);
   }
-  await refreshCandidateProduct(candidateProduct, revalidated.candidate, false);
-  request = await patchRequest(request.id, { status: "applying", reason: null });
+  await refreshCandidateProduct(candidateProduct, revalidated.candidate);
+  request = await patchRequest(request.id, {
+    status: "applying",
+    reason: null,
+    metadata: {
+      ...request.metadata,
+      publication_preflight: "real_editorial_review_pending",
+      proposal_score: revalidated.candidate.score,
+    },
+  });
 
   const clientDb = requireSupabase();
   let sourceArchived = false;
   let candidatePublished = false;
   try {
-    const publishedMeta = parseQueueNote(candidateProduct.curatorNote);
+    const publication = await reviewAndPublishRotationCandidate({
+      source,
+      candidate: candidateProduct,
+      profile,
+      query: revalidated.candidate.query,
+      env,
+    });
+    candidatePublished = true;
+
     const now = new Date();
+    const previousMeta = parseQueueNote(candidateProduct.curatorNote);
     const candidateNote = queueNote({
-      score: revalidated.candidate.score,
+      score: publication.score,
       profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION,
-      queuedAt: publishedMeta?.queuedAt || candidateProduct.createdAt || now.toISOString(),
+      queuedAt: previousMeta?.queuedAt || candidateProduct.createdAt || now.toISOString(),
       publishedAt: now.toISOString(),
       query: revalidated.candidate.query,
       shopId: revalidated.candidate.shopId,
       itemId: revalidated.candidate.itemId,
       sourceProductUrl: revalidated.candidate.sourceProductUrl,
-      imageUrl: revalidated.candidate.sourceImageUrl,
+      imageUrl: publication.replacement.imageCuration?.primaryImageUrl || revalidated.candidate.sourceImageUrl,
+      warnings: revalidated.candidate.warnings,
     });
-    const { error: candidateError } = await clientDb.from("products").update({
-      ativo: true,
-      status: "published",
+    const { error: noteError } = await clientDb.from("products").update({
       created_by: AUTO_QUEUE_CREATED_BY,
       curator_note: candidateNote,
-    }).eq("id", candidateProduct.id).eq("status", "paused").eq("ativo", false);
-    if (candidateError) throw candidateError;
-    candidatePublished = true;
+    }).eq("id", candidateProduct.id).eq("status", "published").eq("ativo", true);
+    if (noteError) throw noteError;
 
     const { error: sourceError } = await clientDb.from("products").update({ ativo: false, status: "archived" })
       .eq("id", source.id).eq("status", "published");
@@ -957,7 +965,10 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
       metadata: {
         ...request.metadata,
         archive_reason: "ROTATED_BY_USER",
-        replacement_score: revalidated.candidate.score,
+        publication_preflight: "passed_canonical_hard_gate",
+        replacement_score: publication.score,
+        replacement_maximum_catalog_similarity: publication.maximumCatalogSimilarity,
+        title_review_model: publication.titleReviewModel,
         replaced_at: new Date().toISOString(),
       },
     });
@@ -966,10 +977,29 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
     if (!replacement || !archivedSource) throw new Error("ROTATION_POST_SYNC_READ_FAILED");
     return { request, source: archivedSource, replacement };
   } catch (error) {
-    if (sourceArchived) await clientDb.from("products").update({ ativo: true, status: "published" }).eq("id", source.id).then(() => undefined, () => undefined);
-    if (candidatePublished) await clientDb.from("products").update({ ativo: false, status: "paused", created_by: ROTATION_CANDIDATE_CREATED_BY }).eq("id", candidateProduct.id).then(() => undefined, () => undefined);
+    if (candidatePublished) {
+      await clientDb.from("products").update({ ativo: false, status: "paused", created_by: ROTATION_CANDIDATE_CREATED_BY }).eq("id", candidateProduct.id).then(() => undefined, () => undefined);
+    }
+    if (sourceArchived) {
+      // This is an exact restoration of the product that was public immediately
+      // before the replacement attempt. The DB migration exposes a guarded RPC
+      // for this recovery so normal growth cannot use the exception.
+      await clientDb.rpc("restore_product_after_failed_rotation", {
+        p_request_id: request.id,
+        p_source_product_id: source.id,
+      }).then(() => undefined, () => undefined);
+    }
     await syncCatalogAndDeploy(`manual product rotation rollback ${request.id}`).catch(() => undefined);
-    await patchRequest(request.id, { status: "candidate_ready", reason: `APPLY_FAILED:${safeReason(error)}` }).catch(() => undefined);
+    const reason = safeReason(error);
+    const recoveryPending = reason.startsWith("REVIEW_RECOVERY_PENDING:");
+    await patchRequest(request.id, {
+      status: "candidate_ready",
+      reason: `${recoveryPending ? "REVIEW_RECOVERY_PENDING" : "APPLY_FAILED"}:${reason}`,
+      metadata: {
+        ...request.metadata,
+        publication_preflight: recoveryPending ? "review_recovery_pending" : "failed",
+      },
+    }).catch(() => undefined);
     throw error;
   }
 }

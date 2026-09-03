@@ -1,4 +1,11 @@
-import { getTelegramBotToken, telegramApiFetch } from "./telegramApiClient";
+import {
+  classifyTelegramHttpFailure,
+  getTelegramBotToken,
+  telegramApiFetch,
+  TelegramProviderError,
+  type TelegramProviderErrorCode,
+  telegramTokenFingerprint,
+} from "./telegramApiClient";
 
 export interface TelegramWebhookDiagnostics {
   configured: boolean;
@@ -16,6 +23,11 @@ export interface TelegramWebhookDiagnostics {
   backendReady: boolean;
   secretConfigured: boolean;
   lastWebhookCheck: string;
+  status: "healthy" | "degraded" | "down";
+  errorCode?: TelegramProviderErrorCode;
+  httpStatus?: number;
+  failedMethod?: string;
+  tokenFingerprint?: string;
 }
 
 const DEFAULT_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
@@ -50,18 +62,53 @@ export function getTelegramBootstrapStatus(): { ready: boolean; initializedAt?: 
   return { ready: telegramBackendReady, initializedAt: lastTelegramBootstrapAt };
 }
 
+type TelegramMethodFailure = Error & {
+  status?: number;
+  code?: TelegramProviderErrorCode;
+  method?: string;
+};
+
 async function telegramGet(method: string): Promise<any> {
-  if (!getTelegramBotToken()) throw new Error("TELEGRAM_BOT_TOKEN não configurado.");
-  const response = await telegramApiFetch(method, {});
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload?.ok) {
-    const error = new Error(
-      sanitizeTelegramText(payload?.description) || `Telegram API HTTP ${response.status}`,
-    ) as Error & { status?: number };
-    error.status = response.status;
+  if (!getTelegramBotToken()) {
+    const error = new Error("TELEGRAM_BOT_TOKEN não configurado.") as TelegramMethodFailure;
+    error.code = "TELEGRAM_AUTH_ERROR";
+    error.method = method;
     throw error;
   }
-  return payload.result;
+  try {
+    const response = await telegramApiFetch(method, {});
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload?.ok) {
+      const error = new Error(
+        sanitizeTelegramText(payload?.description) || `Telegram API HTTP ${response.status}`,
+      ) as TelegramMethodFailure;
+      error.status = response.status;
+      error.code = classifyTelegramHttpFailure(response.status, payload?.description);
+      error.method = method;
+      throw error;
+    }
+    return payload.result;
+  } catch (error) {
+    if (error instanceof TelegramProviderError) {
+      const wrapped = new Error(error.code) as TelegramMethodFailure;
+      wrapped.status = error.httpStatus ?? undefined;
+      wrapped.code = error.code;
+      wrapped.method = error.method || method;
+      throw wrapped;
+    }
+    throw error;
+  }
+}
+
+function failureFields(error: unknown): Pick<TelegramWebhookDiagnostics, "errorCode" | "httpStatus" | "failedMethod" | "tokenFingerprint"> {
+  const record = error && typeof error === "object" ? error as TelegramMethodFailure : undefined;
+  const fingerprint = telegramTokenFingerprint();
+  return {
+    errorCode: record?.code || "TELEGRAM_PROVIDER_UNAVAILABLE",
+    httpStatus: typeof record?.status === "number" ? record.status : undefined,
+    failedMethod: record?.method,
+    tokenFingerprint: fingerprint || undefined,
+  };
 }
 
 export async function getTelegramWebhookDiagnostics(): Promise<TelegramWebhookDiagnostics> {
@@ -70,6 +117,7 @@ export async function getTelegramWebhookDiagnostics(): Promise<TelegramWebhookDi
   const whitelistValue = process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USERS || "";
   const whitelistConfigured = whitelistValue.split(",").map(value => value.trim()).filter(Boolean).length > 0;
   const expectedWebhookUrl = getExpectedTelegramWebhookUrl();
+  const tokenFingerprint = telegramTokenFingerprint() || undefined;
   const base: TelegramWebhookDiagnostics = {
     configured: tokenConfigured,
     tokenConfigured,
@@ -82,10 +130,16 @@ export async function getTelegramWebhookDiagnostics(): Promise<TelegramWebhookDi
     backendReady: telegramBackendReady,
     secretConfigured: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
     lastWebhookCheck: now,
+    status: "down",
+    tokenFingerprint,
   };
 
   if (!tokenConfigured) {
-    return { ...base, webhookLastError: "Token do Telegram não configurado." };
+    return {
+      ...base,
+      errorCode: "TELEGRAM_AUTH_ERROR",
+      webhookLastError: "Token do Telegram não configurado.",
+    };
   }
 
   try {
@@ -95,20 +149,33 @@ export async function getTelegramWebhookDiagnostics(): Promise<TelegramWebhookDi
     ]);
     const webhookUrl = typeof webhook?.url === "string" && webhook.url ? normalizeUrl(webhook.url) : undefined;
     const lastError = sanitizeTelegramText(webhook?.last_error_message);
+    const webhookConfigured = Boolean(webhookUrl);
+    const webhookMatchesExpectedUrl = webhookUrl ? webhookUrl === expectedWebhookUrl : false;
+    const apiHealthy = Boolean(bot);
+    let errorCode: TelegramProviderErrorCode | undefined;
+    if (!webhookConfigured || !webhookMatchesExpectedUrl) errorCode = "TELEGRAM_WEBHOOK_MISMATCH";
+    else if (!telegramBackendReady) errorCode = "TELEGRAM_BACKEND_NOT_READY";
+    else if (lastError) errorCode = "TELEGRAM_PROVIDER_UNAVAILABLE";
+    const healthy = apiHealthy && webhookConfigured && webhookMatchesExpectedUrl && telegramBackendReady && !lastError;
     return {
       ...base,
       configured: Boolean(bot),
-      apiHealthy: Boolean(bot),
-      webhookConfigured: Boolean(webhookUrl),
-      webhookMatchesExpectedUrl: webhookUrl ? webhookUrl === expectedWebhookUrl : false,
+      apiHealthy,
+      webhookConfigured,
+      webhookMatchesExpectedUrl,
       webhookUrl,
       webhookLastError: lastError,
       pendingUpdates: typeof webhook?.pending_update_count === "number" ? webhook.pending_update_count : undefined,
       allowedUpdates: Array.isArray(webhook?.allowed_updates) ? webhook.allowed_updates.map(String) : undefined,
+      status: healthy ? "healthy" : apiHealthy ? "degraded" : "down",
+      errorCode,
+      httpStatus: 200,
     };
   } catch (error: any) {
     return {
       ...base,
+      ...failureFields(error),
+      status: "down",
       webhookLastError: sanitizeTelegramText(error?.message || error),
     };
   }
@@ -120,3 +187,9 @@ export function getTelegramWebhookStatusSnapshot(): Pick<TelegramWebhookDiagnost
     secretConfigured: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
   };
 }
+
+export const telegramDiagnosticsInternals = {
+  sanitizeTelegramText,
+  normalizeUrl,
+  failureFields,
+};

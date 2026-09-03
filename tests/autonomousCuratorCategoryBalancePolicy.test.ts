@@ -18,10 +18,10 @@ test("coordinator replaces the exact-two cap with a cumulative one-per-day floor
 
 test("deficient categories remain in automatic recovery while already-covered categories cannot consume bootstrap growth", () => {
   assert.match(coordinator, /recoveryMode = totalDeficit\(countsBefore, dailyTarget\) > 0/);
-  assert.match(coordinator, /activeBefore \+ AUTONOMOUS_CURATOR_PROFILES\.length/);
-  assert.match(coordinator, /countsBefore\[profile\.category\].*dailyTarget/s);
-  assert.match(coordinator, /overTargetPublicationIds\.push\(product\.id\)/);
-  assert.match(coordinator, /progressive growth correction/);
+  assert.match(coordinator, /activeBefore \+ beforePolicy\.totalDeficit/);
+  assert.match(coordinator, /beforePolicy\.deficitCategories/);
+  assert.match(coordinator, /category_growth_over_target_publication_ids:\s*\[\]/);
+  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "3"/);
 });
 
 test("quality gates remain in the preserved v2 discovery engine", () => {

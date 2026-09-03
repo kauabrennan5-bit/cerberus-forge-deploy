@@ -1,4 +1,5 @@
 import { supabase } from "../repositories/productsRepository";
+import { recoverAbandonedAutonomousCuratorRuns } from "./autonomousCuratorRunRecovery";
 
 export type PersistedCircuitState = "CLOSED" | "OPEN";
 
@@ -84,6 +85,20 @@ export async function loadPersistedOperatorState(timeoutMs = OPERATOR_STATE_TIME
   if (!supabase) {
     persistenceStatus = "SAFE_MODE";
     persistenceReason = "Cliente Supabase não configurado; auto-heal permanece bloqueado em modo seguro.";
+    return { ok: false, states: [], reason: persistenceReason };
+  }
+
+  try {
+    const recovery = await recoverAbandonedAutonomousCuratorRuns({ client: supabase });
+    if (recovery.recovered > 0) {
+      console.warn(`[AUTONOMOUS CURATOR BOOT RECOVERY] recovered=${recovery.recovered} checked=${recovery.checked} replayed_publication=false`);
+    } else {
+      console.info(`[AUTONOMOUS CURATOR BOOT RECOVERY] recovered=0 checked=${recovery.checked}`);
+    }
+  } catch (error) {
+    persistenceStatus = "SAFE_MODE";
+    persistenceReason = `Falha ao reconciliar runs órfãos do Autonomous Curator no boot: ${error instanceof Error ? error.message : String(error)}`;
+    console.warn(`[OPERATOR STATE] ${persistenceReason}`);
     return { ok: false, states: [], reason: persistenceReason };
   }
 

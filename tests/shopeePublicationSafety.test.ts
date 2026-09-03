@@ -150,7 +150,7 @@ describe("contrato positivo da rotação", () => {
     assert.match(source, /const sourceProductUrl = acquisition\.productLink/);
 
     // Um candidato que passa a avaliação canônica deve sair imediatamente como substituto qualificado.
-    assert.match(source, /if \(evaluated\.candidate\) return evaluated\.candidate;/);
+    assert.match(source, /if \(evaluated\.candidate\) \{[\s\S]*return \{ request, source, candidate: refreshed/);
 
     // O substituto descoberto é persistido apenas como candidato pausado e o request vira candidate_ready.
     assert.match(source, /status:\s*"candidate_ready"[\s\S]*candidate_product_id:\s*persisted\.id/);
@@ -162,7 +162,7 @@ describe("contrato positivo da rotação", () => {
     assert.match(source, /status:\s*"replaced"[\s\S]*reason:\s*"ROTATED_BY_USER"/);
 
     // Se a aplicação falhar, o produto atual é restaurado como published.
-    assert.match(source, /if \(sourceArchived\)[\s\S]*ativo:\s*true,[\s\S]*status:\s*"published"/);
+    assert.match(source, /if \(sourceArchived\)[\s\S]*restore_product_after_failed_rotation/);
   });
 
   it("esgotar um lote nunca encerra a rotação e o cursor avança para novas páginas/consultas", () => {

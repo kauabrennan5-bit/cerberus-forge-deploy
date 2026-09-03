@@ -62,7 +62,7 @@ test("balanced curator removes dead listings before calculating replacement defi
   const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
   const auditIndex = source.indexOf("auditPublishedProductHealth");
   const archiveIndex = source.indexOf("archiveUnavailableProducts(health.unavailableIds)");
-  const countIndex = source.indexOf("const countsBefore = categoryCounts(productsBefore)");
+  const countIndex = source.indexOf("const countsBefore = beforePolicy.categoryCounts");
   assert.ok(auditIndex >= 0);
   assert.ok(archiveIndex > auditIndex);
   assert.ok(countIndex > archiveIndex);

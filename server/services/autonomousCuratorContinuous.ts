@@ -12,7 +12,7 @@ import { extractProductForReview } from "./productAutomation";
 import { createProductionProductPipeline, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
-import { DISPLAY_TITLE_REVIEW_VERSION, imageCurationFingerprint } from "./productEditorialReview";
+import { DISPLAY_TITLE_REVIEW_VERSION, imageUrlFingerprint } from "./productEditorialReview";
 import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
@@ -474,7 +474,7 @@ async function persistPausedCandidate(candidate: ContinuousCandidate, now: Date,
     image_reviewed_at: now.toISOString(),
     image_review_model: model,
     image_review_version: "1.1",
-    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
+    image_review_fingerprint: imageUrlFingerprint(candidate.imageCuration.primaryImageUrl),
     display_title_status: "reviewed",
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: resolveCopyModel(env),
@@ -678,7 +678,7 @@ async function updateQueuedProductFromCandidate(
     image_reviewed_at: now.toISOString(),
     image_review_model: env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "gemini-3.5-flash-lite",
     image_review_version: "1.1",
-    image_review_fingerprint: imageCurationFingerprint(candidate.imageCuration),
+    image_review_fingerprint: imageUrlFingerprint(candidate.imageCuration.primaryImageUrl),
     display_title_status: "reviewed",
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: resolveCopyModel(env),

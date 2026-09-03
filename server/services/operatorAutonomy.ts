@@ -63,10 +63,7 @@ export class OperatorStateMachine {
     return [...this.history];
   }
 
-  transition(to: MachineState, reason: string): StateTransition {
-    if (!ALLOWED_TRANSITIONS[this.state].includes(to)) {
-      throw new Error(`INVALID_OPERATOR_TRANSITION:${this.state}->${to}`);
-    }
+  private recordTransition(to: MachineState, reason: string): StateTransition {
     const transition: StateTransition = {
       from: this.state,
       to,
@@ -77,6 +74,30 @@ export class OperatorStateMachine {
     this.history.unshift(transition);
     if (this.history.length > 100) this.history.length = 100;
     return transition;
+  }
+
+  transition(to: MachineState, reason: string): StateTransition {
+    // A recurring heartbeat may arrive while the previous heartbeat is still in
+    // DIAGNOSING/WAITING_APPROVAL. It is normalized through the already-valid
+    // IDLE edge; the graph is not widened to arbitrary transitions.
+    if (to === "CHECKING" && (this.state === "DIAGNOSING" || this.state === "WAITING_APPROVAL")) {
+      this.recordTransition("IDLE", "Normalização determinística do heartbeat anterior antes de nova observação.");
+      return this.recordTransition("CHECKING", reason);
+    }
+    if (!ALLOWED_TRANSITIONS[this.state].includes(to)) {
+      throw new Error(`INVALID_OPERATOR_TRANSITION:${this.state}->${to}`);
+    }
+    return this.recordTransition(to, reason);
+  }
+
+  /**
+   * Start a periodic/manual heartbeat without opening the transition graph.
+   * Active heal/validation phases are not interrupted by a heartbeat.
+   */
+  beginHealthCheck(reason = "Início de health check periódico ou manual."): StateTransition | null {
+    if (this.state === "CHECKING") return null;
+    if (this.state === "HEALING" || this.state === "VALIDATING" || this.state === "RECOVERING") return null;
+    return this.transition("CHECKING", reason);
   }
 }
 
