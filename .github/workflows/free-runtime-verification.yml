@@ -1,0 +1,56 @@
+name: Free Runtime Verification
+
+on:
+  push:
+    branches:
+      - infra/free-runtime-verification-2026-09-03
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-free-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify Supabase Edge health
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --max-time 20 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/health')"
+          node -e 'const b=JSON.parse(process.argv[1]); if(b.status!=="ok"||b.runtime!=="supabase-edge") process.exit(1); console.log("EDGE_HEALTH=PASS")' "$body"
+
+      - name: Verify Supabase Edge catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --max-time 30 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products')"
+          node -e 'const b=JSON.parse(process.argv[1]); const p=Array.isArray(b.products)?b.products:[]; if(b.success!==true||p.length<1||p.some(x=>x.ativo===false||x.status!=="published")) process.exit(1); console.log(`EDGE_CATALOG=PASS count=${p.length}`)' "$body"
+
+      - name: Verify static storefront home
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --max-time 30 -o /tmp/home.html -w '%{http_code}' 'https://cerberus-design-static.onrender.com/')"
+          test "$code" = "200"
+          grep -qi '<div id="root"' /tmp/home.html
+          echo "STATIC_HOME=PASS"
+
+      - name: Verify static storefront product route
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --max-time 30 -o /tmp/product.html -w '%{http_code}' 'https://cerberus-design-static.onrender.com/produto/abajur-led-retro-em-formato-de-cogumelo-cf7ecb')"
+          echo "STATIC_PRODUCT_HTTP=$code"
+          test "$code" = "200"
+          grep -qi '<div id="root"' /tmp/product.html
+          echo "STATIC_PRODUCT_ROUTE=PASS"
+
+      - name: Verify Telegram gateway rejects missing secret header
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --show-error --max-time 20 -o /tmp/tg.json -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-telegram-gateway')"
+          test "$code" = "403"
+          echo "TELEGRAM_GATEWAY_FAIL_CLOSED=PASS"
