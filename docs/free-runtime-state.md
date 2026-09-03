@@ -1,0 +1,1 @@
+The free-runtime migration preserves one backend execution authority for Operator/Curator/Telegram/newsletter while moving scheduling and public catalog availability outside the long-lived process. The static storefront and Supabase Edge public catalog remain available independently. No production newsletter send or approval is part of this migration.

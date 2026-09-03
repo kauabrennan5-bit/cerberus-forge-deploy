@@ -17,6 +17,7 @@ import {
 } from "../services/newsletterWeeklyProductionConfig";
 import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
 import { registerAutonomousCuratorRoutes } from "./autonomousCuratorRoutes";
+import { registerOperatorAutomationRoutes } from "./operatorAutomationRoutes";
 import { runWeeklyProductionPreflight, renderWeeklyPreflightTelegram } from "../services/newsletterWeeklyPreflight";
 import { sendTelegramMessage } from "../services/telegramBot";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
@@ -28,6 +29,7 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
   // Curator reutiliza a autenticação OIDC dos jobs internos sem acoplar sua
   // lógica à newsletter.
   registerAutonomousCuratorRoutes(app);
+  registerOperatorAutomationRoutes(app);
 
   const requireAutomation = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const auth = await authorizeWeeklyAutomationRequest({ headers: req.headers as Record<string, string | string[] | undefined> });
