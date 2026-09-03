@@ -1,0 +1,69 @@
+name: Apply reconciliation patches
+
+on:
+  push:
+    branches:
+      - fix/production-single-source-2026-09-03
+    paths:
+      - .github/workflows/apply-reconciliation-patches.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply exact source patches
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+
+          function replaceExactlyOnce(path, from, to) {
+            const source = fs.readFileSync(path, 'utf8');
+            const first = source.indexOf(from);
+            if (first < 0) throw new Error(`${path}: expected source fragment not found`);
+            if (source.indexOf(from, first + from.length) >= 0) throw new Error(`${path}: source fragment is not unique`);
+            fs.writeFileSync(path, source.slice(0, first) + to + source.slice(first + from.length));
+          }
+
+          replaceExactlyOnce(
+            'server.ts',
+            'process.env.PUBLIC_SITE_URL || "https://cerberus-design-preview.onrender.com"',
+            'process.env.PUBLIC_SITE_URL || "https://cerberus-design-static.onrender.com"',
+          );
+
+          replaceExactlyOnce(
+            'server/services/scraper.ts',
+            '    const shopeePriceMatch = scriptBody.match(/(?:\\\\?"price_min\\\\?")\\s*:\\s*\\\\?"?(\\d+(?:\\.\\d+)?)"?/i) ||\n      scriptBody.match(/(?:\\\\?"price\\\\?")\\s*:\\s*\\\\?"?(\\d+(?:\\.\\d+)?)"?/i) ||\n      // Sem preço promocional/atual no estado, o preço regular ainda é uma\n      // observação real do anúncio e é preferível à ausência total de valor.\n      scriptBody.match(/(?:\\\\?"price_before_discount\\\\?")\\s*:\\s*\\\\?"?(\\d+(?:\\.\\d+)?)"?/i);',
+            '    const shopeePriceMatch = scriptBody.match(/(?:\\\\?"price_min\\\\?")\\s*:\\s*\\\\?"?(\\d+(?:\\.\\d+)?)"?/i) ||\n      scriptBody.match(/(?:\\\\?"price\\\\?")\\s*:\\s*\\\\?"?(\\d+(?:\\.\\d+)?)"?/i);',
+          );
+
+          const server = fs.readFileSync('server.ts', 'utf8');
+          if (server.includes('cerberus-design-preview.onrender.com')) throw new Error('server.ts still contains design-preview');
+          if (!server.includes('cerberus-design-static.onrender.com')) throw new Error('server.ts missing canonical static storefront');
+
+          const scraper = fs.readFileSync('server/services/scraper.ts', 'utf8');
+          const strategyStart = scraper.indexOf('function tryStrategy2InternalData');
+          const strategyEnd = scraper.indexOf('function normalizeShopeePriceScale', strategyStart);
+          const strategy = scraper.slice(strategyStart, strategyEnd);
+          if (strategy.includes('price_before_discount')) throw new Error('Shopee current-price strategy still consumes price_before_discount');
+          NODE
+
+      - name: Remove bootstrap workflow
+        run: rm .github/workflows/apply-reconciliation-patches.yml
+
+      - name: Commit exact patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts server/services/scraper.ts .github/workflows/apply-reconciliation-patches.yml
+          git diff --cached --check
+          git commit -m "fix: remove legacy storefront fallback and reject Shopee old price"
+          git push origin HEAD:fix/production-single-source-2026-09-03
