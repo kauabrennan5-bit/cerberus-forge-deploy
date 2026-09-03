@@ -1,0 +1,2 @@
+-- Historical version recorded as applied in LIVE.
+-- Original SQL artifact is not present in repository history; final schema is reconstructed by supabase/baseline and later surviving migrations.
