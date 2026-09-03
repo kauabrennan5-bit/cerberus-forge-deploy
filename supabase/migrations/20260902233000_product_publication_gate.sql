@@ -15,6 +15,10 @@ create table if not exists public.product_publication_authorizations (
   consumed_at timestamptz null
 );
 
+alter table public.product_publication_authorizations enable row level security;
+revoke all on table public.product_publication_authorizations from public, anon, authenticated;
+grant select, insert, update, delete on table public.product_publication_authorizations to service_role;
+
 create index if not exists product_publication_authorizations_pending_idx
   on public.product_publication_authorizations(product_id, expires_at desc)
   where consumed_at is null;
@@ -40,7 +44,7 @@ create or replace function public.enforce_product_publication_authorization()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
+set search_path = ''
 as $$
 declare
   v_authorization_id uuid;
@@ -122,19 +126,20 @@ begin
     raise exception 'PRODUCT_PUBLICATION_BLOCKED:SHOPEE_IDENTITY_INVALID';
   end if;
 
-  select authorization_id
+  select ppa.authorization_id
     into v_authorization_id
-  from public.product_publication_authorizations
-  where product_id = new.id
-    and consumed_at is null
-    and expires_at > now()
-    and score >= threshold
-    and maximum_catalog_similarity < 0.82
-    and coalesce((evidence ->> 'lifecycleApproved')::boolean, false) = true
-    and coalesce((evidence ->> 'categoryMismatch')::boolean, true) = false
-    and coalesce((evidence ->> 'offBrand')::boolean, true) = false
-    and upper(coalesce(evidence ->> 'reviewState', '')) not like '%REVIEW%'
-  order by created_at desc
+  from public.product_publication_authorizations ppa
+  where ppa.product_id = new.id
+    and ppa.consumed_at is null
+    and ppa.expires_at > now()
+    and ppa.score >= ppa.threshold
+    and ppa.maximum_catalog_similarity < 0.82
+    and coalesce((ppa.evidence ->> 'lifecycleApproved')::boolean, false) = true
+    and coalesce((ppa.evidence ->> 'categoryMismatch')::boolean, true) = false
+    and coalesce((ppa.evidence ->> 'offBrand')::boolean, true) = false
+    and upper(coalesce(ppa.evidence ->> 'reviewState', '')) not like '%REVIEW%'
+    and nullif(btrim(ppa.evidence ->> 'primaryImageUrl'), '') = nullif(btrim(new.image_curation ->> 'primaryImageUrl'), '')
+  order by ppa.created_at desc
   limit 1
   for update;
 
@@ -151,6 +156,8 @@ begin
 end;
 $$;
 
+revoke all on function public.enforce_product_publication_authorization() from public, anon, authenticated;
+
 drop trigger if exists products_publication_authorization_guard on public.products;
 create trigger products_publication_authorization_guard
 before insert or update of ativo, status on public.products
@@ -164,7 +171,7 @@ create or replace function public.restore_product_after_failed_rotation(
 returns boolean
 language plpgsql
 security definer
-set search_path = public
+set search_path = ''
 as $$
 declare
   v_request public.product_rotation_requests%rowtype;
@@ -213,7 +220,7 @@ begin
 end;
 $$;
 
-revoke all on function public.restore_product_after_failed_rotation(uuid, text) from public;
+revoke all on function public.restore_product_after_failed_rotation(uuid, text) from public, anon, authenticated;
 grant execute on function public.restore_product_after_failed_rotation(uuid, text) to service_role;
 
 comment on table public.product_publication_authorizations is
