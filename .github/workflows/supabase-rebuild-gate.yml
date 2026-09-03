@@ -66,10 +66,6 @@ jobs:
           END
           $$;
 
-          -- Supabase Storage is a platform-managed schema, not part of this
-          -- repository's public-schema migration contract. Provide only the
-          -- interface touched by our historical migration so an otherwise
-          -- empty PostgreSQL 17 instance can replay the application history.
           CREATE SCHEMA IF NOT EXISTS storage;
           CREATE TABLE IF NOT EXISTS storage.buckets (
             id text PRIMARY KEY,
@@ -142,19 +138,6 @@ jobs:
           echo "Local rebuild contract: $ACTUAL"
           if [[ "$ACTUAL" != "$EXPECTED" ]]; then
             echo '::error::Ephemeral rebuild does not exactly match the certified LIVE public-schema contract.'
-            echo 'Object counts:'
-            psql "$DB_URL" -X -qAt <<'SQL'
-            select 'tables=' || count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');
-            select 'rls=' || count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity;
-            select 'policies=' || count(*) from pg_policies where schemaname='public';
-            select 'sequences=' || count(*) from pg_sequences where schemaname='public';
-            select 'functions=' || count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public';
-            select 'triggers=' || count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal;
-            select 'indexes=' || count(*) from pg_indexes where schemaname='public';
-            select 'columns=' || count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped;
-            select 'constraints=' || count(*) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public';
-            SQL
-            echo 'Local index manifest:'
-            psql "$DB_URL" -X -qAt -c "select indexname || '|' || indexdef from pg_indexes where schemaname='public' order by indexname;"
+            psql "$DB_URL" -X -qAt -c "select 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' order by c.relname, con.conname;"
             exit 1
           fi
