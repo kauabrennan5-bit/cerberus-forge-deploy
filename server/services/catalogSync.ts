@@ -204,8 +204,8 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
     }
 
     const expectedPublic = canonicalProducts.filter(product => product.ativo !== false && product.status === "published");
-    const expectedPublicIds = new Set(expectedPublic.map(product => product.id));
-    const expectedCategoryById = new Map(expectedPublic.map(product => [product.id, product.categoria] as const));
+    const expectedPublicIds = new Set<string>(expectedPublic.map(product => String(product.id)));
+    const expectedCategoryById = new Map<string, string>(expectedPublic.map(product => [String(product.id), String(product.categoria)]));
     let lastFailure: unknown = new Error("A API pública ainda não forneceu a projeção esperada.");
     const maxAttempts = 12;
 
@@ -217,14 +217,13 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
         ]);
         storefrontHealthy = storefrontStatus >= 200 && storefrontStatus < 400;
         const apiRows = publicListFromPayload(body);
-        if (!Array.isArray(apiRows)) throw new Error("API pública do catálogo não contém uma lista.");
         const visibleRows = apiRows.filter(isPublicRow);
         publicJsonCount = visibleRows.length;
-        const publicIds = new Set(visibleRows.map((product: any) => String(product.id)).filter(Boolean));
+        const publicIds = new Set<string>(visibleRows.map((product: any) => String(product.id)).filter((id: string) => Boolean(id)));
         missingPublicIds = [...expectedPublicIds].filter(id => !publicIds.has(id));
         unexpectedPublicIds = [...publicIds].filter(id => !expectedPublicIds.has(id));
         categoryMismatchIds = visibleRows
-          .filter((product: any) => expectedCategoryById.has(String(product.id)) && expectedCategoryById.get(String(product.id)) !== product.categoria)
+          .filter((product: any) => expectedCategoryById.has(String(product.id)) && expectedCategoryById.get(String(product.id)) !== String(product.categoria))
           .map((product: any) => String(product.id));
         const hasInvalidIdentity = visibleRows.some((product: any) => !product?.id || !product?.slug || !(product?.displayTitle || product?.display_title || product?.produto) || !product?.link || !product?.categoria);
         productFoundPublic = productId
