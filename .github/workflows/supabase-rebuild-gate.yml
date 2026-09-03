@@ -1,0 +1,47 @@
+name: Supabase Rebuild Gate
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Start local Supabase and replay migrations
+        run: |
+          supabase start -x studio,imgproxy,logflare,vector,supavisor
+          supabase db reset --local
+      - name: Verify canonical public schema invariants
+        env:
+          PGPASSWORD: postgres
+        run: |
+          DB='postgresql://postgres:postgres@127.0.0.1:54322/postgres'
+          table_count=$(psql "$DB" -Atc "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r';")
+          rls_count=$(psql "$DB" -Atc "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and c.relrowsecurity;")
+          function_count=$(psql "$DB" -Atc "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public';")
+          trigger_count=$(psql "$DB" -Atc "select count(*) from information_schema.triggers where trigger_schema='public';")
+          sequence_count=$(psql "$DB" -Atc "select count(*) from pg_sequences where schemaname='public';")
+          index_count=$(psql "$DB" -Atc "select count(*) from pg_indexes where schemaname='public';")
+          policy_count=$(psql "$DB" -Atc "select count(*) from pg_policies where schemaname='public';")
+          printf 'tables=%s rls=%s functions=%s triggers=%s sequences=%s indexes=%s policies=%s\n' "$table_count" "$rls_count" "$function_count" "$trigger_count" "$sequence_count" "$index_count" "$policy_count"
+          test "$table_count" = 44
+          test "$rls_count" = 44
+          test "$function_count" = 9
+          test "$trigger_count" = 4
+          test "$sequence_count" = 1
+          test "$index_count" = 196
+          test "$policy_count" = 0
+          psql "$DB" -v ON_ERROR_STOP=1 -c "select to_regclass('public.products') is not null as products_exists, to_regclass('public.telegram_pending_reviews') is not null as telegram_reviews_exists, to_regclass('public.product_publication_authorizations') is not null as publication_auth_exists;"
+      - name: Stop local Supabase
+        if: always()
+        run: supabase stop --no-backup || true
