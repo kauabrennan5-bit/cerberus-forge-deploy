@@ -68,11 +68,17 @@ jobs:
           test "$code" = "403"
           echo "TELEGRAM_GATEWAY_FAIL_CLOSED=PASS"
 
-      - name: Verify current Telegram runtime can be migrated safely
+      - name: Verify Telegram Edge cutover diagnostics
         shell: bash
         run: |
           set -euo pipefail
           curl --fail --silent --show-error --max-time 20 \
             -o /tmp/telegram-status.json \
             'https://cerberus-forge-deploy-backend.onrender.com/api/telegram-status'
-          node -e 'const fs=require("fs");const b=JSON.parse(fs.readFileSync("/tmp/telegram-status.json","utf8"));if(b.tokenConfigured!==true||b.whitelistConfigured!==true||b.secretConfigured!==true||b.backendReady!==true||b.apiHealthy!==true)process.exit(1);console.log(`TELEGRAM_MIGRATION_PRECONDITION=PASS webhookConfigured=${b.webhookConfigured===true}`)'
+          node - <<'NODE'
+          const fs=require('fs');
+          const b=JSON.parse(fs.readFileSync('/tmp/telegram-status.json','utf8'));
+          const expected='https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-telegram-gateway';
+          if(b.tokenConfigured!==true||b.whitelistConfigured!==true||b.secretConfigured!==true||b.backendReady!==true||b.apiHealthy!==true||b.webhookConfigured!==true||b.webhookMatchesExpectedUrl!==true||b.webhookUrl!==expected||b.expectedWebhookUrl!==expected) process.exit(1);
+          console.log(`TELEGRAM_EDGE_CUTOVER=PASS status=${b.status||'unknown'} pending=${Number(b.pendingUpdates||0)}`);
+          NODE
