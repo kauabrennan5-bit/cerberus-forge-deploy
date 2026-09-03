@@ -6,14 +6,18 @@ test("primary curator owns all quarter-hour production triggers", async () => {
   const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
 
   assert.match(primary, /cron: "2,17,32,47 \* \* \* \*"/);
-  assert.match(primary, /group: cerberus-autonomous-curator/);
+  assert.match(primary, /cerberus-autonomous-curator-production/);
+  assert.match(primary, /cerberus-autonomous-curator-status/);
   assert.match(primary, /cancel-in-progress: false/);
   assert.match(primary, /id-token: write/);
   assert.match(primary, /github\.event_name == 'schedule'/);
   assert.match(primary, /github\.event_name == 'push'/);
-  assert.match(primary, /&& 'continuous'/);
+  assert.match(primary, /github\.event_name == 'schedule' && 'continuous'/);
+  assert.match(primary, /github\.event_name == 'push' && 'status'/);
+  assert.doesNotMatch(primary, /github\.event_name == 'push' && 'continuous'/);
   assert.doesNotMatch(primary, /github\.event_name == 'push' && 'dry_run'/);
   assert.match(primary, /api\/internal\/autonomous-curator\/continuous/);
+  assert.match(primary, /api\/internal\/autonomous-curator\/status/);
   assert.match(primary, /-d '\{\"notify\":true\}'/);
 });
 
