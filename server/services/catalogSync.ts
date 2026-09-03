@@ -21,6 +21,7 @@ export interface SyncLogResult {
   staticSiteUrl: string;
   publicCatalogApiUrl?: string;
   storefrontHealthy?: boolean;
+  storefrontCatalogApiUrl?: string;
   missingPublicIds?: string[];
   unexpectedPublicIds?: string[];
   categoryMismatchIds?: string[];
@@ -28,6 +29,13 @@ export interface SyncLogResult {
   diagnostic?: OperationalDiagnostic;
   error?: string;
 }
+
+type StorefrontRuntimeManifest = {
+  version: number;
+  mode: string;
+  frontendOnly: boolean;
+  catalogApiUrl: string;
+};
 
 let queuedSync: Promise<void> = Promise.resolve();
 
@@ -67,24 +75,23 @@ async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ 
   }
 }
 
-async function fetchStorefrontWithTimeout(url: string, timeoutMs = 12_000): Promise<number> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`${url}/?catalog-health=${Date.now()}`, {
-      signal: controller.signal,
-      cache: "no-store",
-      headers: { "User-Agent": "cerberus-catalog-sync" },
-    });
-    if (!response.ok) {
-      const error = new Error(`HTTP ${response.status}`) as Error & { status?: number };
-      error.status = response.status;
-      throw error;
-    }
-    return response.status;
-  } finally {
-    clearTimeout(timer);
-  }
+function normalizeApiUrl(value: unknown): string {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function parseStorefrontManifest(body: unknown): StorefrontRuntimeManifest | null {
+  if (!body || typeof body !== "object") return null;
+  const row = body as Record<string, unknown>;
+  const catalogApiUrl = normalizeApiUrl(row.catalogApiUrl);
+  if (Number(row.version) < 1 || row.mode !== "runtime" || row.frontendOnly !== true || !/^https:\/\//i.test(catalogApiUrl)) return null;
+  return { version: Number(row.version), mode: "runtime", frontendOnly: true, catalogApiUrl };
+}
+
+async function fetchStorefrontManifest(url: string): Promise<StorefrontRuntimeManifest> {
+  const { body } = await fetchJsonWithTimeout(`${url}/catalog-runtime.json?t=${Date.now()}`, 10_000);
+  const manifest = parseStorefrontManifest(body);
+  if (!manifest) throw new Error("STOREFRONT_RUNTIME_MANIFEST_INVALID");
+  return manifest;
 }
 
 function publicListFromPayload(body: unknown): any[] {
@@ -111,42 +118,12 @@ function diagnosticForFailure(
 ): OperationalDiagnostic {
   const candidate = error as { status?: number };
   const defaults: Record<string, Pick<OperationalDiagnostic, "code" | "message" | "likelyCause" | "impact" | "recoverability" | "retryable">> = {
-    SUPABASE_READ: {
-      code: "SUPABASE_PERSISTENCE_ERROR",
-      message: "Não foi possível ler produtos da fonte canônica.",
-      likelyCause: "Supabase indisponível, credencial inválida, RLS inesperada ou schema incompatível.",
-      impact: "A projeção do catálogo não pode ser validada com segurança.",
-      recoverability: "MANUAL",
-      retryable: true,
-    },
-    CATALOG_EXPORT: {
-      code: "CATALOG_GENERATION_ERROR",
-      message: "A projeção local de auditoria do catálogo não foi gerada.",
-      likelyCause: "Filtro de publicação, serialização ou gravação local de products.json falhou.",
-      impact: "A auditoria local do catálogo ficou indisponível; nenhuma publicação deve ser declarada concluída.",
-      recoverability: "AUTO",
-      retryable: true,
-    },
-    PUBLIC_CATALOG_VALIDATION: {
-      code: "PUBLIC_CATALOG_VALIDATION_ERROR",
-      message: "A API pública e o storefront não confirmaram a projeção canônica dentro do prazo.",
-      likelyCause: "Backend/API pública indisponível, storefront indisponível ou divergência entre Supabase e a projeção consumida pelo frontend.",
-      impact: "A publicação não pode ser declarada PUBLISHED_AND_PUBLICLY_VALIDATED.",
-      recoverability: "AUTO",
-      retryable: true,
-    },
+    SUPABASE_READ: { code: "SUPABASE_PERSISTENCE_ERROR", message: "Não foi possível ler produtos da fonte canônica.", likelyCause: "Supabase indisponível, credencial inválida, RLS inesperada ou schema incompatível.", impact: "A projeção do catálogo não pode ser validada com segurança.", recoverability: "MANUAL", retryable: true },
+    CATALOG_EXPORT: { code: "CATALOG_GENERATION_ERROR", message: "A projeção local de auditoria do catálogo não foi gerada.", likelyCause: "Filtro de publicação, serialização ou gravação local de products.json falhou.", impact: "A auditoria local do catálogo ficou indisponível; nenhuma publicação deve ser declarada concluída.", recoverability: "AUTO", retryable: true },
+    PUBLIC_CATALOG_VALIDATION: { code: "PUBLIC_CATALOG_VALIDATION_ERROR", message: "A API pública e o storefront não confirmaram a projeção canônica dentro do prazo.", likelyCause: "Backend/API pública indisponível, manifest do storefront incorreto ou divergência entre Supabase e a projeção consumida pelo frontend.", impact: "A publicação não pode ser declarada PUBLISHED_AND_PUBLICLY_VALIDATED.", recoverability: "AUTO", retryable: true },
   };
   const fallback = defaults[stage] || defaults.PUBLIC_CATALOG_VALIDATION;
-  return createOperationalDiagnostic({
-    operationId,
-    operation: "CATALOG_SYNC",
-    stage,
-    dependency,
-    ...fallback,
-    ...overrides,
-    httpStatus: candidate?.status,
-    cause: error,
-  });
+  return createOperationalDiagnostic({ operationId, operation: "CATALOG_SYNC", stage, dependency, ...fallback, ...overrides, httpStatus: candidate?.status, cause: error });
 }
 
 /**
@@ -155,9 +132,8 @@ function diagnosticForFailure(
  *
  * A publicação NÃO depende mais de commit de catálogo, branch catalog-sync ou deploy
  * do frontend. O arquivo local continua sendo exportado apenas como artefato de
- * auditoria/compatibilidade. Sucesso só é retornado quando a API pública contém
- * exatamente os IDs ativos+published esperados, com categoria compatível, e o
- * storefront novo está acessível.
+ * auditoria/compatibilidade. O storefront publica catalog-runtime.json, que prova
+ * publicamente qual API ele consome e que permanece frontend-only.
  */
 export async function syncCatalogAndDeploy(productTitle?: string, productId?: string, operationId = createOperationId("SYNC")): Promise<SyncLogResult> {
   const release = await acquireCatalogSyncLock();
@@ -168,23 +144,14 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
   let publicJsonCount = 0;
   let productFoundPublic = false;
   let storefrontHealthy = false;
+  let storefrontCatalogApiUrl: string | undefined;
   let missingPublicIds: string[] = [];
   let unexpectedPublicIds: string[] = [];
   let categoryMismatchIds: string[] = [];
   const operationStartedAt = new Date().toISOString();
 
-  void persistOperationalOperation({
-    operationId,
-    operationType: "CATALOG_SYNC",
-    status: "RUNNING",
-    actor: "system",
-    correlationId: operationId,
-    attempt: 1,
-    createdAt: operationStartedAt,
-    startedAt: operationStartedAt,
-    metadata: { productId: productId || undefined, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl },
-    schemaVersion: "1.0",
-  }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
+  void persistOperationalOperation({ operationId, operationType: "CATALOG_SYNC", status: "RUNNING", actor: "system", correlationId: operationId, attempt: 1, createdAt: operationStartedAt, startedAt: operationStartedAt, metadata: { productId: productId || undefined, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl }, schemaVersion: "1.0" })
+    .catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
 
   try {
     let canonicalProducts;
@@ -207,133 +174,44 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
     const expectedPublicIds = new Set<string>(expectedPublic.map(product => String(product.id)));
     const expectedCategoryById = new Map<string, string>(expectedPublic.map(product => [String(product.id), String(product.categoria)]));
     let lastFailure: unknown = new Error("A API pública ainda não forneceu a projeção esperada.");
-    const maxAttempts = 12;
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    for (let attempt = 1; attempt <= 12; attempt += 1) {
       try {
-        const [{ body }, storefrontStatus] = await Promise.all([
+        const [{ body }, manifest] = await Promise.all([
           fetchJsonWithTimeout(`${catalogApiUrl}${catalogApiUrl.includes("?") ? "&" : "?"}t=${Date.now()}`, 10_000),
-          fetchStorefrontWithTimeout(staticSiteUrl, 10_000),
+          fetchStorefrontManifest(staticSiteUrl),
         ]);
-        storefrontHealthy = storefrontStatus >= 200 && storefrontStatus < 400;
-        const apiRows = publicListFromPayload(body);
-        const visibleRows = apiRows.filter(isPublicRow);
+        storefrontCatalogApiUrl = manifest.catalogApiUrl;
+        storefrontHealthy = normalizeApiUrl(manifest.catalogApiUrl) === normalizeApiUrl(catalogApiUrl) && manifest.frontendOnly === true && manifest.mode === "runtime";
+        const visibleRows = publicListFromPayload(body).filter(isPublicRow);
         publicJsonCount = visibleRows.length;
         const publicIds = new Set<string>(visibleRows.map((product: any) => String(product.id)).filter((id: string) => Boolean(id)));
         missingPublicIds = [...expectedPublicIds].filter(id => !publicIds.has(id));
         unexpectedPublicIds = [...publicIds].filter(id => !expectedPublicIds.has(id));
-        categoryMismatchIds = visibleRows
-          .filter((product: any) => expectedCategoryById.has(String(product.id)) && expectedCategoryById.get(String(product.id)) !== String(product.categoria))
-          .map((product: any) => String(product.id));
+        categoryMismatchIds = visibleRows.filter((product: any) => expectedCategoryById.has(String(product.id)) && expectedCategoryById.get(String(product.id)) !== String(product.categoria)).map((product: any) => String(product.id));
         const hasInvalidIdentity = visibleRows.some((product: any) => !product?.id || !product?.slug || !(product?.displayTitle || product?.display_title || product?.produto) || !product?.link || !product?.categoria);
-        productFoundPublic = productId
-          ? expectedPublicIds.has(productId) ? publicIds.has(productId) : !publicIds.has(productId)
-          : missingPublicIds.length === 0;
+        productFoundPublic = productId ? expectedPublicIds.has(productId) ? publicIds.has(productId) : !publicIds.has(productId) : missingPublicIds.length === 0;
 
-        if (
-          storefrontHealthy
-          && missingPublicIds.length === 0
-          && unexpectedPublicIds.length === 0
-          && categoryMismatchIds.length === 0
-          && !hasInvalidIdentity
-          && productFoundPublic
-        ) {
-          const completionEvent = createOperationalEvent({
-            eventType: "catalog.build.completed",
-            source: "catalogSync",
-            actor: "system",
-            correlationId: operationId,
-            severity: "INFO",
-            outcome: "SUCCESS",
-            payload: {
-              productId: productId || undefined,
-              supabaseCount,
-              jsonCount,
-              publicJsonCount,
-              expectedPublicCount: expectedPublicIds.size,
-              storefrontUrl: staticSiteUrl,
-              publicCatalogApiUrl: catalogApiUrl,
-              runtimeProjection: true,
-            },
-          });
+        if (storefrontHealthy && missingPublicIds.length === 0 && unexpectedPublicIds.length === 0 && categoryMismatchIds.length === 0 && !hasInvalidIdentity && productFoundPublic) {
+          const completionEvent = createOperationalEvent({ eventType: "catalog.build.completed", source: "catalogSync", actor: "system", correlationId: operationId, severity: "INFO", outcome: "SUCCESS", payload: { productId: productId || undefined, supabaseCount, jsonCount, publicJsonCount, expectedPublicCount: expectedPublicIds.size, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontCatalogApiUrl, runtimeProjection: true } });
           emitOperationalEvent(completionEvent);
           void persistOperationalEvent(completionEvent).catch(error => console.warn(`[MEMORY] memory.persistence.failed eventId=${completionEvent.eventId} reason=${sanitizeOperationalText(error)}`));
-          void persistOperationalOperation({
-            operationId,
-            operationType: "CATALOG_SYNC",
-            status: "SUCCEEDED",
-            actor: "system",
-            correlationId: operationId,
-            attempt: 1,
-            createdAt: operationStartedAt,
-            startedAt: operationStartedAt,
-            completedAt: new Date().toISOString(),
-            resultCode: "CATALOG_RUNTIME_VALIDATED",
-            metadata: {
-              productId: productId || undefined,
-              publicJsonCount,
-              storefrontUrl: staticSiteUrl,
-              publicCatalogApiUrl: catalogApiUrl,
-              runtimeProjection: true,
-            },
-            schemaVersion: "1.0",
-          }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
-          return {
-            success: true,
-            operationId,
-            product: productTitle,
-            productId,
-            supabaseCount,
-            jsonCount,
-            publicJsonCount,
-            productFoundPublic,
-            staticSiteUrl,
-            publicCatalogApiUrl: catalogApiUrl,
-            storefrontHealthy,
-            missingPublicIds,
-            unexpectedPublicIds,
-            categoryMismatchIds,
-          };
+          void persistOperationalOperation({ operationId, operationType: "CATALOG_SYNC", status: "SUCCEEDED", actor: "system", correlationId: operationId, attempt: 1, createdAt: operationStartedAt, startedAt: operationStartedAt, completedAt: new Date().toISOString(), resultCode: "CATALOG_RUNTIME_VALIDATED", metadata: { productId: productId || undefined, publicJsonCount, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontCatalogApiUrl, runtimeProjection: true }, schemaVersion: "1.0" }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
+          return { success: true, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontHealthy, storefrontCatalogApiUrl, missingPublicIds, unexpectedPublicIds, categoryMismatchIds };
         }
         lastFailure = new Error(`Divergência runtime: missing=${missingPublicIds.length}, unexpected=${unexpectedPublicIds.length}, categoryMismatch=${categoryMismatchIds.length}, invalidIdentity=${hasInvalidIdentity}, storefrontHealthy=${storefrontHealthy}.`);
       } catch (error) {
         lastFailure = error;
       }
-      if (attempt < maxAttempts) await new Promise(resolve => setTimeout(resolve, 5_000));
+      if (attempt < 12) await new Promise(resolve => setTimeout(resolve, 5_000));
     }
 
-    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", lastFailure, {
-      message: "A projeção pública dinâmica não confirmou Supabase + API + storefront.",
-      likelyCause: "A API pública não reflete imediatamente public.products, o storefront novo está indisponível ou existe divergência de IDs/categorias.",
-      impact: "O produto permanece sem validação pública final e o Curator deve tratar a publicação como falha.",
-    });
+    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", lastFailure, { message: "A projeção pública dinâmica não confirmou Supabase + API + manifest do storefront.", likelyCause: "A API pública não reflete public.products, catalog-runtime.json não aponta para a API canônica ou existe divergência de IDs/categorias.", impact: "O produto permanece sem validação pública final e o Curator deve tratar a publicação como falha." });
     console.warn(`[Catalog Sync] operation=${operationId} code=${diagnostic.code} cause=${sanitizeOperationalText(lastFailure)}`);
-    return {
-      success: false,
-      operationId,
-      product: productTitle,
-      productId,
-      supabaseCount,
-      jsonCount,
-      publicJsonCount,
-      productFoundPublic,
-      staticSiteUrl,
-      publicCatalogApiUrl: catalogApiUrl,
-      storefrontHealthy,
-      missingPublicIds,
-      unexpectedPublicIds,
-      categoryMismatchIds,
-      diagnostic,
-      error: diagnostic.code,
-    };
+    return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontHealthy, storefrontCatalogApiUrl, missingPublicIds, unexpectedPublicIds, categoryMismatchIds, diagnostic, error: diagnostic.code };
   } finally {
     release();
   }
 }
 
-export const catalogSyncInternals = {
-  storefrontUrl,
-  publicCatalogApiUrl,
-  publicListFromPayload,
-  isPublicRow,
-};
+export const catalogSyncInternals = { storefrontUrl, publicCatalogApiUrl, normalizeApiUrl, parseStorefrontManifest, publicListFromPayload, isPublicRow };
