@@ -17,7 +17,18 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      - name: Start local Supabase and replay migrations
+      - name: Materialize local-only pre-history baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp supabase/baseline/00000000000000_pre_history_core.sql supabase/migrations/00000000000000_pre_history_core.sql
+          i=1
+          for fragment in $(find supabase/baseline/fragments -maxdepth 1 -type f -name '*.sql' | sort); do
+            printf -v version '%014d' "$i"
+            cp "$fragment" "supabase/migrations/${version}_baseline_fragment.sql"
+            i=$((i + 1))
+          done
+      - name: Start local Supabase and replay exact migration ledger
         run: |
           supabase start -x studio,imgproxy,logflare,vector,supavisor
           supabase db reset --local
