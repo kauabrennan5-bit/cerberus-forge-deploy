@@ -1,0 +1,70 @@
+name: Cerberus Operator Health
+
+on:
+  schedule:
+    # External scheduler: the backend executes one bounded Operator cycle and no longer owns a setInterval.
+    - cron: "5,15,25,35,45,55 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: cerberus-operator-health
+  cancel-in-progress: false
+
+jobs:
+  operator-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      CERBERUS_BACKEND_URL: https://cerberus-forge-deploy-backend.onrender.com
+      OIDC_AUDIENCE: cerberus-weekly-automation
+    steps:
+      - name: Run one bounded Operator V2 cycle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          get_oidc_token() {
+            local token_json token
+            token_json="$(curl --fail --silent --show-error --max-time 20 \
+              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+            token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+            echo "::add-mask::$token" >&2
+            printf '%s' "$token"
+          }
+
+          result="$RUNNER_TEMP/operator-health.json"
+          for attempt in 1 2 3; do
+            token="$(get_oidc_token)"
+            status="$(curl --silent --show-error --max-time 120 \
+              -o "$result" -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Content-Type: application/json' \
+              -d '{}' \
+              "$CERBERUS_BACKEND_URL/api/internal/operator/health-cycle" || true)"
+            if [ "$status" = "200" ] || [ "$status" = "202" ]; then
+              node - "$result" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.success !== true || body?.accepted !== true) process.exit(1);
+          if (body.status === 'already_running') {
+            console.log('OPERATOR_EXTERNAL=already_running');
+            process.exit(0);
+          }
+          const report = body.report || {};
+          console.log(`OPERATOR_EXTERNAL=completed overall=${report.overallStatus || 'unknown'} incidents=${Number(report.activeIncidentsCount || 0)}`);
+          NODE
+              exit 0
+            fi
+            echo "Operator cycle HTTP ${status}; retry ${attempt}/3."
+            sleep 10
+          done
+
+          echo "Operator external cycle failed after retries."
+          cat "$result" 2>/dev/null || true
+          exit 1
