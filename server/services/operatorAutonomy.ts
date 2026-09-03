@@ -78,6 +78,24 @@ export class OperatorStateMachine {
     if (this.history.length > 100) this.history.length = 100;
     return transition;
   }
+
+  /**
+   * Start a periodic/manual heartbeat without opening the transition graph.
+   * A previous diagnostic phase is explicitly finalized through IDLE first;
+   * active heal/validation phases are not interrupted by a heartbeat.
+   */
+  beginHealthCheck(reason = "Início de health check periódico ou manual."): StateTransition | null {
+    if (this.state === "CHECKING") return null;
+    if (this.state === "HEALING" || this.state === "VALIDATING" || this.state === "RECOVERING") return null;
+    if (this.state === "DIAGNOSING" || this.state === "WAITING_APPROVAL") {
+      this.transition("IDLE", "Normalização determinística do heartbeat anterior antes de nova observação.");
+      return this.transition("CHECKING", reason);
+    }
+    if (this.state === "IDLE" || this.state === "RESOLVED" || this.state === "ESCALATED") {
+      return this.transition("CHECKING", reason);
+    }
+    return null;
+  }
 }
 
 export function autonomyLevelFor(mode: AutoHealMode): 0 | 1 | 2 | 3 {
