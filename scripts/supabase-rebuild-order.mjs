@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 const migrationsDir = path.resolve('supabase/migrations');
 
 // These files predate unique timestamped migration filenames in the repository.
-// The effective ordering preserves the chronology already proven by LIVE
-// supabase_migrations records where available, without renaming/fabricating files.
+// The effective ordering preserves the chronology proven by LIVE object
+// ordinals and supabase_migrations records, without fabricating migrations.
 const legacyEffectiveVersion = new Map([
   ['20260816_commercial_brain.sql', '20260816000000'],
   ['20260816_agent_executions.sql', '20260816052812'],
@@ -21,9 +21,11 @@ const legacyEffectiveVersion = new Map([
   ['20260820_governance_candidates.sql', '20260819142113'],
   ['20260820_publication_executions.sql', '20260819173857'],
   ['20260822_newsletter_subscribers.sql', '20260822090000'],
-  ['20260822_product_curator_note.sql', '20260822100000'],
+  // LIVE products ordinals prove oferta_promocional was added before
+  // raw_title/display_title, and curator_note was added after those fields.
+  ['20260822_product_promotion_offer.sql', '20260822100000'],
   ['20260822_product_display_title.sql', '20260822101000'],
-  ['20260822_product_promotion_offer.sql', '20260822102000'],
+  ['20260822_product_curator_note.sql', '20260822102000'],
   ['20260822_newsletter_consent_suppression.sql', '20260822224450'],
 ]);
 
