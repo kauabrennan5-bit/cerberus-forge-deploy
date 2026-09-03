@@ -21,7 +21,7 @@ export type OperationalFailureCode =
   | "TELEGRAM_DELIVERY_ERROR"
   | "UNKNOWN_OPERATION_ERROR";
 
-export type DependencyName = "Supabase" | "Exportador" | "GitHub" | "Render Static Site" | "Telegram" | "Backend" | "Analytics";
+export type DependencyName = "Supabase" | "Exportador" | "GitHub" | "Render Static Site" | "Public Runtime" | "Telegram" | "Backend" | "Analytics";
 export type RecoveryClass = "AUTO" | "ADMIN_APPROVAL" | "MANUAL" | "NOT_APPLICABLE";
 
 export interface OperationalDiagnostic {
