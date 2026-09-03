@@ -84,6 +84,16 @@ begin
 end;
 $function$;
 
+create or replace function public.set_updated_at()
+returns trigger
+language plpgsql
+as $function$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$function$;
+
 -- This trigger exists in LIVE but its original creation SQL predates the surviving
 -- migration artifacts. Recreate it only in the fresh local rebuild.
 drop trigger if exists job_queue_set_updated_at on public.job_queue;
