@@ -1,0 +1,49 @@
+name: Reconcile migration versions
+
+on:
+  push:
+    branches: [fix/production-single-source-2026-09-03]
+    paths: [.github/workflows/reconcile-migration-versions.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rename duplicate migration versions deterministically
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv supabase/migrations/20260816_agent_executions.sql supabase/migrations/20260816052812_agent_executions.sql
+          mv supabase/migrations/20260816_experiments.sql supabase/migrations/20260816064321_experiments.sql
+          mv supabase/migrations/20260816_candidates.sql supabase/migrations/20260816082902_candidates.sql
+          mv supabase/migrations/20260816_candidate_evidence.sql supabase/migrations/20260816100000_candidate_evidence.sql
+          mv supabase/migrations/20260816_candidate_assessment.sql supabase/migrations/20260816181738_candidate_assessment.sql
+          mv supabase/migrations/20260816_affiliate_infrastructure.sql supabase/migrations/20260816220304_affiliate_infrastructure.sql
+          mv supabase/migrations/20260816_job_queue.sql supabase/migrations/20260816230000_job_queue.sql
+          mv supabase/migrations/20260816_policy_evaluations.sql supabase/migrations/20260816231000_policy_evaluations.sql
+          mv supabase/migrations/20260816_product_observations.sql supabase/migrations/20260816232000_product_observations.sql
+          node - <<'NODE'
+          const fs = require('fs');
+          const files = fs.readdirSync('supabase/migrations').filter(f => f.endsWith('.sql'));
+          const versions = new Map();
+          for (const file of files) {
+            const version = file.split('_', 1)[0];
+            if (versions.has(version)) throw new Error(`duplicate migration version ${version}: ${versions.get(version)}, ${file}`);
+            versions.set(version, file);
+          }
+          NODE
+          rm .github/workflows/reconcile-migration-versions.yml
+      - name: Commit reconciliation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(db): assign unique migration versions"
+          git push origin HEAD:fix/production-single-source-2026-09-03
