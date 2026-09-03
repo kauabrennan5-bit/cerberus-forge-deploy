@@ -23,6 +23,28 @@ test("a máquina de estados bloqueia transição inválida", () => {
   assert.throws(() => machine.transition("HEALING", "não permitido"), /INVALID_OPERATOR_TRANSITION/);
 });
 
+test("health check seguido de novo health check normaliza DIAGNOSING sem transição inválida", () => {
+  const machine = new OperatorStateMachine();
+  machine.beginHealthCheck("heartbeat 1");
+  machine.transition("DIAGNOSING", "heartbeat 1 terminou observação");
+  assert.doesNotThrow(() => machine.beginHealthCheck("heartbeat 2"));
+  assert.equal(machine.getState(), "CHECKING");
+  const history = machine.getHistory();
+  assert.equal(history[0].to, "CHECKING");
+  assert.equal(history[1].to, "IDLE");
+  assert.equal(history[2].to, "DIAGNOSING");
+  assert.equal(history[3].to, "CHECKING");
+});
+
+test("heartbeat não interrompe HEALING/VALIDATING/RECOVERING", () => {
+  const machine = new OperatorStateMachine();
+  machine.transition("CHECKING", "health");
+  machine.transition("DIAGNOSING", "diagnóstico");
+  machine.transition("HEALING", "heal");
+  assert.equal(machine.beginHealthCheck("heartbeat concorrente"), null);
+  assert.equal(machine.getState(), "HEALING");
+});
+
 test("Decision Engine escolhe auto-heal apenas para ação LOW registrada no nível seguro", () => {
   const decision = decideRecovery({
     mode: "SAFE_AUTO_HEAL",
