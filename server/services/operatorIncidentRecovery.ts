@@ -48,12 +48,21 @@ function normalizedText(value: unknown): string {
 
 export function componentForIncident(incident: Pick<PersistedOperatorIncident, "incident_type" | "summary" | "error_code" | "metadata">): OperatorHealthComponentName | null {
   const metadataComponent = String(incident.metadata?.component || "").trim();
+  const metadataDependency = String(incident.metadata?.dependency || "").trim();
   const known: OperatorHealthComponentName[] = ["Site", "Backend", "Produtos/API", "Catálogo/Projection", "Supabase", "Telegram", "Shopee", "Gemini", "OpenAI", "Newsletter"];
   if (known.includes(metadataComponent as OperatorHealthComponentName)) return metadataComponent as OperatorHealthComponentName;
+
+  // Legacy Operator incidents used broad component names that no longer match
+  // V2 observations. Translate them to the independently measured dependency
+  // so healthy checks can resolve old incidents instead of leaving false OPENs.
+  if (metadataComponent === "Lifecycle" && metadataDependency === "Backend") return "Backend";
+  if (metadataComponent === "Produtos") return "Produtos/API";
+
   const text = normalizedText(`${incident.incident_type} ${incident.summary} ${incident.error_code || ""}`);
+  if (text.includes("lifecycle_degraded")) return "Backend";
+  if (text.includes("produtos_degraded") || text.includes("produtos/api") || text.includes("products_api") || text.includes("api_products")) return "Produtos/API";
   if (text.includes("telegram") || text.includes("unauthorized")) return "Telegram";
   if (text.includes("catalog") || text.includes("catalogo") || text.includes("projection")) return "Catálogo/Projection";
-  if (text.includes("produtos/api") || text.includes("products_api") || text.includes("api_products")) return "Produtos/API";
   if (text.includes("backend")) return "Backend";
   if (text.includes("supabase")) return "Supabase";
   if (text.includes("shopee")) return "Shopee";
