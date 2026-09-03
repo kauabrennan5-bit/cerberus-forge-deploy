@@ -11,7 +11,6 @@ import { persistOperationalEvent, persistOperationalOperation } from "../reposit
 
 const OFFICIAL_STOREFRONT_URL = "https://cerberus-design-static.onrender.com";
 const OFFICIAL_PUBLIC_CATALOG_API_URL = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products";
-const LEGACY_PUBLIC_HOSTS = ["cerberus-design-preview.onrender.com", "cerberus-static-catalog.onrender.com", "cerberus-forge-deploy-backend.onrender.com/api/products"];
 
 export interface SyncLogResult {
   success: boolean;
@@ -54,19 +53,18 @@ async function acquireCatalogSyncLock(): Promise<() => void> {
   return release;
 }
 
-function assertCurrentArchitecture(url: string, label: string): string {
+function assertCanonicalUrl(url: string, expected: string, label: string): string {
   const normalized = String(url || "").trim().replace(/\/+$/, "");
-  if (!/^https:\/\//i.test(normalized)) throw new Error(`${label}_INVALID_URL`);
-  if (LEGACY_PUBLIC_HOSTS.some(host => normalized.includes(host))) throw new Error(`${label}_LEGACY_URL_FORBIDDEN`);
+  if (normalized !== expected) throw new Error(`${label}_NON_CANONICAL_URL`);
   return normalized;
 }
 
 function storefrontUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return assertCurrentArchitecture(String(env.PUBLIC_STOREFRONT_URL || OFFICIAL_STOREFRONT_URL), "PUBLIC_STOREFRONT");
+  return assertCanonicalUrl(String(env.PUBLIC_STOREFRONT_URL || OFFICIAL_STOREFRONT_URL), OFFICIAL_STOREFRONT_URL, "PUBLIC_STOREFRONT");
 }
 
 function publicCatalogApiUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return assertCurrentArchitecture(String(env.PUBLIC_CATALOG_API_URL || OFFICIAL_PUBLIC_CATALOG_API_URL), "PUBLIC_CATALOG_API");
+  return assertCanonicalUrl(String(env.PUBLIC_CATALOG_API_URL || OFFICIAL_PUBLIC_CATALOG_API_URL), OFFICIAL_PUBLIC_CATALOG_API_URL, "PUBLIC_CATALOG_API");
 }
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ status: number; body: unknown }> {
@@ -97,8 +95,8 @@ function parseStorefrontManifest(body: unknown): StorefrontRuntimeManifest | nul
   if (!body || typeof body !== "object") return null;
   const row = body as Record<string, unknown>;
   const catalogApiUrl = normalizeApiUrl(row.catalogApiUrl);
-  if (Number(row.version) < 1 || row.mode !== "runtime" || row.frontendOnly !== true || !/^https:\/\//i.test(catalogApiUrl)) return null;
-  if (LEGACY_PUBLIC_HOSTS.some(host => catalogApiUrl.includes(host))) return null;
+  if (Number(row.version) < 1 || row.mode !== "runtime" || row.frontendOnly !== true) return null;
+  if (catalogApiUrl !== OFFICIAL_PUBLIC_CATALOG_API_URL) return null;
   return { version: Number(row.version), mode: "runtime", frontendOnly: true, catalogApiUrl };
 }
 
@@ -158,7 +156,6 @@ function diagnosticForFailure(
 /**
  * Arquitetura pública canônica:
  * public.products (Supabase) -> cerberus-public-api (Supabase Edge) -> cerberus-design-static.
- * Backend /api/products, design-preview e static-catalog são proibidos como fontes de validação.
  */
 export async function syncCatalogAndDeploy(productTitle?: string, productId?: string, operationId = createOperationId("SYNC")): Promise<SyncLogResult> {
   const release = await acquireCatalogSyncLock();
@@ -212,7 +209,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
         ]);
         storefrontCatalogApiUrl = manifest.catalogApiUrl;
         storefrontHealthy = normalizeApiUrl(staticSiteUrl) === OFFICIAL_STOREFRONT_URL
-          && normalizeApiUrl(manifest.catalogApiUrl) === normalizeApiUrl(catalogApiUrl)
+          && normalizeApiUrl(manifest.catalogApiUrl) === OFFICIAL_PUBLIC_CATALOG_API_URL
           && normalizeApiUrl(catalogApiUrl) === OFFICIAL_PUBLIC_CATALOG_API_URL
           && manifest.frontendOnly === true
           && manifest.mode === "runtime";
