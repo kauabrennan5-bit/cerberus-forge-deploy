@@ -45,6 +45,40 @@ test("OpenAI rate limit honors Retry-After and bounded exponential retry", async
   assert.deepEqual(waits, [3000, 2000]);
 });
 
+test("repeated OpenAI 429 opens a provider circuit and suppresses further network calls", async () => {
+  openAIProviderRuntimeInternals.reset();
+  let calls = 0;
+  let nowMs = 1_000;
+  const fetchImpl = async () => {
+    calls += 1;
+    return errorResponse(429, "rate_limit_exceeded", "120");
+  };
+  const common = {
+    apiKey: "test-key-repeated-rate",
+    timeoutMs: 1000,
+    fetchImpl: fetchImpl as typeof fetch,
+    delayImpl: async () => undefined,
+    randomImpl: () => 0,
+    now: () => nowMs,
+    maxAttempts: 2,
+  };
+  await assert.rejects(
+    callOpenAIResponses({ ...common, request: { model: "rate-primary", input: "first" } }),
+    (error: unknown) => error instanceof OpenAIProviderError && error.code === "OPENAI_RATE_LIMITED",
+  );
+  assert.equal(calls, 2, "bounded attempts must stop after the configured retry budget");
+  const circuit = getOpenAIRuntimeCircuitStatus({ apiKey: common.apiKey, model: "other-model", nowMs });
+  assert.equal(circuit.providerOpen, true);
+  assert.equal(circuit.providerReason, "OPENAI_RATE_LIMITED");
+  await assert.rejects(
+    callOpenAIResponses({ ...common, request: { model: "other-model", input: "second" } }),
+    (error: unknown) => error instanceof OpenAIProviderError && error.code === "OPENAI_RATE_LIMITED",
+  );
+  assert.equal(calls, 2, "open provider circuit must prevent a useless extra request");
+  nowMs += 121_000;
+  assert.equal(getOpenAIRuntimeCircuitStatus({ apiKey: common.apiKey, model: "other-model", nowMs }).providerOpen, false);
+});
+
 test("OpenAI insufficient quota does not retry and opens a provider-wide circuit breaker", async () => {
   openAIProviderRuntimeInternals.reset();
   let calls = 0;
