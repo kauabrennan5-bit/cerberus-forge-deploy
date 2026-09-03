@@ -30,10 +30,12 @@ export interface ApiResponse<T = any> {
 }
 
 const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
+const PUBLIC_CATALOG_EDGE_BASE = 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api';
 const PRODUCTION_BACKEND_HOSTS = new Set([
   'cerberusfinds.com',
   'www.cerberusfinds.com',
   'cerberus-design-preview.onrender.com',
+  'cerberus-design-static.onrender.com',
 ]);
 
 function getApiUrl(path: string): string {
@@ -41,8 +43,8 @@ function getApiUrl(path: string): string {
   try {
     if (typeof window !== 'undefined' && window.location) {
       const hostname = window.location.hostname.toLowerCase();
-      // The surviving design site is frontend-only from the product perspective:
-      // all live catalog/API traffic must come from the canonical backend service.
+      // Public storefronts stay frontend-only. Mutating/admin/newsletter endpoints
+      // continue to use the canonical backend while the catalog read path is serverless.
       if (PRODUCTION_BACKEND_HOSTS.has(hostname) || hostname.includes('cerberus-static-catalog')) {
         return `${PRODUCTION_API_BASE}${normalizedPath}`;
       }
@@ -57,13 +59,18 @@ function getApiUrl(path: string): string {
 }
 
 function getPublicCatalogApiUrl(): string {
+  return `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}`;
+}
+
+function getBackendCatalogFallbackUrl(): string {
   return `${PRODUCTION_API_BASE}/api/products?t=${Date.now()}`;
 }
 
 /**
- * Carrega a projeção pública dinâmica diretamente da API canônica do backend.
- * O design-preview permanece frontend-only e não depende da sua própria branch
- * para receber cada nova publicação/arquivamento do Curator.
+ * O catálogo público usa Supabase Edge como leitura primária para que o site
+ * estático não dependa de um processo Render acordado. O backend fica apenas
+ * como fallback operacional; publicação/arquivamento aparece imediatamente
+ * porque ambos leem a mesma fonte canônica Supabase.
  */
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   try {
@@ -83,7 +90,16 @@ export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
 }
 
 export async function getProducts(): Promise<any[]> {
-  const response = await fetch(getPublicCatalogApiUrl(), { cache: 'no-store' });
+  let response: Response;
+  let source = 'supabase-edge';
+  try {
+    response = await fetch(getPublicCatalogApiUrl(), { cache: 'no-store' });
+    if (!response.ok) throw new Error(`edge_http_${response.status}`);
+  } catch (edgeError) {
+    console.warn('[Catalog] Edge API indisponível; usando fallback canônico do backend.', edgeError);
+    source = 'backend-fallback';
+    response = await fetch(getBackendCatalogFallbackUrl(), { cache: 'no-store' });
+  }
 
   if (!response.ok) {
     throw new Error(`Catálogo indisponível: API pública retornou HTTP ${response.status}.`);
@@ -101,7 +117,7 @@ export async function getProducts(): Promise<any[]> {
     throw new Error('Catálogo indisponível: API pública não contém uma lista válida.');
   }
 
-  console.log(`[Catalog] ${list.length} registros carregados da API pública canônica.`);
+  console.log(`[Catalog] ${list.length} registros carregados da API pública (${source}).`);
   const normalized = list.map((p: any) => ({
     ...p,
     id: String(p.id || ''),
@@ -286,5 +302,7 @@ export async function fetchProxyCsv(url: string): Promise<string> {
 
 export const publicCatalogApiInternals = {
   PRODUCTION_API_BASE,
+  PUBLIC_CATALOG_EDGE_BASE,
   getPublicCatalogApiUrl,
+  getBackendCatalogFallbackUrl,
 };
