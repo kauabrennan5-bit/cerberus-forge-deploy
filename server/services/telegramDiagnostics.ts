@@ -30,9 +30,17 @@ export interface TelegramWebhookDiagnostics {
   tokenFingerprint?: string;
 }
 
+export type TelegramWebhookReconcileResult = {
+  ok: boolean;
+  changed: boolean;
+  expectedWebhookUrl: string;
+  reason: "disabled" | "token_missing" | "secret_missing" | "already_configured" | "updated" | "provider_error";
+};
+
 const DEFAULT_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
 let telegramBackendReady = false;
 let lastTelegramBootstrapAt: string | undefined;
+let webhookReconcileScheduled = false;
 
 function sanitizeTelegramText(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
@@ -100,6 +108,35 @@ async function telegramGet(method: string): Promise<any> {
   }
 }
 
+async function telegramSetWebhook(url: string, secretToken: string): Promise<void> {
+  try {
+    const response = await telegramApiFetch("setWebhook", {
+      url,
+      secret_token: secretToken,
+      drop_pending_updates: false,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload?.ok !== true) {
+      const error = new Error(
+        sanitizeTelegramText(payload?.description) || `Telegram API HTTP ${response.status}`,
+      ) as TelegramMethodFailure;
+      error.status = response.status;
+      error.code = classifyTelegramHttpFailure(response.status, payload?.description);
+      error.method = "setWebhook";
+      throw error;
+    }
+  } catch (error) {
+    if (error instanceof TelegramProviderError) {
+      const wrapped = new Error(error.code) as TelegramMethodFailure;
+      wrapped.status = error.httpStatus ?? undefined;
+      wrapped.code = error.code;
+      wrapped.method = error.method || "setWebhook";
+      throw wrapped;
+    }
+    throw error;
+  }
+}
+
 function failureFields(error: unknown): Pick<TelegramWebhookDiagnostics, "errorCode" | "httpStatus" | "failedMethod" | "tokenFingerprint"> {
   const record = error && typeof error === "object" ? error as TelegramMethodFailure : undefined;
   const fingerprint = telegramTokenFingerprint();
@@ -109,6 +146,50 @@ function failureFields(error: unknown): Pick<TelegramWebhookDiagnostics, "errorC
     failedMethod: record?.method,
     tokenFingerprint: fingerprint || undefined,
   };
+}
+
+export async function reconcileTelegramWebhookConfiguration(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<TelegramWebhookReconcileResult> {
+  const expectedWebhookUrl = getExpectedTelegramWebhookUrl();
+  if (env.TELEGRAM_AUTO_CONFIGURE_WEBHOOK !== "true") {
+    return { ok: true, changed: false, expectedWebhookUrl, reason: "disabled" };
+  }
+  if (!getTelegramBotToken()) {
+    return { ok: false, changed: false, expectedWebhookUrl, reason: "token_missing" };
+  }
+  const secret = env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
+  if (!secret) {
+    console.warn("[Telegram] webhook_reconcile_blocked reason=secret_missing");
+    return { ok: false, changed: false, expectedWebhookUrl, reason: "secret_missing" };
+  }
+  if (!/^https:\/\//i.test(expectedWebhookUrl)) {
+    console.warn("[Telegram] webhook_reconcile_blocked reason=invalid_https_url");
+    return { ok: false, changed: false, expectedWebhookUrl, reason: "provider_error" };
+  }
+
+  try {
+    const current = await telegramGet("getWebhookInfo");
+    const currentUrl = typeof current?.url === "string" && current.url ? normalizeUrl(current.url) : "";
+    if (currentUrl === expectedWebhookUrl) {
+      console.info("[Telegram] webhook_reconcile status=already_configured");
+      return { ok: true, changed: false, expectedWebhookUrl, reason: "already_configured" };
+    }
+
+    await telegramSetWebhook(expectedWebhookUrl, secret);
+    const verified = await telegramGet("getWebhookInfo");
+    const verifiedUrl = typeof verified?.url === "string" && verified.url ? normalizeUrl(verified.url) : "";
+    if (verifiedUrl !== expectedWebhookUrl) {
+      console.warn("[Telegram] webhook_reconcile status=verification_mismatch");
+      return { ok: false, changed: true, expectedWebhookUrl, reason: "provider_error" };
+    }
+    console.info("[Telegram] webhook_reconcile status=updated");
+    return { ok: true, changed: true, expectedWebhookUrl, reason: "updated" };
+  } catch (error) {
+    const failure = failureFields(error);
+    console.warn(`[Telegram] webhook_reconcile status=provider_error code=${failure.errorCode || "unknown"} method=${failure.failedMethod || "unknown"}`);
+    return { ok: false, changed: false, expectedWebhookUrl, reason: "provider_error" };
+  }
 }
 
 export async function getTelegramWebhookDiagnostics(): Promise<TelegramWebhookDiagnostics> {
@@ -187,6 +268,18 @@ export function getTelegramWebhookStatusSnapshot(): Pick<TelegramWebhookDiagnost
     secretConfigured: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET?.trim()),
   };
 }
+
+function scheduleTelegramWebhookReconciliation(): void {
+  if (webhookReconcileScheduled) return;
+  if (process.env.NODE_ENV !== "production" || process.env.TELEGRAM_AUTO_CONFIGURE_WEBHOOK !== "true") return;
+  webhookReconcileScheduled = true;
+  const timer = setTimeout(() => {
+    void reconcileTelegramWebhookConfiguration().catch(() => undefined);
+  }, 1_500);
+  timer.unref?.();
+}
+
+scheduleTelegramWebhookReconciliation();
 
 export const telegramDiagnosticsInternals = {
   sanitizeTelegramText,
