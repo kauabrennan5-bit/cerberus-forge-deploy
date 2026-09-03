@@ -1,6 +1,14 @@
 name: Cerberus Operator Health
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/operator-health.yml"
+      - "server/services/cerberusOperator.ts"
+      - "server/routes/operatorAutomationRoutes.ts"
+      - "server/services/newsletterWeeklyAutomationAuth.ts"
   schedule:
     # External scheduler: the backend executes one bounded Operator cycle and no longer owns a setInterval.
     - cron: "5,15,25,35,45,55 * * * *"
