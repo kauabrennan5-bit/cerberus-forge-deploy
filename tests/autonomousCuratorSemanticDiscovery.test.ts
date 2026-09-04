@@ -26,7 +26,7 @@ function openAIResponse(value: unknown): Response {
   });
 }
 
-test("semantic discovery fica totalmente inerte sem OPENAI_API_KEY", async () => {
+test("semantic discovery fica totalmente inerte sem provider configurado", async () => {
   let calls = 0;
   const result = await rankAutonomousCuratorCandidates(
     profileForCategory("Iluminação"),
@@ -92,6 +92,109 @@ test("query expansion usa Luna, Structured Outputs e cache estável apesar da ro
   assert.equal(capturedBody.text.format.strict, true);
 });
 
+test("query expansion mantém OpenAI como primário mesmo com Gemini configurado", async () => {
+  autonomousCuratorSemanticDiscoveryInternals.clearQueryExpansionCache();
+  let openAICalls = 0;
+  let geminiCalls = 0;
+  const result = await expandAutonomousCuratorQueries(
+    profileForCategory("Móveis"),
+    ["mesa lateral vintage"],
+    {
+      env: {
+        OPENAI_API_KEY: "test-openai",
+        GEMINI_API_KEY: "test-gemini",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+      },
+      budget: allowBudget,
+      fetchImpl: (async () => {
+        openAICalls += 1;
+        return openAIResponse({ queries: ["mesa tubular cromada"] });
+      }) as typeof fetch,
+      geminiGenerate: async () => {
+        geminiCalls += 1;
+        return { text: JSON.stringify({ queries: ["mesa globo acrilico"] }) };
+      },
+    },
+  );
+  assert.deepEqual(result, ["mesa tubular cromada"]);
+  assert.equal(openAICalls, 1);
+  assert.equal(geminiCalls, 0);
+});
+
+test("query expansion cai para Gemini quando OpenAI está sem quota e preserva sanitização", async () => {
+  autonomousCuratorSemanticDiscoveryInternals.clearQueryExpansionCache();
+  let openAICalls = 0;
+  let geminiCalls = 0;
+  let geminiRequest: any = null;
+  const result = await expandAutonomousCuratorQueries(
+    profileForCategory("Decoração"),
+    ["decoracao bauhaus"],
+    {
+      env: {
+        OPENAI_API_KEY: "test-openai",
+        GEMINI_API_KEY: "test-gemini",
+        OPENAI_AUTONOMOUS_DISCOVERY_MAX_ATTEMPTS: "1",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+        GEMINI_AUTONOMOUS_DISCOVERY_MODEL: "gemini-3.1-flash-lite",
+      },
+      budget: allowBudget,
+      fetchImpl: (async () => {
+        openAICalls += 1;
+        return new Response(JSON.stringify({
+          error: { message: "You exceeded your current quota", type: "insufficient_quota", code: "insufficient_quota" },
+        }), { status: 429, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+      geminiGenerate: async (request) => {
+        geminiCalls += 1;
+        geminiRequest = request;
+        return {
+          text: JSON.stringify({
+            queries: [
+              "escultura geometrica acrilica",
+              "vaso cromado anos 70",
+              "https://example.com invalida",
+              "escultura geometrica acrilica",
+              "decoracao bauhaus",
+            ],
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(openAICalls, 1);
+  assert.equal(geminiCalls, 1);
+  assert.equal(geminiRequest.model, "gemini-3.1-flash-lite");
+  assert.equal(geminiRequest.config.responseMimeType, "application/json");
+  assert.ok(geminiRequest.config.responseSchema);
+  assert.deepEqual(result, ["escultura geometrica acrilica", "vaso cromado anos 70"]);
+});
+
+test("query expansion tenta modelo Gemini secundário após indisponibilidade temporária do primário", async () => {
+  autonomousCuratorSemanticDiscoveryInternals.clearQueryExpansionCache();
+  const models: string[] = [];
+  const result = await expandAutonomousCuratorQueries(
+    profileForCategory("Tecnologia"),
+    ["radio retro madeira"],
+    {
+      env: {
+        GEMINI_API_KEY: "test-gemini",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+        GEMINI_AUTONOMOUS_DISCOVERY_MODEL: "gemini-3.1-flash-lite",
+        GEMINI_AUTONOMOUS_DISCOVERY_FALLBACK_MODEL: "gemini-3.5-flash-lite",
+      },
+      budget: allowBudget,
+      geminiGenerate: async (request) => {
+        models.push(String(request.model));
+        if (request.model === "gemini-3.1-flash-lite") throw new Error("503 high demand");
+        return { text: JSON.stringify({ queries: ["radio portatil alca vintage"] }) };
+      },
+    },
+  );
+  assert.deepEqual(models, ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]);
+  assert.deepEqual(result, ["radio portatil alca vintage"]);
+});
+
 test("semantic ranking restringe IDs aos candidatos reais e usa imagem só para resgate lexical", async () => {
   let capturedBody: any = null;
   const result = await rankAutonomousCuratorCandidates(
@@ -140,13 +243,84 @@ test("semantic ranking restringe IDs aos candidatos reais e usa imagem só para 
 
   assert.equal(result.status, "ok");
   assert.equal(result.decisions[0].identityKey, "10:20");
-  assert.equal(capturedBody.text.format.schema.properties.decisions.items.properties.identityKey.type, "string");
-  assert.equal("enum" in capturedBody.text.format.schema.properties.decisions.items.properties.identityKey, false);
+  const enumIds = capturedBody.text.format.schema.properties.decisions.items.properties.identityKey.enum;
+  assert.deepEqual(enumIds, ["10:20", "30:40"]);
   const content = capturedBody.input[0].content;
   const imageParts = content.filter((part: any) => part.type === "input_image");
   assert.equal(imageParts.length, 1);
   assert.equal(imageParts[0].image_url, "https://cdn.example.test/rescue.jpg");
   assert.ok(!JSON.stringify(content).includes("https://cdn.example.test/lexical.jpg"));
+});
+
+test("semantic ranking cai para Gemini após quota da OpenAI sem inventar IDs", async () => {
+  let geminiRequest: any = null;
+  const result = await rankAutonomousCuratorCandidates(
+    profileForCategory("Móveis"),
+    [
+      {
+        identityKey: "1:2",
+        name: "Mesa lateral tubular cromada",
+        query: "mesa lateral vintage",
+        page: 1,
+        price: 180,
+        imageUrl: null,
+        lexicalScore: 110,
+      },
+      {
+        identityKey: "3:4",
+        name: "Mesa de apoio redonda",
+        query: "mesa apoio retro",
+        page: 1,
+        price: 150,
+        imageUrl: null,
+        lexicalScore: 80,
+      },
+    ],
+    {
+      env: {
+        OPENAI_API_KEY: "test-openai",
+        GEMINI_API_KEY: "test-gemini",
+        OPENAI_AUTONOMOUS_DISCOVERY_MAX_ATTEMPTS: "1",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+        GEMINI_AUTONOMOUS_DISCOVERY_MODEL: "gemini-3.1-flash-lite",
+      },
+      budget: allowBudget,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        error: { message: "quota exhausted", type: "insufficient_quota", code: "insufficient_quota" },
+      }), { status: 429, headers: { "content-type": "application/json" } })) as typeof fetch,
+      geminiGenerate: async (request) => {
+        geminiRequest = request;
+        return { text: JSON.stringify({
+          decisions: [
+            {
+              identityKey: "1:2",
+              fitScore: 94,
+              categoryFit: 97,
+              worthEnriching: true,
+              confidence: "HIGH",
+              signals: ["tubular", "cromado"],
+              reason: "Forma e material coerentes.",
+            },
+            {
+              identityKey: "999:999",
+              fitScore: 100,
+              categoryFit: 100,
+              worthEnriching: true,
+              confidence: "HIGH",
+              signals: ["inventado"],
+              reason: "deve ser descartado",
+            },
+          ],
+        }) };
+      },
+    },
+  );
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.model, "gemini-3.1-flash-lite");
+  assert.deepEqual(result.decisions.map(item => item.identityKey), ["1:2"]);
+  assert.equal(geminiRequest.config.responseMimeType, "application/json");
+  assert.equal(geminiRequest.config.responseSchema.properties.decisions.items.properties.identityKey.enum, undefined);
 });
 
 test("resposta com ID que não pertence ao lote é descartada mesmo se o provider devolver", async () => {
@@ -181,7 +355,7 @@ test("resposta com ID que não pertence ao lote é descartada mesmo se o provide
   assert.deepEqual(result.decisions, []);
 });
 
-test("orçamento esgotado não chama OpenAI nem inventa decisão", async () => {
+test("orçamento esgotado não chama provider nem inventa decisão", async () => {
   let calls = 0;
   const result = await rankAutonomousCuratorCandidates(
     profileForCategory("Decoração"),
@@ -208,16 +382,8 @@ test("orçamento esgotado não chama OpenAI nem inventa decisão", async () => {
   assert.deepEqual(result.decisions, []);
 });
 
-test("semantic ranking usa schema estrutural e valida IDs, scores e confidence localmente", () => {
-  const schema = autonomousCuratorSemanticDiscoveryInternals.semanticRankingSchema() as any;
-  assert.equal(schema.properties.decisions.items.properties.identityKey.type, "string");
-  assert.equal(schema.properties.decisions.items.properties.fitScore.type, "number");
-  assert.equal(schema.properties.decisions.items.properties.confidence.type, "string");
-  assert.equal("enum" in schema.properties.decisions.items.properties.identityKey, false);
+test("semantic ranking schema enumera somente identidades reais do lote", () => {
+  const schema = autonomousCuratorSemanticDiscoveryInternals.semanticRankingSchema(["a:b", "c:d"]) as any;
+  assert.deepEqual(schema.properties.decisions.items.properties.identityKey.enum, ["a:b", "c:d"]);
   assert.equal(schema.additionalProperties, false);
-
-  const normalize = autonomousCuratorSemanticDiscoveryInternals.normalizeDecision;
-  assert.equal(normalize({ identityKey: "a:b", fitScore: 140, categoryFit: -5, confidence: "INVALID" }, new Set(["a:b"]))?.fitScore, 100);
-  assert.equal(normalize({ identityKey: "not-allowed", fitScore: 100 }, new Set(["a:b"])), null);
-  assert.equal(normalize({ identityKey: "a:b", confidence: "MEDIUM" }, new Set(["a:b"]))?.confidence, "MEDIUM");
 });

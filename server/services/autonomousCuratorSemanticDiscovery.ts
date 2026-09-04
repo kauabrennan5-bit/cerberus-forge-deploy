@@ -1,14 +1,19 @@
+import { GoogleGenAI, Type } from "@google/genai";
 import type { AutonomousCuratorCategoryProfile } from "./autonomousCuratorProfiles";
 import { ExternalCallBudget, type BudgetDecision } from "./operationalGuards";
+import { callOpenAIResponses, OpenAIProviderError } from "./openAIProviderRuntime";
 
 type BudgetLike = {
   reserve(name: string, amount?: number): BudgetDecision;
 };
 
+type GeminiGenerate = (request: Record<string, unknown>) => Promise<{ text?: string | null }>;
+
 type SemanticOptions = {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   budget?: BudgetLike;
+  geminiGenerate?: GeminiGenerate;
 };
 
 export type SemanticDiscoveryCandidate = {
@@ -38,6 +43,8 @@ export type SemanticDiscoveryRankingResult = {
 };
 
 const DEFAULT_MODEL = "gpt-5.6-luna";
+const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 const QUERY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const queryExpansionCache = new Map<string, { expiresAt: number; queries: string[] }>();
 
@@ -56,9 +63,24 @@ function resolveModel(env: NodeJS.ProcessEnv): string {
   return String(env.OPENAI_AUTONOMOUS_DISCOVERY_MODEL || "").trim() || DEFAULT_MODEL;
 }
 
+function resolveGeminiModel(env: NodeJS.ProcessEnv): string {
+  return String(env.GEMINI_AUTONOMOUS_DISCOVERY_MODEL || env.GEMINI_PRODUCT_IMAGE_REVIEW_MODEL || "").trim() || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveGeminiModels(env: NodeJS.ProcessEnv): string[] {
+  const primary = resolveGeminiModel(env);
+  const fallback = String(
+    env.GEMINI_AUTONOMOUS_DISCOVERY_FALLBACK_MODEL
+    || env.GEMINI_PRODUCT_IMAGE_REVIEW_FALLBACK_MODEL
+    || DEFAULT_GEMINI_FALLBACK_MODEL,
+  ).trim();
+  return [...new Set([primary, fallback].filter(Boolean))];
+}
+
 const productionBudget = new ExternalCallBudget(
   {
     openaiAutonomousDiscovery: positiveInt(process.env.OPENAI_AUTONOMOUS_DISCOVERY_HOURLY_BUDGET, 72, 240),
+    geminiAutonomousDiscovery: positiveInt(process.env.GEMINI_AUTONOMOUS_DISCOVERY_HOURLY_BUDGET, 72, 240),
   },
   60 * 60 * 1000,
 );
@@ -102,45 +124,119 @@ async function callResponsesApi(input: {
   content: Array<Record<string, unknown>>;
   maxOutputTokens: number;
   fetchImpl: typeof fetch;
+  env: NodeJS.ProcessEnv;
 }): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs);
-  try {
-    const response = await input.fetchImpl("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        "Content-Type": "application/json",
-        "User-Agent": "CerberusFinds/1.0",
+  const request = {
+    model: input.model,
+    store: false,
+    reasoning: { effort: "none" },
+    max_output_tokens: input.maxOutputTokens,
+    input: [{ role: "user", content: input.content }],
+    text: {
+      format: {
+        type: "json_schema",
+        name: input.schemaName,
+        strict: true,
+        schema: input.schema,
       },
-      body: JSON.stringify({
-        model: input.model,
-        store: false,
-        reasoning: { effort: "none" },
-        max_output_tokens: input.maxOutputTokens,
-        input: [{ role: "user", content: input.content }],
-        text: {
-          format: {
-            type: "json_schema",
-            name: input.schemaName,
-            strict: true,
-            schema: input.schema,
+    },
+  };
+  const payload = await callOpenAIResponses({
+    apiKey: input.apiKey,
+    request,
+    timeoutMs: input.timeoutMs,
+    fetchImpl: input.fetchImpl,
+    maxAttempts: positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_MAX_ATTEMPTS, 4, 6),
+    maxConcurrency: positiveInt(input.env.OPENAI_GLOBAL_MAX_CONCURRENCY, 2, 8),
+  });
+  return parseJson(extractOutputText(payload));
+}
+
+function geminiGenerateFor(apiKey: string, injected?: GeminiGenerate): GeminiGenerate {
+  if (injected) return injected;
+  return async (request: Record<string, unknown>) => {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { headers: { "User-Agent": "aistudio-build" } },
+    });
+    return ai.models.generateContent(request as any) as Promise<{ text?: string | null }>;
+  };
+}
+
+async function callGeminiQueryExpansion(input: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  maxQueries: number;
+  generate?: GeminiGenerate;
+}): Promise<unknown> {
+  const response = await geminiGenerateFor(input.apiKey, input.generate)({
+    model: input.model,
+    contents: input.prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          queries: {
+            type: Type.ARRAY,
+            maxItems: input.maxQueries,
+            items: { type: Type.STRING },
           },
         },
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      await response.text().catch(() => "");
-      throw new Error(`OPENAI_AUTONOMOUS_DISCOVERY_HTTP_${response.status}`);
-    }
-    return parseJson(extractOutputText(await response.json()));
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("OPENAI_AUTONOMOUS_DISCOVERY_TIMEOUT");
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
+        required: ["queries"],
+      },
+    },
+  });
+  return parseJson(String(response.text || ""));
+}
+
+async function callGeminiSemanticRanking(input: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  identityKeys: string[];
+  generate?: GeminiGenerate;
+}): Promise<unknown> {
+  const response = await geminiGenerateFor(input.apiKey, input.generate)({
+    model: input.model,
+    contents: input.prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          decisions: {
+            type: Type.ARRAY,
+            description: `Return at most ${input.identityKeys.length} decisions using only candidate IDs from the prompt.`,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                // Keep Gemini's transport schema structural only. Exact identity,
+                // ranges, confidence and output limits are enforced after parsing.
+                identityKey: { type: Type.STRING },
+                fitScore: { type: Type.INTEGER },
+                categoryFit: { type: Type.INTEGER },
+                worthEnriching: { type: Type.BOOLEAN },
+                confidence: { type: Type.STRING },
+                signals: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+                reason: { type: Type.STRING },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  return parseJson(String(response.text || ""));
+}
+
+function safeProviderReason(error: unknown): string {
+  if (error instanceof OpenAIProviderError) return error.code;
+  return error instanceof Error ? error.message.slice(0, 120) : "PROVIDER_UNAVAILABLE";
 }
 
 function sanitizeQuery(value: unknown): string | null {
@@ -160,21 +256,33 @@ function expansionCacheKey(profile: AutonomousCuratorCategoryProfile, existingQu
   return `${profile.category}|${normalized.join("|")}`;
 }
 
+function normalizeExpandedQueries(parsed: { queries?: unknown[] }, existingQueries: readonly string[], maxQueries: number): string[] {
+  const existing = new Set(existingQueries.map(item => item.toLowerCase().trim()));
+  return [...new Set((Array.isArray(parsed.queries) ? parsed.queries : [])
+    .map(sanitizeQuery)
+    .filter((item): item is string => Boolean(item))
+    .filter(item => !existing.has(item.toLowerCase())))]
+    .slice(0, maxQueries);
+}
+
 export async function expandAutonomousCuratorQueries(
   profile: AutonomousCuratorCategoryProfile,
   existingQueries: readonly string[],
   options: SemanticOptions = {},
 ): Promise<string[]> {
   const env = options.env || process.env;
-  const apiKey = String(env.OPENAI_API_KEY || "").trim();
-  if (!apiKey || !enabledUnlessFalse(env.OPENAI_AUTONOMOUS_DISCOVERY_ENABLED) || !enabledUnlessFalse(env.OPENAI_AUTONOMOUS_QUERY_EXPANSION_ENABLED)) return [];
+  if (!enabledUnlessFalse(env.OPENAI_AUTONOMOUS_QUERY_EXPANSION_ENABLED)) return [];
+  const openAIApiKey = String(env.OPENAI_API_KEY || "").trim();
+  const geminiApiKey = String(env.GEMINI_API_KEY || "").trim();
+  const openAIEnabled = enabledUnlessFalse(env.OPENAI_AUTONOMOUS_DISCOVERY_ENABLED);
+  const geminiEnabled = enabledUnlessFalse(env.GEMINI_AUTONOMOUS_DISCOVERY_ENABLED);
+  if ((!openAIApiKey || !openAIEnabled) && (!geminiApiKey || !geminiEnabled)) return [];
 
   const key = expansionCacheKey(profile, existingQueries);
   const cached = queryExpansionCache.get(key);
   if (cached && cached.expiresAt > Date.now()) return [...cached.queries];
 
   const budget = options.budget || productionBudget;
-  if (!budget.reserve("openaiAutonomousDiscovery").allowed) return [];
   const maxQueries = positiveInt(env.OPENAI_AUTONOMOUS_QUERY_EXPANSION_COUNT, 4, 8);
   const schema = {
     type: "object",
@@ -198,47 +306,69 @@ Sinais de forma/material: ${profile.signatureTerms.join(", ")}
 Bloqueios: ${profile.blockedTerms.join(", ")}
 
 Regras: retorne no máximo ${maxQueries} consultas em português do Brasil; 2 a 10 palavras por consulta; não repita as buscas existentes; não invente URLs, IDs, marcas, autenticidade ou disponibilidade; não use termos bloqueados; prefira consultas com alta chance de encontrar produtos visualmente Cerberus mesmo quando o anúncio não usa a palavra Bauhaus/Space Age/vintage.`;
-  try {
-    const parsed = await callResponsesApi({
-      apiKey,
-      model: resolveModel(env),
-      timeoutMs: positiveInt(env.OPENAI_AUTONOMOUS_DISCOVERY_TIMEOUT_MS, 20_000, 60_000),
-      schemaName: "cerberus_shopee_query_expansion",
-      schema,
-      content: [{ type: "input_text", text: prompt }],
-      maxOutputTokens: 500,
-      fetchImpl: options.fetchImpl || fetch,
-    }) as { queries?: unknown[] };
-    const existing = new Set(existingQueries.map(item => item.toLowerCase().trim()));
-    const queries = [...new Set((Array.isArray(parsed.queries) ? parsed.queries : [])
-      .map(sanitizeQuery)
-      .filter((item): item is string => Boolean(item))
-      .filter(item => !existing.has(item.toLowerCase())))]
-      .slice(0, maxQueries);
-    queryExpansionCache.set(key, { expiresAt: Date.now() + QUERY_CACHE_TTL_MS, queries });
-    return queries;
-  } catch (error) {
-    console.warn(`[Autonomous Curator] OpenAI query expansion indisponível: ${error instanceof Error ? error.message : "unknown"}`);
-    return [];
+
+  if (openAIApiKey && openAIEnabled && budget.reserve("openaiAutonomousDiscovery").allowed) {
+    try {
+      const parsed = await callResponsesApi({
+        apiKey: openAIApiKey,
+        model: resolveModel(env),
+        timeoutMs: positiveInt(env.OPENAI_AUTONOMOUS_DISCOVERY_TIMEOUT_MS, 20_000, 60_000),
+        schemaName: "cerberus_shopee_query_expansion",
+        schema,
+        content: [{ type: "input_text", text: prompt }],
+        maxOutputTokens: 500,
+        fetchImpl: options.fetchImpl || fetch,
+        env,
+      }) as { queries?: unknown[] };
+      const queries = normalizeExpandedQueries(parsed, existingQueries, maxQueries);
+      queryExpansionCache.set(key, { expiresAt: Date.now() + QUERY_CACHE_TTL_MS, queries });
+      return queries;
+    } catch (error) {
+      console.warn(`[Autonomous Curator] OpenAI query expansion indisponível: ${safeProviderReason(error)}`);
+    }
   }
+
+  if (geminiApiKey && geminiEnabled) {
+    for (const model of resolveGeminiModels(env)) {
+      if (!budget.reserve("geminiAutonomousDiscovery").allowed) break;
+      try {
+        const parsed = await callGeminiQueryExpansion({
+          apiKey: geminiApiKey,
+          model,
+          prompt,
+          maxQueries,
+          generate: options.geminiGenerate,
+        }) as { queries?: unknown[] };
+        const queries = normalizeExpandedQueries(parsed, existingQueries, maxQueries);
+        queryExpansionCache.set(key, { expiresAt: Date.now() + QUERY_CACHE_TTL_MS, queries });
+        console.info(`[Autonomous Curator] Gemini query expansion fallback ativo: ${model}`);
+        return queries;
+      } catch (error) {
+        console.warn(`[Autonomous Curator] Gemini query expansion indisponível (${model}): ${safeProviderReason(error)}`);
+      }
+    }
+  }
+  return [];
 }
 
-function semanticRankingSchema(): Record<string, unknown> {
+function semanticRankingSchema(identityKeys: string[]): Record<string, unknown> {
   return {
     type: "object",
     properties: {
       decisions: {
         type: "array",
+        maxItems: identityKeys.length,
         items: {
           type: "object",
           properties: {
-            identityKey: { type: "string" },
-            fitScore: { type: "number" },
-            categoryFit: { type: "number" },
+            identityKey: { type: "string", enum: identityKeys },
+            fitScore: { type: "integer", minimum: 0, maximum: 100 },
+            categoryFit: { type: "integer", minimum: 0, maximum: 100 },
             worthEnriching: { type: "boolean" },
-            confidence: { type: "string" },
+            confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
             signals: {
               type: "array",
+              maxItems: 4,
               items: { type: "string" },
             },
             reason: { type: "string" },
@@ -281,23 +411,38 @@ function normalizeDecision(value: unknown, allowed: Set<string>): SemanticDiscov
   };
 }
 
+function normalizeDecisions(parsed: { decisions?: unknown[] }, identityKeys: string[]): SemanticDiscoveryDecision[] {
+  const allowed = new Set(identityKeys);
+  const seen = new Set<string>();
+  return (Array.isArray(parsed.decisions) ? parsed.decisions : [])
+    .map(item => normalizeDecision(item, allowed))
+    .filter((item): item is SemanticDiscoveryDecision => Boolean(item))
+    .filter(item => {
+      if (seen.has(item.identityKey)) return false;
+      seen.add(item.identityKey);
+      return true;
+    });
+}
+
 export async function rankAutonomousCuratorCandidates(
   profile: AutonomousCuratorCategoryProfile,
   candidates: readonly SemanticDiscoveryCandidate[],
   options: SemanticOptions = {},
 ): Promise<SemanticDiscoveryRankingResult> {
   const env = options.env || process.env;
-  const apiKey = String(env.OPENAI_API_KEY || "").trim();
-  if (!apiKey || !enabledUnlessFalse(env.OPENAI_AUTONOMOUS_DISCOVERY_ENABLED) || !enabledUnlessFalse(env.OPENAI_AUTONOMOUS_RERANK_ENABLED)) {
+  const openAIApiKey = String(env.OPENAI_API_KEY || "").trim();
+  const geminiApiKey = String(env.GEMINI_API_KEY || "").trim();
+  const rerankEnabled = enabledUnlessFalse(env.OPENAI_AUTONOMOUS_RERANK_ENABLED);
+  const openAIEnabled = rerankEnabled && enabledUnlessFalse(env.OPENAI_AUTONOMOUS_DISCOVERY_ENABLED);
+  const geminiEnabled = rerankEnabled && enabledUnlessFalse(env.GEMINI_AUTONOMOUS_DISCOVERY_ENABLED);
+  if ((!openAIApiKey || !openAIEnabled) && (!geminiApiKey || !geminiEnabled)) {
     return { status: "disabled", model: null, decisions: [] };
   }
-  if (candidates.length === 0) return { status: "ok", model: resolveModel(env), decisions: [] };
+
+  const preferredModel = openAIApiKey && openAIEnabled ? resolveModel(env) : resolveGeminiModels(env)[0] || null;
+  if (candidates.length === 0) return { status: "ok", model: preferredModel, decisions: [] };
 
   const budget = options.budget || productionBudget;
-  if (!budget.reserve("openaiAutonomousDiscovery").allowed) {
-    return { status: "budget_exhausted", model: resolveModel(env), decisions: [] };
-  }
-
   const maxCandidates = positiveInt(env.OPENAI_AUTONOMOUS_DISCOVERY_MAX_CANDIDATES, 48, 80);
   const selected = candidates.slice(0, maxCandidates);
   const identityKeys = selected.map(item => item.identityKey);
@@ -331,45 +476,82 @@ Candidatos JSON:\n${JSON.stringify(rows)}`;
     content.push({ type: "input_image", image_url: imageUrl, detail: "auto" });
   }
 
-  const model = resolveModel(env);
-  try {
-    const parsed = await callResponsesApi({
-      apiKey,
-      model,
-      timeoutMs: positiveInt(env.OPENAI_AUTONOMOUS_DISCOVERY_TIMEOUT_MS, 20_000, 60_000),
-      schemaName: "cerberus_shopee_semantic_ranking",
-      schema: semanticRankingSchema(),
-      content,
-      maxOutputTokens: Math.min(5_000, 500 + selected.length * 90),
-      fetchImpl: options.fetchImpl || fetch,
-    }) as { decisions?: unknown[] };
-    const allowed = new Set(identityKeys);
-    const seen = new Set<string>();
-    const decisions = (Array.isArray(parsed.decisions) ? parsed.decisions : [])
-      .map(item => normalizeDecision(item, allowed))
-      .filter((item): item is SemanticDiscoveryDecision => Boolean(item))
-      .filter(item => {
-        if (seen.has(item.identityKey)) return false;
-        seen.add(item.identityKey);
-        return true;
-      });
-    return { status: "ok", model, decisions };
-  } catch (error) {
-    console.warn(`[Autonomous Curator] OpenAI semantic ranking indisponível: ${error instanceof Error ? error.message : "unknown"}`);
-    return { status: "unavailable", model, decisions: [] };
+  let attemptedProvider = false;
+  let budgetDenied = false;
+  const openAIModel = resolveModel(env);
+  if (openAIApiKey && openAIEnabled) {
+    const reservation = budget.reserve("openaiAutonomousDiscovery");
+    if (reservation.allowed) {
+      attemptedProvider = true;
+      try {
+        const parsed = await callResponsesApi({
+          apiKey: openAIApiKey,
+          model: openAIModel,
+          timeoutMs: positiveInt(env.OPENAI_AUTONOMOUS_DISCOVERY_TIMEOUT_MS, 20_000, 60_000),
+          schemaName: "cerberus_shopee_semantic_ranking",
+          schema: semanticRankingSchema(identityKeys),
+          content,
+          maxOutputTokens: Math.min(5_000, 500 + selected.length * 90),
+          fetchImpl: options.fetchImpl || fetch,
+          env,
+        }) as { decisions?: unknown[] };
+        return { status: "ok", model: openAIModel, decisions: normalizeDecisions(parsed, identityKeys) };
+      } catch (error) {
+        console.warn(`[Autonomous Curator] OpenAI semantic ranking indisponível: ${safeProviderReason(error)}`);
+      }
+    } else {
+      budgetDenied = true;
+    }
   }
+
+  if (geminiApiKey && geminiEnabled) {
+    for (const model of resolveGeminiModels(env)) {
+      const reservation = budget.reserve("geminiAutonomousDiscovery");
+      if (!reservation.allowed) {
+        budgetDenied = true;
+        break;
+      }
+      attemptedProvider = true;
+      try {
+        const parsed = await callGeminiSemanticRanking({
+          apiKey: geminiApiKey,
+          model,
+          prompt,
+          identityKeys,
+          generate: options.geminiGenerate,
+        }) as { decisions?: unknown[] };
+        const decisions = normalizeDecisions(parsed, identityKeys);
+        console.info(`[Autonomous Curator] Gemini semantic ranking success model=${model} input=${selected.length} accepted=${decisions.length}`);
+        return { status: "ok", model, decisions };
+      } catch (error) {
+        console.warn(`[Autonomous Curator] Gemini semantic ranking indisponível (${model}): ${safeProviderReason(error)}`);
+      }
+    }
+  }
+
+  if (attemptedProvider) return { status: "unavailable", model: preferredModel, decisions: [] };
+  if (budgetDenied) return { status: "budget_exhausted", model: preferredModel, decisions: [] };
+  return { status: "disabled", model: null, decisions: [] };
 }
 
 export const autonomousCuratorSemanticDiscoveryInternals = {
   positiveInt,
   enabledUnlessFalse,
   resolveModel,
+  resolveGeminiModel,
+  resolveGeminiModels,
   extractOutputText,
   parseJson,
+  callResponsesApi,
+  callGeminiQueryExpansion,
+  callGeminiSemanticRanking,
+  safeProviderReason,
   sanitizeQuery,
   expansionCacheKey,
+  normalizeExpandedQueries,
   semanticRankingSchema,
   validImageUrl,
   normalizeDecision,
+  normalizeDecisions,
   clearQueryExpansionCache: () => queryExpansionCache.clear(),
 };
