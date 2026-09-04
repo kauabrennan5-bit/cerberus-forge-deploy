@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { Product } from "../../src/types";
 import type { PublicProductCategory } from "../../src/lib/productCategory";
-import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
+import { isPublicHttpsImageUrl, resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { generateSlug } from "../../src/data/initialProducts";
 import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
 import { createShopeeApiClient, type ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
 import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
-import { extractProductForReview } from "./productAutomation";
+import { buildDeterministicEditorialFallback, extractProductForReview } from "./productAutomation";
 import { createProductionProductPipeline, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
@@ -46,7 +46,6 @@ const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SEARCH_MAX_PAGE = 10;
 const MAX_CYCLE_HISTORY = 48;
-const QUALIFIED_COMPARISON_TARGET = 4;
 const DEFAULT_LIVE_CATALOG_TARGET = 10;
 const REVIEW_RECOVERY_PREFIX = "REVIEW_RECOVERY_PENDING:";
 
@@ -93,6 +92,9 @@ type CuratedCandidate = {
   score: number;
   breakdown: AutonomousCuratorScoreBreakdown;
   lifecycle: LifecycleRecord;
+  publicationMode: "STANDARD" | "BEST_OF_LOT" | "DEFICIT_RECOVERY";
+  warnings: string[];
+  softPenalty: number;
 };
 
 type RecoverySeed = {
@@ -500,9 +502,166 @@ async function evaluateIdentity(input: {
       rawTitle, displayTitle, displayTitleReviewModel: titleReview.model, description, category, price,
       priceEvidence: resolvedPriceEvidence,
       images: image.publicHttpsImageUrls, imageCuration, score: breakdown.finalScore, breakdown, lifecycle,
+      publicationMode: "STANDARD", warnings: [], softPenalty: 0,
     },
     reason: "QUALIFIED",
   };
+}
+
+
+function bestOfLotWarningPenalty(warnings: readonly string[]): number {
+  return [...new Set(warnings)].reduce((total, warning) => {
+    const upper = warning.toUpperCase();
+    if (upper.includes("CATEGORY_MISMATCH")) return total + 80;
+    if (upper.includes("PROFILE_BLOCKED_TERM")) return total + 60;
+    if (upper.includes("CATALOG_SIMILARITY")) return total + 45;
+    if (upper.includes("PIPELINE_NOT_AUTO_PUBLISHABLE") || upper.includes("PIPELINE_")) return total + 35;
+    if (upper.includes("OFF_BRAND")) return total + 30;
+    if (upper.includes("IMAGE") || upper.includes("REVIEW") || upper.includes("OPENAI") || upper.includes("GEMINI")) return total + 25;
+    if (upper.includes("BELOW_AUTO_PUBLISH_THRESHOLD")) return total + 20;
+    if (upper.includes("EDITORIAL") || upper.includes("DETERMINISTIC_COPY")) return total + 10;
+    return total + 15;
+  }, 0);
+}
+
+async function evaluateBestOfLotIdentity(
+  input: Parameters<typeof evaluateIdentity>[0],
+  strictReason: string,
+): Promise<{ candidate: CuratedCandidate | null; reason: string }> {
+  if (!input.config.autoPublishEnabled) return { candidate: null, reason: "AUTO_PUBLISH_DISABLED" };
+
+  const sourceIdentity = await curatorRepo.findProductSourceIdentity("Shopee", input.shopId, input.itemId);
+  const reservedUntil = sourceIdentity?.reservedUntil ? Date.parse(sourceIdentity.reservedUntil) : 0;
+  if (sourceIdentity?.productId && sourceIdentity.productId !== input.allowedProductId) return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
+  if (sourceIdentity && !sourceIdentity.productId && Number.isFinite(reservedUntil) && reservedUntil > Date.now()) return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
+
+  const acquisition = await input.client.acquireAffiliateLink({ shopId: input.shopId, itemId: input.itemId });
+  if (acquisition.status !== "link_acquired" || !acquisition.affiliateUrl || !acquisition.productLink || !acquisition.shopId || !acquisition.itemId) {
+    return { candidate: null, reason: `AFFILIATE_${acquisition.status}` };
+  }
+  if (acquisition.shopId !== input.shopId || acquisition.itemId !== input.itemId || !sourceIdentityMatches(acquisition.productLink, input.shopId, input.itemId)) {
+    return { candidate: null, reason: "AFFILIATE_IDENTITY_MISMATCH" };
+  }
+
+  const rawTitle = (acquisition.name || input.discoveryName || "").replace(/\s+/g, " ").trim();
+  if (!rawTitle) return { candidate: null, reason: "BEST_OF_LOT_RAW_TITLE_MISSING" };
+  const resolvedPriceEvidence = resolvePriceEvidence({
+    shopId: input.shopId,
+    itemId: input.itemId,
+    acquisitionPrice: acquisition.price,
+    discoveryEvidence: input.discoveryPriceEvidence,
+  });
+  const price = resolvedPriceEvidence?.price ?? Number.NaN;
+  if (!resolvedPriceEvidence || !Number.isFinite(price) || price <= 0) {
+    return { candidate: null, reason: "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK" };
+  }
+
+  const sourceImage = isPublicHttpsImageUrl(input.sourceImageUrl) ? input.sourceImageUrl : null;
+  if (!sourceImage) return { candidate: null, reason: "BEST_OF_LOT_PRIMARY_IMAGE_MISSING" };
+
+  const editorial = buildDeterministicEditorialFallback({ rawTitle });
+  const displayTitle = editorial.title.replace(/\s+/g, " ").trim() || rawTitle;
+  const description = editorial.description.replace(/\s+/g, " ").trim();
+  if (!displayTitle || !description) return { candidate: null, reason: "BEST_OF_LOT_EDITORIAL_FALLBACK_MISSING" };
+
+  const imageCuration: NonNullable<Product["imageCuration"]> = {
+    status: "ready",
+    rawImageUrls: [sourceImage],
+    primaryImageUrl: sourceImage,
+    galleryImageUrls: [],
+    assessments: [{
+      url: sourceImage,
+      decision: "unknown",
+      confidence: "LOW",
+      reason: "Imagem oficial aceita pela política editorial best-of-lot para zerar déficit.",
+    }],
+  };
+  const image = resolveCanonicalProductImage({ imagens: [sourceImage], imageCuration, imageEditorialStatus: "clean" });
+  if (image.status !== "ready" || !image.primaryImageUrl) return { candidate: null, reason: "BEST_OF_LOT_PRIMARY_IMAGE_INVALID" };
+
+  const sourceUrl = canonicalSourceUrl(input.shopId, input.itemId);
+  const category = input.profile.category;
+  const lifecycle = await createProductionProductPipeline().evaluate({
+    normalizedUrl: sourceUrl,
+    link: acquisition.affiliateUrl,
+    marketplace: "Shopee",
+    produto: displayTitle,
+    rawTitle,
+    displayTitle,
+    categoria: category,
+    preco: price,
+    imagens: image.publicHttpsImageUrls,
+    imagensOriginais: imageCuration.rawImageUrls,
+    imageCuration,
+    imagemPrincipal: image.primaryImageUrl,
+    imagensGaleria: image.galleryImageUrls,
+    imageEditorialStatus: "clean",
+    descricao: description,
+  });
+
+  const breakdown = scoreAutonomousCandidate({
+    profile: input.profile,
+    rawTitle,
+    displayTitle,
+    description,
+    category,
+    price,
+    imageCuration,
+    pipelineScore: lifecycle.curation.score,
+    existingProducts: similarityUniverse(input.products),
+  });
+
+  const warnings = [strictReason, "BEST_OF_LOT_IMAGE_EDITORIAL_OVERRIDE", "BEST_OF_LOT_DETERMINISTIC_COPY"];
+  const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
+  if (blocked) warnings.push(`PROFILE_BLOCKED_TERM:${blocked}`);
+  if (lifecycle.validation.outcome !== "PASS" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED" || lifecycle.curation.recommendation !== "PUBLISH") {
+    warnings.push(`PIPELINE_NOT_AUTO_PUBLISHABLE:${lifecycle.validation.errors.join("|") || lifecycle.curation.recommendation}`);
+  }
+  if (breakdown.maximumCatalogSimilarity >= 0.82) warnings.push(`CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}`);
+  if (breakdown.finalScore < input.config.autoPublishThreshold) warnings.push(`BELOW_AUTO_PUBLISH_THRESHOLD:${breakdown.finalScore}`);
+
+  const normalizedWarnings = [...new Set(warnings.map(value => safeFailureScalar(value, 180)).filter(Boolean))];
+  const publicationMode: CuratedCandidate["publicationMode"] = recoveryModeFromEnv(input.env) ? "DEFICIT_RECOVERY" : "BEST_OF_LOT";
+  const softPenalty = bestOfLotWarningPenalty(normalizedWarnings);
+  const auditedBreakdown = breakdown as AutonomousCuratorScoreBreakdown & { priceEvidence?: PriceEvidence; bestOfLot?: Record<string, unknown> };
+  auditedBreakdown.priceEvidence = resolvedPriceEvidence;
+  auditedBreakdown.bestOfLot = { publicationMode, warnings: normalizedWarnings, softPenalty, strictReason: safeFailureScalar(strictReason, 180) };
+
+  return {
+    candidate: {
+      profile: input.profile,
+      query: input.query,
+      shopId: input.shopId,
+      itemId: input.itemId,
+      sourceProductUrl: sourceUrl,
+      affiliateUrl: acquisition.affiliateUrl,
+      sourceImageUrl: sourceImage,
+      rawTitle,
+      displayTitle,
+      displayTitleReviewModel: "deterministic-best-of-lot-v1",
+      description,
+      category,
+      price,
+      priceEvidence: resolvedPriceEvidence,
+      images: image.publicHttpsImageUrls,
+      imageCuration,
+      score: breakdown.finalScore,
+      breakdown,
+      lifecycle,
+      publicationMode,
+      warnings: normalizedWarnings,
+      softPenalty,
+    },
+    reason: `${publicationMode}:${safeFailureScalar(strictReason, 120)}`,
+  };
+}
+
+async function evaluateWithBestOfLot(
+  input: Parameters<typeof evaluateIdentity>[0],
+): Promise<{ candidate: CuratedCandidate | null; reason: string }> {
+  const strict = await evaluateIdentity(input);
+  if (strict.candidate || !input.config.autoPublishEnabled) return strict;
+  return evaluateBestOfLotIdentity(input, strict.reason);
 }
 
 function semanticEntryScore(cheap: number, page: number, decision: SemanticDiscoveryDecision | undefined): number {
@@ -552,7 +711,6 @@ async function discoverQualifiedCandidate(input: {
     metrics.candidatesDiscovered += search.items.length;
     for (const item of search.items) {
       if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
-      if (hasBlockedProfileTerm(input.profile, item.name)) { metrics.candidatesRejected += 1; continue; }
       const identityKey = `${item.shopId}:${item.itemId}`;
       if (seenIdentities.has(identityKey)) continue;
       seenIdentities.add(identityKey);
@@ -583,14 +741,9 @@ async function discoverQualifiedCandidate(input: {
   const semantic = await rankAutonomousCuratorCandidates(input.profile, semanticCandidates, { env: input.env });
   if (semantic.status === "unavailable") metrics.technicalFailures += 1;
   const semanticByIdentity = new Map(semantic.decisions.map(decision => [decision.identityKey, decision] as const));
-  const rescueThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_RESCUE_THRESHOLD, 68, 100);
-  const categoryThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100);
-  const rankedPool = candidatePool.filter(entry => {
-    if (entry.cheap > -1000) return true;
-    if (semantic.status !== "ok") return false;
-    const decision = semanticByIdentity.get(`${entry.item.shopId}:${entry.item.itemId}`);
-    return Boolean(decision?.worthEnriching && decision.fitScore >= rescueThreshold && decision.categoryFit >= categoryThreshold);
-  });
+  // Best-of-lot recovery never lets lexical/semantic editorial gates erase the entire supply.
+  // Semantic/lexical scores still order the pool, but every official Shopee candidate remains eligible for enrichment.
+  const rankedPool = [...candidatePool];
   rankedPool.sort((a, b) => semanticEntryScore(b.cheap, b.page, semanticByIdentity.get(`${b.item.shopId}:${b.item.itemId}`)) - semanticEntryScore(a.cheap, a.page, semanticByIdentity.get(`${a.item.shopId}:${a.item.itemId}`)));
 
   const qualified: Array<{ candidate: CuratedCandidate; cheap: number; page: number; semantic?: SemanticDiscoveryDecision }> = [];
@@ -605,7 +758,7 @@ async function discoverQualifiedCandidate(input: {
     examined += 1;
     metrics.candidatesEnriched += 1;
     const discoveryPriceEvidence = priceEvidence("shopee_discovery_api", entry.item.price, shopId, itemId);
-    const evaluated = await evaluateIdentity({
+    const evaluated = await evaluateWithBestOfLot({
       profile: input.profile, query: entry.query, shopId, itemId, discoveryName: entry.item.name || "",
       discoveryPriceEvidence, sourceImageUrl: entry.item.imageUrl, products: input.products,
       client: input.client, env: input.env, extractor: input.extractor, config: input.config,
@@ -622,14 +775,14 @@ async function discoverQualifiedCandidate(input: {
         const audited = evaluated.candidate.breakdown as AutonomousCuratorScoreBreakdown & { semanticDiscovery?: Record<string, unknown> };
         audited.semanticDiscovery = { provider: semantic.model?.startsWith("gemini-") ? "gemini" : "openai", model: semantic.model, fitScore: semanticDecision.fitScore, categoryFit: semanticDecision.categoryFit, confidence: semanticDecision.confidence, rescuedFromLexicalGate: entry.cheap <= -1000, signals: semanticDecision.signals, reason: semanticDecision.reason };
       }
+      if (evaluated.candidate.warnings.some(warning => isTechnicalReviewFailure(warning))) metrics.technicalFailures += 1;
       qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page, semantic: semanticDecision });
-      if (qualified.length >= QUALIFIED_COMPARISON_TARGET) break;
     }
   }
 
   if (qualified.length > 0) {
-    qualified.sort((a, b) => b.candidate.score - a.candidate.score || (b.semantic?.fitScore || 0) - (a.semantic?.fitScore || 0) || Number(a.page !== 1) - Number(b.page !== 1) || b.cheap - a.cheap || a.candidate.price - b.candidate.price);
-    return { candidate: qualified[0].candidate, reason: `BEST_OF_${qualified.length}_QUALIFIED_CANDIDATES`, examined, searchedPages, recoverySeed, metrics };
+    qualified.sort((a, b) => a.candidate.softPenalty - b.candidate.softPenalty || a.candidate.warnings.length - b.candidate.warnings.length || b.candidate.score - a.candidate.score || (b.semantic?.fitScore || 0) - (a.semantic?.fitScore || 0) || Number(a.page !== 1) - Number(b.page !== 1) || b.cheap - a.cheap || a.candidate.price - b.candidate.price);
+    return { candidate: qualified[0].candidate, reason: `BEST_OF_${qualified.length}_PUBLISHABLE_CANDIDATES:${qualified[0].candidate.publicationMode}`, examined, searchedPages, recoverySeed, metrics };
   }
   return { candidate: null, reason: `${lastReason};SEARCH_CONTINUES_NEXT_SCHEDULED_CYCLE`, examined, searchedPages, recoverySeed, metrics };
 }
@@ -753,7 +906,7 @@ async function maybeQueueCandidate(candidate: CuratedCandidate, products: Produc
 async function refreshQueuedCandidate(input: { product: Product; profile: AutonomousCuratorCategoryProfile; products: Product[]; client: ShopeeApiClient; env: NodeJS.ProcessEnv; extractor: typeof extractProductForReview; config: curatorRepo.AutonomousCuratorConfig; }) {
   const meta = parseQueueNote(input.product.curatorNote);
   if (!meta) return { candidate: null, reason: "QUEUE_METADATA_MISSING" };
-  return evaluateIdentity({ profile: input.profile, query: meta.query, shopId: meta.shopId, itemId: meta.itemId, discoveryName: input.product.rawTitle || input.product.produto, discoveryPriceEvidence: meta.priceEvidence || null, sourceImageUrl: meta.imageUrl || input.product.imagens?.[0] || null, products: input.products.filter(product => product.id !== input.product.id), client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowedProductId: input.product.id });
+  return evaluateWithBestOfLot({ profile: input.profile, query: meta.query, shopId: meta.shopId, itemId: meta.itemId, discoveryName: input.product.rawTitle || input.product.produto, discoveryPriceEvidence: meta.priceEvidence || null, sourceImageUrl: meta.imageUrl || input.product.imagens?.[0] || null, products: input.products.filter(product => product.id !== input.product.id), client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowedProductId: input.product.id });
 }
 
 async function prepareQueuedProduct(product: Product, candidate: CuratedCandidate, now: Date): Promise<void> {
@@ -779,6 +932,8 @@ async function publishQueuedProductWithHardGate(product: Product, candidate: Cur
       offBrand: false,
       lifecycleApproved: candidate.lifecycle.validation.outcome === "PASS" && candidate.lifecycle.curation.recommendation === "PUBLISH",
       reviewState: candidate.lifecycle.state,
+      bestOfLotFallback: candidate.publicationMode !== "STANDARD",
+      publicationWarnings: candidate.warnings,
     },
   });
   const previous = parseQueueNote(product.curatorNote);
@@ -827,8 +982,11 @@ async function markCycleStarted(runId: string, cycleId: string, cycleNumber: num
 }
 
 async function markPublished(runId: string, candidate: CuratedCandidate, productId: string): Promise<void> {
-  const auditedBreakdown = { ...(candidate.breakdown as unknown as Record<string, unknown>), priceEvidence: candidate.priceEvidence };
-  await curatorRepo.saveAutonomousCuratorCategoryResult({ runId, category: candidate.category, searchQuery: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, rawTitle: candidate.rawTitle, displayTitle: candidate.displayTitle, score: candidate.score, scoreBreakdown: auditedBreakdown, decision: "auto_published", reason: "PUBLISHED_FROM_CONTINUOUS_CURATOR_V2_THROUGH_HARD_GATE_AND_PUBLICLY_VALIDATED", productId });
+  const auditedBreakdown = { ...(candidate.breakdown as unknown as Record<string, unknown>), priceEvidence: candidate.priceEvidence, publicationMode: candidate.publicationMode, publicationWarnings: candidate.warnings, softPenalty: candidate.softPenalty };
+  const reason = candidate.publicationMode === "STANDARD"
+    ? "PUBLISHED_FROM_CONTINUOUS_CURATOR_V2_THROUGH_HARD_GATE_AND_PUBLICLY_VALIDATED"
+    : `PUBLISHED_FROM_CONTINUOUS_CURATOR_V2_${candidate.publicationMode}_AND_PUBLICLY_VALIDATED`;
+  await curatorRepo.saveAutonomousCuratorCategoryResult({ runId, category: candidate.category, searchQuery: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, rawTitle: candidate.rawTitle, displayTitle: candidate.displayTitle, score: candidate.score, scoreBreakdown: auditedBreakdown, decision: "auto_published", reason, productId });
 }
 
 async function persistReviewRecovery(runId: string, category: PublicProductCategory, seed: RecoverySeed): Promise<void> {
@@ -920,7 +1078,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
           const recoverySeed = recoverySeedFromStored(previous);
           if (recoverySeed && budgetRemaining > 0) {
             metrics.candidatesExamined += 1; metrics.candidatesEnriched += 1; budgetRemaining -= 1;
-            const recovered = await evaluateIdentity({ profile, query: recoverySeed.query, shopId: recoverySeed.shopId, itemId: recoverySeed.itemId, discoveryName: recoverySeed.rawTitle, discoveryPriceEvidence: recoverySeed.priceEvidence, sourceImageUrl: recoverySeed.imageUrl, products, client, env, extractor, config });
+            const recovered = await evaluateWithBestOfLot({ profile, query: recoverySeed.query, shopId: recoverySeed.shopId, itemId: recoverySeed.itemId, discoveryName: recoverySeed.rawTitle, discoveryPriceEvidence: recoverySeed.priceEvidence, sourceImageUrl: recoverySeed.imageUrl, products, client, env, extractor, config });
             if (recovered.candidate) {
               const queued = await maybeQueueCandidate(recovered.candidate, products, now, env);
               if (queued.product) await publishCandidate(queued.product, recovered.candidate, "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_REVIEW_RECOVERY");
@@ -986,7 +1144,9 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
         for (const item of pendingPublications) {
           await markPublished(runId, item.candidate, item.product.id);
           const category = categories.find(entry => entry.category === item.candidate.category);
-          if (category) category.reason = "PUBLISHED_AND_PUBLICLY_VALIDATED";
+          if (category) category.reason = item.candidate.publicationMode === "STANDARD"
+            ? "PUBLISHED_AND_PUBLICLY_VALIDATED"
+            : `PUBLISHED_AND_PUBLICLY_VALIDATED:${item.candidate.publicationMode}:WARNINGS=${item.candidate.warnings.length}`;
         }
       }
     }
@@ -998,7 +1158,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     let fulfilledCategories = categoryPolicyAfter?.fulfilledCategories || 0;
     if (!categoryPolicyAfter) for (const profile of AUTONOMOUS_CURATOR_PROFILES) { const last = await lastPublishedAt(profile.category, products); if (last && !dueForPublication(last, now)) fulfilledCategories += 1; }
     const queuedProducts = products.filter(product => product.createdBy === QUEUE_CREATED_BY && product.status === "paused" && product.ativo === false && parseQueueNote(product.curatorNote)).length;
-    const publishedThisCycle = categories.filter(category => category.published && category.reason === "PUBLISHED_AND_PUBLICLY_VALIDATED").length;
+    const publishedThisCycle = categories.filter(category => category.published).length;
     const remainingDeficit = categoryPolicyAfter ? categoryPolicyAfter.totalDeficit : inventoryDeficitAfter;
     const status: ContinuousCuratorResultV2["status"] = remainingDeficit > 0 ? failedThisCycle > 0 && fulfilledCategories === 0 ? "failed" : "partial" : failedThisCycle === 0 ? "completed" : "partial";
     const completedAt = new Date().toISOString();

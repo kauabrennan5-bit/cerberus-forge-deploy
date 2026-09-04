@@ -38,9 +38,9 @@ export type {
 
 /**
  * Public catalog contract:
- * - every official category has an absolute public floor of five valid products;
+ * - every official category has an absolute public floor of six valid products;
  * - cumulative growth can raise that target after the initial floor, but can never
- *   reduce it below five; an explicit production floor may raise it further;
+ *   reduce it below six; an explicit production floor may raise it further;
  * - already-published healthy pieces are never retired to keep a cap;
  * - while any category is below today's target, normal growth publication is
  *   restricted to the explicit deficit category list before enrichment starts;
@@ -49,11 +49,11 @@ export type {
  * - a day/cycle is never recorded as complete while any category is below its
  *   cumulative floor or the public runtime projection is not validated.
  */
-const CATEGORY_GROWTH_VERSION = "6";
+const CATEGORY_GROWTH_VERSION = "7";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "2";
-const MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5;
+const MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 6;
 const MAX_CONFIGURED_PUBLIC_PRODUCTS_PER_CATEGORY = 10;
-const MAX_RECOVERY_BURST_CYCLES = 8;
+const MAX_RECOVERY_BURST_CYCLES = 12;
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -124,7 +124,7 @@ function configuredDailyFloor(env: NodeJS.ProcessEnv): number {
 
 function recoveryBurstCycles(env: NodeJS.ProcessEnv): number {
   const parsed = Number.parseInt(String(env.AUTONOMOUS_CURATOR_RECOVERY_BURST_CYCLES || ""), 10);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) return 1;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return MAX_RECOVERY_BURST_CYCLES;
   return Math.min(MAX_RECOVERY_BURST_CYCLES, parsed);
 }
 
@@ -406,13 +406,14 @@ async function notifyGrowth(
     `Queries: <b>${metrics.queriesExecuted}</b> · rejeitados: <b>${metrics.candidatesRejected}</b> · falhas técnicas: <b>${metrics.technicalFailures}</b>`,
     `Catálogo público/frontend: <b>${publicValidation.success && publicValidation.storefrontHealthy ? "VALIDADO" : "NÃO VALIDADO"}</b>`,
     `Links Shopee indisponíveis removidos: <b>${health.unavailableIds.length}</b>`,
-    `Bloqueios principais: <code>${escapeHtml(summaryText)}</code>`,
+    `Avisos/ranking best-of-lot: <code>${escapeHtml(summaryText)}</code>`,
+    `Política de publicação: <b>OBRIGATÓRIA POR DÉFICIT</b> · melhor candidato tecnicamente publicável vence mesmo com warnings editoriais`,
     "",
     ...lines,
     "",
     covered === AUTONOMOUS_CURATOR_PROFILES.length && publicValidation.success
       ? `✅ Meta do dia cumprida. O piso operacional permanece ≥${dailyTarget} peças por categoria; nenhuma peça saudável é removida só para manter limite.`
-      : "🚨 META DO DIA NÃO CUMPRIDA. O run permanece partial/failed até count(category) >= dailyTarget nas 10 categorias e a projeção pública estar validada. Nenhum gate editorial é afrouxado.",
+      : "🚨 META DO DIA AINDA NÃO CUMPRIDA. O run continua em recuperação até count(category) >= dailyTarget nas 10 categorias. Bloqueios editoriais/visuais viram warnings e ranking best-of-lot; só falhas técnicas objetivas podem impedir publicação.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
 }
@@ -501,7 +502,6 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     const afterBurstProducts = await productsRepository.getProducts();
     const afterBurstPolicy = calculateCategoryPolicy(afterBurstProducts, dailyTarget);
     if (afterBurstPolicy.totalDeficit === 0) break;
-    if (cycleResult.publishedThisCycle === 0 && cycleResult.failedThisCycle > 0) break;
   }
 
   if (!result) {
