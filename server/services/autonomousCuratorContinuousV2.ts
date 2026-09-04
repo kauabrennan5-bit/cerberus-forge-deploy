@@ -40,7 +40,8 @@ export type {
  * Public catalog contract:
  * - every official category has an absolute public floor of five valid products;
  * - cumulative growth can raise that target after the initial floor, but can never
- *   reduce it below five; already-published healthy pieces are never retired to keep a cap;
+ *   reduce it below five; an explicit production floor may raise it further;
+ * - already-published healthy pieces are never retired to keep a cap;
  * - while any category is below today's target, normal growth publication is
  *   restricted to the explicit deficit category list before enrichment starts;
  * - availability failures still archive only listings definitively unavailable
@@ -48,9 +49,11 @@ export type {
  * - a day/cycle is never recorded as complete while any category is below its
  *   cumulative floor or the public runtime projection is not validated.
  */
-const CATEGORY_GROWTH_VERSION = "5";
+const CATEGORY_GROWTH_VERSION = "6";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "2";
 const MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5;
+const MAX_CONFIGURED_PUBLIC_PRODUCTS_PER_CATEGORY = 10;
+const MAX_RECOVERY_BURST_CYCLES = 8;
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -113,11 +116,24 @@ function autonomousGrowthStartDate(products: readonly Product[], now: Date, env:
   return Number.isFinite(earliest) ? localDateKey(new Date(earliest)) : localDateKey(now);
 }
 
+function configuredDailyFloor(env: NodeJS.ProcessEnv): number {
+  const parsed = Number.parseInt(String(env.AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY || ""), 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return MIN_PUBLIC_PRODUCTS_PER_CATEGORY;
+  return Math.max(MIN_PUBLIC_PRODUCTS_PER_CATEGORY, Math.min(MAX_CONFIGURED_PUBLIC_PRODUCTS_PER_CATEGORY, parsed));
+}
+
+function recoveryBurstCycles(env: NodeJS.ProcessEnv): number {
+  const parsed = Number.parseInt(String(env.AUTONOMOUS_CURATOR_RECOVERY_BURST_CYCLES || ""), 10);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) return 1;
+  return Math.min(MAX_RECOVERY_BURST_CYCLES, parsed);
+}
+
 function dailyTargetPerCategory(products: readonly Product[], now: Date, env: NodeJS.ProcessEnv): number {
+  const configuredFloor = configuredDailyFloor(env);
   const start = dateKeyOrdinal(autonomousGrowthStartDate(products, now, env));
   const today = dateKeyOrdinal(localDateKey(now));
-  if (start === null || today === null) return MIN_PUBLIC_PRODUCTS_PER_CATEGORY;
-  return Math.max(MIN_PUBLIC_PRODUCTS_PER_CATEGORY, today - start + 1);
+  if (start === null || today === null) return configuredFloor;
+  return Math.max(configuredFloor, today - start + 1);
 }
 
 function totalDeficit(counts: CategoryCounts, target: number): number {
@@ -395,7 +411,7 @@ async function notifyGrowth(
     ...lines,
     "",
     covered === AUTONOMOUS_CURATOR_PROFILES.length && publicValidation.success
-      ? `✅ Meta do dia cumprida. O piso operacional permanece ≥5 peças por categoria e só pode ficar mais estrito com o crescimento; nenhuma peça saudável é removida só para manter limite.`
+      ? `✅ Meta do dia cumprida. O piso operacional permanece ≥${dailyTarget} peças por categoria; nenhuma peça saudável é removida só para manter limite.`
       : "🚨 META DO DIA NÃO CUMPRIDA. O run permanece partial/failed até count(category) >= dailyTarget nas 10 categorias e a projeção pública estar validada. Nenhum gate editorial é afrouxado.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
@@ -440,31 +456,74 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   const beforePolicy = calculateCategoryPolicy(productsBefore, dailyTarget);
   const countsBefore = beforePolicy.categoryCounts;
   const recoveryMode = totalDeficit(countsBefore, dailyTarget) > 0;
-  const activeBefore = productsBefore.filter(isActivePublished).length;
+  const burstLimit = recoveryMode ? recoveryBurstCycles(env) : 1;
 
-  // Deficit categories are a hard pre-enrichment scope. Complete categories
-  // cannot consume semantic ranking, visual review, affiliate acquisition or
-  // catalog publication while any lane remains below the daily cumulative floor.
-  const baseEnv: NodeJS.ProcessEnv = {
-    ...env,
-    AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
-    AUTONOMOUS_CURATOR_RECOVERY_MODE: recoveryMode ? "true" : "false",
-    AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: beforePolicy.deficitCategories.join(","),
-    AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(
-      recoveryMode
-        ? Math.min(100, activeBefore + beforePolicy.totalDeficit)
-        : Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length),
-    ),
-  };
+  let result: ContinuousCuratorResultV2 | null = null;
+  let publishedAcrossBurst = 0;
+  let failedAcrossBurst = 0;
 
-  // Growth is cumulative: never archived merely because a category crossed a fixed cap.
-  const result = await runAutonomousCuratorContinuousV2Base({
-    ...options,
-    ...(shopeeClient ? { shopeeClient } : {}),
-    env: baseEnv,
-    notify: false,
-  });
-  if (result.status === "disabled" || !result.runId) return result;
+  for (let burstIndex = 0; burstIndex < burstLimit; burstIndex += 1) {
+    const burstProducts = burstIndex === 0 ? productsBefore : await productsRepository.getProducts();
+    const burstPolicy = calculateCategoryPolicy(burstProducts, dailyTarget);
+    if (recoveryMode && burstPolicy.totalDeficit === 0) break;
+    const activeBefore = burstProducts.filter(isActivePublished).length;
+    const burstRecoveryMode = burstPolicy.totalDeficit > 0;
+
+    // Deficit categories are a hard pre-enrichment scope. Complete categories
+    // cannot consume semantic ranking, visual review, affiliate acquisition or
+    // catalog publication while any lane remains below the daily cumulative floor.
+    const baseEnv: NodeJS.ProcessEnv = {
+      ...env,
+      AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
+      AUTONOMOUS_CURATOR_RECOVERY_MODE: burstRecoveryMode ? "true" : "false",
+      AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: burstPolicy.deficitCategories.join(","),
+      AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(
+        burstRecoveryMode
+          ? Math.min(100, activeBefore + burstPolicy.totalDeficit)
+          : Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length),
+      ),
+    };
+
+    // Each burst iteration delegates to the canonical base coordinator. Publication
+    // remains exclusively behind publishProductWithGate + catalogSync in that base.
+    const cycleResult = await runAutonomousCuratorContinuousV2Base({
+      ...options,
+      ...(shopeeClient ? { shopeeClient } : {}),
+      env: baseEnv,
+      notify: false,
+    });
+    if (cycleResult.status === "disabled" || !cycleResult.runId) return cycleResult;
+
+    result = cycleResult;
+    publishedAcrossBurst += cycleResult.publishedThisCycle;
+    failedAcrossBurst += cycleResult.failedThisCycle;
+
+    const afterBurstProducts = await productsRepository.getProducts();
+    const afterBurstPolicy = calculateCategoryPolicy(afterBurstProducts, dailyTarget);
+    if (afterBurstPolicy.totalDeficit === 0) break;
+    if (cycleResult.publishedThisCycle === 0 && cycleResult.failedThisCycle > 0) break;
+  }
+
+  if (!result) {
+    result = await runAutonomousCuratorContinuousV2Base({
+      ...options,
+      ...(shopeeClient ? { shopeeClient } : {}),
+      env: {
+        ...env,
+        AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
+        AUTONOMOUS_CURATOR_RECOVERY_MODE: "false",
+        AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: "",
+        AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length)),
+      },
+      notify: false,
+    });
+    if (result.status === "disabled" || !result.runId) return result;
+    publishedAcrossBurst += result.publishedThisCycle;
+    failedAcrossBurst += result.failedThisCycle;
+  }
+
+  result.publishedThisCycle = publishedAcrossBurst;
+  result.failedThisCycle = failedAcrossBurst;
 
   const productsAfter = await productsRepository.getProducts();
   const afterPolicy = calculateCategoryPolicy(productsAfter, dailyTarget);
@@ -507,6 +566,8 @@ export const autonomousCuratorContinuousV2Internals = {
   localDateKey,
   dateKeyOrdinal,
   autonomousGrowthStartDate,
+  configuredDailyFloor,
+  recoveryBurstCycles,
   dailyTargetPerCategory,
   categoryDeficits,
   deficitCategories,
