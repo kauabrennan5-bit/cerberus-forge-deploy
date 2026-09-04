@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { Product } from "../src/types";
 import {
@@ -31,6 +32,16 @@ test("database-row predicate requires the exact Edge v3 fields", () => {
   assert.equal(isPublicCatalogEligibleDbRow(row), true);
   assert.equal(isPublicCatalogEligibleDbRow({ ...row, display_title_status: "unreviewed" }), false);
   assert.equal(isPublicCatalogEligibleDbRow({ ...row, image_curation: { status: "pending" } }), false);
+});
+
+test("Edge source cannot drift from the shared public eligibility contract", async () => {
+  const source = await readFile(new URL("../supabase/functions/cerberus-public-api/index.ts", import.meta.url), "utf8");
+  assert.match(source, /\.eq\("ativo", true\)/);
+  assert.match(source, /\.eq\("status", "published"\)/);
+  assert.match(source, /\.eq\("display_title_status", "reviewed"\)/);
+  assert.match(source, /\.eq\("image_editorial_status", "clean"\)/);
+  assert.match(source, /\.not\("display_title", "is", null\)/);
+  assert.match(source, /\.eq\("image_curation->>status", "ready"\)/);
 });
 
 test("category deficit counts only products eligible for the public Edge catalog", () => {
