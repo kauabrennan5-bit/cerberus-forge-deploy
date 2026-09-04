@@ -11,10 +11,26 @@ import { categoryCounts } from "../server/services/autonomousCuratorCategoryPoli
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
-    id: "p1", produto: "Peça", displayTitle: "Peça editorial", displayTitleStatus: "reviewed",
-    categoria: "Iluminação", preco: 10, imagens: ["https://cdn.example/p1.jpg"],
-    imageEditorialStatus: "clean", imageCuration: { status: "ready", raw: [], gallery: [], principal: "https://cdn.example/p1.jpg", decision: "approved", confidence: 1, reason: "test" } as any,
-    link: "https://shopee.example/p1", ativo: true, destaque: false, status: "published", ...overrides,
+    id: "p1",
+    produto: "Peça",
+    displayTitle: "Peça editorial",
+    displayTitleStatus: "reviewed",
+    categoria: "Iluminação",
+    preco: 10,
+    imagens: ["https://cdn.example/p1.jpg"],
+    imageEditorialStatus: "clean",
+    imageCuration: {
+      status: "ready",
+      rawImageUrls: ["https://cdn.example/p1.jpg"],
+      primaryImageUrl: "https://cdn.example/p1.jpg",
+      galleryImageUrls: [],
+      assessments: [{ url: "https://cdn.example/p1.jpg", decision: "clean", confidence: "HIGH", reason: "fixture" }],
+    },
+    link: "https://shopee.example/p1",
+    ativo: true,
+    destaque: false,
+    status: "published",
+    ...overrides,
   };
 }
 
@@ -22,8 +38,16 @@ test("public catalog eligibility mirrors Edge v3 editorial contract", () => {
   assert.equal(PUBLIC_CATALOG_ELIGIBILITY_CONTRACT_VERSION, "edge-v3");
   assert.equal(isPublicCatalogEligibleProduct(product()), true);
   assert.equal(isPublicCatalogEligibleProduct(product({ displayTitleStatus: "unreviewed" })), false);
-  assert.equal(isPublicCatalogEligibleProduct(product({ imageEditorialStatus: "pending" as any })), false);
-  assert.equal(isPublicCatalogEligibleProduct(product({ imageCuration: { status: "rejected" } as any })), false);
+  assert.equal(isPublicCatalogEligibleProduct(product({ imageEditorialStatus: "unreviewed" })), false);
+  assert.equal(isPublicCatalogEligibleProduct(product({
+    imageCuration: {
+      status: "review_required",
+      rawImageUrls: ["https://cdn.example/p1.jpg"],
+      galleryImageUrls: [],
+      assessments: [],
+      reason: "image_review_unavailable",
+    },
+  })), false);
   assert.equal(isPublicCatalogEligibleProduct(product({ ativo: false })), false);
 });
 
@@ -48,7 +72,7 @@ test("category deficit counts only products eligible for the public Edge catalog
   const counts = categoryCounts([
     product({ id: "ok" }),
     product({ id: "bad-title", displayTitleStatus: "unreviewed" }),
-    product({ id: "bad-image", imageEditorialStatus: "pending" as any }),
+    product({ id: "bad-image", imageEditorialStatus: "unreviewed" }),
   ]);
   assert.equal(counts["Iluminação"], 1);
 });
