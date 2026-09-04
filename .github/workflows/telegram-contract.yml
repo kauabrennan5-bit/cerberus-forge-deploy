@@ -2,24 +2,6 @@ name: Telegram V2 Gate
 
 on:
   pull_request:
-    paths:
-      - "server/services/telegram*.ts"
-      - "server/repositories/telegramRepository.ts"
-      - "server/repositories/productsRepository.ts"
-      - "tests/telegram*.test.ts"
-      - "tests/publishCommand.test.ts"
-      - "tests/promotionReview.test.ts"
-      - "tests/previewTelegramRoutes.test.ts"
-      - "tests/shopeeCommand.test.ts"
-      - "tests/socialLinks.test.ts"
-      - "tests/newsletterCampaign.test.ts"
-      - "tests/newsletterWeeklyCampaign.test.ts"
-      - "server/services/newsletterWeekly*.ts"
-      - "server/routes/newsletterWeeklyRoutes.ts"
-      - ".github/workflows/cerberus-watchdog.yml"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/telegram-contract.yml"
   push:
     branches:
       - main
