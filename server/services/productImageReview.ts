@@ -7,6 +7,7 @@ import {
 } from "../../src/lib/productImageCuration";
 import { ExternalCallBudget, type BudgetDecision } from "./operationalGuards";
 import { repairProductImage, type ProductImageRepairResult } from "./productImageRepair";
+import { callOpenAIResponses, OpenAIProviderError } from "./openAIProviderRuntime";
 
 type BudgetLike = {
   reserve(name: string, amount?: number): BudgetDecision;
@@ -90,6 +91,7 @@ const OPENAI_QUOTA_ERROR_MARKERS = [
   "project_spend_limit_exceeded",
   "organization_usage_limit_exceeded",
   "project_usage_limit_exceeded",
+  "openai_quota_exhausted",
 ];
 
 function resolveImageReviewModel(env: NodeJS.ProcessEnv): string {
@@ -120,6 +122,9 @@ function resolveOpenAIImageReviewFallbackModel(env: NodeJS.ProcessEnv, primaryMo
 }
 
 function providerErrorText(error: unknown): string {
+  if (error instanceof OpenAIProviderError) {
+    return `${error.code} ${error.errorCode || ""}`.toLowerCase();
+  }
   return String(error instanceof Error ? error.message : error || "").toLowerCase();
 }
 
@@ -129,6 +134,9 @@ function safeOpenAIErrorCode(value: unknown): string | null {
 }
 
 function permanentProviderFailure(error: unknown): boolean {
+  if (error instanceof OpenAIProviderError) {
+    return error.code === "OPENAI_AUTH_ERROR" || error.code === "OPENAI_MODEL_UNAVAILABLE";
+  }
   const message = providerErrorText(error);
   return [
     "401",
@@ -146,11 +154,15 @@ function permanentProviderFailure(error: unknown): boolean {
 }
 
 function quotaProviderFailure(error: unknown): boolean {
+  if (error instanceof OpenAIProviderError && error.code === "OPENAI_QUOTA_EXHAUSTED") return true;
   const message = providerErrorText(error);
   return OPENAI_QUOTA_ERROR_MARKERS.some(marker => message.includes(marker));
 }
 
 function transientProviderFailure(error: unknown): boolean {
+  if (error instanceof OpenAIProviderError) {
+    return ["OPENAI_RATE_LIMITED", "OPENAI_TIMEOUT", "OPENAI_PROVIDER_UNAVAILABLE"].includes(error.code);
+  }
   const message = providerErrorText(error);
   return [
     "429",
@@ -176,6 +188,7 @@ function transientProviderFailure(error: unknown): boolean {
 
 function openAIFallbackModelWorthTrying(error: unknown): boolean {
   if (quotaProviderFailure(error)) return false;
+  if (error instanceof OpenAIProviderError && error.code === "OPENAI_AUTH_ERROR") return false;
   const message = providerErrorText(error);
   return ![
     "http_401",
@@ -345,9 +358,9 @@ function imageReviewSchema(): Record<string, unknown> {
         items: {
           type: "object",
           properties: {
-            index: { type: "number" },
-            decision: { type: "string" },
-            confidence: { type: "string" },
+            index: { type: "integer" },
+            decision: { type: "string", enum: ["clean", "technical", "promotional", "logo", "collage", "screenshot", "off_brand", "incomplete", "novelty", "unknown"] },
+            confidence: { type: "string", enum: ["HIGH", "MEDIUM", "LOW"] },
             reason: { type: "string" },
           },
           required: ["index", "decision", "confidence", "reason"],
@@ -423,39 +436,23 @@ function extractOpenAIOutputText(value: unknown): string {
 }
 
 async function openaiReviewWithResponsesApi(input: OpenAIReviewInput): Promise<ProductImageAssessment[]> {
-  const fetchImpl = input.fetchImpl || fetch;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs);
   try {
-    const response = await fetchImpl("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        "Content-Type": "application/json",
-        "User-Agent": "CerberusFinds/1.0",
-      },
-      body: JSON.stringify(buildOpenAIReviewRequest(input.downloaded, input.title, input.model)),
-      signal: controller.signal,
+    const payload = await callOpenAIResponses({
+      apiKey: input.apiKey,
+      request: buildOpenAIReviewRequest(input.downloaded, input.title, input.model),
+      timeoutMs: input.timeoutMs,
+      fetchImpl: input.fetchImpl || fetch,
+      maxAttempts: positiveInt(process.env.OPENAI_PRODUCT_IMAGE_REVIEW_MAX_ATTEMPTS, 4),
+      maxConcurrency: positiveInt(process.env.OPENAI_GLOBAL_MAX_CONCURRENCY, 2),
+      singleFlightKey: `image-review:${input.model}:${input.title}:${input.downloaded.map(image => image.url).join("|")}`,
     });
-    if (!response.ok) {
-      const responseText = await response.text();
-      let errorCode: string | null = null;
-      try {
-        const parsed = JSON.parse(responseText) as { error?: { code?: unknown; type?: unknown } };
-        errorCode = safeOpenAIErrorCode(parsed?.error?.code) || safeOpenAIErrorCode(parsed?.error?.type);
-      } catch {
-        // HTTP status alone remains safe and sufficient for fallback classification.
-      }
-      const codeSuffix = errorCode ? `_${errorCode.toUpperCase()}` : "";
-      throw new Error(`OPENAI_IMAGE_REVIEW_HTTP_${response.status}${codeSuffix}`);
-    }
-    const payload = await response.json();
     return parseAssessments(input.rawImageUrls, input.downloaded, parseModelJson(extractOpenAIOutputText(payload)));
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("OPENAI_IMAGE_REVIEW_TIMEOUT");
+    if (error instanceof OpenAIProviderError && error.httpStatus !== null) {
+      const code = safeOpenAIErrorCode(error.errorCode);
+      throw new Error(`OPENAI_IMAGE_REVIEW_HTTP_${error.httpStatus}${code ? `_${code.toUpperCase()}` : ""}`);
+    }
     throw error;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -726,7 +723,6 @@ export const productImageReviewInternals = {
   normalizeReviewTitle,
   productFamilyGuidance,
   buildReviewPrompt,
-  imageReviewSchema,
   buildReviewRequest,
   buildOpenAIReviewRequest,
   extractOpenAIOutputText,
