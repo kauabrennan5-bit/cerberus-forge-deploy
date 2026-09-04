@@ -1,0 +1,339 @@
+/* CERBERUS / QUIET ARCHIVE — PRODUCT DETAIL
+   Keeps product behavior intact while aligning the detail view with the cream editorial archive.
+   Palette: #0A0605 / #8C1A1A / #F2EDE4 / #6B6558 only. */
+
+main:has(button[title='Copiar link direto do produto']) {
+  width: 100% !important;
+  max-width: none !important;
+  padding: 0 !important;
+  background: #F2EDE4 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl {
+  width: min(100%, 76rem) !important;
+  max-width: 76rem !important;
+  margin: 0 auto !important;
+  padding: clamp(1rem, 3vw, 2.4rem) clamp(1rem, 4vw, 2.5rem) clamp(3.5rem, 7vw, 6rem) !important;
+  color: #0A0605 !important;
+  background: #F2EDE4 !important;
+}
+
+/* Old dark utility colors become Quiet Archive neutrals outside the lightbox. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='text-[#E8E1D3]'] {
+  color: #0A0605 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='text-[#E8E1D3]/'] {
+  color: #6B6558 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='text-[#8A1F1F]'] {
+  color: #8C1A1A !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='border-[#3A342E]'] {
+  border-color: color-mix(in srgb, #0A0605 20%, transparent) !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='border-[#8A1F1F]'] {
+  border-color: #8C1A1A !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='bg-[#090807]'],
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='bg-[#0B0908]'],
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='bg-[#141210]'] {
+  background: transparent !important;
+}
+
+/* Remove every legacy gold promotion/focus accent from this page. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > *:not(.fixed) [class*='D7A64B'] {
+  color: #8C1A1A !important;
+  border-color: #8C1A1A !important;
+  --tw-ring-color: #8C1A1A !important;
+}
+
+/* Top navigation — editorial utility row, not toolbar chrome. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:first-child {
+  min-height: 2.7rem;
+  padding-bottom: 0.75rem !important;
+  border-color: color-mix(in srgb, #0A0605 22%, transparent) !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:first-child button {
+  min-height: 2.75rem !important;
+  min-width: 2.75rem !important;
+  padding: 0.35rem 0.2rem !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:first-child button svg {
+  color: #8C1A1A !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:first-child button span {
+  color: inherit !important;
+  font-size: 0.58rem !important;
+  letter-spacing: 0.15em !important;
+}
+
+/* Main composition. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) {
+  gap: clamp(1.5rem, 4vw, 4rem) !important;
+  margin-top: clamp(1rem, 2vw, 1.5rem) !important;
+}
+
+/* Gallery becomes a neutral catalogue plate. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:first-child {
+  max-height: none !important;
+  aspect-ratio: 1 / 1.05 !important;
+  padding: clamp(0.4rem, 1.2vw, 0.8rem) !important;
+  border: 0 !important;
+  background: color-mix(in srgb, #6B6558 9%, #F2EDE4) !important;
+  box-shadow: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) .tech-frame::before,
+main:has(button[title='Copiar link direto do produto']) .tech-frame::after {
+  display: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:first-child > img {
+  transform: none !important;
+  filter: saturate(0.82) contrast(0.98) !important;
+}
+
+/* Gallery overlay controls stay functional but visually quiet. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:first-child > button {
+  width: 2.5rem !important;
+  height: 2.5rem !important;
+  min-width: 2.5rem !important;
+  min-height: 2.5rem !important;
+  padding: 0 !important;
+  border: 1px solid color-mix(in srgb, #0A0605 26%, transparent) !important;
+  background: color-mix(in srgb, #F2EDE4 90%, transparent) !important;
+  color: #0A0605 !important;
+  box-shadow: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:first-child > button:hover {
+  border-color: #8C1A1A !important;
+  background: #F2EDE4 !important;
+  color: #8C1A1A !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:first-child > div.absolute.top-2.left-2 {
+  padding: 0.28rem 0.45rem !important;
+  border: 0 !important;
+  background: #F2EDE4 !important;
+  color: #8C1A1A !important;
+  font-size: 0.5rem !important;
+  letter-spacing: 0.12em !important;
+}
+
+/* Thumbnails. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:nth-child(2) button {
+  width: 3.3rem !important;
+  height: 3.3rem !important;
+  padding: 0.15rem !important;
+  border-color: color-mix(in srgb, #0A0605 22%, transparent) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:nth-child(2) button[class*='border-[#8A1F1F]'] {
+  border-color: #8C1A1A !important;
+  --tw-ring-color: #8C1A1A !important;
+}
+
+/* Product information — same hierarchy as the archive cards. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) {
+  color: #0A0605 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) > div > div:first-child {
+  padding-bottom: 0.5rem !important;
+  border-color: color-mix(in srgb, #0A0605 20%, transparent) !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) > div > div:first-child span {
+  color: #8C1A1A !important;
+  font-size: 0.55rem !important;
+  letter-spacing: 0.18em !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl h1 {
+  max-width: 15ch;
+  margin-top: 0.15rem !important;
+  color: #0A0605 !important;
+  font-family: var(--font-gothic, Georgia, 'Times New Roman', serif) !important;
+  font-size: clamp(2rem, 4.4vw, 4.2rem) !important;
+  font-weight: 400 !important;
+  line-height: 0.98 !important;
+  letter-spacing: -0.035em !important;
+}
+
+/* Price blocks: editorial rule, not promotional widget. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-y'],
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-l-2'] {
+  margin-top: 0.85rem !important;
+  padding: 0.9rem 0 !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-top: 1px solid color-mix(in srgb, #0A0605 22%, transparent) !important;
+  border-bottom: 1px solid color-mix(in srgb, #0A0605 22%, transparent) !important;
+  background: transparent !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-y'] p:first-child,
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-l-2'] p:first-child {
+  color: #6B6558 !important;
+  font-size: 0.52rem !important;
+  letter-spacing: 0.18em !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-y'] p:nth-child(2),
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-l-2'] p:nth-child(2) {
+  color: #0A0605 !important;
+  font-family: inherit !important;
+  font-size: clamp(1.55rem, 3vw, 2.2rem) !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.02em !important;
+}
+
+/* Primary purchase CTA — strong but contained. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) button[class~='w-full'] {
+  width: min(100%, 24rem) !important;
+  min-height: 3rem !important;
+  margin-top: 0.35rem !important;
+  padding: 0.8rem 1rem !important;
+  border: 1px solid #8C1A1A !important;
+  background: #8C1A1A !important;
+  color: #F2EDE4 !important;
+  box-shadow: none !important;
+  transform: none !important;
+  font-size: 0.64rem !important;
+  letter-spacing: 0.16em !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) button[class~='w-full'] span,
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) button[class~='w-full'] svg {
+  color: #F2EDE4 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) button[class~='w-full'] + p {
+  width: min(100%, 24rem);
+  margin-top: 0.45rem !important;
+  color: #6B6558 !important;
+  text-align: left !important;
+  font-size: 0.5rem !important;
+  letter-spacing: 0.12em !important;
+}
+
+/* Description / curator / trust note: text sections, not cards. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-t'] {
+  border-color: color-mix(in srgb, #0A0605 18%, transparent) !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='border-l'] {
+  border-color: #8C1A1A !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='bg-[#141210]'] {
+  margin-top: 1.2rem !important;
+  padding: 0.9rem 0 !important;
+  border: 0 !important;
+  border-top: 1px solid color-mix(in srgb, #0A0605 18%, transparent) !important;
+  background: transparent !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) [class*='bg-[#141210]'] svg {
+  color: #8C1A1A !important;
+}
+
+/* Related products keep the cream catalogue language. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section {
+  margin-top: clamp(2.5rem, 5vw, 4.5rem) !important;
+  padding-top: clamp(1.5rem, 3vw, 2.5rem) !important;
+  border-color: color-mix(in srgb, #0A0605 18%, transparent) !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section h2 {
+  color: #0A0605 !important;
+  font-size: clamp(1.8rem, 3.6vw, 3rem) !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.025em !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section p {
+  color: #8C1A1A !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section span {
+  color: #6B6558 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section [data-testid='product-card'] {
+  border: 0 !important;
+  border-top: 1px solid color-mix(in srgb, #0A0605 18%, transparent) !important;
+  background: transparent !important;
+  color: #0A0605 !important;
+  box-shadow: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section [data-testid='product-card'] h3 {
+  color: #0A0605 !important;
+  font-family: var(--font-gothic, Georgia, 'Times New Roman', serif) !important;
+  text-transform: none !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section [data-testid='product-card'] p,
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section [data-testid='product-card'] span {
+  color: #6B6558 !important;
+}
+
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > section [data-testid='product-card'] button {
+  color: #0A0605 !important;
+  box-shadow: none !important;
+}
+
+/* Keep the fullscreen lightbox intentionally dark. */
+main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > .fixed {
+  background: color-mix(in srgb, #0A0605 98%, transparent) !important;
+}
+
+@media (max-width: 767px) {
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl {
+    padding: 0.85rem 1rem 4rem !important;
+  }
+
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:first-child {
+    padding-bottom: 0.55rem !important;
+  }
+
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) {
+    gap: 1.15rem !important;
+    margin-top: 0.85rem !important;
+  }
+
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:first-child > div:first-child {
+    max-height: 27rem !important;
+    aspect-ratio: 1 / 1.05 !important;
+  }
+
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl h1 {
+    max-width: 12ch;
+    font-size: clamp(2rem, 9.5vw, 3rem) !important;
+  }
+
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) button[class~='w-full'] {
+    width: 100% !important;
+  }
+
+  main:has(button[title='Copiar link direto do produto']) > div.max-w-5xl > div:nth-child(2) > div:nth-child(2) button[class~='w-full'] + p {
+    width: 100%;
+  }
+}
