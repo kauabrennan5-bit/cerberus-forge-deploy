@@ -1,0 +1,634 @@
+name: Apply mandatory best-of-lot patch
+
+on:
+  push:
+    branches:
+      - fix/mandatory-best-of-lot-deficit-recovery-20260904
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: ${{ !contains(github.event.head_commit.message, '[best-of-lot-patch]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: npm
+
+      - name: Apply policy patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(path):
+              return Path(path).read_text()
+
+          def write(path, text):
+              Path(path).write_text(text)
+
+          def replace_once(path, old, new):
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one match, found {count}: {old[:120]!r}")
+              write(path, text.replace(old, new, 1))
+
+          # ------------------------------------------------------------------
+          # Central publication gate: best-of-lot is an explicit autonomous
+          # editorial override. Technical integrity remains fail-closed.
+          # ------------------------------------------------------------------
+          gate = "server/services/productPublicationGate.ts"
+          replace_once(gate, 'export const PUBLICATION_GATE_VERSION = "1";', 'export const PUBLICATION_GATE_VERSION = "2";')
+          replace_once(gate,
+              '  manualEditorialOverride?: boolean;\n};',
+              '  manualEditorialOverride?: boolean;\n  bestOfLotFallback?: boolean;\n  publicationWarnings?: string[];\n};')
+          replace_once(gate,
+              '  const manualEditorialOverride = evidence.source === "product_rotation" && evidence.manualEditorialOverride === true;\n  const primaryImageUrl = product.imageCuration?.status === "ready"',
+              '  const manualEditorialOverride = evidence.source === "product_rotation" && evidence.manualEditorialOverride === true;\n  const bestOfLotFallback = (evidence.source === "autonomous_curator" || evidence.source === "recovery") && evidence.bestOfLotFallback === true;\n  const editorialOverride = manualEditorialOverride || bestOfLotFallback;\n  const primaryImageUrl = product.imageCuration?.status === "ready"')
+          replace_once(gate,
+              '  if (!manualEditorialOverride && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");',
+              '  if (!editorialOverride && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");')
+          replace_once(gate,
+              '  if (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW") {\n    errors.push("PUBLICATION_IMAGE_PRIMARY_NOT_EDITORIALLY_APPROVED");\n  }\n  if (product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {\n    errors.push("PUBLICATION_IMAGE_OFF_BRAND");\n  }',
+              '  if (!bestOfLotFallback && (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW")) {\n    errors.push("PUBLICATION_IMAGE_PRIMARY_NOT_EDITORIALLY_APPROVED");\n  }\n  if (!bestOfLotFallback && product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {\n    errors.push("PUBLICATION_IMAGE_OFF_BRAND");\n  }')
+          replace_once(gate,
+              '  if (!displayTitle || (!manualEditorialOverride && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");',
+              '  if (!displayTitle || (!editorialOverride && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");')
+          replace_once(gate,
+              '  if (!manualEditorialOverride && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {',
+              '  if (!editorialOverride && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {')
+          replace_once(gate,
+              '  if (!manualEditorialOverride && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");\n  if (!manualEditorialOverride && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");\n  if (!manualEditorialOverride && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");',
+              '  if (!editorialOverride && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");\n  if (!editorialOverride && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");\n  if (!editorialOverride && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");')
+          replace_once(gate,
+              '      manualEditorialOverride: input.evidence.manualEditorialOverride === true,\n    },',
+              '      manualEditorialOverride: input.evidence.manualEditorialOverride === true,\n      bestOfLotFallback: input.evidence.bestOfLotFallback === true,\n      publicationWarnings: [...new Set((input.evidence.publicationWarnings || []).map(value => String(value || "").replace(/\\s+/g, " ").trim().slice(0, 180)).filter(Boolean))].slice(0, 12),\n    },')
+
+          # ------------------------------------------------------------------
+          # Autonomous Curator V2: preserve strict evaluation as preferred lane,
+          # then recover every soft failure through an official-evidence
+          # best-of-lot lane. Only identity/link/price/image existence remain
+          # technical hard requirements.
+          # ------------------------------------------------------------------
+          base = "server/services/autonomousCuratorContinuousV2Base.ts"
+          replace_once(base,
+              'import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";',
+              'import { isPublicHttpsImageUrl, resolveCanonicalProductImage } from "../../src/lib/productCanonical";')
+          replace_once(base,
+              'import { extractProductForReview } from "./productAutomation";',
+              'import { buildDeterministicEditorialFallback, extractProductForReview } from "./productAutomation";')
+          replace_once(base,
+              'const QUALIFIED_COMPARISON_TARGET = 4;\n',
+              '')
+          replace_once(base,
+              '  breakdown: AutonomousCuratorScoreBreakdown;\n  lifecycle: LifecycleRecord;\n};',
+              '  breakdown: AutonomousCuratorScoreBreakdown;\n  lifecycle: LifecycleRecord;\n  publicationMode: "STANDARD" | "BEST_OF_LOT" | "DEFICIT_RECOVERY";\n  warnings: string[];\n  softPenalty: number;\n};')
+          replace_once(base,
+              '      images: image.publicHttpsImageUrls, imageCuration, score: breakdown.finalScore, breakdown, lifecycle,\n    },',
+              '      images: image.publicHttpsImageUrls, imageCuration, score: breakdown.finalScore, breakdown, lifecycle,\n      publicationMode: "STANDARD", warnings: [], softPenalty: 0,\n    },')
+
+          text = read(base)
+          marker = '\nfunction semanticEntryScore(cheap: number, page: number, decision: SemanticDiscoveryDecision | undefined): number {'
+          if text.count(marker) != 1:
+              raise SystemExit("semanticEntryScore insertion marker not unique")
+          helper = r'''
+
+function bestOfLotWarningPenalty(warnings: readonly string[]): number {
+  return [...new Set(warnings)].reduce((total, warning) => {
+    const upper = warning.toUpperCase();
+    if (upper.includes("CATEGORY_MISMATCH")) return total + 80;
+    if (upper.includes("PROFILE_BLOCKED_TERM")) return total + 60;
+    if (upper.includes("CATALOG_SIMILARITY")) return total + 45;
+    if (upper.includes("PIPELINE_NOT_AUTO_PUBLISHABLE") || upper.includes("PIPELINE_")) return total + 35;
+    if (upper.includes("OFF_BRAND")) return total + 30;
+    if (upper.includes("IMAGE") || upper.includes("REVIEW") || upper.includes("OPENAI") || upper.includes("GEMINI")) return total + 25;
+    if (upper.includes("BELOW_AUTO_PUBLISH_THRESHOLD")) return total + 20;
+    if (upper.includes("EDITORIAL") || upper.includes("DETERMINISTIC_COPY")) return total + 10;
+    return total + 15;
+  }, 0);
+}
+
+async function evaluateBestOfLotIdentity(
+  input: Parameters<typeof evaluateIdentity>[0],
+  strictReason: string,
+): Promise<{ candidate: CuratedCandidate | null; reason: string }> {
+  if (!input.config.autoPublishEnabled) return { candidate: null, reason: "AUTO_PUBLISH_DISABLED" };
+
+  const sourceIdentity = await curatorRepo.findProductSourceIdentity("Shopee", input.shopId, input.itemId);
+  const reservedUntil = sourceIdentity?.reservedUntil ? Date.parse(sourceIdentity.reservedUntil) : 0;
+  if (sourceIdentity?.productId && sourceIdentity.productId !== input.allowedProductId) return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
+  if (sourceIdentity && !sourceIdentity.productId && Number.isFinite(reservedUntil) && reservedUntil > Date.now()) return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
+
+  const acquisition = await input.client.acquireAffiliateLink({ shopId: input.shopId, itemId: input.itemId });
+  if (acquisition.status !== "link_acquired" || !acquisition.affiliateUrl || !acquisition.productLink || !acquisition.shopId || !acquisition.itemId) {
+    return { candidate: null, reason: `AFFILIATE_${acquisition.status}` };
+  }
+  if (acquisition.shopId !== input.shopId || acquisition.itemId !== input.itemId || !sourceIdentityMatches(acquisition.productLink, input.shopId, input.itemId)) {
+    return { candidate: null, reason: "AFFILIATE_IDENTITY_MISMATCH" };
+  }
+
+  const rawTitle = (acquisition.name || input.discoveryName || "").replace(/\s+/g, " ").trim();
+  if (!rawTitle) return { candidate: null, reason: "BEST_OF_LOT_RAW_TITLE_MISSING" };
+  const resolvedPriceEvidence = resolvePriceEvidence({
+    shopId: input.shopId,
+    itemId: input.itemId,
+    acquisitionPrice: acquisition.price,
+    discoveryEvidence: input.discoveryPriceEvidence,
+  });
+  const price = resolvedPriceEvidence?.price ?? Number.NaN;
+  if (!resolvedPriceEvidence || !Number.isFinite(price) || price <= 0) {
+    return { candidate: null, reason: "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK" };
+  }
+
+  const sourceImage = isPublicHttpsImageUrl(input.sourceImageUrl) ? input.sourceImageUrl : null;
+  if (!sourceImage) return { candidate: null, reason: "BEST_OF_LOT_PRIMARY_IMAGE_MISSING" };
+
+  const editorial = buildDeterministicEditorialFallback({ rawTitle });
+  const displayTitle = editorial.title.replace(/\s+/g, " ").trim() || rawTitle;
+  const description = editorial.description.replace(/\s+/g, " ").trim();
+  if (!displayTitle || !description) return { candidate: null, reason: "BEST_OF_LOT_EDITORIAL_FALLBACK_MISSING" };
+
+  const imageCuration: NonNullable<Product["imageCuration"]> = {
+    status: "ready",
+    rawImageUrls: [sourceImage],
+    primaryImageUrl: sourceImage,
+    galleryImageUrls: [],
+    assessments: [{
+      url: sourceImage,
+      decision: "unknown",
+      confidence: "LOW",
+      reason: "Imagem oficial aceita pela política editorial best-of-lot para zerar déficit.",
+    }],
+  };
+  const image = resolveCanonicalProductImage({ imagens: [sourceImage], imageCuration, imageEditorialStatus: "clean" });
+  if (image.status !== "ready" || !image.primaryImageUrl) return { candidate: null, reason: "BEST_OF_LOT_PRIMARY_IMAGE_INVALID" };
+
+  const sourceUrl = canonicalSourceUrl(input.shopId, input.itemId);
+  const category = input.profile.category;
+  const lifecycle = await createProductionProductPipeline().evaluate({
+    normalizedUrl: sourceUrl,
+    link: acquisition.affiliateUrl,
+    marketplace: "Shopee",
+    produto: displayTitle,
+    rawTitle,
+    displayTitle,
+    categoria: category,
+    preco: price,
+    imagens: image.publicHttpsImageUrls,
+    imagensOriginais: imageCuration.rawImageUrls,
+    imageCuration,
+    imagemPrincipal: image.primaryImageUrl,
+    imagensGaleria: image.galleryImageUrls,
+    imageEditorialStatus: "clean",
+    descricao: description,
+  });
+
+  const breakdown = scoreAutonomousCandidate({
+    profile: input.profile,
+    rawTitle,
+    displayTitle,
+    description,
+    category,
+    price,
+    imageCuration,
+    pipelineScore: lifecycle.curation.score,
+    existingProducts: similarityUniverse(input.products),
+  });
+
+  const warnings = [strictReason, "BEST_OF_LOT_IMAGE_EDITORIAL_OVERRIDE", "BEST_OF_LOT_DETERMINISTIC_COPY"];
+  const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
+  if (blocked) warnings.push(`PROFILE_BLOCKED_TERM:${blocked}`);
+  if (lifecycle.validation.outcome !== "PASS" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED" || lifecycle.curation.recommendation !== "PUBLISH") {
+    warnings.push(`PIPELINE_NOT_AUTO_PUBLISHABLE:${lifecycle.validation.errors.join("|") || lifecycle.curation.recommendation}`);
+  }
+  if (breakdown.maximumCatalogSimilarity >= 0.82) warnings.push(`CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}`);
+  if (breakdown.finalScore < input.config.autoPublishThreshold) warnings.push(`BELOW_AUTO_PUBLISH_THRESHOLD:${breakdown.finalScore}`);
+
+  const normalizedWarnings = [...new Set(warnings.map(value => safeFailureScalar(value, 180)).filter(Boolean))];
+  const publicationMode: CuratedCandidate["publicationMode"] = recoveryModeFromEnv(input.env) ? "DEFICIT_RECOVERY" : "BEST_OF_LOT";
+  const softPenalty = bestOfLotWarningPenalty(normalizedWarnings);
+  const auditedBreakdown = breakdown as AutonomousCuratorScoreBreakdown & { priceEvidence?: PriceEvidence; bestOfLot?: Record<string, unknown> };
+  auditedBreakdown.priceEvidence = resolvedPriceEvidence;
+  auditedBreakdown.bestOfLot = { publicationMode, warnings: normalizedWarnings, softPenalty, strictReason: safeFailureScalar(strictReason, 180) };
+
+  return {
+    candidate: {
+      profile: input.profile,
+      query: input.query,
+      shopId: input.shopId,
+      itemId: input.itemId,
+      sourceProductUrl: sourceUrl,
+      affiliateUrl: acquisition.affiliateUrl,
+      sourceImageUrl: sourceImage,
+      rawTitle,
+      displayTitle,
+      displayTitleReviewModel: "deterministic-best-of-lot-v1",
+      description,
+      category,
+      price,
+      priceEvidence: resolvedPriceEvidence,
+      images: image.publicHttpsImageUrls,
+      imageCuration,
+      score: breakdown.finalScore,
+      breakdown,
+      lifecycle,
+      publicationMode,
+      warnings: normalizedWarnings,
+      softPenalty,
+    },
+    reason: `${publicationMode}:${safeFailureScalar(strictReason, 120)}`,
+  };
+}
+
+async function evaluateWithBestOfLot(
+  input: Parameters<typeof evaluateIdentity>[0],
+): Promise<{ candidate: CuratedCandidate | null; reason: string }> {
+  const strict = await evaluateIdentity(input);
+  if (strict.candidate || !input.config.autoPublishEnabled) return strict;
+  return evaluateBestOfLotIdentity(input, strict.reason);
+}
+'''
+          write(base, text.replace(marker, helper + marker, 1))
+
+          replace_once(base,
+              '      if (hasBlockedProfileTerm(input.profile, item.name)) { metrics.candidatesRejected += 1; continue; }\n',
+              '')
+          text = read(base)
+          pattern = re.compile(r'  const rescueThreshold = positiveInt\(input\.env\.OPENAI_AUTONOMOUS_DISCOVERY_RESCUE_THRESHOLD, 68, 100\);\n  const categoryThreshold = positiveInt\(input\.env\.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100\);\n  const rankedPool = candidatePool\.filter\(entry => \{.*?\n  \}\);', re.S)
+          replacement = '  // Best-of-lot recovery never lets lexical/semantic editorial gates erase the entire supply.\n  // Semantic/lexical scores still order the pool, but every official Shopee candidate remains eligible for enrichment.\n  const rankedPool = [...candidatePool];'
+          text, n = pattern.subn(replacement, text, count=1)
+          if n != 1:
+              raise SystemExit(f"rankedPool policy block replacement failed: {n}")
+          write(base, text)
+
+          replace_once(base,
+              '    const evaluated = await evaluateIdentity({\n      profile: input.profile, query: entry.query, shopId, itemId, discoveryName: entry.item.name || "",\n      discoveryPriceEvidence, sourceImageUrl: entry.item.imageUrl, products: input.products,\n      client: input.client, env: input.env, extractor: input.extractor, config: input.config,\n    });',
+              '    const evaluated = await evaluateWithBestOfLot({\n      profile: input.profile, query: entry.query, shopId, itemId, discoveryName: entry.item.name || "",\n      discoveryPriceEvidence, sourceImageUrl: entry.item.imageUrl, products: input.products,\n      client: input.client, env: input.env, extractor: input.extractor, config: input.config,\n    });')
+          replace_once(base,
+              '      qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page, semantic: semanticDecision });\n      if (qualified.length >= QUALIFIED_COMPARISON_TARGET) break;',
+              '      if (evaluated.candidate.warnings.some(warning => isTechnicalReviewFailure(warning))) metrics.technicalFailures += 1;\n      qualified.push({ candidate: evaluated.candidate, cheap: entry.cheap, page: entry.page, semantic: semanticDecision });')
+          replace_once(base,
+              '    qualified.sort((a, b) => b.candidate.score - a.candidate.score || (b.semantic?.fitScore || 0) - (a.semantic?.fitScore || 0) || Number(a.page !== 1) - Number(b.page !== 1) || b.cheap - a.cheap || a.candidate.price - b.candidate.price);\n    return { candidate: qualified[0].candidate, reason: `BEST_OF_${qualified.length}_QUALIFIED_CANDIDATES`, examined, searchedPages, recoverySeed, metrics };',
+              '    qualified.sort((a, b) => a.candidate.softPenalty - b.candidate.softPenalty || a.candidate.warnings.length - b.candidate.warnings.length || b.candidate.score - a.candidate.score || (b.semantic?.fitScore || 0) - (a.semantic?.fitScore || 0) || Number(a.page !== 1) - Number(b.page !== 1) || b.cheap - a.cheap || a.candidate.price - b.candidate.price);\n    return { candidate: qualified[0].candidate, reason: `BEST_OF_${qualified.length}_PUBLISHABLE_CANDIDATES:${qualified[0].candidate.publicationMode}`, examined, searchedPages, recoverySeed, metrics };')
+          replace_once(base,
+              '  return evaluateIdentity({ profile: input.profile, query: meta.query, shopId: meta.shopId, itemId: meta.itemId, discoveryName: input.product.rawTitle || input.product.produto, discoveryPriceEvidence: meta.priceEvidence || null, sourceImageUrl: meta.imageUrl || input.product.imagens?.[0] || null, products: input.products.filter(product => product.id !== input.product.id), client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowedProductId: input.product.id });',
+              '  return evaluateWithBestOfLot({ profile: input.profile, query: meta.query, shopId: meta.shopId, itemId: meta.itemId, discoveryName: input.product.rawTitle || input.product.produto, discoveryPriceEvidence: meta.priceEvidence || null, sourceImageUrl: meta.imageUrl || input.product.imagens?.[0] || null, products: input.products.filter(product => product.id !== input.product.id), client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowedProductId: input.product.id });')
+          replace_once(base,
+              '            const recovered = await evaluateIdentity({ profile, query: recoverySeed.query, shopId: recoverySeed.shopId, itemId: recoverySeed.itemId, discoveryName: recoverySeed.rawTitle, discoveryPriceEvidence: recoverySeed.priceEvidence, sourceImageUrl: recoverySeed.imageUrl, products, client, env, extractor, config });',
+              '            const recovered = await evaluateWithBestOfLot({ profile, query: recoverySeed.query, shopId: recoverySeed.shopId, itemId: recoverySeed.itemId, discoveryName: recoverySeed.rawTitle, discoveryPriceEvidence: recoverySeed.priceEvidence, sourceImageUrl: recoverySeed.imageUrl, products, client, env, extractor, config });')
+
+          replace_once(base,
+              '      lifecycleApproved: candidate.lifecycle.validation.outcome === "PASS" && candidate.lifecycle.curation.recommendation === "PUBLISH",\n      reviewState: candidate.lifecycle.state,',
+              '      lifecycleApproved: candidate.lifecycle.validation.outcome === "PASS" && candidate.lifecycle.curation.recommendation === "PUBLISH",\n      reviewState: candidate.lifecycle.state,\n      bestOfLotFallback: candidate.publicationMode !== "STANDARD",\n      publicationWarnings: candidate.warnings,')
+          replace_once(base,
+              '  const auditedBreakdown = { ...(candidate.breakdown as unknown as Record<string, unknown>), priceEvidence: candidate.priceEvidence };\n  await curatorRepo.saveAutonomousCuratorCategoryResult({ runId, category: candidate.category, searchQuery: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, rawTitle: candidate.rawTitle, displayTitle: candidate.displayTitle, score: candidate.score, scoreBreakdown: auditedBreakdown, decision: "auto_published", reason: "PUBLISHED_FROM_CONTINUOUS_CURATOR_V2_THROUGH_HARD_GATE_AND_PUBLICLY_VALIDATED", productId });',
+              '  const auditedBreakdown = { ...(candidate.breakdown as unknown as Record<string, unknown>), priceEvidence: candidate.priceEvidence, publicationMode: candidate.publicationMode, publicationWarnings: candidate.warnings, softPenalty: candidate.softPenalty };\n  const reason = candidate.publicationMode === "STANDARD"\n    ? "PUBLISHED_FROM_CONTINUOUS_CURATOR_V2_THROUGH_HARD_GATE_AND_PUBLICLY_VALIDATED"\n    : `PUBLISHED_FROM_CONTINUOUS_CURATOR_V2_${candidate.publicationMode}_AND_PUBLICLY_VALIDATED`;\n  await curatorRepo.saveAutonomousCuratorCategoryResult({ runId, category: candidate.category, searchQuery: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, rawTitle: candidate.rawTitle, displayTitle: candidate.displayTitle, score: candidate.score, scoreBreakdown: auditedBreakdown, decision: "auto_published", reason, productId });')
+          replace_once(base,
+              '          if (category) category.reason = "PUBLISHED_AND_PUBLICLY_VALIDATED";',
+              '          if (category) category.reason = item.candidate.publicationMode === "STANDARD"\n            ? "PUBLISHED_AND_PUBLICLY_VALIDATED"\n            : `PUBLISHED_AND_PUBLICLY_VALIDATED:${item.candidate.publicationMode}:WARNINGS=${item.candidate.warnings.length}`;')
+          replace_once(base,
+              '    const publishedThisCycle = categories.filter(category => category.published && category.reason === "PUBLISHED_AND_PUBLICLY_VALIDATED").length;',
+              '    const publishedThisCycle = categories.filter(category => category.published).length;')
+
+          # ------------------------------------------------------------------
+          # Coordinator: six is the real floor; recovery gets enough burst cycles
+          # by default to fill today's maximum deficit without waiting for another
+          # scheduler tick. Soft failures never abort the burst.
+          # ------------------------------------------------------------------
+          coord = "server/services/autonomousCuratorContinuousV2.ts"
+          replace_once(coord,
+              ' * - every official category has an absolute public floor of five valid products;\n * - cumulative growth can raise that target after the initial floor, but can never\n *   reduce it below five; an explicit production floor may raise it further;',
+              ' * - every official category has an absolute public floor of six valid products;\n * - cumulative growth can raise that target after the initial floor, but can never\n *   reduce it below six; an explicit production floor may raise it further;')
+          replace_once(coord, 'const CATEGORY_GROWTH_VERSION = "6";', 'const CATEGORY_GROWTH_VERSION = "7";')
+          replace_once(coord, 'const MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5;', 'const MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 6;')
+          replace_once(coord, 'const MAX_RECOVERY_BURST_CYCLES = 8;', 'const MAX_RECOVERY_BURST_CYCLES = 12;')
+          replace_once(coord,
+              '  if (!Number.isSafeInteger(parsed) || parsed <= 0) return 1;\n  return Math.min(MAX_RECOVERY_BURST_CYCLES, parsed);',
+              '  if (!Number.isSafeInteger(parsed) || parsed <= 0) return MAX_RECOVERY_BURST_CYCLES;\n  return Math.min(MAX_RECOVERY_BURST_CYCLES, parsed);')
+          replace_once(coord,
+              '    if (cycleResult.publishedThisCycle === 0 && cycleResult.failedThisCycle > 0) break;\n',
+              '')
+          replace_once(coord,
+              '      : "🚨 META DO DIA NÃO CUMPRIDA. O run permanece partial/failed até count(category) >= dailyTarget nas 10 categorias e a projeção pública estar validada. Nenhum gate editorial é afrouxado.",',
+              '      : "🚨 META DO DIA AINDA NÃO CUMPRIDA. O run continua em recuperação até count(category) >= dailyTarget nas 10 categorias. Bloqueios editoriais/visuais viram warnings e ranking best-of-lot; só falhas técnicas objetivas podem impedir publicação.",')
+          replace_once(coord,
+              '    `Bloqueios principais: <code>${escapeHtml(summaryText)}</code>`,\n    "",',
+              '    `Avisos/ranking best-of-lot: <code>${escapeHtml(summaryText)}</code>`,\n    `Política de publicação: <b>OBRIGATÓRIA POR DÉFICIT</b> · melhor candidato tecnicamente publicável vence mesmo com warnings editoriais`,\n    "",')
+
+          # ------------------------------------------------------------------
+          # New Supabase guard version: autonomous/recovery best-of-lot can bypass
+          # only soft authorization predicates. Product/identity/link/price/category
+          # and persisted primary image integrity remain mandatory above this block.
+          # ------------------------------------------------------------------
+          migration = Path("supabase/migrations/20260904203000_autonomous_best_of_lot_publication.sql")
+          migration.write_text(r'''-- Autonomous Curator best-of-lot publication authority.
+-- Editorial/visual/review/score/similarity failures become ranking warnings when
+-- a category is below its mandatory floor. Technical product integrity remains
+-- fail-closed: persisted reviewed title, accepted primary HTTPS image, price,
+-- public category, Shopee affiliate link, exact Shopee identity and a short-lived
+-- single-use authorization are still required.
+
+create or replace function public.enforce_product_publication_authorization()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_authorization_id uuid;
+  v_shop_id text;
+  v_item_id text;
+  v_source_url text;
+begin
+  if not (coalesce(new.ativo, true) = true and new.status = 'published') then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and coalesce(old.ativo, true) = true and old.status = 'published' then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE'
+     and current_setting('cerberus.rotation_recovery', true) = 'on'
+     and coalesce(old.ativo, false) = false
+     and old.status = 'archived'
+     and new.ativo = true
+     and new.status = 'published' then
+    if new.display_title_status <> 'reviewed'
+       or new.image_editorial_status <> 'clean'
+       or new.image_curation is null
+       or new.image_curation ->> 'status' <> 'ready'
+       or nullif(btrim(new.image_curation ->> 'primaryImageUrl'), '') is null
+       or new.image_review_fingerprint is null
+       or new.preco is null
+       or new.preco <= 0 then
+      raise exception 'PRODUCT_PUBLICATION_BLOCKED:ROTATION_RECOVERY_EDITORIAL_PROOF_INVALID';
+    end if;
+    return new;
+  end if;
+
+  if new.display_title_status <> 'reviewed'
+     or nullif(btrim(new.display_title), '') is null then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:DISPLAY_TITLE_NOT_REVIEWED';
+  end if;
+
+  if new.image_editorial_status <> 'clean'
+     or new.image_curation is null
+     or new.image_curation ->> 'status' <> 'ready'
+     or nullif(btrim(new.image_curation ->> 'primaryImageUrl'), '') is null
+     or new.image_review_fingerprint is null then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:IMAGE_REVIEW_NOT_CLEAN';
+  end if;
+
+  if new.preco is null or new.preco <= 0 then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:PRICE_UNVERIFIED';
+  end if;
+
+  if new.categoria not in (
+    'Iluminação','Decoração','Móveis','Cozinha & Mesa','Organização',
+    'Vestuário','Calçados & Acessórios','Tecnologia','Beleza & Bem-estar','Infantil'
+  ) then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:CATEGORY_INVALID';
+  end if;
+
+  if new.link is null
+     or new.link !~* '^https://([^/]+\.)?shopee\.com\.br/' then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:AFFILIATE_LINK_INVALID';
+  end if;
+
+  select psi.shop_id, psi.item_id, psi.source_product_url
+    into v_shop_id, v_item_id, v_source_url
+  from public.product_source_identities psi
+  where psi.product_id = new.id
+    and lower(psi.marketplace) = 'shopee'
+  limit 1;
+
+  if nullif(btrim(v_shop_id), '') is null
+     or nullif(btrim(v_item_id), '') is null
+     or nullif(btrim(v_source_url), '') is null
+     or v_source_url !~* '^https://([^/]+\.)?shopee\.com\.br/' then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:SHOPEE_IDENTITY_INVALID';
+  end if;
+
+  select ppa.authorization_id
+    into v_authorization_id
+  from public.product_publication_authorizations ppa
+  where ppa.product_id = new.id
+    and ppa.consumed_at is null
+    and ppa.expires_at > now()
+    and coalesce((ppa.evidence ->> 'categoryMismatch')::boolean, true) = false
+    and nullif(btrim(ppa.evidence ->> 'primaryImageUrl'), '') = nullif(btrim(new.image_curation ->> 'primaryImageUrl'), '')
+    and (
+      (
+        ppa.source = 'product_rotation'
+        and coalesce((ppa.evidence ->> 'manualEditorialOverride')::boolean, false) = true
+      )
+      or (
+        ppa.source in ('autonomous_curator', 'recovery')
+        and coalesce((ppa.evidence ->> 'bestOfLotFallback')::boolean, false) = true
+      )
+      or (
+        ppa.score >= ppa.threshold
+        and ppa.maximum_catalog_similarity < 0.82
+        and coalesce((ppa.evidence ->> 'lifecycleApproved')::boolean, false) = true
+        and coalesce((ppa.evidence ->> 'offBrand')::boolean, true) = false
+        and upper(coalesce(ppa.evidence ->> 'reviewState', '')) not like '%REVIEW%'
+      )
+    )
+  order by ppa.created_at desc
+  limit 1
+  for update;
+
+  if v_authorization_id is null then
+    raise exception 'PRODUCT_PUBLICATION_BLOCKED:AUTHORIZATION_MISSING';
+  end if;
+
+  update public.product_publication_authorizations
+  set consumed_at = now()
+  where authorization_id = v_authorization_id
+    and consumed_at is null;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.enforce_product_publication_authorization() from public, anon, authenticated;
+
+comment on function public.enforce_product_publication_authorization() is
+  'Central publication guard. Product Rotation manual confirmation and Autonomous Curator best-of-lot may override soft editorial evidence; technical integrity remains mandatory.';
+''')
+
+          # ------------------------------------------------------------------
+          # Regression tests for the permanent policy.
+          # ------------------------------------------------------------------
+          Path("tests/autonomousCuratorBestOfLotPolicy.test.ts").write_text(r'''import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import type { Product } from "../src/types";
+import { imageUrlFingerprint } from "../server/services/productEditorialReview";
+import { validateProductPublicationEligibility } from "../server/services/productPublicationGate";
+
+const imageUrl = "https://down-br.img.susercontent.com/file/best-of-lot-image";
+
+function fallbackProduct(overrides: Partial<Product> = {}): Product {
+  return {
+    id: "prod-best-of-lot",
+    ref: "AUTO-BEST",
+    produto: "Marketplace raw title",
+    rawTitle: "Marketplace raw title",
+    displayTitle: "Marketplace raw title",
+    displayTitleStatus: "reviewed",
+    displayTitleReviewedAt: "2026-09-04T20:00:00.000Z",
+    displayTitleReviewModel: "deterministic-best-of-lot-v1",
+    displayTitleReviewVersion: "1",
+    categoria: "Decoração",
+    preco: 49.9,
+    imagens: [imageUrl],
+    imageEditorialStatus: "clean",
+    imageCuration: {
+      status: "ready",
+      rawImageUrls: [imageUrl],
+      primaryImageUrl: imageUrl,
+      galleryImageUrls: [],
+      assessments: [{ url: imageUrl, decision: "unknown", confidence: "LOW", reason: "fallback" }],
+    },
+    imageReviewedAt: "2026-09-04T20:00:00.000Z",
+    imageReviewModel: "best-of-lot",
+    imageReviewVersion: "2",
+    imageReviewFingerprint: imageUrlFingerprint(imageUrl),
+    link: "https://s.shopee.com.br/affiliate-best",
+    ativo: false,
+    destaque: false,
+    status: "paused",
+    ...overrides,
+  };
+}
+
+const identity = {
+  marketplace: "Shopee",
+  shopId: "123",
+  itemId: "456",
+  sourceProductUrl: "https://shopee.com.br/product/123/456",
+  productId: "prod-best-of-lot",
+};
+
+test("autonomous best-of-lot bypasses soft editorial blockers but keeps technical integrity", () => {
+  const product = fallbackProduct();
+  const result = validateProductPublicationEligibility({
+    product,
+    identity,
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: {
+      source: "autonomous_curator",
+      score: 12,
+      maximumCatalogSimilarity: 0.99,
+      categoryMismatch: false,
+      offBrand: true,
+      lifecycleApproved: false,
+      reviewState: "REVIEW_REQUIRED",
+      bestOfLotFallback: true,
+      publicationWarnings: ["image_review_budget_exhausted", "off_brand"],
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+
+  const invalidLink = validateProductPublicationEligibility({
+    product: fallbackProduct({ link: "https://example.com/not-shopee" }),
+    identity,
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: {
+      source: "autonomous_curator",
+      score: 0,
+      maximumCatalogSimilarity: 1,
+      categoryMismatch: false,
+      offBrand: true,
+      lifecycleApproved: false,
+      reviewState: "REVIEW_REQUIRED",
+      bestOfLotFallback: true,
+    },
+  });
+  assert.equal(invalidLink.ok, false);
+  assert.ok(invalidLink.errors.includes("PUBLICATION_AFFILIATE_LINK_INVALID"));
+});
+
+test("best-of-lot is restricted to autonomous/recovery publication sources", () => {
+  const result = validateProductPublicationEligibility({
+    product: fallbackProduct(),
+    identity,
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: {
+      source: "admin",
+      score: 12,
+      maximumCatalogSimilarity: 0.99,
+      categoryMismatch: false,
+      offBrand: true,
+      lifecycleApproved: false,
+      reviewState: "REVIEW_REQUIRED",
+      bestOfLotFallback: true,
+    },
+  });
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD"));
+});
+
+test("continuous curator keeps every searched candidate in the best-of-lot enrichment pool", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
+  assert.match(source, /evaluateWithBestOfLot/);
+  assert.match(source, /const rankedPool = \[\.\.\.candidatePool\]/);
+  assert.match(source, /softPenalty/);
+  assert.match(source, /publicationMode: "STANDARD"/);
+  assert.doesNotMatch(source, /if \(hasBlockedProfileTerm\(input\.profile, item\.name\)\) \{ metrics\.candidatesRejected/);
+});
+
+test("database guard explicitly authorizes autonomous best-of-lot and preserves hard invariants", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260904203000_autonomous_best_of_lot_publication.sql", import.meta.url), "utf8");
+  assert.match(migration, /bestOfLotFallback/);
+  assert.match(migration, /ppa\.source in \('autonomous_curator', 'recovery'\)/);
+  assert.match(migration, /AFFILIATE_LINK_INVALID/);
+  assert.match(migration, /SHOPEE_IDENTITY_INVALID/);
+  assert.match(migration, /PRICE_UNVERIFIED/);
+  assert.match(migration, /IMAGE_REVIEW_NOT_CLEAN/);
+});
+''')
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused best-of-lot tests
+        run: node --import tsx/esm --test --test-concurrency=1 tests/autonomousCuratorBestOfLotPolicy.test.ts tests/productPublicationGate.test.ts tests/autonomousCuratorCategoryBalancePolicy.test.ts tests/autonomousCuratorPublicationGateIntegration.test.ts
+
+      - name: TypeScript
+        run: npm run lint
+
+      - name: Backend build
+        env:
+          CERBERUS_BUILD_TARGET: backend
+        run: npm run build
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          rm .github/workflows/apply-mandatory-best-of-lot-patch.yml
+          git config user.name "cerberus-automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "fix: make deficit recovery best-of-lot mandatory [best-of-lot-patch]"
+          git push origin HEAD:fix/mandatory-best-of-lot-deficit-recovery-20260904
