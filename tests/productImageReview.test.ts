@@ -21,6 +21,24 @@ function imageResponse(status = 200): Response {
   });
 }
 
+test("image review usa schema estrutural e mantém decisão e confidence no parser local", () => {
+  const schema = productImageReviewInternals.imageReviewSchema() as any;
+  const properties = schema.properties.images.items.properties;
+  assert.equal(properties.index.type, "number");
+  assert.equal(properties.decision.type, "string");
+  assert.equal(properties.confidence.type, "string");
+  assert.equal("enum" in properties.decision, false);
+  assert.equal("enum" in properties.confidence, false);
+
+  const parsed = productImageReviewInternals.parseAssessments(
+    ["https://cdn.example.test/a.jpg"],
+    [{ url: "https://cdn.example.test/a.jpg", mimeType: "image/jpeg", data: "AA==" }],
+    { images: [{ index: 1, decision: "not-a-decision", confidence: "not-confidence", reason: "raw" }] },
+  );
+  assert.equal(parsed[0].decision, "unknown");
+  assert.equal(parsed[0].confidence, "LOW");
+});
+
 test("reviewer visual é desacoplado do modelo de copy e usa Flash-Lite de alto throughput", () => {
   assert.equal(productImageReviewInternals.resolveImageReviewModel({}), "gemini-3.5-flash-lite");
   assert.equal(productImageReviewInternals.resolveImageReviewModel({ GEMINI_PRODUCT_CURATOR_MODEL: "gemini-3.7-flash" }), "gemini-3.5-flash-lite");
