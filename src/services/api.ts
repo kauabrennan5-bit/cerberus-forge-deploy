@@ -36,8 +36,8 @@ function getApiUrl(path: string): string {
   try {
     if (typeof window !== 'undefined' && window.location) {
       const hostname = window.location.hostname;
-      // Se estivermos no domínio estático de produção, usa o Web Service do Render
-      if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-static-catalog')) {
+      // No storefront estático de produção, operações não-catálogo usam o backend canônico.
+      if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-design-static')) {
         return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
       }
       if (window.location.origin && window.location.origin !== 'null' && !window.location.origin.startsWith('blob:')) {
