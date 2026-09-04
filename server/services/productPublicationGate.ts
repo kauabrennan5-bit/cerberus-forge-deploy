@@ -22,6 +22,7 @@ export type ProductPublicationEvidence = {
   offBrand: boolean;
   lifecycleApproved: boolean;
   reviewState?: string | null;
+  manualEditorialOverride?: boolean;
 };
 
 type SourceIdentity = {
@@ -83,6 +84,7 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   const threshold = Number.isFinite(Number(evidence.threshold))
     ? Math.max(input.canonicalThreshold, Number(evidence.threshold))
     : input.canonicalThreshold;
+  const manualEditorialOverride = evidence.source === "product_rotation" && evidence.manualEditorialOverride === true;
   const primaryImageUrl = product.imageCuration?.status === "ready"
     ? product.imageCuration.primaryImageUrl?.trim() || null
     : null;
@@ -92,7 +94,7 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   if (!input.identity?.sourceProductUrl || !validHttpsUrl(input.identity.sourceProductUrl)) errors.push("PUBLICATION_SOURCE_URL_INVALID");
   if (!validAffiliateLink(product.link)) errors.push("PUBLICATION_AFFILIATE_LINK_INVALID");
   if (!isPublicProductCategory(product.categoria)) errors.push("PUBLICATION_CATEGORY_INVALID");
-  if (!Number.isFinite(evidence.score) || evidence.score < threshold) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
+  if (!manualEditorialOverride && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
 
   if (product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
   if (!product.imageCuration || product.imageCuration.status !== "ready") errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
@@ -113,17 +115,17 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   const displayTitle = String(product.displayTitle || "").replace(/\s+/g, " ").trim();
   const rawTitle = String(product.rawTitle || product.produto || "").replace(/\s+/g, " ").trim();
   if (product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
-  if (!displayTitle || displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
+  if (!displayTitle || (!manualEditorialOverride && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
   if (!Number.isFinite(Number(product.preco)) || Number(product.preco) <= 0) errors.push("PUBLICATION_PRICE_UNVERIFIED");
   if ((input.duplicateProductIds || []).some(id => id !== product.id)) errors.push("PUBLICATION_DUPLICATE_PRODUCT");
   if (input.identity?.productId && input.identity.productId !== product.id) errors.push("PUBLICATION_IDENTITY_OWNED_BY_OTHER_PRODUCT");
-  if (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY) {
+  if (!manualEditorialOverride && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
     errors.push("PUBLICATION_CATALOG_SIMILARITY_PROHIBITED");
   }
   if (evidence.categoryMismatch) errors.push("PUBLICATION_CATEGORY_MISMATCH");
-  if (evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
-  if (!evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
-  if (/REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
+  if (!manualEditorialOverride && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
+  if (!manualEditorialOverride && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
+  if (!manualEditorialOverride && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
 
   return { ok: errors.length === 0, errors: [...new Set(errors)], primaryImageUrl, threshold };
 }
@@ -227,6 +229,7 @@ export async function publishProductWithGate(input: {
       categoryMismatch: input.evidence.categoryMismatch,
       offBrand: input.evidence.offBrand,
       reviewState: input.evidence.reviewState || null,
+      manualEditorialOverride: input.evidence.manualEditorialOverride === true,
     },
   });
   if (authorizationError) throw authorizationError;
