@@ -243,6 +243,10 @@ test("category deficits use today's cumulative target instead of an exact-two ca
   const product = (id: string, category: Product["categoria"], status: Product["status"] = "published", ativo = true): Product => ({
     id,
     produto: id,
+    displayTitle: id,
+    displayTitleStatus: "reviewed",
+    imageEditorialStatus: "clean",
+    imageCuration: { status: "ready", rawImageUrls: ["https://example.com/a.jpg"], primaryImageUrl: "https://example.com/a.jpg", galleryImageUrls: [], assessments: [{ url: "https://example.com/a.jpg", decision: "clean", confidence: "HIGH", reason: "fixture" }] },
     categoria: category,
     preco: 100,
     imagens: ["https://example.com/a.jpg"],
