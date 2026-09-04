@@ -1,3 +1,4 @@
+-- Restored to the exact version recorded in LIVE supabase_migrations.
 -- Operator incidents must be explicitly recoverable after dependencies return healthy.
 
 alter table public.operational_incidents

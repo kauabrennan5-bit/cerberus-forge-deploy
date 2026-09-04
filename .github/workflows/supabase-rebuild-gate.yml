@@ -1,0 +1,195 @@
+name: Supabase Rebuild Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-rebuild-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  supabase-rebuild-gate:
+    name: supabase-rebuild-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGPASSWORD: postgres
+      DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate baseline and deterministic migration order
+        run: node scripts/validate-supabase-migrations.mjs
+
+      - name: Bootstrap Supabase platform dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+              CREATE ROLE service_role NOLOGIN;
+            END IF;
+          END
+          $$;
+
+          CREATE SCHEMA IF NOT EXISTS storage;
+          CREATE TABLE IF NOT EXISTS storage.buckets (
+            id text PRIMARY KEY,
+            name text NOT NULL,
+            public boolean NOT NULL DEFAULT false,
+            file_size_limit bigint,
+            allowed_mime_types text[],
+            updated_at timestamptz NOT NULL DEFAULT now()
+          );
+          SQL
+
+      - name: Rebuild public schema from zero
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'Applying canonical pre-20260814 baseline'
+          psql "$DB_URL" -X -v ON_ERROR_STOP=1 -f supabase/baseline.sql
+          while IFS= read -r migration; do
+            echo "Applying $migration"
+            psql "$DB_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+          done < <(node scripts/supabase-rebuild-order.mjs)
+
+      - name: Verify exact LIVE schema contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED='ce4f3e50fe1481754a5139aee58860e8|44|44|0|1|9|3|196|762|324'
+          ACTUAL="$(psql "$DB_URL" -X -qAt <<'SQL'
+          with lines as (
+            select 'TABLE|' || c.relname || '|' || c.relkind::text as line
+            from pg_class c join pg_namespace n on n.oid=c.relnamespace
+            where n.nspname='public' and c.relkind in ('r','p')
+            union all
+            select 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'')
+            from pg_attribute a
+            join pg_class c on c.oid=a.attrelid
+            join pg_namespace n on n.oid=c.relnamespace
+            left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+            where n.nspname='public' and c.relkind in ('r','p') and a.attnum > 0 and not a.attisdropped
+            union all
+            select 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true)
+            from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+            union all
+            select 'RLS|' || c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity
+            union all
+            select 'POLICY|' || tablename || '|' || policyname || '|' || cmd || '|' || coalesce(qual,'') || '|' || coalesce(with_check,'') from pg_policies where schemaname='public'
+            union all
+            select 'SEQUENCE|' || sequencename || '|' || data_type || '|' || start_value::text || '|' || min_value::text || '|' || max_value::text || '|' || increment_by::text || '|' || cycle::text from pg_sequences where schemaname='public'
+            union all
+            select 'FUNCTION|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || p.prokind::text || '|' || pg_get_functiondef(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+            union all
+            select 'TRIGGER|' || c.relname || '|' || t.tgname || '|' || pg_get_triggerdef(t.oid,true) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal
+            union all
+            select 'INDEX|' || indexname || '|' || indexdef from pg_indexes where schemaname='public'
+          ), canonical as (select string_agg(line,E'\n' order by line) manifest from lines)
+          select md5(manifest) || '|' ||
+            (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')) || '|' ||
+            (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity) || '|' ||
+            (select count(*) from pg_policies where schemaname='public') || '|' ||
+            (select count(*) from pg_sequences where schemaname='public') || '|' ||
+            (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public') || '|' ||
+            (select count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal) || '|' ||
+            (select count(*) from pg_indexes where schemaname='public') || '|' ||
+            (select count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped) || '|' ||
+            (select count(*) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public')
+          from canonical;
+          SQL
+          )"
+          echo "Expected LIVE contract: $EXPECTED"
+          echo "Local rebuild contract: $ACTUAL"
+          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+            echo '::error::Ephemeral rebuild does not exactly match the certified LIVE public-schema contract.'
+            echo 'Component hashes (compare with certified LIVE diagnostics):'
+            psql "$DB_URL" -X -qAt <<'SQL'
+          with table_lines as (
+            select 'TABLE|' || c.relname || '|' || c.relkind::text as line from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')
+          ), column_lines as (
+            select 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'') as line
+            from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+            where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped
+          ), constraint_lines as (
+            select 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true) as line from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+          ), rls_lines as (
+            select 'RLS|' || c.relname as line from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity
+          ), policy_lines as (
+            select 'POLICY|' || tablename || '|' || policyname || '|' || cmd || '|' || coalesce(qual,'') || '|' || coalesce(with_check,'') as line from pg_policies where schemaname='public'
+          ), sequence_lines as (
+            select 'SEQUENCE|' || sequencename || '|' || data_type || '|' || start_value::text || '|' || min_value::text || '|' || max_value::text || '|' || increment_by::text || '|' || cycle::text as line from pg_sequences where schemaname='public'
+          ), function_lines as (
+            select 'FUNCTION|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || p.prokind::text || '|' || pg_get_functiondef(p.oid) as line from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+          ), trigger_lines as (
+            select 'TRIGGER|' || c.relname || '|' || t.tgname || '|' || pg_get_triggerdef(t.oid,true) as line from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal
+          ), index_lines as (
+            select 'INDEX|' || indexname || '|' || indexdef as line from pg_indexes where schemaname='public'
+          )
+          select 'tables_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from table_lines)
+          union all select 'columns_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from column_lines)
+          union all select 'constraints_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from constraint_lines)
+          union all select 'rls_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from rls_lines)
+          union all select 'policies_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from policy_lines)
+          union all select 'sequences_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from sequence_lines)
+          union all select 'functions_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from function_lines)
+          union all select 'triggers_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from trigger_lines)
+          union all select 'indexes_hash=' || (select md5(coalesce(string_agg(line,E'\n' order by line),'')) from index_lines);
+          SQL
+            echo 'Per-table column/constraint hashes:'
+            psql "$DB_URL" -X -qAt <<'SQL'
+          with column_lines as (
+            select c.relname table_name, 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'') as line
+            from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+            where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped
+          ), constraint_lines as (
+            select c.relname table_name, 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true) as line
+            from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+          ), tables as (
+            select c.relname table_name from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')
+          )
+          select t.table_name || '|columns=' || (select md5(string_agg(line,E'\n' order by line)) from column_lines cl where cl.table_name=t.table_name) || '|constraints=' || (select md5(string_agg(line,E'\n' order by line)) from constraint_lines xl where xl.table_name=t.table_name)
+          from tables t order by t.table_name;
+          SQL
+            echo 'Per-function hashes:'
+            psql "$DB_URL" -X -qAt <<'SQL'
+          select p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || md5('FUNCTION|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || p.prokind::text || '|' || pg_get_functiondef(p.oid))
+          from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' order by 1;
+          SQL
+            exit 1
+          fi

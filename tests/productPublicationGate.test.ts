@@ -117,7 +117,7 @@ test("off-brand, REVIEW state and prohibited similarity remain hard blockers", (
 });
 
 test("database migration enforces authorization and never fabricates editorial review", async () => {
-  const migration = await readFile(new URL("../supabase/migrations/20260902233000_product_publication_gate.sql", import.meta.url), "utf8");
+  const migration = await readFile(new URL("../supabase/migrations/20260903041603_product_publication_gate.sql", import.meta.url), "utf8");
   assert.match(migration, /products_publication_authorization_guard/);
   assert.match(migration, /PRODUCT_PUBLICATION_BLOCKED:AUTHORIZATION_MISSING/);
   assert.match(migration, /display_title_status <> 'reviewed'/);

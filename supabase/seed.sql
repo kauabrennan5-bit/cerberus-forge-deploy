@@ -1,0 +1,3 @@
+-- Cerberus Finds local rebuild seed.
+-- Intentionally empty: production/customer/Telegram/newsletter data must never be copied here.
+-- Future rows, if any, must be synthetic, deterministic and test-only.

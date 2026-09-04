@@ -1,3 +1,4 @@
+-- Restored to the exact version recorded in LIVE supabase_migrations.
 -- Explicit, idempotent recovery metadata for abandoned Autonomous Curator runs.
 
 alter table public.autonomous_curator_runs

@@ -26,7 +26,7 @@ test("rotation publication preflight performs real image title pipeline score an
 });
 
 test("rotation rollback exception is restricted to exact applying request and original source snapshot", async () => {
-  const migration = await readFile(new URL("../supabase/migrations/20260902233000_product_publication_gate.sql", import.meta.url), "utf8");
+  const migration = await readFile(new URL("../supabase/migrations/20260903041603_product_publication_gate.sql", import.meta.url), "utf8");
   assert.match(migration, /restore_product_after_failed_rotation/);
   assert.match(migration, /status = 'applying'/);
   assert.match(migration, /source_product_id = p_source_product_id/);
