@@ -1,3 +1,4 @@
+-- Restored to the exact version recorded in LIVE supabase_migrations.
 -- Central publication authority for Cerberus public products.
 -- Existing public editorial violations are made non-public without inventing review proof.
 
@@ -23,8 +24,6 @@ create index if not exists product_publication_authorizations_pending_idx
   on public.product_publication_authorizations(product_id, expires_at desc)
   where consumed_at is null;
 
--- Fail closed on records that were already public without the editorial proof the
--- new publication authority requires. This never converts unreviewed -> reviewed.
 update public.products
 set ativo = false,
     status = 'paused'
@@ -52,8 +51,6 @@ declare
   v_item_id text;
   v_source_url text;
 begin
-  -- Only guard a real transition into the public state. Ordinary edits to an
-  -- already-public healthy product do not consume another authorization.
   if not (coalesce(new.ativo, true) = true and new.status = 'published') then
     return new;
   end if;
@@ -61,9 +58,6 @@ begin
     return new;
   end if;
 
-  -- Exact rollback of the source from a failed Product Rotation is handled by
-  -- the SECURITY DEFINER RPC below. The flag is transaction-local and cannot be
-  -- reached by an ordinary products update. Editorial proof is still required.
   if tg_op = 'UPDATE'
      and current_setting('cerberus.rotation_recovery', true) = 'on'
      and coalesce(old.ativo, false) = false
