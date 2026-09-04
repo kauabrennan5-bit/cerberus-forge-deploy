@@ -1,31 +1,8 @@
 name: Autonomous Curator Gate
 
-# Required-check trigger: keep this workflow visible to visual-only PRs that must satisfy branch protection.
+# Required-check trigger: keep this workflow visible to every PR that must satisfy branch protection.
 on:
   pull_request:
-    paths:
-      - "server/services/autonomousCurator*.ts"
-      - "server/services/productAutomation.ts"
-      - "server/services/productAiRecovery.ts"
-      - "server/services/productImage*.ts"
-      - "server/services/productPipeline.ts"
-      - "server/services/catalogSync.ts"
-      - "server/services/githubCatalogSync.ts"
-      - "server/services/scraper.ts"
-      - "server/commercial/affiliate/shopee*.ts"
-      - "server/commercial/marketplace/shopeeIdentity.ts"
-      - "server/routes/autonomousCuratorRoutes.ts"
-      - "server/repositories/autonomousCuratorRepository.ts"
-      - "src/lib/productImageCuration.ts"
-      - "src/lib/productCanonical.ts"
-      - "tests/autonomousCurator*.test.ts"
-      - "tests/productAiRecovery*.test.ts"
-      - "tests/productImage*.test.ts"
-      - "tests/productCanonical.test.ts"
-      - "supabase/migrations/*autonomous_curator*"
-      - ".github/workflows/autonomous-curator*.yml"
-      - "package.json"
-      - "package-lock.json"
   push:
     branches:
       - main
