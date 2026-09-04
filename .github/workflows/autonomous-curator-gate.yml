@@ -1,5 +1,6 @@
 name: Autonomous Curator Gate
 
+# Required-check trigger: keep this workflow visible to visual-only PRs that must satisfy branch protection.
 on:
   pull_request:
     paths:

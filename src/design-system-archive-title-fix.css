@@ -1,0 +1,11 @@
+/* CERBERUS / QUIET ARCHIVE — archive title hotfix
+   Prevents the original h1 text from rendering underneath the editorial
+   "ACERVO COMPLETO" pseudo-title after the dark-surface pass. */
+
+#cerberus-acervo h1 {
+  color: transparent !important;
+}
+
+#cerberus-acervo h1::after {
+  color: #F2EDE4 !important;
+}
