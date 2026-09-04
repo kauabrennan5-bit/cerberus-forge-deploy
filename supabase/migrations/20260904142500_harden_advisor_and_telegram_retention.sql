@@ -9,7 +9,6 @@ create index if not exists idx_product_rotation_requests_replacement_product_id
 create index if not exists idx_product_source_identities_reserved_run_id
   on public.product_source_identities(reserved_run_id);
 
-create extension if not exists pg_cron;
 create schema if not exists private;
 revoke all on schema private from anon, authenticated;
 
@@ -73,14 +72,33 @@ $$;
 
 revoke all on function private.archive_terminal_telegram_reviews(interval) from public, anon, authenticated;
 
+-- Supabase ships pg_cron; the deterministic rebuild CI intentionally uses vanilla postgres.
+-- Enable/schedule only where the extension package is available so the schema remains portable.
 do $$
+declare
+  cron_available boolean := false;
+  cron_installed boolean := false;
+  job_exists boolean := false;
 begin
-  if not exists (select 1 from cron.job where jobname = 'cerberus-telegram-review-archive') then
-    perform cron.schedule(
-      'cerberus-telegram-review-archive',
-      '15 * * * *',
-      $job$select private.archive_terminal_telegram_reviews(interval '7 days');$job$
-    );
+  select exists(select 1 from pg_available_extensions where name = 'pg_cron') into cron_available;
+  if cron_available then
+    execute 'create extension if not exists pg_cron';
+    select exists(select 1 from pg_extension where extname = 'pg_cron') into cron_installed;
+  end if;
+
+  if cron_installed then
+    execute 'select exists(select 1 from cron.job where jobname = $1)'
+      into job_exists
+      using 'cerberus-telegram-review-archive';
+    if not job_exists then
+      execute $sql$
+        select cron.schedule(
+          'cerberus-telegram-review-archive',
+          '15 * * * *',
+          $job$select private.archive_terminal_telegram_reviews(interval '7 days');$job$
+        )
+      $sql$;
+    end if;
   end if;
 end;
 $$;
