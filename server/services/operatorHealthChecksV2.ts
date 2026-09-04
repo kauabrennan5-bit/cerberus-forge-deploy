@@ -4,6 +4,7 @@ import { checkGeminiVisualProviderHealth, checkOpenAIVisualProviderHealth } from
 import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
 import { inspectShopeeProviderEnv } from "./shopeeProviderRuntime";
 import type { ComponentObservation, OperationalStatus } from "./operatorAutonomy";
+import { isPublicCatalogEligibleDbRow, PUBLIC_CATALOG_ELIGIBILITY_CONTRACT_VERSION } from "./publicCatalogEligibility";
 
 export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-static.onrender.com";
 export const DEFAULT_PUBLIC_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
@@ -161,7 +162,7 @@ async function checkProductsApi(fetchImpl: typeof fetch, url: string, timeoutMs:
 
 async function readSupabaseProducts(client: SupabaseClient): Promise<{ rows: Array<Record<string, unknown>>; observation: OperatorHealthObservation }> {
   const startedAt = Date.now();
-  const { data, error } = await client.from("products").select("id,status,ativo");
+  const { data, error } = await client.from("products").select("id,status,ativo,categoria,display_title,display_title_status,image_editorial_status,image_curation");
   if (error) return { rows: [], observation: observation({ name: "Supabase", status: "DOWN", startedAt, error: "SUPABASE_READ_FAILED", diagnostic: { code: error.code || null } }) };
   const rows = (Array.isArray(data) ? data : []) as Array<Record<string, unknown>>;
   return { rows, observation: observation({ name: "Supabase", status: "HEALTHY", startedAt, diagnostic: { readOnly: true, productsRead: rows.length } }) };
@@ -185,7 +186,7 @@ async function checkCatalogProjection(input: {
     if (!input.supabaseRows) {
       return observation({ name: "Catálogo/Projection", status: "UNKNOWN", startedAt, httpStatus: response.status, error: "SUPABASE_COMPARISON_UNAVAILABLE", diagnostic: { projectedCount: projected.length, urlRole: "public_catalog_projection" } });
     }
-    const expectedIds = input.supabaseRows.filter(productIsPublic).map(productId).filter(Boolean).sort();
+    const expectedIds = input.supabaseRows.filter(isPublicCatalogEligibleDbRow).map(productId).filter(Boolean).sort();
     const projectedIds = projected.filter(productIsPublic).map(productId).filter(Boolean).sort();
     const missing = expectedIds.filter(id => !projectedIds.includes(id));
     const extra = projectedIds.filter(id => !expectedIds.includes(id));
@@ -196,7 +197,7 @@ async function checkCatalogProjection(input: {
       startedAt,
       httpStatus: response.status,
       error: coherent ? undefined : "CATALOG_PROJECTION_DIVERGENCE",
-      diagnostic: { urlRole: "public_catalog_projection", expectedCount: expectedIds.length, projectedCount: projectedIds.length, missingCount: missing.length, extraCount: extra.length, missingIds: missing.slice(0, 20), extraIds: extra.slice(0, 20) },
+      diagnostic: { urlRole: "public_catalog_projection", eligibilityContract: PUBLIC_CATALOG_ELIGIBILITY_CONTRACT_VERSION, expectedCount: expectedIds.length, projectedCount: projectedIds.length, missingCount: missing.length, extraCount: extra.length, missingIds: missing.slice(0, 20), extraIds: extra.slice(0, 20) },
     });
   } catch (error) {
     return observation({ name: "Catálogo/Projection", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "CATALOG_TIMEOUT" : "CATALOG_FETCH_FAILED", diagnostic: { urlRole: "public_catalog_projection" } });

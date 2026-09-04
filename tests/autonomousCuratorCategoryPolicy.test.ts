@@ -18,6 +18,10 @@ function productsFor(counts: Partial<Record<Product["categoria"], number>>): Pro
       products.push({
         id: `p-${index}`,
         produto: `Produto ${index}`,
+        displayTitle: `Produto ${index}`,
+        displayTitleStatus: "reviewed",
+        imageEditorialStatus: "clean",
+        imageCuration: { status: "ready", rawImageUrls: ["https://example.com/image.jpg"], primaryImageUrl: "https://example.com/image.jpg", galleryImageUrls: [], assessments: [{ url: "https://example.com/image.jpg", decision: "clean", confidence: "HIGH", reason: "fixture" }] },
         categoria: category as Product["categoria"],
         preco: 100,
         imagens: ["https://example.com/image.jpg"],
@@ -75,7 +79,7 @@ test("explicit replacement remains allowed even when other categories have defic
   }));
 });
 
-test("fulfilled categories is based only on active published count >= target", () => {
+test("fulfilled categories is based only on Edge-v3 eligible public count >= target", () => {
   const policy = calculateCategoryPolicy(productsFor({
     Iluminação: 7,
     Decoração: 4,

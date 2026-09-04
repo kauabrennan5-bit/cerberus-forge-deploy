@@ -8,6 +8,7 @@ import {
 } from "./operationalDiagnostics";
 import { createOperationalEvent, emitOperationalEvent } from "./operationalEvents";
 import { persistOperationalEvent, persistOperationalOperation } from "../repositories/operationalMemoryRepository";
+import { isPublicCatalogEligibleProduct, PUBLIC_CATALOG_ELIGIBILITY_CONTRACT_VERSION } from "./publicCatalogEligibility";
 
 export interface SyncLogResult {
   success: boolean;
@@ -171,7 +172,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
       return { success: false, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontHealthy, diagnostic, error: diagnostic.code };
     }
 
-    const expectedPublic = canonicalProducts.filter(product => product.ativo !== false && product.status === "published");
+    const expectedPublic = canonicalProducts.filter(isPublicCatalogEligibleProduct);
     const expectedPublicIds = new Set<string>(expectedPublic.map(product => String(product.id)));
     const expectedCategoryById = new Map<string, string>(expectedPublic.map(product => [String(product.id), String(product.categoria)]));
     let lastFailure: unknown = new Error("A API pública ainda não forneceu a projeção esperada.");
@@ -197,7 +198,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
           const completionEvent = createOperationalEvent({ eventType: "catalog.build.completed", source: "catalogSync", actor: "system", correlationId: operationId, severity: "INFO", outcome: "SUCCESS", payload: { productId: productId || undefined, supabaseCount, jsonCount, publicJsonCount, expectedPublicCount: expectedPublicIds.size, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontCatalogApiUrl, runtimeProjection: true } });
           emitOperationalEvent(completionEvent);
           void persistOperationalEvent(completionEvent).catch(error => console.warn(`[MEMORY] memory.persistence.failed eventId=${completionEvent.eventId} reason=${sanitizeOperationalText(error)}`));
-          void persistOperationalOperation({ operationId, operationType: "CATALOG_SYNC", status: "SUCCEEDED", actor: "system", correlationId: operationId, attempt: 1, createdAt: operationStartedAt, startedAt: operationStartedAt, completedAt: new Date().toISOString(), resultCode: "CATALOG_RUNTIME_VALIDATED", metadata: { productId: productId || undefined, publicJsonCount, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontCatalogApiUrl, runtimeProjection: true }, schemaVersion: "1.0" }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
+          void persistOperationalOperation({ operationId, operationType: "CATALOG_SYNC", status: "SUCCEEDED", actor: "system", correlationId: operationId, attempt: 1, createdAt: operationStartedAt, startedAt: operationStartedAt, completedAt: new Date().toISOString(), resultCode: "CATALOG_RUNTIME_VALIDATED", metadata: { productId: productId || undefined, publicJsonCount, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontCatalogApiUrl, runtimeProjection: true, eligibilityContract: PUBLIC_CATALOG_ELIGIBILITY_CONTRACT_VERSION }, schemaVersion: "1.0" }).catch(error => console.warn(`[MEMORY] memory.persistence.failed operationId=${operationId} reason=${sanitizeOperationalText(error)}`));
           return { success: true, operationId, product: productTitle, productId, supabaseCount, jsonCount, publicJsonCount, productFoundPublic, staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontHealthy, storefrontCatalogApiUrl, missingPublicIds, unexpectedPublicIds, categoryMismatchIds };
         }
         lastFailure = new Error(`Divergência runtime: missing=${missingPublicIds.length}, unexpected=${unexpectedPublicIds.length}, categoryMismatch=${categoryMismatchIds.length}, invalidIdentity=${hasInvalidIdentity}, storefrontHealthy=${storefrontHealthy}.`);
