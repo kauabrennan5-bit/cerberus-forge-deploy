@@ -24,6 +24,22 @@ jobs:
           ref: convergence/public-edge-3d
           fetch-depth: 0
 
+      - name: Align patch script with current newsletter resolver
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-convergence-hardening.py')
+          s = p.read_text()
+          old_a = "'  const base = String(env.PUBLIC_SITE_URL || env.STATIC_CATALOG_URL || DEFAULT_PUBLIC_SITE_URL).trim();'"
+          new_a = "'  const configured = (env.PUBLIC_SITE_URL || env.STATIC_CATALOG_URL || DEFAULT_PUBLIC_SITE_URL).trim();'"
+          old_b = "'  const base = String(env.PUBLIC_SITE_URL || env.PUBLIC_STOREFRONT_URL || DEFAULT_PUBLIC_SITE_URL).trim();'"
+          new_b = "'  const configured = (env.PUBLIC_SITE_URL || env.PUBLIC_STOREFRONT_URL || DEFAULT_PUBLIC_SITE_URL).trim();'"
+          if old_a not in s or old_b not in s:
+              raise SystemExit('newsletter patch-script markers not found')
+          p.write_text(s.replace(old_a, new_a).replace(old_b, new_b))
+          PY
+
       - name: Apply deterministic patch
         run: python scripts/apply-convergence-hardening.py
 
