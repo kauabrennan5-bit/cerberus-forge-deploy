@@ -8,6 +8,7 @@ const VALID_CONDITIONS: ReadonlySet<PromotionOfferCondition> = new Set([
 ]);
 
 export const LEGACY_PROMOTION_TTL_MS = 24 * 60 * 60 * 1000;
+const PROMOTION_TTL_CLOCK_DRIFT_MS = 1000;
 
 /**
  * Normaliza o ajuste confirmado pelo administrador antes de ele cruzar a
@@ -26,9 +27,27 @@ export function normalizePromotionOffer(value: unknown): PromotionOffer | undefi
   if (source !== "admin_confirmed") return undefined;
   if (typeof confirmedAt !== "number" || !Number.isFinite(confirmedAt) || confirmedAt <= 0) return undefined;
   const explicitExpiry = candidate.expiresAt ?? candidate.validUntil;
-  const expiresAt = typeof explicitExpiry === "number" && Number.isFinite(explicitExpiry)
+  let expiresAt = typeof explicitExpiry === "number" && Number.isFinite(explicitExpiry)
     ? explicitExpiry
     : confirmedAt + LEGACY_PROMOTION_TTL_MS;
+
+  // Callers that capture confirmedAt/expiresAt with two consecutive clock reads
+  // can introduce a few milliseconds of drift. When the explicit expiry is
+  // clearly the default 24h policy, canonicalize it to one exact timestamp.
+  // Explicitly different validity windows remain untouched.
+  const canonicalDefaultExpiry = confirmedAt + LEGACY_PROMOTION_TTL_MS;
+  if (
+    typeof candidate.expiresAt === "number"
+    && Number.isFinite(candidate.expiresAt)
+    && Math.abs(expiresAt - canonicalDefaultExpiry) <= PROMOTION_TTL_CLOCK_DRIFT_MS
+  ) {
+    expiresAt = canonicalDefaultExpiry;
+    // Some callers validate and then persist the same object reference. Keep
+    // that object aligned with the normalized contract instead of reintroducing
+    // the clock drift after validation.
+    candidate.expiresAt = expiresAt;
+  }
+
   if (expiresAt <= confirmedAt) return undefined;
   const benefits = Array.isArray(candidate.benefits)
     ? candidate.benefits.filter((benefit): benefit is string => typeof benefit === "string" && benefit.trim().length > 0).map(benefit => benefit.trim()).slice(0, 8)
