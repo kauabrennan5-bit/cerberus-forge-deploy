@@ -92,6 +92,84 @@ test("query expansion usa Luna, Structured Outputs e cache estável apesar da ro
   assert.equal(capturedBody.text.format.strict, true);
 });
 
+test("query expansion mantém OpenAI como primário mesmo com Gemini configurado", async () => {
+  autonomousCuratorSemanticDiscoveryInternals.clearQueryExpansionCache();
+  let openAICalls = 0;
+  let geminiCalls = 0;
+  const result = await expandAutonomousCuratorQueries(
+    profileForCategory("Móveis"),
+    ["mesa lateral vintage"],
+    {
+      env: {
+        OPENAI_API_KEY: "test-openai",
+        GEMINI_API_KEY: "test-gemini",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+      },
+      budget: allowBudget,
+      fetchImpl: (async () => {
+        openAICalls += 1;
+        return openAIResponse({ queries: ["mesa tubular cromada"] });
+      }) as typeof fetch,
+      geminiGenerate: async () => {
+        geminiCalls += 1;
+        return { text: JSON.stringify({ queries: ["mesa globo acrilico"] }) };
+      },
+    },
+  );
+  assert.deepEqual(result, ["mesa tubular cromada"]);
+  assert.equal(openAICalls, 1);
+  assert.equal(geminiCalls, 0);
+});
+
+test("query expansion cai para Gemini quando OpenAI está sem quota e preserva sanitização", async () => {
+  autonomousCuratorSemanticDiscoveryInternals.clearQueryExpansionCache();
+  let openAICalls = 0;
+  let geminiCalls = 0;
+  let geminiRequest: any = null;
+  const result = await expandAutonomousCuratorQueries(
+    profileForCategory("Decoração"),
+    ["decoracao bauhaus"],
+    {
+      env: {
+        OPENAI_API_KEY: "test-openai",
+        GEMINI_API_KEY: "test-gemini",
+        OPENAI_AUTONOMOUS_DISCOVERY_MAX_ATTEMPTS: "1",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+        GEMINI_AUTONOMOUS_DISCOVERY_MODEL: "gemini-3.1-flash-lite",
+      },
+      budget: allowBudget,
+      fetchImpl: (async () => {
+        openAICalls += 1;
+        return new Response(JSON.stringify({
+          error: { message: "You exceeded your current quota", type: "insufficient_quota", code: "insufficient_quota" },
+        }), { status: 429, headers: { "content-type": "application/json" } });
+      }) as typeof fetch,
+      geminiGenerate: async (request) => {
+        geminiCalls += 1;
+        geminiRequest = request;
+        return {
+          text: JSON.stringify({
+            queries: [
+              "escultura geometrica acrilica",
+              "vaso cromado anos 70",
+              "https://example.com invalida",
+              "escultura geometrica acrilica",
+              "decoracao bauhaus",
+            ],
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(openAICalls, 1);
+  assert.equal(geminiCalls, 1);
+  assert.equal(geminiRequest.model, "gemini-3.1-flash-lite");
+  assert.equal(geminiRequest.config.responseMimeType, "application/json");
+  assert.ok(geminiRequest.config.responseSchema);
+  assert.deepEqual(result, ["escultura geometrica acrilica", "vaso cromado anos 70"]);
+});
+
 test("semantic ranking restringe IDs aos candidatos reais e usa imagem só para resgate lexical", async () => {
   let capturedBody: any = null;
   const result = await rankAutonomousCuratorCandidates(
