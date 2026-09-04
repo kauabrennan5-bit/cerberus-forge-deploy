@@ -212,7 +212,9 @@ async function callGeminiSemanticRanking(input: {
             items: {
               type: Type.OBJECT,
               properties: {
-                identityKey: { type: Type.STRING, enum: input.identityKeys },
+                // Keep the Gemini schema compact. The exact batch whitelist is
+                // enforced after parsing by normalizeDecision/allowed.has().
+                identityKey: { type: Type.STRING },
                 fitScore: { type: Type.INTEGER, minimum: 0, maximum: 100 },
                 categoryFit: { type: Type.INTEGER, minimum: 0, maximum: 100 },
                 worthEnriching: { type: Type.BOOLEAN },
