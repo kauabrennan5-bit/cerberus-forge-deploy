@@ -6,7 +6,7 @@ function patch(path, from, to) {
   writeFileSync(path, source.replace(from, to));
 }
 
-const eligibleFields = `        displayTitle: \`Produto \${index}\`,\n        displayTitleStatus: "reviewed",\n        imageEditorialStatus: "clean",\n        imageCuration: { status: "ready", raw: [], gallery: [], principal: "https://example.com/image.jpg", decision: "approved", confidence: 1, reason: "test" },\n`;
+const eligibleFields = `        displayTitle: \`Produto \${index}\`,\n        displayTitleStatus: "reviewed",\n        imageEditorialStatus: "clean",\n        imageCuration: { status: "ready", rawImageUrls: ["https://example.com/image.jpg"], primaryImageUrl: "https://example.com/image.jpg", galleryImageUrls: [], assessments: [{ url: "https://example.com/image.jpg", decision: "clean", confidence: "HIGH", reason: "fixture" }] },\n`;
 patch(
   'tests/autonomousCuratorCategoryPolicy.test.ts',
   '        produto: `Produto ${index}`,\n        categoria: category as Product["categoria"],',
@@ -18,7 +18,7 @@ patch(
   'test("fulfilled categories is based only on Edge-v3 eligible public count >= target", () => {',
 );
 
-const continuousEligible = `    displayTitle: id,\n    displayTitleStatus: "reviewed",\n    imageEditorialStatus: "clean",\n    imageCuration: { status: "ready", raw: [], gallery: [], principal: "https://example.com/a.jpg", decision: "approved", confidence: 1, reason: "test" },\n`;
+const continuousEligible = `    displayTitle: id,\n    displayTitleStatus: "reviewed",\n    imageEditorialStatus: "clean",\n    imageCuration: { status: "ready", rawImageUrls: ["https://example.com/a.jpg"], primaryImageUrl: "https://example.com/a.jpg", galleryImageUrls: [], assessments: [{ url: "https://example.com/a.jpg", decision: "clean", confidence: "HIGH", reason: "fixture" }] },\n`;
 patch(
   'tests/autonomousCuratorContinuousV2.test.ts',
   '    produto: id,\n    categoria: category,\n    preco: 100,',
