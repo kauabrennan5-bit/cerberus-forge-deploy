@@ -43,9 +43,11 @@ permissions:
   id-token: write
 
 concurrency:
-  # Read-only deployment verification must never queue behind a production curator cycle.
+  # Read-only deployment verification never queues behind production. A newer
+  # production trigger replaces only stale workflow polling; the backend
+  # activeExecution lock remains the authority that prevents duplicate cycles.
   group: ${{ github.event_name == 'push' && 'cerberus-autonomous-curator-status' || 'cerberus-autonomous-curator-production' }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   daily-curator:
@@ -191,6 +193,13 @@ jobs:
           if (mode === 'continuous') {
             const metadata = run.metadata && typeof run.metadata === 'object' ? run.metadata : {};
             if (String(metadata.continuous_cycle_id || '') !== expectedCycle) {
+              // A Render restart can terminate the in-memory cycle before its id
+              // reaches the run row. Do not hold the production concurrency group
+              // for the full job timeout when the backend no longer owns that cycle.
+              if (body?.running !== true) {
+                process.stdout.write('orphaned');
+                process.exit(0);
+              }
               process.stdout.write('waiting');
               process.exit(0);
             }
@@ -219,6 +228,10 @@ jobs:
               echo "AUTONOMOUS_CURATOR_RESULT=$state"
               if [[ "$state" == done:failed:* ]]; then exit 1; fi
               exit 0
+            fi
+            if [ "$state" = "orphaned" ]; then
+              echo "AUTONOMOUS_CURATOR_CYCLE_ORPHANED_AFTER_BACKEND_RESTART=$expected_cycle"
+              exit 1
             fi
             sleep 15
           done
