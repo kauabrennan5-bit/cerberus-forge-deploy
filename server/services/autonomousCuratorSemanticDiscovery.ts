@@ -208,29 +208,26 @@ async function callGeminiSemanticRanking(input: {
         properties: {
           decisions: {
             type: Type.ARRAY,
-            maxItems: input.identityKeys.length,
+            description: `Return at most ${input.identityKeys.length} decisions using only candidate IDs from the prompt.`,
             items: {
               type: Type.OBJECT,
               properties: {
-                // Keep the Gemini schema compact. Exact identity and semantic
-                // value constraints are enforced after parsing by normalizeDecision.
+                // Keep Gemini's transport schema structural only. Exact identity,
+                // ranges, confidence and output limits are enforced after parsing.
                 identityKey: { type: Type.STRING },
-                fitScore: { type: Type.INTEGER, minimum: 0, maximum: 100 },
-                categoryFit: { type: Type.INTEGER, minimum: 0, maximum: 100 },
+                fitScore: { type: Type.INTEGER },
+                categoryFit: { type: Type.INTEGER },
                 worthEnriching: { type: Type.BOOLEAN },
                 confidence: { type: Type.STRING },
                 signals: {
                   type: Type.ARRAY,
-                  maxItems: 4,
                   items: { type: Type.STRING },
                 },
                 reason: { type: Type.STRING },
               },
-              required: ["identityKey", "fitScore", "categoryFit", "worthEnriching", "confidence", "signals", "reason"],
             },
           },
         },
-        required: ["decisions"],
       },
     },
   });
