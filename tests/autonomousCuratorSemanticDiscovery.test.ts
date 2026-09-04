@@ -26,7 +26,7 @@ function openAIResponse(value: unknown): Response {
   });
 }
 
-test("semantic discovery fica totalmente inerte sem OPENAI_API_KEY", async () => {
+test("semantic discovery fica totalmente inerte sem provider configurado", async () => {
   let calls = 0;
   const result = await rankAutonomousCuratorCandidates(
     profileForCategory("Iluminação"),
@@ -170,6 +170,31 @@ test("query expansion cai para Gemini quando OpenAI está sem quota e preserva s
   assert.deepEqual(result, ["escultura geometrica acrilica", "vaso cromado anos 70"]);
 });
 
+test("query expansion tenta modelo Gemini secundário após indisponibilidade temporária do primário", async () => {
+  autonomousCuratorSemanticDiscoveryInternals.clearQueryExpansionCache();
+  const models: string[] = [];
+  const result = await expandAutonomousCuratorQueries(
+    profileForCategory("Tecnologia"),
+    ["radio retro madeira"],
+    {
+      env: {
+        GEMINI_API_KEY: "test-gemini",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+        GEMINI_AUTONOMOUS_DISCOVERY_MODEL: "gemini-3.1-flash-lite",
+        GEMINI_AUTONOMOUS_DISCOVERY_FALLBACK_MODEL: "gemini-3.5-flash-lite",
+      },
+      budget: allowBudget,
+      geminiGenerate: async (request) => {
+        models.push(String(request.model));
+        if (request.model === "gemini-3.1-flash-lite") throw new Error("503 high demand");
+        return { text: JSON.stringify({ queries: ["radio portatil alca vintage"] }) };
+      },
+    },
+  );
+  assert.deepEqual(models, ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite"]);
+  assert.deepEqual(result, ["radio portatil alca vintage"]);
+});
+
 test("semantic ranking restringe IDs aos candidatos reais e usa imagem só para resgate lexical", async () => {
   let capturedBody: any = null;
   const result = await rankAutonomousCuratorCandidates(
@@ -227,6 +252,77 @@ test("semantic ranking restringe IDs aos candidatos reais e usa imagem só para 
   assert.ok(!JSON.stringify(content).includes("https://cdn.example.test/lexical.jpg"));
 });
 
+test("semantic ranking cai para Gemini após quota da OpenAI sem inventar IDs", async () => {
+  let geminiRequest: any = null;
+  const result = await rankAutonomousCuratorCandidates(
+    profileForCategory("Móveis"),
+    [
+      {
+        identityKey: "1:2",
+        name: "Mesa lateral tubular cromada",
+        query: "mesa lateral vintage",
+        page: 1,
+        price: 180,
+        imageUrl: null,
+        lexicalScore: 110,
+      },
+      {
+        identityKey: "3:4",
+        name: "Mesa de apoio redonda",
+        query: "mesa apoio retro",
+        page: 1,
+        price: 150,
+        imageUrl: null,
+        lexicalScore: 80,
+      },
+    ],
+    {
+      env: {
+        OPENAI_API_KEY: "test-openai",
+        GEMINI_API_KEY: "test-gemini",
+        OPENAI_AUTONOMOUS_DISCOVERY_MAX_ATTEMPTS: "1",
+        GEMINI_AUTONOMOUS_DISCOVERY_ENABLED: "true",
+        GEMINI_AUTONOMOUS_DISCOVERY_MODEL: "gemini-3.1-flash-lite",
+      },
+      budget: allowBudget,
+      fetchImpl: (async () => new Response(JSON.stringify({
+        error: { message: "quota exhausted", type: "insufficient_quota", code: "insufficient_quota" },
+      }), { status: 429, headers: { "content-type": "application/json" } })) as typeof fetch,
+      geminiGenerate: async (request) => {
+        geminiRequest = request;
+        return { text: JSON.stringify({
+          decisions: [
+            {
+              identityKey: "1:2",
+              fitScore: 94,
+              categoryFit: 97,
+              worthEnriching: true,
+              confidence: "HIGH",
+              signals: ["tubular", "cromado"],
+              reason: "Forma e material coerentes.",
+            },
+            {
+              identityKey: "999:999",
+              fitScore: 100,
+              categoryFit: 100,
+              worthEnriching: true,
+              confidence: "HIGH",
+              signals: ["inventado"],
+              reason: "deve ser descartado",
+            },
+          ],
+        }) };
+      },
+    },
+  );
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.model, "gemini-3.1-flash-lite");
+  assert.deepEqual(result.decisions.map(item => item.identityKey), ["1:2"]);
+  assert.equal(geminiRequest.config.responseMimeType, "application/json");
+  assert.deepEqual(geminiRequest.config.responseSchema.properties.decisions.items.properties.identityKey.enum, ["1:2", "3:4"]);
+});
+
 test("resposta com ID que não pertence ao lote é descartada mesmo se o provider devolver", async () => {
   const result = await rankAutonomousCuratorCandidates(
     profileForCategory("Móveis"),
@@ -259,7 +355,7 @@ test("resposta com ID que não pertence ao lote é descartada mesmo se o provide
   assert.deepEqual(result.decisions, []);
 });
 
-test("orçamento esgotado não chama OpenAI nem inventa decisão", async () => {
+test("orçamento esgotado não chama provider nem inventa decisão", async () => {
   let calls = 0;
   const result = await rankAutonomousCuratorCandidates(
     profileForCategory("Decoração"),
