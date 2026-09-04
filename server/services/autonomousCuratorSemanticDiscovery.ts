@@ -212,13 +212,13 @@ async function callGeminiSemanticRanking(input: {
             items: {
               type: Type.OBJECT,
               properties: {
-                // Keep the Gemini schema compact. The exact batch whitelist is
-                // enforced after parsing by normalizeDecision/allowed.has().
+                // Keep the Gemini schema compact. Exact identity and semantic
+                // value constraints are enforced after parsing by normalizeDecision.
                 identityKey: { type: Type.STRING },
                 fitScore: { type: Type.INTEGER, minimum: 0, maximum: 100 },
                 categoryFit: { type: Type.INTEGER, minimum: 0, maximum: 100 },
                 worthEnriching: { type: Type.BOOLEAN },
-                confidence: { type: Type.STRING, enum: ["HIGH", "MEDIUM", "LOW"] },
+                confidence: { type: Type.STRING },
                 signals: {
                   type: Type.ARRAY,
                   maxItems: 4,
@@ -523,8 +523,9 @@ Candidatos JSON:\n${JSON.stringify(rows)}`;
           identityKeys,
           generate: options.geminiGenerate,
         }) as { decisions?: unknown[] };
-        console.info(`[Autonomous Curator] Gemini semantic ranking fallback ativo: ${model}`);
-        return { status: "ok", model, decisions: normalizeDecisions(parsed, identityKeys) };
+        const decisions = normalizeDecisions(parsed, identityKeys);
+        console.info(`[Autonomous Curator] Gemini semantic ranking success model=${model} input=${selected.length} accepted=${decisions.length}`);
+        return { status: "ok", model, decisions };
       } catch (error) {
         console.warn(`[Autonomous Curator] Gemini semantic ranking indisponível (${model}): ${safeProviderReason(error)}`);
       }
