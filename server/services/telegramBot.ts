@@ -173,10 +173,12 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
 
   const data = String(update?.callback_query?.data || "");
   if (isProductRotationCallback(data)) {
+    const senderId = update?.callback_query?.from?.id;
+    const authorized = core.isUserAllowed(senderId);
     const requestId = rotationRequestId(data);
-    const before = requestId ? await getProductRotationRequest(requestId).catch(() => null) : null;
+    const before = authorized && requestId ? await getProductRotationRequest(requestId).catch(() => null) : null;
     let detachedOnCancel: string | null = null;
-    if (requestId && data.startsWith("rotation_cancel:")) {
+    if (authorized && requestId && data.startsWith("rotation_cancel:")) {
       try {
         detachedOnCancel = await detachDisposableRotationCandidateForCancellation(requestId);
       } catch (error) {
@@ -185,7 +187,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
     }
 
     await handleProductRotationCallback(update);
-    if (requestId) await cleanupRejectedCandidate(requestId, detachedOnCancel || before?.candidateProductId || null);
+    if (authorized && requestId) await cleanupRejectedCandidate(requestId, detachedOnCancel || before?.candidateProductId || null);
     return;
   }
 
