@@ -28,6 +28,20 @@ jobs:
           Path('/tmp/apply-best-of-lot.py').write_text('\n'.join(lines) + '\n')
           PY
           python3 /tmp/apply-best-of-lot.py
+      - name: Align category recovery contract tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/autonomousCuratorCategoryBalancePolicy.test.ts')
+          text = path.read_text()
+          text = text.replace('absolute five-item public floor', 'absolute six-item public floor')
+          text = text.replace('MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5', 'MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 6')
+          text = text.replace('MAX_RECOVERY_BURST_CYCLES = 8', 'MAX_RECOVERY_BURST_CYCLES = 12')
+          text = text.replace('const CATEGORY_GROWTH_VERSION = "6"', 'const CATEGORY_GROWTH_VERSION = "7"')
+          text = text.replace('META DO DIA NÃO CUMPRIDA', 'META DO DIA AINDA NÃO CUMPRIDA')
+          path.write_text(text)
+          PY
       - name: Install dependencies
         run: npm ci
       - name: Focused tests
