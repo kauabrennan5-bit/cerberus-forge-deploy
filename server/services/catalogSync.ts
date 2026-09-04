@@ -191,7 +191,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
         unexpectedPublicIds = [...publicIds].filter(id => !expectedPublicIds.has(id));
         categoryMismatchIds = visibleRows.filter((product: any) => expectedCategoryById.has(String(product.id)) && expectedCategoryById.get(String(product.id)) !== String(product.categoria)).map((product: any) => String(product.id));
         const hasInvalidIdentity = visibleRows.some((product: any) => !product?.id || !product?.slug || !(product?.displayTitle || product?.display_title || product?.produto) || !product?.link || !product?.categoria);
-        productFoundPublic = productId ? expectedPublicIds.has(productId) ? publicIds.has(productId) : !publicIds.has(productId) : missingPublicIds.length === 0;
+        productFoundPublic = productId ? expectedPublicIds.has(productId) && publicIds.has(productId) : missingPublicIds.length === 0;
 
         if (storefrontHealthy && missingPublicIds.length === 0 && unexpectedPublicIds.length === 0 && categoryMismatchIds.length === 0 && !hasInvalidIdentity && productFoundPublic) {
           const completionEvent = createOperationalEvent({ eventType: "catalog.build.completed", source: "catalogSync", actor: "system", correlationId: operationId, severity: "INFO", outcome: "SUCCESS", payload: { productId: productId || undefined, supabaseCount, jsonCount, publicJsonCount, expectedPublicCount: expectedPublicIds.size, storefrontUrl: staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontCatalogApiUrl, runtimeProjection: true } });

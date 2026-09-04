@@ -83,6 +83,10 @@ Deno.serve(async (req: Request) => {
         .select(PUBLIC_PRODUCT_COLUMNS)
         .eq("ativo", true)
         .eq("status", "published")
+        .eq("display_title_status", "reviewed")
+        .eq("image_editorial_status", "clean")
+        .not("display_title", "is", null)
+        .eq("image_curation->>status", "ready")
         .order("created_at", { ascending: false });
       if (error) throw new Error(`PRODUCTS_QUERY_FAILED:${error.code || "unknown"}`);
 

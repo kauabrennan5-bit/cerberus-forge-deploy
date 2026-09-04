@@ -10,7 +10,7 @@ dotenv.config();
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-const backendUrl = process.env.CATALOG_API_URL || 'https://cerberus-forge-deploy-backend.onrender.com/api/products';
+const publicCatalogUrl = process.env.PUBLIC_CATALOG_API_URL || process.env.PUBLIC_CATALOG_URL || 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products';
 
 const RAW_PAYLOAD_MARKERS = [
   '[url final]',
@@ -128,12 +128,12 @@ async function generateStaticCatalog() {
     }
   }
 
-  // O backend é apenas o caminho operacional alternativo para o mesmo Supabase;
-  // nunca é permitido usar um arquivo local como fonte concorrente do catálogo.
+  // A Edge Function pública é o único fallback de rede para o mesmo Supabase;
+  // nunca é permitido usar o backend ou um arquivo local como fonte concorrente do catálogo.
   if (!sourceLoaded) {
-    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela API do backend: ${backendUrl}`);
+    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela Supabase Edge: ${publicCatalogUrl}`);
     try {
-      const json = await requestCanonicalJson(backendUrl);
+      const json = await requestCanonicalJson(publicCatalogUrl);
       const products = json.products || json.data;
       if (!Array.isArray(products)) {
         throw new Error('Resposta da API não contém uma lista de produtos.');
@@ -141,10 +141,10 @@ async function generateStaticCatalog() {
 
       rawProducts = products;
       sourceLoaded = true;
-      sourceName = 'backend /api/products (projeção de public.products)';
-      console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via API do backend.`);
+      sourceName = 'Supabase Edge cerberus-public-api';
+      console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via Supabase Edge.`);
     } catch (apiErr) {
-      throw new Error(`Nenhuma fonte canônica disponível: Supabase indisponível e API do backend falhou (${apiErr?.message || apiErr}).`);
+      throw new Error(`Nenhuma fonte canônica disponível: Supabase indisponível e API pública Edge falhou (${apiErr?.message || apiErr}).`);
     }
   }
 

@@ -5,9 +5,10 @@ import fs from "node:fs";
 const coordinator = fs.readFileSync("server/services/autonomousCuratorContinuousV2.ts", "utf8");
 const base = fs.readFileSync("server/services/autonomousCuratorContinuousV2Base.ts", "utf8");
 
-test("coordinator replaces the exact-two cap with a cumulative one-per-day floor", () => {
+test("coordinator combines cumulative growth with an absolute five-item public floor", () => {
   assert.match(coordinator, /function dailyTargetPerCategory/);
   assert.match(coordinator, /today - start \+ 1/);
+  assert.match(coordinator, /MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5/);
   assert.match(coordinator, /AUTONOMOUS_CURATOR_GROWTH_START_DATE/);
   assert.match(coordinator, /daily_target_per_category/);
   assert.match(coordinator, /growth_day/);
@@ -21,7 +22,9 @@ test("deficient categories remain in automatic recovery while already-covered ca
   assert.match(coordinator, /activeBefore \+ beforePolicy\.totalDeficit/);
   assert.match(coordinator, /beforePolicy\.deficitCategories/);
   assert.match(coordinator, /category_growth_over_target_publication_ids:\s*\[\]/);
-  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "4"/);
+  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "5"/);
+  assert.match(coordinator, /autonomous curator pre-cycle public baseline validation/);
+  assert.match(coordinator, /AUTONOMOUS_CURATOR_PUBLIC_BASELINE_NOT_VALIDATED/);
 });
 
 test("daily target is fail-closed on all ten category floors plus public runtime validation", () => {
@@ -42,7 +45,7 @@ test("quality gates remain in the preserved v2 discovery engine", () => {
 });
 
 test("growth messaging promises accumulation instead of rotating healthy products away", () => {
-  assert.match(coordinator, /Amanhã o piso sobe automaticamente/);
+  assert.match(coordinator, /piso operacional permanece/);
   assert.match(coordinator, /nenhuma peça saudável é removida só para manter limite/);
   assert.match(coordinator, /never archived merely because a category crossed a fixed cap/);
 });

@@ -8,10 +8,10 @@ import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import type { NewsletterSocialLink } from "./newsletterCampaignTemplate";
 import { emptySocialLinkConfig, readCanonicalSocialLinks, SOCIAL_NETWORKS, type SocialLinksClient } from "./socialLinks";
 
-export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-static-catalog.onrender.com";
+export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-static.onrender.com";
 
 export function resolvePublicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
-  const configured = (env.PUBLIC_SITE_URL || env.STATIC_CATALOG_URL || DEFAULT_PUBLIC_SITE_URL).trim();
+  const configured = (env.PUBLIC_SITE_URL || env.PUBLIC_STOREFRONT_URL || DEFAULT_PUBLIC_SITE_URL).trim();
   try {
     const url = new URL(configured);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("PUBLIC_SITE_URL_PROTOCOL_INVALID");

@@ -9,12 +9,13 @@ test("canonical Operator facade delegates heartbeat and scheduler to independent
   assert.match(source, /export async function runSystemHealthCheck/);
   assert.match(source, /export function startOperatorScheduler/);
   assert.match(source, /runSystemHealthCheck\(\)/);
-  assert.doesNotMatch(source, /cerberus-static-catalog\.onrender\.com/);
+  assert.equal(source.includes(["cerberus-static", "catalog.onrender.com"].join("-")), false);
 });
 
 test("V2 health defines frontend, backend and catalog projection as independent components", async () => {
   const source = await readFile(new URL("../server/services/operatorHealthChecksV2.ts", import.meta.url), "utf8");
-  assert.match(source, /cerberus-design-preview\.onrender\.com/);
+  assert.match(source, /cerberus-design-static\.onrender\.com/);
+  assert.match(source, /cerberus-public-api\/products/);
   assert.match(source, /cerberus-forge-deploy-backend\.onrender\.com/);
   assert.match(source, /"Site"/);
   assert.match(source, /"Backend"/);

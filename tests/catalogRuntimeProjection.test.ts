@@ -6,16 +6,19 @@ import { catalogSyncInternals } from "../server/services/catalogSync";
 const catalogSyncSource = readFileSync(new URL("../server/services/catalogSync.ts", import.meta.url), "utf8");
 const frontendApiSource = readFileSync(new URL("../src/services/api.ts", import.meta.url), "utf8");
 const runtimeManifest = JSON.parse(readFileSync(new URL("../public/catalog-runtime.json", import.meta.url), "utf8"));
+const edgeSource = readFileSync(new URL("../supabase/functions/cerberus-public-api/index.ts", import.meta.url), "utf8");
 
 test("catalog sync validates the new frontend runtime and no longer promotes a static catalog branch", () => {
-  assert.equal(catalogSyncSource.includes("cerberus-static-catalog.onrender.com"), false);
+  assert.equal(catalogSyncSource.includes(["cerberus-static", "catalog.onrender.com"].join("-")), false);
   assert.equal(catalogSyncSource.includes("syncCatalogToGitHub"), false);
   assert.match(catalogSyncSource, /https:\/\/juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api\/products/);
-  assert.equal(catalogSyncSource.includes("https://cerberus-forge-deploy-backend.onrender.com/api/products"), false);
+  const obsoleteBackendProducts = ["https://cerberus-forge-deploy-backend.onrender.com", "api", "products"].join("/");
+  assert.equal(catalogSyncSource.includes(obsoleteBackendProducts), false);
   assert.match(catalogSyncSource, /catalog-runtime\.json/);
   assert.match(catalogSyncSource, /storefrontHealthy/);
   assert.match(catalogSyncSource, /missingPublicIds/);
   assert.match(catalogSyncSource, /categoryMismatchIds/);
+  assert.match(catalogSyncSource, /expectedPublicIds\.has\(productId\) && publicIds\.has\(productId\)/);
 });
 
 test("storefront runtime manifest proves frontend-only mode and canonical catalog API", () => {
@@ -47,4 +50,11 @@ test("frontend consumes the canonical Edge API instead of its branch-local produ
   assert.match(getProductsBody, /product\.ativo !== false/);
   assert.match(getProductsBody, /product\.status === 'published'/);
   assert.match(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
+});
+
+test("public Edge exposes only publication-authorized editorial rows", () => {
+  assert.match(edgeSource, /\.eq\("display_title_status", "reviewed"\)/);
+  assert.match(edgeSource, /\.eq\("image_editorial_status", "clean"\)/);
+  assert.match(edgeSource, /\.not\("display_title", "is", null\)/);
+  assert.match(edgeSource, /image_curation->>status/);
 });
