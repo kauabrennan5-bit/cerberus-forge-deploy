@@ -1,0 +1,277 @@
+from pathlib import Path
+
+
+def replace(path: str, old: str, new: str, expected: int = 1):
+    p = Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != expected:
+        raise SystemExit(f"{path}: expected {expected} occurrence(s), found {count}: {old[:100]!r}")
+    p.write_text(text.replace(old, new))
+
+
+EDGE_PRODUCTS = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products"
+STATIC_SITE = "https://cerberus-design-static.onrender.com"
+
+# Canonical Operator V2: frontend static + Edge catalog + backend health are independent.
+replace(
+    "server/services/operatorHealthChecksV2.ts",
+    'export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-preview.onrender.com";\nexport const DEFAULT_PUBLIC_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";',
+    f'export const DEFAULT_PUBLIC_SITE_URL = "{STATIC_SITE}";\nexport const DEFAULT_PUBLIC_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";\nexport const DEFAULT_PUBLIC_CATALOG_URL = "{EDGE_PRODUCTS}";',
+)
+replace(
+    "server/services/operatorHealthChecksV2.ts",
+    '  const catalogProjectionUrl = String(env.PUBLIC_CATALOG_URL || `${publicSiteUrl}/data/products.json`).trim();',
+    '  const catalogProjectionUrl = String(env.PUBLIC_CATALOG_URL || env.PUBLIC_CATALOG_API_URL || DEFAULT_PUBLIC_CATALOG_URL).trim();',
+)
+replace(
+    "server/services/operatorHealthChecksV2.ts",
+    'async function checkProductsApi(fetchImpl: typeof fetch, baseUrl: string, timeoutMs: number): Promise<{ observation: OperatorHealthObservation; products: Array<Record<string, unknown>> | null }> {',
+    'async function checkProductsApi(fetchImpl: typeof fetch, url: string, timeoutMs: number): Promise<{ observation: OperatorHealthObservation; products: Array<Record<string, unknown>> | null }> {',
+)
+replace(
+    "server/services/operatorHealthChecksV2.ts",
+    '    const response = await fetchWithTimeout(fetchImpl, `${baseUrl}/api/products`, timeoutMs);',
+    '    const response = await fetchWithTimeout(fetchImpl, url, timeoutMs);',
+)
+replace("server/services/operatorHealthChecksV2.ts", "backend_products_api", "public_edge_products_api", expected=2)
+replace(
+    "server/services/operatorHealthChecksV2.ts",
+    '    checkProductsApi(fetchImpl, urls.publicBackendUrl, timeoutMs),',
+    '    checkProductsApi(fetchImpl, urls.catalogProjectionUrl, timeoutMs),',
+)
+
+# Backend human routes redirect only to the official static frontend.
+replace(
+    "server.ts",
+    'const publicSiteBase = (process.env.PUBLIC_SITE_URL || "https://cerberus-design-preview.onrender.com").replace(/\\/+$/, "");',
+    f'const publicSiteBase = (process.env.PUBLIC_SITE_URL || "{STATIC_SITE}").replace(/\\/+$/, "");',
+)
+
+# Newsletter links use the official frontend; no legacy static catalog fallback.
+replace(
+    "server/services/newsletterInstitutional.ts",
+    'export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-static-catalog.onrender.com";',
+    f'export const DEFAULT_PUBLIC_SITE_URL = "{STATIC_SITE}";',
+)
+replace(
+    "server/services/newsletterInstitutional.ts",
+    '  const base = String(env.PUBLIC_SITE_URL || env.STATIC_CATALOG_URL || DEFAULT_PUBLIC_SITE_URL).trim();',
+    '  const base = String(env.PUBLIC_SITE_URL || env.PUBLIC_STOREFRONT_URL || DEFAULT_PUBLIC_SITE_URL).trim();',
+)
+
+# Configuration examples describe the current public architecture only.
+replace(
+    ".env.example",
+    'GITHUB_TOKEN=""\nCATALOG_API_URL="https://cerberus-forge-deploy-backend.onrender.com/api/products"\nSTATIC_CATALOG_URL="https://cerberus-static-catalog.onrender.com"\nPUBLIC_SITE_URL="https://cerberusfinds.com"',
+    f'GITHUB_TOKEN=""\nPUBLIC_CATALOG_API_URL="{EDGE_PRODUCTS}"\nPUBLIC_CATALOG_URL="{EDGE_PRODUCTS}"\nPUBLIC_STOREFRONT_URL="{STATIC_SITE}"\nPUBLIC_SITE_URL="{STATIC_SITE}"',
+)
+
+# Build-time compatibility export may fall back only to the public Edge API.
+replace(
+    "scripts/generate-static-catalog.js",
+    "const backendUrl = process.env.CATALOG_API_URL || 'https://cerberus-forge-deploy-backend.onrender.com/api/products';",
+    f"const publicCatalogUrl = process.env.PUBLIC_CATALOG_API_URL || process.env.PUBLIC_CATALOG_URL || '{EDGE_PRODUCTS}';",
+)
+replace(
+    "scripts/generate-static-catalog.js",
+    '  // O backend é apenas o caminho operacional alternativo para o mesmo Supabase;\n  // nunca é permitido usar um arquivo local como fonte concorrente do catálogo.',
+    '  // A Edge Function pública é o único fallback de rede para o mesmo Supabase;\n  // nunca é permitido usar o backend ou um arquivo local como fonte concorrente do catálogo.',
+)
+replace(
+    "scripts/generate-static-catalog.js",
+    '    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela API do backend: ${backendUrl}`);',
+    '    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela Supabase Edge: ${publicCatalogUrl}`);',
+)
+replace("scripts/generate-static-catalog.js", '      const json = await requestCanonicalJson(backendUrl);', '      const json = await requestCanonicalJson(publicCatalogUrl);')
+replace("scripts/generate-static-catalog.js", "      sourceName = 'backend /api/products (projeção de public.products)';", "      sourceName = 'Supabase Edge cerberus-public-api';")
+replace("scripts/generate-static-catalog.js", '      console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via API do backend.`);', '      console.log(`⚡ [Build Catalog] ${rawProducts.length} produtos obtidos via Supabase Edge.`);')
+replace("scripts/generate-static-catalog.js", '      throw new Error(`Nenhuma fonte canônica disponível: Supabase indisponível e API do backend falhou (${apiErr?.message || apiErr}).`);', '      throw new Error(`Nenhuma fonte canônica disponível: Supabase indisponível e API pública Edge falhou (${apiErr?.message || apiErr}).`);')
+
+# Legacy Operator is not the live facade, but must not preserve obsolete production endpoints.
+replace(
+    "server/services/cerberusOperatorLegacy.ts",
+    'const BACKEND_PRODUCTS_URL = process.env.CATALOG_API_URL || "https://cerberus-forge-deploy-backend.onrender.com/api/products";\nconst STATIC_CATALOG_URL = "https://cerberus-static-catalog.onrender.com/data/products.json";',
+    f'const BACKEND_HEALTH_URL = `${{String(process.env.PUBLIC_BACKEND_URL || "https://cerberus-forge-deploy-backend.onrender.com").replace(/\\/+$/, "")}}/health`;\nconst PUBLIC_CATALOG_URL = process.env.PUBLIC_CATALOG_URL || process.env.PUBLIC_CATALOG_API_URL || "{EDGE_PRODUCTS}";',
+)
+replace(
+    "server/services/cerberusOperatorLegacy.ts",
+    '  // 1. Backend: endpoint canônico responde com coleção válida.\n  const t0Backend = Date.now();\n  try {\n    const backendJson = await fetchJsonWithTimeout(BACKEND_PRODUCTS_URL);\n    const backendProducts = backendJson.products || backendJson.data || backendJson;\n    if (!Array.isArray(backendProducts)) throw new Error("Resposta não contém coleção de produtos.");',
+    '  // 1. Backend: health endpoint canônico responde independentemente do catálogo público.\n  const t0Backend = Date.now();\n  try {\n    const backendHealth = await fetchJsonWithTimeout(BACKEND_HEALTH_URL);',
+)
+replace(
+    "server/services/cerberusOperatorLegacy.ts",
+    '      details: `API respondeu ${backendProducts.length} produtos.`,',
+    '      details: `Health endpoint respondeu (${String(backendHealth?.status || "ok")}).`,',
+)
+replace(
+    "server/services/cerberusOperatorLegacy.ts",
+    '    const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);\n    if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("products.json ausente, vazio ou inválido.");',
+    '    const catalogPayload = await fetchJsonWithTimeout(PUBLIC_CATALOG_URL);\n    const staticCatalog = catalogPayload.products || catalogPayload.data || catalogPayload;\n    if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("Projeção pública Edge ausente, vazia ou inválida.");',
+)
+
+# Public validation requires the requested product to exist in the current Edge projection.
+replace(
+    "server/services/catalogSync.ts",
+    '        productFoundPublic = productId ? expectedPublicIds.has(productId) ? publicIds.has(productId) : !publicIds.has(productId) : missingPublicIds.length === 0;',
+    '        productFoundPublic = productId ? expectedPublicIds.has(productId) && publicIds.has(productId) : missingPublicIds.length === 0;',
+)
+
+# Public Edge emits only publication-authorized editorial rows.
+replace(
+    "supabase/functions/cerberus-public-api/index.ts",
+    '        .eq("ativo", true)\n        .eq("status", "published")\n        .order("created_at", { ascending: false });',
+    '        .eq("ativo", true)\n        .eq("status", "published")\n        .eq("display_title_status", "reviewed")\n        .eq("image_editorial_status", "clean")\n        .not("display_title", "is", null)\n        .eq("image_curation->>status", "ready")\n        .order("created_at", { ascending: false });',
+)
+
+# Ten-category invariant: absolute floor 5, then cumulative growth may only make it stricter.
+replace(
+    "server/services/autonomousCuratorContinuousV2.ts",
+    ' * - the autonomous catalog grows cumulatively by one visible piece per category\n *   for every local calendar day since autonomous publication began;\n * - day 1 targets 1/category, day 2 targets 2/category, day 3 targets 3/category,\n *   and so on; already-published pieces are never retired merely to keep a cap;',
+    ' * - every official category has an absolute public floor of five valid products;\n * - cumulative growth can raise that target after the initial floor, but can never\n *   reduce it below five; already-published healthy pieces are never retired to keep a cap;',
+)
+replace(
+    "server/services/autonomousCuratorContinuousV2.ts",
+    'const CATEGORY_GROWTH_VERSION = "4";\nconst PUBLISHED_HEALTH_COORDINATOR_VERSION = "2";',
+    'const CATEGORY_GROWTH_VERSION = "5";\nconst PUBLISHED_HEALTH_COORDINATOR_VERSION = "2";\nconst MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5;',
+)
+replace(
+    "server/services/autonomousCuratorContinuousV2.ts",
+    '  if (start === null || today === null) return 1;\n  return Math.max(1, today - start + 1);',
+    '  if (start === null || today === null) return MIN_PUBLIC_PRODUCTS_PER_CATEGORY;\n  return Math.max(MIN_PUBLIC_PRODUCTS_PER_CATEGORY, today - start + 1);',
+)
+replace(
+    "server/services/autonomousCuratorContinuousV2.ts",
+    '  const growthStartDate = autonomousGrowthStartDate(productsBefore, now, env);',
+    '  if (config.enabled) {\n    const preCyclePublicValidation = await syncCatalogAndDeploy("autonomous curator pre-cycle public baseline validation");\n    if (!preCyclePublicValidation.success || !preCyclePublicValidation.storefrontHealthy) {\n      const reason = preCyclePublicValidation.error || "PUBLIC_BASELINE_NOT_VALIDATED";\n      throw new Error(`AUTONOMOUS_CURATOR_PUBLIC_BASELINE_NOT_VALIDATED:${reason}`);\n    }\n  }\n\n  const growthStartDate = autonomousGrowthStartDate(productsBefore, now, env);',
+)
+replace(
+    "server/services/autonomousCuratorContinuousV2.ts",
+    '    `Dia de crescimento: <b>${dailyTarget}</b> · início: <code>${growthStartDate}</code>`,',
+    '    `Piso operacional hoje: <b>${dailyTarget}</b> · início: <code>${growthStartDate}</code>`,',
+)
+replace(
+    "server/services/autonomousCuratorContinuousV2.ts",
+    '      ? `✅ Meta do dia cumprida. Amanhã o piso sobe automaticamente para ${dailyTarget + 1} peças por categoria; nenhuma peça saudável é removida só para manter limite.`',
+    '      ? `✅ Meta do dia cumprida. O piso operacional permanece ≥5 peças por categoria e só pode ficar mais estrito com o crescimento; nenhuma peça saudável é removida só para manter limite.`',
+)
+
+# Tests validate the new architecture rather than preserving old URLs.
+replace(
+    "tests/backendFrontendBoundary.test.ts",
+    '  assert.match(serverSource, /PUBLIC_SITE_URL \\|\\| "https:\\/\\/cerberus-design-preview\\.onrender\\.com"/);',
+    '  assert.match(serverSource, /PUBLIC_SITE_URL \\|\\| "https:\\/\\/cerberus-design-static\\.onrender\\.com"/);',
+)
+replace(
+    "tests/operatorV2FacadeIntegration.test.ts",
+    '  assert.doesNotMatch(source, /cerberus-static-catalog\\.onrender\\.com/);',
+    '  assert.equal(source.includes(["cerberus-static", "catalog.onrender.com"].join("-")), false);',
+)
+replace(
+    "tests/operatorV2FacadeIntegration.test.ts",
+    '  assert.match(source, /cerberus-design-preview\\.onrender\\.com/);',
+    '  assert.match(source, /cerberus-design-static\\.onrender\\.com/);\n  assert.match(source, /cerberus-public-api\\/products/);',
+)
+replace(
+    "tests/catalogRuntimeProjection.test.ts",
+    '  assert.equal(catalogSyncSource.includes("cerberus-static-catalog.onrender.com"), false);',
+    '  assert.equal(catalogSyncSource.includes(["cerberus-static", "catalog.onrender.com"].join("-")), false);',
+)
+replace(
+    "tests/catalogRuntimeProjection.test.ts",
+    '  assert.equal(catalogSyncSource.includes("https://cerberus-forge-deploy-backend.onrender.com/api/products"), false);',
+    '  const obsoleteBackendProducts = ["https://cerberus-forge-deploy-backend.onrender.com", "api", "products"].join("/");\n  assert.equal(catalogSyncSource.includes(obsoleteBackendProducts), false);',
+)
+replace(
+    "tests/catalogRuntimeProjection.test.ts",
+    'const runtimeManifest = JSON.parse(readFileSync(new URL("../public/catalog-runtime.json", import.meta.url), "utf8"));',
+    'const runtimeManifest = JSON.parse(readFileSync(new URL("../public/catalog-runtime.json", import.meta.url), "utf8"));\nconst edgeSource = readFileSync(new URL("../supabase/functions/cerberus-public-api/index.ts", import.meta.url), "utf8");',
+)
+replace(
+    "tests/catalogRuntimeProjection.test.ts",
+    '  assert.match(catalogSyncSource, /categoryMismatchIds/);\n});',
+    '  assert.match(catalogSyncSource, /categoryMismatchIds/);\n  assert.match(catalogSyncSource, /expectedPublicIds\\.has\\(productId\\) && publicIds\\.has\\(productId\\)/);\n});',
+)
+p = Path("tests/catalogRuntimeProjection.test.ts")
+p.write_text(
+    p.read_text().rstrip()
+    + '''\n\ntest("public Edge exposes only publication-authorized editorial rows", () => {\n  assert.match(edgeSource, /\\.eq\\("display_title_status", "reviewed"\\)/);\n  assert.match(edgeSource, /\\.eq\\("image_editorial_status", "clean"\\)/);\n  assert.match(edgeSource, /\\.not\\("display_title", "is", null\\)/);\n  assert.match(edgeSource, /image_curation->>status/);\n});\n'''
+)
+
+replace(
+    "tests/autonomousCuratorContinuousV2.test.ts",
+    'test("progressive coordinator derives day 3 target from the first autonomous publication", () => {',
+    'test("progressive coordinator enforces an absolute five-per-category public floor", () => {',
+)
+replace(
+    "tests/autonomousCuratorContinuousV2.test.ts",
+    '  assert.equal(dailyTargetPerCategory([first], now, {} as NodeJS.ProcessEnv), 3);\n  assert.equal(dailyTargetPerCategory([first], now, { AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-29" } as NodeJS.ProcessEnv), 4);',
+    '  assert.equal(dailyTargetPerCategory([first], now, {} as NodeJS.ProcessEnv), 5);\n  assert.equal(dailyTargetPerCategory([first], now, { AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-29" } as NodeJS.ProcessEnv), 5);',
+)
+replace(
+    "tests/autonomousCuratorCategoryBalancePolicy.test.ts",
+    'test("coordinator replaces the exact-two cap with a cumulative one-per-day floor", () => {',
+    'test("coordinator combines cumulative growth with an absolute five-item public floor", () => {',
+)
+replace(
+    "tests/autonomousCuratorCategoryBalancePolicy.test.ts",
+    '  assert.match(coordinator, /today - start \\+ 1/);',
+    '  assert.match(coordinator, /today - start \\+ 1/);\n  assert.match(coordinator, /MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5/);',
+)
+replace(
+    "tests/autonomousCuratorCategoryBalancePolicy.test.ts",
+    '  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "4"/);',
+    '  assert.match(coordinator, /const CATEGORY_GROWTH_VERSION = "5"/);\n  assert.match(coordinator, /autonomous curator pre-cycle public baseline validation/);\n  assert.match(coordinator, /AUTONOMOUS_CURATOR_PUBLIC_BASELINE_NOT_VALIDATED/);',
+)
+replace(
+    "tests/autonomousCuratorCategoryBalancePolicy.test.ts",
+    '  assert.match(coordinator, /Amanhã o piso sobe automaticamente/);',
+    '  assert.match(coordinator, /piso operacional permanece/);',
+)
+
+architecture_test = r'''import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+const roots = ["server", "src", "scripts", "public", ".github/workflows", "tests"];
+const standalone = [".env.example"];
+const textExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".json", ".yml", ".yaml", ".toml"]);
+const forbidden = [
+  ["cerberus-design", "preview.onrender.com"].join("-"),
+  ["cerberus-static", "catalog.onrender.com"].join("-"),
+  ["https://cerberus-forge-deploy-backend.onrender.com", "api", "products"].join("/"),
+];
+
+function filesUnder(root: string): string[] {
+  if (!fs.existsSync(root)) return [];
+  const stat = fs.statSync(root);
+  if (stat.isFile()) return [root];
+  return fs.readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) return filesUnder(full);
+    return textExtensions.has(path.extname(entry.name)) ? [full] : [];
+  });
+}
+
+test("production surfaces contain no obsolete public catalog or frontend endpoints", () => {
+  const files = [...roots.flatMap(filesUnder), ...standalone];
+  const violations: string[] = [];
+  for (const file of files) {
+    const source = fs.readFileSync(file, "utf8");
+    for (const marker of forbidden) if (source.includes(marker)) violations.push(`${file}: ${marker}`);
+  }
+  assert.deepEqual(violations, []);
+});
+'''
+Path("tests/productionArchitectureContract.test.ts").write_text(architecture_test)
+
+# Temporary automation files must not persist in the validated PR tree.
+for temporary in [
+    ".github/workflows/convergence-hardening-apply.yml",
+    ".github/workflows/convergence-hardening-apply-v2.yml",
+    "scripts/apply-convergence-hardening.py",
+]:
+    p = Path(temporary)
+    if p.exists():
+        p.unlink()
