@@ -1,0 +1,47 @@
+name: Sync best of lot with main
+on: push
+permissions:
+  contents: write
+jobs:
+  sync-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.1'
+          cache: npm
+      - name: Merge current main and remove generated catalog diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'cerberus-automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git fetch origin main
+          git merge --no-commit --no-ff origin/main
+          git checkout origin/main -- public/data/products.json
+          rm .github/workflows/sync-best-of-lot-with-main.yml
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused policy tests
+        run: node --import tsx/esm --test --test-concurrency=1 tests/autonomousCuratorBestOfLotPolicy.test.ts tests/productPublicationGate.test.ts tests/autonomousCuratorCategoryBalancePolicy.test.ts tests/autonomousCuratorPublicationGateIntegration.test.ts
+      - name: Full test suite
+        run: npm test
+      - name: TypeScript
+        run: npm run lint
+      - name: Backend build
+        env:
+          CERBERUS_BUILD_TARGET: backend
+        run: npm run build
+      - name: Diff check
+        run: git diff --check
+      - name: Commit current-main merge after validation
+        shell: bash
+        run: |
+          git add -A
+          git status --short
+          git commit -m 'merge: validate mandatory best-of-lot on current main'
+          git push origin HEAD:fix/mandatory-best-of-lot-deficit-recovery-20260904
