@@ -36,7 +36,9 @@ export type AiProviderHealth = {
 type OpenAICall = typeof callOpenAIResponses;
 type GeminiGenerate = (input: { model: string; request: Record<string, unknown> }) => Promise<{ text?: string | null }>;
 
-const ONE_PIXEL_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z1ZkAAAAASUVORK5CYII=";
+// 64x64 RGB PNG. The previous 1x1 LA fixture could be rejected by provider-side
+// image validation even though the Responses API request shape itself was valid.
+const PROVIDER_HEALTH_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQ0AAAgEILV/2ItgCh9u0IBOUp9NPScgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwbwH3PQNQliOz8AAAAABJRU5ErkJggg==";
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 const DEFAULT_GEMINI_FALLBACK = "gemini-3.7-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
@@ -189,7 +191,7 @@ export async function checkOpenAIVisualProviderHealth(options: {
           max_output_tokens: 80,
           input: [{ role: "user", content: [
             { type: "input_text", text: "Return ok=true after confirming this image input is readable." },
-            { type: "input_image", image_url: `data:image/png;base64,${ONE_PIXEL_PNG_BASE64}`, detail: "low" },
+            { type: "input_image", image_url: `data:image/png;base64,${PROVIDER_HEALTH_PNG_BASE64}`, detail: "low" },
           ] }],
           text: { format: { type: "json_schema", name: "cerberus_openai_provider_health", strict: true, schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false } } },
         },
@@ -271,7 +273,7 @@ export async function checkGeminiVisualProviderHealth(options: {
           request: {
             contents: [{ role: "user", parts: [
               { text: "Return ok=true after confirming this image input is readable." },
-              { inlineData: { mimeType: "image/png", data: ONE_PIXEL_PNG_BASE64 } },
+              { inlineData: { mimeType: "image/png", data: PROVIDER_HEALTH_PNG_BASE64 } },
             ] }],
             config: {
               responseMimeType: "application/json",
@@ -322,7 +324,7 @@ export async function checkGeminiVisualProviderHealth(options: {
 }
 
 export const aiProviderHealthInternals = {
-  ONE_PIXEL_PNG_BASE64,
+  PROVIDER_HEALTH_PNG_BASE64,
   enabledUnlessFalse,
   safeModel,
   classifyGeminiFailure,
