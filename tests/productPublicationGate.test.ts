@@ -116,6 +116,25 @@ test("off-brand, REVIEW state and prohibited similarity remain hard blockers", (
   assert.ok(result.errors.includes("PUBLICATION_CATALOG_SIMILARITY_PROHIBITED"));
 });
 
+test("manual Product Rotation confirmation overrides editorial evidence but not technical integrity", () => {
+  const manualEvidence = {
+    source: "product_rotation",
+    manualEditorialOverride: true,
+    score: 10,
+    offBrand: true,
+    lifecycleApproved: false,
+    reviewState: "REVIEW_REQUIRED",
+    maximumCatalogSimilarity: 0.99,
+  };
+  const result = eligibility(reviewedProduct(), manualEvidence);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+
+  const invalidLink = eligibility(reviewedProduct({ link: "https://example.com/not-shopee" }), manualEvidence);
+  assert.equal(invalidLink.ok, false);
+  assert.ok(invalidLink.errors.includes("PUBLICATION_AFFILIATE_LINK_INVALID"));
+});
+
 test("database migration enforces authorization and never fabricates editorial review", async () => {
   const migration = await readFile(new URL("../supabase/migrations/20260903041603_product_publication_gate.sql", import.meta.url), "utf8");
   assert.match(migration, /products_publication_authorization_guard/);
@@ -125,4 +144,14 @@ test("database migration enforces authorization and never fabricates editorial r
   assert.match(migration, /set ativo = false,\s*status = 'paused'/);
   assert.doesNotMatch(migration, /set\s+display_title_status\s*=\s*'reviewed'/i);
   assert.doesNotMatch(migration, /set\s+image_editorial_status\s*=\s*'clean'/i);
+});
+
+test("manual rotation override exists only inside product_rotation authorization path", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260904194500_manual_rotation_editorial_override.sql", import.meta.url), "utf8");
+  assert.match(migration, /ppa\.source = 'product_rotation'/);
+  assert.match(migration, /manualEditorialOverride/);
+  assert.match(migration, /categoryMismatch/);
+  assert.match(migration, /AFFILIATE_LINK_INVALID/);
+  assert.match(migration, /SHOPEE_IDENTITY_INVALID/);
+  assert.match(migration, /PRICE_UNVERIFIED/);
 });
