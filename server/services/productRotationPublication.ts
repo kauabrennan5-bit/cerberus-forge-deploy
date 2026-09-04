@@ -20,6 +20,7 @@ import { publishProductWithGate } from "./productPublicationGate";
 
 const TITLE_PRIMARY_MODEL = "gemini-3.5-flash-lite";
 const TITLE_FALLBACK_MODEL = "gemini-3.7-flash";
+const DETERMINISTIC_TITLE_MODEL = "deterministic-editorial-v1";
 const VISUAL_CHAIN_ID = "cerberus_visual_review_chain_v2";
 
 export type RotationPublicationReviewResult = {
@@ -39,47 +40,62 @@ function titleModels(env: NodeJS.ProcessEnv): string[] {
   return [...new Set([primary, fallback].filter(Boolean))];
 }
 
+function deterministicDisplayTitle(rawTitle: string): string | null {
+  const candidate = safeText(buildDeterministicEditorialFallback({ rawTitle }).title, 90);
+  const normalizedCandidate = candidate.toLocaleLowerCase("pt-BR");
+  const normalizedRaw = safeText(rawTitle, 180).toLocaleLowerCase("pt-BR");
+  if (!candidate || normalizedCandidate === normalizedRaw || !isEditorialDisplayTitle(candidate)) return null;
+  return candidate;
+}
+
 async function reviewDisplayTitle(input: {
   rawTitle: string;
   category: string;
   env: NodeJS.ProcessEnv;
 }): Promise<{ displayTitle: string; model: string }> {
   const apiKey = safeText(input.env.GEMINI_API_KEY, 500);
-  if (!apiKey) throw new Error("REVIEW_RECOVERY_PENDING:DISPLAY_TITLE_PROVIDER_NOT_CONFIGURED");
-  const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "aistudio-build" } } });
-  let lastReason = "DISPLAY_TITLE_PROVIDER_UNAVAILABLE";
+  let lastReason = apiKey ? "DISPLAY_TITLE_PROVIDER_UNAVAILABLE" : "DISPLAY_TITLE_PROVIDER_NOT_CONFIGURED";
 
-  for (const model of titleModels(input.env)) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: `Revise este título real de marketplace para publicação editorial no Cerberus Finds.\nTítulo bruto: ${input.rawTitle}\nCategoria confirmada: ${input.category}\n\nRetorne somente um display_title em PT-BR com no máximo 8 palavras. Remova marca, SKU, promoções, frete, marketplace e redundâncias. Não invente material, função, época, cor ou atributo que não esteja explicitamente no título bruto.`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: { display_title: { type: Type.STRING } },
-            required: ["display_title"],
+  if (apiKey) {
+    const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "aistudio-build" } } });
+    for (const model of titleModels(input.env)) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: `Revise este título real de marketplace para publicação editorial no Cerberus Finds.\nTítulo bruto: ${input.rawTitle}\nCategoria confirmada: ${input.category}\n\nRetorne somente um display_title em PT-BR com no máximo 8 palavras. Remova marca, SKU, promoções, frete, marketplace e redundâncias. Não invente material, função, época, cor ou atributo que não esteja explicitamente no título bruto.`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: { display_title: { type: Type.STRING } },
+              required: ["display_title"],
+            },
           },
-        },
-      });
-      const parsed = JSON.parse(String(response.text || "{}")) as { display_title?: unknown };
-      const displayTitle = safeText(parsed.display_title, 90);
-      if (!displayTitle || displayTitle.toLocaleLowerCase("pt-BR") === input.rawTitle.toLocaleLowerCase("pt-BR") || !isEditorialDisplayTitle(displayTitle)) {
-        lastReason = "DISPLAY_TITLE_INVALID_RESPONSE";
-        continue;
+        });
+        const parsed = JSON.parse(String(response.text || "{}")) as { display_title?: unknown };
+        const displayTitle = safeText(parsed.display_title, 90);
+        if (!displayTitle || displayTitle.toLocaleLowerCase("pt-BR") === input.rawTitle.toLocaleLowerCase("pt-BR") || !isEditorialDisplayTitle(displayTitle)) {
+          lastReason = "DISPLAY_TITLE_INVALID_RESPONSE";
+          continue;
+        }
+        return { displayTitle, model };
+      } catch (error) {
+        const message = safeText(error instanceof Error ? error.message : error, 140).toUpperCase();
+        lastReason = /429|RESOURCE_EXHAUSTED|RATE_LIMIT|TIMEOUT|503|UNAVAILABLE/.test(message)
+          ? "DISPLAY_TITLE_PROVIDER_TEMPORARILY_UNAVAILABLE"
+          : /401|403|API_KEY|PERMISSION|UNAUTHENTICATED/.test(message)
+            ? "DISPLAY_TITLE_PROVIDER_AUTH_ERROR"
+            : "DISPLAY_TITLE_PROVIDER_INVALID_RESPONSE";
+        if (lastReason === "DISPLAY_TITLE_PROVIDER_AUTH_ERROR") break;
       }
-      return { displayTitle, model };
-    } catch (error) {
-      const message = safeText(error instanceof Error ? error.message : error, 140).toUpperCase();
-      lastReason = /429|RESOURCE_EXHAUSTED|RATE_LIMIT|TIMEOUT|503|UNAVAILABLE/.test(message)
-        ? "DISPLAY_TITLE_PROVIDER_TEMPORARILY_UNAVAILABLE"
-        : /401|403|API_KEY|PERMISSION|UNAUTHENTICATED/.test(message)
-          ? "DISPLAY_TITLE_PROVIDER_AUTH_ERROR"
-          : "DISPLAY_TITLE_PROVIDER_INVALID_RESPONSE";
-      if (lastReason === "DISPLAY_TITLE_PROVIDER_AUTH_ERROR") break;
     }
   }
+
+  const deterministicTitle = deterministicDisplayTitle(input.rawTitle);
+  if (deterministicTitle) {
+    return { displayTitle: deterministicTitle, model: `${DETERMINISTIC_TITLE_MODEL}:${lastReason.toLowerCase()}` };
+  }
+
   throw new Error(`REVIEW_RECOVERY_PENDING:${lastReason}`);
 }
 
@@ -257,6 +273,7 @@ export async function reviewAndPublishRotationCandidate(input: {
 
 export const productRotationPublicationInternals = {
   titleModels,
+  deterministicDisplayTitle,
   reviewDisplayTitle,
   VISUAL_CHAIN_ID,
 };
