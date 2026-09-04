@@ -1,0 +1,41 @@
+name: Update Public Eligibility Test Fixtures
+
+on:
+  push:
+    branches:
+      - fix/public-catalog-invariant-2026-09-04
+    paths:
+      - scripts/update-public-eligibility-test-fixtures.mjs
+      - .github/workflows/update-public-eligibility-test-fixtures.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/public-catalog-invariant-2026-09-04
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/update-public-eligibility-test-fixtures.mjs
+      - name: Validate affected tests
+        run: npx tsx --test tests/autonomousCuratorCategoryPolicy.test.ts tests/autonomousCuratorContinuousV2.test.ts tests/publicCatalogEligibilityInvariant.test.ts
+      - run: npx tsc --noEmit
+      - name: Remove temporary applicator
+        run: rm scripts/update-public-eligibility-test-fixtures.mjs .github/workflows/update-public-eligibility-test-fixtures.yml
+      - name: Commit validated fixtures
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "test: align curator fixtures with public eligibility contract"
+          git push origin HEAD:fix/public-catalog-invariant-2026-09-04
