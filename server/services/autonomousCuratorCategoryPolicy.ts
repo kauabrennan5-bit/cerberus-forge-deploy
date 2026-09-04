@@ -3,6 +3,7 @@ import {
   PUBLIC_PRODUCT_CATEGORIES,
   type PublicProductCategory,
 } from "../../src/lib/productCategory";
+import { isPublicCatalogEligibleProduct } from "./publicCatalogEligibility";
 
 export type CategoryCounts = Record<PublicProductCategory, number>;
 export type CategoryDeficits = Record<PublicProductCategory, number>;
@@ -31,7 +32,7 @@ export function isActivePublishedProduct(product: Product): boolean {
 export function categoryCounts(products: readonly Product[]): CategoryCounts {
   const counts = Object.fromEntries(PUBLIC_PRODUCT_CATEGORIES.map(category => [category, 0])) as CategoryCounts;
   for (const product of products) {
-    if (!isActivePublishedProduct(product)) continue;
+    if (!isPublicCatalogEligibleProduct(product)) continue;
     if (!PUBLIC_PRODUCT_CATEGORIES.includes(product.categoria as PublicProductCategory)) continue;
     counts[product.categoria as PublicProductCategory] += 1;
   }
