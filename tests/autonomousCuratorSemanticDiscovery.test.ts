@@ -320,7 +320,7 @@ test("semantic ranking cai para Gemini após quota da OpenAI sem inventar IDs", 
   assert.equal(result.model, "gemini-3.1-flash-lite");
   assert.deepEqual(result.decisions.map(item => item.identityKey), ["1:2"]);
   assert.equal(geminiRequest.config.responseMimeType, "application/json");
-  assert.deepEqual(geminiRequest.config.responseSchema.properties.decisions.items.properties.identityKey.enum, ["1:2", "3:4"]);
+  assert.equal(geminiRequest.config.responseSchema.properties.decisions.items.properties.identityKey.enum, undefined);
 });
 
 test("resposta com ID que não pertence ao lote é descartada mesmo se o provider devolver", async () => {
