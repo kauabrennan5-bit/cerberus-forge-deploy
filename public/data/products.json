@@ -1,5 +1,25 @@
 [
   {
+    "id": "prod-1788461069267-1496a1a180",
+    "ref": "AUTOQ-1496A1A180",
+    "slug": "brinquedo-didatico-montessori-de-madeira-13-pecas-1496a1",
+    "produto": "Brinquedo Didático Montessori de Madeira 13 Peças",
+    "displayTitle": "Brinquedo Didático Montessori de Madeira 13 Peças",
+    "preco": 34.99,
+    "imagens": [
+      "https://cf.shopee.com.br/file/br-11134207-81ztc-mj4w71eqw54y5a",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztc-mj4w71esexa980",
+      "https://down-br.img.susercontent.com/file/br-11134207-81ztc-mj4w71esgbup2d"
+    ],
+    "link": "https://s.shopee.com.br/9KhklrDI7X",
+    "categoria": "Infantil",
+    "descricao": "Conjunto de brinquedo didático em madeira inspirado nas pedagogias Waldorf e Montessori para montagem educativa. O kit possui 13 peças com dimensões compactas, ideal para o desenvolvimento infantil.",
+    "paginaPonteUrl": "",
+    "createdAt": "2026-09-03T18:49:57.786269+00:00",
+    "ativo": true,
+    "status": "published"
+  },
+  {
     "id": "prod-1788385427088-cf7ecb2b07",
     "ref": "AUTOQ-CF7ECB2B07",
     "slug": "abajur-led-retro-em-formato-de-cogumelo-cf7ecb",
@@ -15,24 +35,6 @@
     "descricao": "Luminária de mesa estilo vintage com design em formato de cogumelo e alimentação USB. Ideal para compor a decoração e iluminação suave de quartos e salas.",
     "paginaPonteUrl": "",
     "createdAt": "2026-09-02T21:45:14.230135+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788317839541-221403a906",
-    "ref": "ROTA-221403A906",
-    "slug": "brinquedos-montessori-brinquedos-sensoriais-de-seis-lados-interativo-221403",
-    "produto": "Brinquedos Montessori brinquedos sensoriais de seis lados Interativo",
-    "displayTitle": "Brinquedos Montessori brinquedos sensoriais de seis lados Interativo",
-    "preco": 35.49,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820m7-mo81b5ieyku8e2"
-    ],
-    "link": "https://s.shopee.com.br/50YjSAhejJ",
-    "categoria": "Infantil",
-    "descricao": "Descrição factual baseada no anúncio: Brinquedos Montessori brinquedos sensoriais de seis lados Interativo. Os demais detalhes devem ser conferidos na página oficial do produto.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-02T02:57:19.595176+00:00",
     "ativo": true,
     "status": "published"
   },
@@ -73,24 +75,6 @@
     "descricao": "Descrição factual baseada no anúncio: Óculos Do Elvis Presley Retro Fantasia Festa Anos. Os demais detalhes devem ser conferidos na página oficial do produto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-09-01T23:56:10.536552+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788302572316-3229a7fbcc",
-    "ref": "ROTA-3229A7FBCC",
-    "slug": "cubo-sensorial-brinquedos-montessori-bebe-brinquedos-pedagogicos-brinquedo-3229a7",
-    "produto": "Cubo Sensorial Brinquedos Montessori Bebê Brinquedos Pedagogicos Brinquedo",
-    "displayTitle": "Cubo Sensorial Brinquedos Montessori Bebê Brinquedos Pedagogicos Brinquedo",
-    "preco": 37.9,
-    "imagens": [
-      "https://cf.shopee.com.br/file/sg-11134201-81zul-mj3k14pu54hv7a"
-    ],
-    "link": "https://s.shopee.com.br/5VV035fkiM",
-    "categoria": "Infantil",
-    "descricao": "Descrição factual baseada no anúncio: Cubo Sensorial Brinquedos Montessori Bebê Brinquedos Pedagogicos Brinquedo. Os demais detalhes devem ser conferidos na página oficial do produto.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T22:42:52.382597+00:00",
     "ativo": true,
     "status": "published"
   },
@@ -279,24 +263,6 @@
     "status": "published"
   },
   {
-    "id": "prod-1788294016648-d54ad1070f",
-    "ref": "ROTA-D54AD1070F",
-    "slug": "fruteira-dupla-de-mesa-vintage-dois-andares-para-d54ad1",
-    "produto": "Fruteira Dupla De Mesa Vintage Dois Andares Para",
-    "displayTitle": "Fruteira Dupla De Mesa Vintage Dois Andares Para",
-    "preco": 58,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820mb-mn0drtuoa1383a"
-    ],
-    "link": "https://s.shopee.com.br/1LfQWVCkzi",
-    "categoria": "Cozinha & Mesa",
-    "descricao": "Descrição factual baseada no anúncio: Fruteira Dupla De Mesa Vintage Dois Andares Para. Os demais detalhes devem ser conferidos na página oficial do produto.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T20:20:16.787512+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
     "id": "prod-1788290601373-99e82b198c",
     "ref": "AUTOQ-99E82B198C",
     "slug": "quadro-decorativo-geometrico-moderno-com-moldura-bauhaus-99e82b",
@@ -314,42 +280,6 @@
     "descricao": "Descrição factual baseada no anúncio: Quadro Decorativo Geométrico Moderno com Moldura Bauhaus –. Os demais detalhes devem ser conferidos na página oficial do produto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-09-01T19:32:47.230141+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788291076374-9c6e415cd2",
-    "ref": "ROTA-9C6E415CD2",
-    "slug": "caixa-de-pao-de-metal-vintage-cozinha-vintage-9c6e41",
-    "produto": "caixa de pão de metal vintage, cozinha vintage,",
-    "displayTitle": "caixa de pão de metal vintage, cozinha vintage,",
-    "preco": 296.1,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820l9-mlqfed305b7o5f"
-    ],
-    "link": "https://s.shopee.com.br/1A2w3HphK",
-    "categoria": "Cozinha & Mesa",
-    "descricao": "Descrição factual baseada no anúncio: caixa de pão de metal vintage, cozinha vintage,. Os demais detalhes devem ser conferidos na página oficial do produto.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T19:31:16.476331+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788291045980-1cfd0ac837",
-    "ref": "ROTA-1CFD0AC837",
-    "slug": "caixa-de-joias-madeira-nogueira-3-camadas-organizador-1cfd0a",
-    "produto": "Caixa de Joias Madeira Nogueira 3 Camadas Organizador",
-    "displayTitle": "Caixa de Joias Madeira Nogueira 3 Camadas Organizador",
-    "preco": 55.89,
-    "imagens": [
-      "https://cf.shopee.com.br/file/br-11134207-820mh-ms262qbxperr42"
-    ],
-    "link": "https://s.shopee.com.br/qj77K9zNe",
-    "categoria": "Organização",
-    "descricao": "Descrição factual baseada no anúncio: Caixa de Joias Madeira Nogueira 3 Camadas Organizador. Os demais detalhes devem ser conferidos na página oficial do produto.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-09-01T19:30:46.051482+00:00",
     "ativo": true,
     "status": "published"
   },
@@ -675,25 +605,6 @@
     "descricao": "Arandela de parede com corpo circular, cúpula superior metálica aparente e difusor inferior claro. A imagem ambientada mostra a peça emitindo luz quente em um quarto.",
     "paginaPonteUrl": "",
     "createdAt": "2026-08-30T17:33:45.724699+00:00",
-    "ativo": true,
-    "status": "published"
-  },
-  {
-    "id": "prod-1788066309797",
-    "ref": "REF-001",
-    "slug": "espelho-de-maquiagem-dobravel-para-viagem",
-    "produto": "Espelho de Maquiagem Dobrável para Viagem",
-    "displayTitle": "Espelho de Maquiagem Dobrável para Viagem",
-    "preco": 180.32,
-    "imagens": [
-      "https://down-br.img.susercontent.com/file/sg-11134201-825aq-mqegoj5850y6f6",
-      "https://down-br.img.susercontent.com/file/sg-11134201-825ad-mqegq68a6m8121"
-    ],
-    "link": "https://s.shopee.com.br/3VjrB66XH0",
-    "categoria": "Beleza & Bem-estar",
-    "descricao": "Este espelho de maquiagem dobrável possui design compacto com acabamento em couro e ângulo ajustável. Ideal para transportar em viagens, oferece praticidade nos cuidados diários.",
-    "paginaPonteUrl": "",
-    "createdAt": "2026-08-30T05:05:09.847888+00:00",
     "ativo": true,
     "status": "published"
   }

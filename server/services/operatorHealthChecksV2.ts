@@ -5,8 +5,9 @@ import { getTelegramWebhookDiagnostics } from "./telegramDiagnostics";
 import { inspectShopeeProviderEnv } from "./shopeeProviderRuntime";
 import type { ComponentObservation, OperationalStatus } from "./operatorAutonomy";
 
-export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-preview.onrender.com";
+export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-static.onrender.com";
 export const DEFAULT_PUBLIC_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
+export const DEFAULT_PUBLIC_CATALOG_URL = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products";
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 export type OperatorHealthComponentName =
@@ -52,7 +53,7 @@ function normalizeBaseUrl(value: string): string {
 export function resolveOperatorHealthUrls(env: NodeJS.ProcessEnv = process.env) {
   const publicSiteUrl = normalizeBaseUrl(String(env.PUBLIC_SITE_URL || DEFAULT_PUBLIC_SITE_URL).trim());
   const publicBackendUrl = normalizeBaseUrl(String(env.PUBLIC_BACKEND_URL || DEFAULT_PUBLIC_BACKEND_URL).trim());
-  const catalogProjectionUrl = String(env.PUBLIC_CATALOG_URL || `${publicSiteUrl}/data/products.json`).trim();
+  const catalogProjectionUrl = String(env.PUBLIC_CATALOG_URL || env.PUBLIC_CATALOG_API_URL || DEFAULT_PUBLIC_CATALOG_URL).trim();
   return { publicSiteUrl, publicBackendUrl, catalogProjectionUrl };
 }
 
@@ -141,20 +142,20 @@ async function checkBackend(fetchImpl: typeof fetch, baseUrl: string, timeoutMs:
   }
 }
 
-async function checkProductsApi(fetchImpl: typeof fetch, baseUrl: string, timeoutMs: number): Promise<{ observation: OperatorHealthObservation; products: Array<Record<string, unknown>> | null }> {
+async function checkProductsApi(fetchImpl: typeof fetch, url: string, timeoutMs: number): Promise<{ observation: OperatorHealthObservation; products: Array<Record<string, unknown>> | null }> {
   const startedAt = Date.now();
   try {
-    const response = await fetchWithTimeout(fetchImpl, `${baseUrl}/api/products`, timeoutMs);
+    const response = await fetchWithTimeout(fetchImpl, url, timeoutMs);
     let payload: unknown = null;
     try { payload = await response.json(); } catch { payload = null; }
     const products = normalizeProductsPayload(payload);
     const valid = response.ok && products !== null;
     return {
-      observation: observation({ name: "Produtos/API", status: valid ? "HEALTHY" : response.ok ? "DEGRADED" : "DOWN", startedAt, httpStatus: response.status, error: valid ? undefined : response.ok ? "PRODUCTS_COLLECTION_INVALID" : `HTTP_${response.status}`, diagnostic: { urlRole: "backend_products_api", collectionSize: products?.length ?? null } }),
+      observation: observation({ name: "Produtos/API", status: valid ? "HEALTHY" : response.ok ? "DEGRADED" : "DOWN", startedAt, httpStatus: response.status, error: valid ? undefined : response.ok ? "PRODUCTS_COLLECTION_INVALID" : `HTTP_${response.status}`, diagnostic: { urlRole: "public_edge_products_api", collectionSize: products?.length ?? null } }),
       products,
     };
   } catch (error) {
-    return { observation: observation({ name: "Produtos/API", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "PRODUCTS_API_TIMEOUT" : "PRODUCTS_API_FETCH_FAILED", diagnostic: { urlRole: "backend_products_api" } }), products: null };
+    return { observation: observation({ name: "Produtos/API", status: "DOWN", startedAt, error: error instanceof Error && error.name === "AbortError" ? "PRODUCTS_API_TIMEOUT" : "PRODUCTS_API_FETCH_FAILED", diagnostic: { urlRole: "public_edge_products_api" } }), products: null };
   }
 }
 
@@ -236,7 +237,7 @@ export async function runOperatorHealthChecksV2(options: HealthOptions = {}): Pr
   const [site, backend, productsResult] = await Promise.all([
     checkSite(fetchImpl, urls.publicSiteUrl, timeoutMs),
     checkBackend(fetchImpl, urls.publicBackendUrl, timeoutMs),
-    checkProductsApi(fetchImpl, urls.publicBackendUrl, timeoutMs),
+    checkProductsApi(fetchImpl, urls.catalogProjectionUrl, timeoutMs),
   ]);
   observations.push(site, backend, productsResult.observation);
 

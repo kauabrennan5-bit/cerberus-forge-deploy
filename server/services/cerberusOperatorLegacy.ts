@@ -146,8 +146,8 @@ const CONFIG = {
   failureThresholdForError: 3 // 3 falhas consecutivas elevam para ERROR persistente
 };
 
-const BACKEND_PRODUCTS_URL = process.env.CATALOG_API_URL || "https://cerberus-forge-deploy-backend.onrender.com/api/products";
-const STATIC_CATALOG_URL = "https://cerberus-static-catalog.onrender.com/data/products.json";
+const BACKEND_HEALTH_URL = `${String(process.env.PUBLIC_BACKEND_URL || "https://cerberus-forge-deploy-backend.onrender.com").replace(/\/+$/, "")}/health`;
+const PUBLIC_CATALOG_URL = process.env.PUBLIC_CATALOG_URL || process.env.PUBLIC_CATALOG_API_URL || "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products";
 const GITHUB_MAIN_URL = "https://api.github.com/repos/kauabrennan5-bit/cerberus-forge-deploy/branches/main";
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<any> {
@@ -689,18 +689,16 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
 
   const components: Record<string, ComponentHealth> = {};
 
-  // 1. Backend: endpoint canônico responde com coleção válida.
+  // 1. Backend: health endpoint canônico responde independentemente do catálogo público.
   const t0Backend = Date.now();
   try {
-    const backendJson = await fetchJsonWithTimeout(BACKEND_PRODUCTS_URL);
-    const backendProducts = backendJson.products || backendJson.data || backendJson;
-    if (!Array.isArray(backendProducts)) throw new Error("Resposta não contém coleção de produtos.");
+    const backendHealth = await fetchJsonWithTimeout(BACKEND_HEALTH_URL);
     components["Backend"] = {
       name: "Backend",
       status: "HEALTHY",
       latencyMs: Date.now() - t0Backend,
       timestamp: now,
-      details: `API respondeu ${backendProducts.length} produtos.`,
+      details: `Health endpoint respondeu (${String(backendHealth?.status || "ok")}).`,
       operationId,
     };
   } catch (err: any) {
@@ -771,8 +769,9 @@ export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   // 4. Catálogo: projeção pública versus produtos canônicos, sem modificar arquivo algum.
   const t0Catalog = Date.now();
   try {
-    const staticCatalog = await fetchJsonWithTimeout(STATIC_CATALOG_URL);
-    if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("products.json ausente, vazio ou inválido.");
+    const catalogPayload = await fetchJsonWithTimeout(PUBLIC_CATALOG_URL);
+    const staticCatalog = catalogPayload.products || catalogPayload.data || catalogPayload;
+    if (!Array.isArray(staticCatalog) || staticCatalog.length === 0) throw new Error("Projeção pública Edge ausente, vazia ou inválida.");
     const canonicalActive = canonicalProducts.filter(product => product.ativo !== false && product.status === "published");
     const jsonIds = new Set(staticCatalog.map((product: any) => product.id));
     const missing = canonicalActive.filter(product => !jsonIds.has(product.id));

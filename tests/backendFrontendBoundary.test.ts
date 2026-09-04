@@ -13,7 +13,7 @@ test("production backend never serves the legacy SPA fallback", () => {
 });
 
 test("human visual routes redirect to the canonical public site", () => {
-  assert.match(serverSource, /PUBLIC_SITE_URL \|\| "https:\/\/cerberus-design-preview\.onrender\.com"/);
+  assert.match(serverSource, /PUBLIC_SITE_URL \|\| "https:\/\/cerberus-design-static\.onrender\.com"/);
   assert.match(serverSource, /app\.get\("\/produto\/:slug"/);
   assert.match(serverSource, /if \(!isSocialCrawler\(req\.headers\["user-agent"\]\)\)/);
   assert.match(serverSource, /return redirectToPublicSite\(req, res\)/);

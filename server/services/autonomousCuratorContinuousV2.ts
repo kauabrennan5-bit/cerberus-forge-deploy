@@ -38,10 +38,9 @@ export type {
 
 /**
  * Public catalog contract:
- * - the autonomous catalog grows cumulatively by one visible piece per category
- *   for every local calendar day since autonomous publication began;
- * - day 1 targets 1/category, day 2 targets 2/category, day 3 targets 3/category,
- *   and so on; already-published pieces are never retired merely to keep a cap;
+ * - every official category has an absolute public floor of five valid products;
+ * - cumulative growth can raise that target after the initial floor, but can never
+ *   reduce it below five; already-published healthy pieces are never retired to keep a cap;
  * - while any category is below today's target, normal growth publication is
  *   restricted to the explicit deficit category list before enrichment starts;
  * - availability failures still archive only listings definitively unavailable
@@ -49,8 +48,9 @@ export type {
  * - a day/cycle is never recorded as complete while any category is below its
  *   cumulative floor or the public runtime projection is not validated.
  */
-const CATEGORY_GROWTH_VERSION = "4";
+const CATEGORY_GROWTH_VERSION = "5";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "2";
+const MIN_PUBLIC_PRODUCTS_PER_CATEGORY = 5;
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -116,8 +116,8 @@ function autonomousGrowthStartDate(products: readonly Product[], now: Date, env:
 function dailyTargetPerCategory(products: readonly Product[], now: Date, env: NodeJS.ProcessEnv): number {
   const start = dateKeyOrdinal(autonomousGrowthStartDate(products, now, env));
   const today = dateKeyOrdinal(localDateKey(now));
-  if (start === null || today === null) return 1;
-  return Math.max(1, today - start + 1);
+  if (start === null || today === null) return MIN_PUBLIC_PRODUCTS_PER_CATEGORY;
+  return Math.max(MIN_PUBLIC_PRODUCTS_PER_CATEGORY, today - start + 1);
 }
 
 function totalDeficit(counts: CategoryCounts, target: number): number {
@@ -382,7 +382,7 @@ async function notifyGrowth(
   const text = [
     "📈 <b>CERBERUS — CRESCIMENTO DIÁRIO DO ACERVO</b>",
     "",
-    `Dia de crescimento: <b>${dailyTarget}</b> · início: <code>${growthStartDate}</code>`,
+    `Piso operacional hoje: <b>${dailyTarget}</b> · início: <code>${growthStartDate}</code>`,
     `Meta mínima hoje: <b>${dailyTarget} peças por categoria</b>`,
     `Categorias na meta: <b>${covered}/${AUTONOMOUS_CURATOR_PROFILES.length}</b>`,
     `Novos publicados neste ciclo: <b>${result.publishedThisCycle}</b>`,
@@ -395,7 +395,7 @@ async function notifyGrowth(
     ...lines,
     "",
     covered === AUTONOMOUS_CURATOR_PROFILES.length && publicValidation.success
-      ? `✅ Meta do dia cumprida. Amanhã o piso sobe automaticamente para ${dailyTarget + 1} peças por categoria; nenhuma peça saudável é removida só para manter limite.`
+      ? `✅ Meta do dia cumprida. O piso operacional permanece ≥5 peças por categoria e só pode ficar mais estrito com o crescimento; nenhuma peça saudável é removida só para manter limite.`
       : "🚨 META DO DIA NÃO CUMPRIDA. O run permanece partial/failed até count(category) >= dailyTarget nas 10 categorias e a projeção pública estar validada. Nenhum gate editorial é afrouxado.",
   ].join("\n");
   await sendTelegramMessage(chatId, text).catch(() => undefined);
@@ -424,6 +424,14 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       await notifyConfirmedUnavailableTransitions(beforeHealth, health.unavailableIds, env).catch(error => {
         console.warn("[Published Product Health Telegram] notification failed", error);
       });
+    }
+  }
+
+  if (config.enabled) {
+    const preCyclePublicValidation = await syncCatalogAndDeploy("autonomous curator pre-cycle public baseline validation");
+    if (!preCyclePublicValidation.success || !preCyclePublicValidation.storefrontHealthy) {
+      const reason = preCyclePublicValidation.error || "PUBLIC_BASELINE_NOT_VALIDATED";
+      throw new Error(`AUTONOMOUS_CURATOR_PUBLIC_BASELINE_NOT_VALIDATED:${reason}`);
     }
   }
 

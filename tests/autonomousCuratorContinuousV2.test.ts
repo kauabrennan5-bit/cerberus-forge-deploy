@@ -219,7 +219,7 @@ test("legacy emergency refill primitive still overrides cooldown only while its 
   assert.equal(dueForCycle(justPublished, now, false, 0), false);
 });
 
-test("progressive coordinator derives day 3 target from the first autonomous publication", () => {
+test("progressive coordinator enforces an absolute five-per-category public floor", () => {
   const first: Product = {
     id: "auto-first",
     produto: "Primeiro find",
@@ -235,8 +235,8 @@ test("progressive coordinator derives day 3 target from the first autonomous pub
   };
   const now = new Date("2026-09-01T16:30:00.000Z");
   assert.equal(autonomousGrowthStartDate([first], now, {} as NodeJS.ProcessEnv), "2026-08-30");
-  assert.equal(dailyTargetPerCategory([first], now, {} as NodeJS.ProcessEnv), 3);
-  assert.equal(dailyTargetPerCategory([first], now, { AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-29" } as NodeJS.ProcessEnv), 4);
+  assert.equal(dailyTargetPerCategory([first], now, {} as NodeJS.ProcessEnv), 5);
+  assert.equal(dailyTargetPerCategory([first], now, { AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-29" } as NodeJS.ProcessEnv), 5);
 });
 
 test("category deficits use today's cumulative target instead of an exact-two cap", () => {

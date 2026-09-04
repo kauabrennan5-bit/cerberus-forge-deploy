@@ -1,6 +1,6 @@
 {
-  "version": 1,
+  "version": 2,
   "mode": "runtime",
   "frontendOnly": true,
-  "catalogApiUrl": "https://cerberus-forge-deploy-backend.onrender.com/api/products"
+  "catalogApiUrl": "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products"
 }
