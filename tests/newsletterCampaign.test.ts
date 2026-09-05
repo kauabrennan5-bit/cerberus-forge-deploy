@@ -1543,7 +1543,8 @@ test("MASTHEAD is the first editorial block and Variant A is universal", () => {
   assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="96" height="70"/);
   assert.doesNotMatch(rendered.html, /email-masthead-logo-print|cerberus-logo-square\.png/);
   assert.match(rendered.html, /class="email-masthead-brand-mark" width="108" height="82"/);
-  assert.match(rendered.html, /class="email-masthead-brand-mark"[^>]+bgcolor="#F2EDE4"/);
+  assert.doesNotMatch(rendered.html, /class="email-masthead-brand-mark"[^>]+bgcolor=/);
+  assert.doesNotMatch(rendered.html, /class="email-masthead-brand-mark"[^>]+#F2EDE4/);
   assert.match(rendered.html, /alt="Logo Cerberus Finds"/);
   assert.match(rendered.html, /CERBERUS FINDS/);
   assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
