@@ -20,7 +20,7 @@ test("primary curator owns all quarter-hour manual-review triggers", async () =>
   assert.match(primary, /api\/internal\/autonomous-curator\/daily/);
   assert.match(primary, /api\/internal\/autonomous-curator\/status/);
   assert.doesNotMatch(primary, /api\/internal\/autonomous-curator\/continuous/);
-  assert.match(primary, /\"notify\":\$\{dry_run\}/);
+  assert.match(primary, /\\\"notify\\\":true/);
 });
 
 test("manual-review workflow waits for the audited daily run terminal state", async () => {
