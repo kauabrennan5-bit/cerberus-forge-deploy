@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 
-test("primary curator owns all quarter-hour production triggers", async () => {
+test("primary curator owns all quarter-hour manual-review triggers", async () => {
   const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
 
   assert.match(primary, /cron: "2,17,32,47 \* \* \* \*"/);
@@ -12,28 +12,30 @@ test("primary curator owns all quarter-hour production triggers", async () => {
   assert.match(primary, /id-token: write/);
   assert.match(primary, /github\.event_name == 'schedule'/);
   assert.match(primary, /github\.event_name == 'push'/);
-  assert.match(primary, /github\.event_name == 'schedule' && 'continuous'/);
+  assert.match(primary, /github\.event_name == 'schedule' && 'manual_review'/);
   assert.match(primary, /github\.event_name == 'push' && 'status'/);
+  assert.doesNotMatch(primary, /github\.event_name == 'schedule' && 'continuous'/);
   assert.doesNotMatch(primary, /github\.event_name == 'push' && 'continuous'/);
   assert.doesNotMatch(primary, /github\.event_name == 'push' && 'dry_run'/);
-  assert.match(primary, /api\/internal\/autonomous-curator\/continuous/);
+  assert.match(primary, /api\/internal\/autonomous-curator\/daily/);
   assert.match(primary, /api\/internal\/autonomous-curator\/status/);
-  assert.match(primary, /-d '\{\"notify\":true\}'/);
+  assert.doesNotMatch(primary, /api\/internal\/autonomous-curator\/continuous/);
+  assert.match(primary, /\\\"notify\\\":true/);
 });
 
-test("continuous workflow waits for the category-balance coordinator instead of stopping at base completion", async () => {
+test("manual-review workflow waits for the audited daily run terminal state", async () => {
   const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
-  assert.match(primary, /body\?\.running === true/);
-  assert.match(primary, /body\.activeCycleId/);
-  assert.match(primary, /String\(body\.activeCycleId \|\| ''\) === expectedCycle/);
-  assert.match(primary, /base engine records a terminal run before the category-balance/);
+  assert.match(primary, /const run = body\?\.latestRun/);
+  assert.match(primary, /\['completed','partial','failed','dry_run'\]\.includes\(String\(run\.status\)\)/);
+  assert.match(primary, /terminalStatus && run\.completed_at/);
+  assert.match(primary, /done:\$\{run\.status\}/);
 });
 
-test("continuous workflow releases concurrency when a Render restart orphans the expected cycle", async () => {
+test("manual-review workflow treats disabled curator as a safe terminal state", async () => {
   const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
-  assert.match(primary, /body\?\.running !== true/);
-  assert.match(primary, /process\.stdout\.write\('orphaned'\)/);
-  assert.match(primary, /AUTONOMOUS_CURATOR_CYCLE_ORPHANED_AFTER_BACKEND_RESTART/);
+  assert.match(primary, /body\?\.status === 'disabled'/);
+  assert.match(primary, /AUTONOMOUS_CURATOR=disabled/);
+  assert.match(primary, /body\?\.accepted !== true/);
 });
 
 test("obsolete recovery workflow is removed so scheduled cycles cannot duplicate", async () => {

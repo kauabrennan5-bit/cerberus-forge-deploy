@@ -1,10 +1,9 @@
 name: Cerberus Autonomous Curator
-# Production schedule: one bounded continuous-curation opportunity every 15 minutes.
-# A cycle may remain partial; the next scheduled cycle continues searching without lowering gates.
+# Production schedule: one bounded curation opportunity every 15 minutes.
+# Production discoveries are sent to Telegram for a human publish/discard decision.
 
 on:
   schedule:
-    # Quarter-hour recovery cadence. Normal publication eligibility enforces >=24h per category; inventory floor may override it.
     - cron: "2,17,32,47 * * * *"
   push:
     branches:
@@ -34,8 +33,7 @@ on:
         type: choice
         options:
           - dry_run
-          - continuous
-          - real_legacy
+          - manual_review
           - status
 
 permissions:
@@ -43,9 +41,6 @@ permissions:
   id-token: write
 
 concurrency:
-  # Read-only deployment verification never queues behind production. A newer
-  # production trigger replaces only stale workflow polling; the backend
-  # activeExecution lock remains the authority that prevents duplicate cycles.
   group: ${{ github.event_name == 'push' && 'cerberus-autonomous-curator-status' || 'cerberus-autonomous-curator-production' }}
   cancel-in-progress: true
 
@@ -56,8 +51,9 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      # Scheduled runs own production curation. Pushes are deployment verification only and must never publish.
-      MODE: ${{ github.event_name == 'schedule' && 'continuous' || github.event_name == 'push' && 'status' || inputs.mode }}
+      # Scheduled runs perform real curation but never auto-publish: the database
+      # keeps auto_publish_enabled=false and the daily path creates Telegram reviews.
+      MODE: ${{ github.event_name == 'schedule' && 'manual_review' || github.event_name == 'push' && 'status' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
@@ -116,43 +112,15 @@ jobs:
 
           start_file="$RUNNER_TEMP/autonomous-curator-start.json"
           token="$(get_oidc_token)"
-          expected_cycle=""
           dry_run=false
-          if [ "$MODE" = "continuous" ]; then
-            curl --fail-with-body --silent --show-error --max-time 30 \
-              -o "$start_file" \
-              -H "Authorization: Bearer ${token}" \
-              -H 'Content-Type: application/json' \
-              -d '{"notify":true}' \
-              "$base/api/internal/autonomous-curator/continuous"
-            expected_cycle="$(node - "$start_file" <<'NODE'
-          const fs = require('node:fs');
-          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (body?.ok !== true || body?.accepted !== true) process.exit(1);
-          if (body?.status === 'disabled') process.exit(0);
-          if (body?.status === 'already_running') {
-            if (typeof body.cycleId === 'string') process.stdout.write(body.cycleId);
-            process.exit(0);
-          }
-          if (typeof body.cycleId !== 'string' || !body.cycleId) process.exit(1);
-          process.stdout.write(body.cycleId);
-          NODE
-          )"
-            if [ -z "$expected_cycle" ]; then
-              echo "AUTONOMOUS_CURATOR=disabled"
-              exit 0
-            fi
-            echo "AUTONOMOUS_CURATOR_START=continuous"
-            echo "AUTONOMOUS_CURATOR_CYCLE=$expected_cycle"
-          else
-            if [ "$MODE" = "dry_run" ]; then dry_run=true; fi
-            curl --fail-with-body --silent --show-error --max-time 30 \
-              -o "$start_file" \
-              -H "Authorization: Bearer ${token}" \
-              -H 'Content-Type: application/json' \
-              -d "{\"dryRun\":${dry_run},\"notify\":true}" \
-              "$base/api/internal/autonomous-curator/daily"
-            node - "$start_file" <<'NODE'
+          if [ "$MODE" = "dry_run" ]; then dry_run=true; fi
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            -o "$start_file" \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Content-Type: application/json' \
+            -d "{\"dryRun\":${dry_run},\"notify\":true}" \
+            "$base/api/internal/autonomous-curator/daily"
+          node - "$start_file" <<'NODE'
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           if (body?.ok !== true) process.exit(1);
@@ -163,13 +131,11 @@ jobs:
           if (body?.accepted !== true) process.exit(1);
           console.log(`AUTONOMOUS_CURATOR_START=${body.status || 'accepted'}`);
           NODE
-          fi
 
           expected_date="$(TZ=America/Fortaleza date +%F)"
           for attempt in $(seq 1 180); do
             token="$(get_oidc_token)"
             filter="?dryRun=${dry_run}"
-            if [ "$MODE" = "continuous" ]; then filter='?dryRun=false'; fi
             if ! curl --fail-with-body --silent --show-error --max-time 45 \
               -o "$status_file" -H "Authorization: Bearer ${token}" \
               "$base/api/internal/autonomous-curator/status${filter}"; then
@@ -178,45 +144,16 @@ jobs:
               continue
             fi
 
-            state="$(node - "$status_file" "$expected_date" "$MODE" "$expected_cycle" <<'NODE'
+            state="$(node - "$status_file" "$expected_date" <<'NODE'
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           const expectedDate = process.argv[3];
-          const mode = process.argv[4];
-          const expectedCycle = process.argv[5];
           const run = body?.latestRun;
           if (!run || String(run.run_date) !== expectedDate) {
             process.stdout.write('waiting');
             process.exit(0);
           }
           const terminalStatus = ['completed','partial','failed','dry_run'].includes(String(run.status));
-          if (mode === 'continuous') {
-            const metadata = run.metadata && typeof run.metadata === 'object' ? run.metadata : {};
-            if (String(metadata.continuous_cycle_id || '') !== expectedCycle) {
-              // A Render restart can terminate the in-memory cycle before its id
-              // reaches the run row. Do not hold the production concurrency group
-              // for the full job timeout when the backend no longer owns that cycle.
-              if (body?.running !== true) {
-                process.stdout.write('orphaned');
-                process.exit(0);
-              }
-              process.stdout.write('waiting');
-              process.exit(0);
-            }
-            // The base engine records a terminal run before the category-balance
-            // coordinator has necessarily finished catalog cleanup and public sync.
-            // Keep polling while the backend still owns this exact cycle.
-            if (body?.running === true && String(body.activeCycleId || '') === expectedCycle) {
-              process.stdout.write('waiting');
-              process.exit(0);
-            }
-            if (terminalStatus && run.completed_at && metadata.continuous_cycle_completed_at) {
-              console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}:queue=${body.queueCount || 0}`);
-              process.exit(0);
-            }
-            process.stdout.write('waiting');
-            process.exit(0);
-          }
           if (terminalStatus && run.completed_at) {
             console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
             process.exit(0);
@@ -228,10 +165,6 @@ jobs:
               echo "AUTONOMOUS_CURATOR_RESULT=$state"
               if [[ "$state" == done:failed:* ]]; then exit 1; fi
               exit 0
-            fi
-            if [ "$state" = "orphaned" ]; then
-              echo "AUTONOMOUS_CURATOR_CYCLE_ORPHANED_AFTER_BACKEND_RESTART=$expected_cycle"
-              exit 1
             fi
             sleep 15
           done

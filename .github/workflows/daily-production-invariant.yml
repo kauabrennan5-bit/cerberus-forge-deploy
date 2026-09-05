@@ -2,7 +2,6 @@ name: Daily Production Invariant
 
 on:
   schedule:
-    # 23:30 America/Fortaleza = 02:30 UTC.
     - cron: "30 2 * * *"
   workflow_dispatch:
 
@@ -22,44 +21,19 @@ jobs:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
     steps:
-      - name: Validate invariant and allow at most one curator opportunity
+      - name: Observe catalog state
         shell: bash
         run: |
           set -euo pipefail
           base="${CERBERUS_HEALTH_URL%/health}"
           get_token() {
             local json token
-            json="$(curl --fail --silent --show-error --max-time 20 \
-              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+            json="$(curl --fail --silent --show-error --max-time 20 -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
             token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$json")"
             echo "::add-mask::$token" >&2
             printf '%s' "$token"
           }
-          check_invariant() {
-            local token="$1"
-            curl --fail-with-body --silent --show-error --max-time 90 \
-              -H "Authorization: Bearer ${token}" \
-              -o invariant.json "$base/api/internal/autonomous-curator/invariant"
-          }
           token="$(get_token)"
-          check_invariant "$token"
-          if node -e 'const v=require("./invariant.json"); process.exit(v.ok===true ? 0 : 1)'; then
-            echo "DAILY_INVARIANT=PASS"
-            cat invariant.json
-            exit 0
-          fi
-
-          echo "DAILY_INVARIANT=FAIL; one bounded Curator opportunity is allowed."
-          token="$(get_token)"
-          curl --fail-with-body --silent --show-error --max-time 90 \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            -d '{"notify":true}' \
-            "$base/api/internal/autonomous-curator/continuous" > curator-start.json
-          cat curator-start.json
-          sleep 60
-          token="$(get_token)"
-          check_invariant "$token"
+          curl --fail-with-body --silent --show-error --max-time 90 -H "Authorization: Bearer ${token}" -o invariant.json "$base/api/internal/autonomous-curator/invariant"
           cat invariant.json
-          node -e 'const v=require("./invariant.json"); if(v.ok!==true) { console.error("DAILY_INVARIANT=FAIL"); process.exit(1); } console.log("DAILY_INVARIANT=PASS_AFTER_ONE_CURATOR_OPPORTUNITY")'
+          echo "DAILY_INVARIANT=OBSERVATIONAL_MANUAL_APPROVAL_MODE"
