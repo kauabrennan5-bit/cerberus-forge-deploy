@@ -135,7 +135,7 @@ function canonicalSourceUrl(shopId: string, itemId: string): string {
 }
 
 function terminalDecision(decision: string): boolean {
-  return ["auto_published", "review_required", "rejected", "duplicate", "no_candidate", "dry_run_auto", "dry_run_review"].includes(decision);
+  return decision === "auto_published";
 }
 
 function extractorTimeoutMs(env: NodeJS.ProcessEnv): number {
@@ -549,7 +549,7 @@ function summaryText(result: AutonomousCuratorDailyResult): string {
     "",
     result.dryRun
       ? "Nenhum produto, review ou catálogo foi alterado neste dry-run."
-      : "A quota é um teto, não uma obrigação: categorias sem candidato forte ficam sem publicação.",
+      : "Publicação é manual; categorias com 30 produtos ativos deixam de gerar novos cards.",
   ].join("\n");
 }
 
@@ -601,6 +601,13 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
     if (config.maxDailyPerCategory <= 0) {
       await saveResult({ runId: open.run.id, category: profile.category, searchQuery: query, decision: "no_candidate", reason: "CATEGORY_DAILY_LIMIT_ZERO" });
       outcomes.push({ category: profile.category, query, decision: "none", reason: "CATEGORY_DAILY_LIMIT_ZERO", score: null, title: null });
+      continue;
+    }
+    const activeInCategory = existingProducts.filter(product => product.ativo !== false && product.categoria === profile.category).length;
+    if (!dryRun && activeInCategory >= config.maxDailyPerCategory) {
+      const reason = `CATEGORY_PUBLICATION_CEILING_REACHED:${activeInCategory}/${config.maxDailyPerCategory}`;
+      await saveResult({ runId: open.run.id, category: profile.category, searchQuery: query, decision: "no_candidate", reason });
+      outcomes.push({ category: profile.category, query, decision: "none", reason, score: null, title: null });
       continue;
     }
 
