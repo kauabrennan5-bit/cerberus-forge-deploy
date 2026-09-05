@@ -18,7 +18,9 @@ jobs:
           fetch-depth: 2
 
       - name: Patch campaign builder
-        run: python .github/scripts/implement_telegram_custom_campaign_builder.py
+        run: |
+          python .github/scripts/implement_telegram_custom_campaign_builder.py
+          python .github/scripts/fix_campaign_builder_legacy_test.py
 
       - name: Install dependencies
         run: npm ci
@@ -40,6 +42,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/implement-telegram-custom-campaign-builder.yml
           git rm .github/scripts/implement_telegram_custom_campaign_builder.py
+          git rm .github/scripts/fix_campaign_builder_legacy_test.py
           git add \
             server/repositories/telegramRepository.ts \
             server/services/newsletterCampaignCollection.ts \
