@@ -463,15 +463,33 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
       }
     }
 
-    // Regra 8: Se não houver título real nem imagens reais, rejeita a extração
-    const hasInvalidTitle = !scrapedTitle || isGenericTitle(scrapedTitle);
-    const hasNoImages = scrapedImages.length === 0;
-    const hasNoCommercialImage = imageCuration.status !== "ready" || !imageCuration.primaryImageUrl;
+    // Falhas editoriais/visuais não podem impedir a entrada de um anúncio tecnicamente utilizável.
+    // Quando o reviewer está indisponível ou sem orçamento, preservamos as imagens oficiais
+    // como fallback técnico e deixamos o status de review pendente para auditoria posterior.
+    const fallbackImageUrls = [...new Set(
+      (imageCuration.rawImageUrls.length > 0 ? imageCuration.rawImageUrls : curateProductImages(scrapedImages).rawImageUrls)
+        .filter(imageUrl => /^https:\/\//i.test(String(imageUrl || ""))),
+    )];
+    const fallbackPrimaryImage = imageCuration.primaryImageUrl?.trim() || fallbackImageUrls[0];
+    const fallbackGalleryImages = imageCuration.status === "ready"
+      ? imageCuration.galleryImageUrls.filter(imageUrl => imageUrl !== fallbackPrimaryImage)
+      : fallbackImageUrls.filter(imageUrl => imageUrl !== fallbackPrimaryImage).slice(0, 5);
+    const resolvedImageCuration: ProductImageCuration = imageCuration.status === "ready"
+      ? imageCuration
+      : {
+          ...imageCuration,
+          rawImageUrls: fallbackImageUrls,
+          primaryImageUrl: fallbackPrimaryImage,
+          galleryImageUrls: fallbackGalleryImages,
+        };
 
-    if (hasInvalidTitle || hasNoImages || hasNoCommercialImage) {
-      const blockError = hasNoCommercialImage
-        ? `IMAGE_REVIEW_REQUIRED:${imageCuration.reason || "no_commercial_image"}`
-        : "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título e imagens válidos.";
+    // Só título inexistente/genérico ou ausência real de imagem continuam sendo hard blocks.
+    const hasInvalidTitle = !scrapedTitle || isGenericTitle(scrapedTitle);
+    const hasNoImages = fallbackImageUrls.length === 0 || !fallbackPrimaryImage;
+    const hasNoCommercialImage = resolvedImageCuration.status !== "ready";
+
+    if (hasInvalidTitle || hasNoImages) {
+      const blockError = "Não foi possível extrair os dados reais do anúncio. O marketplace bloqueou a requisição ou o anúncio não retornou título e imagens válidos.";
 
       const priceReason = scrapedPrice !== null
         ? "Preço identificado"
@@ -488,12 +506,16 @@ export async function extractProductForReview(rawUrl: string, rawTextOverride?: 
       console.log(`[TELEGRAM EXTRACTION] Quantidade de imagens: ${scrapedImages.length}`);
       console.log(`[TELEGRAM EXTRACTION] Preço encontrado: ${scrapedPrice !== null ? `R$ ${scrapedPrice.toFixed(2)}` : "null"}`);
       console.log(`[TELEGRAM EXTRACTION] Motivo caso o preço não esteja disponível: ${priceReason}`);
-        console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${blockError}`);
+      console.log(`[TELEGRAM EXTRACTION] Erro/bloqueio: ${blockError}`);
 
       return {
         success: false,
         error: blockError
       };
+    }
+
+    if (hasNoCommercialImage) {
+      console.warn(`[Product Review Extraction] Revisão visual indisponível; preservando imagens oficiais como fallback técnico: ${resolvedImageCuration.reason || "review_required"}`);
     }
 
     const rawTitle = scrapedTitle && !isGenericTitle(scrapedTitle) ? scrapedTitle : "";
@@ -611,12 +633,12 @@ NUNCA invente preços, títulos fictícios ou URLs.`,
         precoCheckout: scrapedCheckoutPrice,
         condicaoPrecoCheckout: scrapedCheckoutPriceCondition,
         evidenciaPromocional: scrapedPromotionEvidence,
-        imagens: [imageCuration.primaryImageUrl!, ...imageCuration.galleryImageUrls],
-        imagensOriginais: imageCuration.rawImageUrls,
-        imagemPrincipal: imageCuration.primaryImageUrl,
-        imagensGaleria: imageCuration.galleryImageUrls,
-        imageCuration,
-        imageEditorialStatus: "clean",
+        imagens: fallbackPrimaryImage ? [fallbackPrimaryImage, ...fallbackGalleryImages] : fallbackImageUrls,
+        imagensOriginais: resolvedImageCuration.rawImageUrls,
+        imagemPrincipal: fallbackPrimaryImage,
+        imagensGaleria: fallbackGalleryImages,
+        imageCuration: resolvedImageCuration,
+        imageEditorialStatus: resolvedImageCuration.status === "ready" ? "clean" : "review_required",
         descricao: curatedDescription,
         existingProduct
       }
