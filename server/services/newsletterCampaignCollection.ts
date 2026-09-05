@@ -4,6 +4,7 @@ import { assessProductReadiness, type ProductImageProbe } from "../../src/lib/pr
 export const DEFAULT_NEWSLETTER_COLLECTION_SIZE = 10;
 export const MIN_NEWSLETTER_COLLECTION_SIZE = 1;
 export const MAX_NEWSLETTER_COLLECTION_SIZE = 15;
+export const MAX_CUSTOM_CAMPAIGN_PRODUCTS = 10;
 export const MIN_WEEKLY_COLLECTION_PRODUCTS = 5;
 export const NEWSLETTER_COLLECTION_LOOKBACK_DAYS = 14;
 
@@ -105,6 +106,54 @@ export async function selectNewestNewsletterProducts(
   }
 
   return { products: selected, requestedSize, since, until, skipped };
+}
+
+export async function selectNewsletterProductsByIds(
+  products: readonly Product[],
+  productIds: readonly string[],
+  options: Pick<NewsletterCollectionSelectionOptions, "verifyImageAccessibility" | "imageProbe"> = {},
+): Promise<NewsletterCollectionSelection> {
+  const normalizedIds = productIds
+    .map(value => String(value || "").trim())
+    .filter(Boolean)
+    .filter((value, index, list) => list.indexOf(value) === index);
+  if (normalizedIds.length === 0) throw new Error("CAMPAIGN_CUSTOM_SELECTION_REQUIRED");
+  if (normalizedIds.length > MAX_CUSTOM_CAMPAIGN_PRODUCTS) throw new Error("CAMPAIGN_CUSTOM_SELECTION_LIMIT");
+
+  const byId = new Map(products
+    .filter(product => typeof product.id === "string" && product.id.trim())
+    .map(product => [product.id.trim(), product] as const));
+  const selected: Product[] = [];
+  const skipped: NewsletterCollectionSkippedProduct[] = [];
+
+  for (const productId of normalizedIds) {
+    const product = byId.get(productId);
+    if (!product) {
+      skipped.push({ productId, reason: "PRODUCT_NOT_FOUND" });
+      continue;
+    }
+    if (product.ativo !== true || !isApprovedOrPublished(product.status)) {
+      skipped.push({ productId, reason: "PRODUCT_NOT_AVAILABLE" });
+      continue;
+    }
+    const readiness = await assessProductReadiness(product, {
+      channel: "campaign",
+      verifyImageAccessibility: options.verifyImageAccessibility !== false,
+      imageProbe: options.imageProbe,
+    });
+    if (!readiness.ready) {
+      skipped.push({ productId, reason: readiness.errors.join(",") || "CAMPAIGN_PRODUCT_NOT_READY" });
+      continue;
+    }
+    selected.push(product);
+  }
+
+  if (skipped.length > 0 || selected.length !== normalizedIds.length) {
+    const first = skipped[0] || { productId: "unknown", reason: "CAMPAIGN_PRODUCT_NOT_READY" };
+    throw new Error(`CAMPAIGN_CUSTOM_PRODUCT_NOT_READY:${first.productId}:${first.reason}`);
+  }
+
+  return { products: selected, requestedSize: normalizedIds.length, since: null, until: null, skipped: [] };
 }
 
 export function getStartOfNewsletterCollectionWindow(now = new Date()): Date {

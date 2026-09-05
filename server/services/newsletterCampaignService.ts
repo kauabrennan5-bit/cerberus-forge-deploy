@@ -31,6 +31,7 @@ import {
 import {
   getStartOfNewsletterCollectionWindow,
   selectNewestNewsletterProducts,
+  selectNewsletterProductsByIds,
 } from "./newsletterCampaignCollection";
 import {
   buildNewsletterAssetUrl,
@@ -147,6 +148,49 @@ export async function createWeeklyCollectionCampaign(
     if (isCollectionEditionConflict(error)) throw new Error("CAMPAIGN_COLLECTION_ALREADY_EXISTS");
     throw error;
   }
+  await store.createCampaignProducts(persisted.id, collectionProducts);
+  return { ...persisted, collectionProducts, editionKey };
+}
+
+export async function createCustomCollectionCampaign(
+  productIds: readonly string[],
+  actorTelegramId: string,
+  options: CampaignServiceOptions = {},
+): Promise<EmailCampaign> {
+  const env = options.env || process.env;
+  const now = options.now || new Date();
+  const campaignId = crypto.randomUUID();
+  const products = await (options.productsLoader || productsRepository.getProducts)();
+  const selection = await selectNewsletterProductsByIds(products, productIds, {
+    verifyImageAccessibility: options.verifyImageAccessibility !== false,
+    imageProbe: options.imageProbe,
+  });
+  const institutional = await getNewsletterInstitutionalOptions(env);
+  const count = selection.products.length;
+  const baseSubject = env.NEWSLETTER_CUSTOM_SUBJECT?.trim() || "Seleção Cerberus Finds";
+  const subject = `${baseSubject} · ${count} ${count === 1 ? "produto selecionado" : "produtos selecionados"}`.slice(0, 255);
+  const rendered = renderNewsletterCollectionCampaign(selection.products, {
+    subject,
+    collectionKicker: "Monte sua campanha",
+    collectionTitle: count === 1 ? "1 ACHADO SELECIONADO" : `${count} ACHADOS SELECIONADOS`,
+    collectionIntro: "Uma seleção montada manualmente no painel Cerberus.",
+    trackingCampaignId: campaignId,
+    privacyUrl: institutional.privacyUrl,
+    termsUrl: institutional.termsUrl,
+    socialLinks: institutional.socialLinks,
+    finalBrowseUrl: env.NEWSLETTER_COLLECTION_BROWSE_URL || undefined,
+    mastheadImageStatus: "unavailable",
+    mastheadLogoStatus: "available",
+  });
+  const collectionProducts: CampaignProductLink[] = selection.products.map((product, index) => ({
+    productId: product.id,
+    position: index + 1,
+    layout: index === 0 ? "feature" : "grid",
+  }));
+  const editionKey = `manual:${now.toISOString().slice(0, 10)}:${campaignId}`;
+  const draft = createCampaignDraft(null, actorTelegramId, rendered, now, campaignId, "collection", collectionProducts, editionKey);
+  const store = options.store || createSupabaseNewsletterCampaignStore();
+  const persisted = await store.createCampaign(draft);
   await store.createCampaignProducts(persisted.id, collectionProducts);
   return { ...persisted, collectionProducts, editionKey };
 }
