@@ -65,6 +65,8 @@ test("user-selected masthead logo is a real PNG with the expected email-safe can
   assert.equal(png.toString("hex", 0, 8), "89504e470d0a1a0a");
   assert.equal(png.readUInt32BE(16), 384);
   assert.equal(png.readUInt32BE(20), 280);
+  assert.equal(png[24], 8, "PNG must use 8-bit channels");
+  assert.equal(png[25], 6, "PNG must use RGBA color type so the background can remain transparent");
 });
 
 test("generic collection renders the user-selected black logo once and never duplicates it in the masthead image slot", () => {
@@ -90,6 +92,9 @@ test("generic collection renders the user-selected black logo once and never dup
   assert.doesNotMatch(masthead, /class="email-masthead-logo-print"/);
   assert.match(masthead, /class="email-masthead-logo"[^>]+width="96" height="70"/);
   assert.match(masthead, /class="email-masthead-brand-mark" width="108" height="82"/);
+  assert.doesNotMatch(masthead, /email-masthead-brand-mark[^>]+bgcolor=/);
+  assert.doesNotMatch(masthead, /email-masthead-brand-mark[^>]+#F2EDE4/);
+  assert.match(masthead, /email-masthead-brand-mark[^>]+background:transparent/);
   assert.doesNotMatch(masthead, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
   assert.match(rendered.html, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
 });
