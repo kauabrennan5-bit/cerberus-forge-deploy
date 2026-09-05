@@ -156,7 +156,7 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
   try {
     assertCanonicalRuntimeTargets(staticSiteUrl, catalogApiUrl);
   } catch (error) {
-    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", error, { code: "NON_CANONICAL_PUBLIC_VALIDATION_TARGET", message: "A validação pós-publicação exige o storefront oficial e a API pública canônica." });
+    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", error, { code: "PUBLIC_CATALOG_VALIDATION_ERROR", message: "A validação pós-publicação exige o storefront oficial e a API pública canônica." });
     return { success: false, operationId, product: productTitle, productId, supabaseCount: 0, jsonCount: 0, publicJsonCount: 0, productFoundPublic: false, staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontHealthy: false, diagnostic, error: diagnostic.code };
   }
   let supabaseCount = 0;
