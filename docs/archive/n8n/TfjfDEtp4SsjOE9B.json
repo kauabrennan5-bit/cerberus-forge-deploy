@@ -1,0 +1,152 @@
+{
+  "name": "CERBERUS — Watchdog",
+  "nodes": [
+    {
+      "id": "eb2e67c0-c2c1-4257-99ba-018184b6eeba",
+      "name": "Hourly Watchdog",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "f60ce8a2-b412-4af0-9f39-7f472746f0a4",
+      "name": "Check Backend Health",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://cerberus-forge-deploy-backend.onrender.com/health",
+        "timeout": 10000,
+        "response": {
+          "response": {
+            "fullResponse": true,
+            "neverError": true,
+            "responseFormat": "autodetect"
+          }
+        }
+      }
+    },
+    {
+      "id": "4b5e5bd1-96b5-4be2-b2da-0b25a4ab9fe6",
+      "name": "Check Official Frontend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://cerberus-design-static.onrender.com/",
+        "timeout": 10000,
+        "response": {
+          "response": {
+            "fullResponse": true,
+            "neverError": true,
+            "responseFormat": "text",
+            "outputPropertyName": "body"
+          }
+        }
+      }
+    },
+    {
+      "id": "4eddd8c3-fa47-49a1-909d-95c8ef2cb2e4",
+      "name": "Watchdog Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "checkedAt",
+              "name": "checkedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "scope",
+              "name": "scope",
+              "value": "public backend and official frontend only; Supabase/catalog checks blocked until credentials and endpoint contract exist",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Hourly Watchdog": {
+      "main": [
+        [
+          {
+            "node": "Check Backend Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Backend Health": {
+      "main": [
+        [
+          {
+            "node": "Check Official Frontend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Official Frontend": {
+      "main": [
+        [
+          {
+            "node": "Watchdog Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "48735e31-4597-489b-8d39-bc13a9284e60",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "TfjfDEtp4SsjOE9B",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; production watchdog belongs to GitHub Actions"
+}
