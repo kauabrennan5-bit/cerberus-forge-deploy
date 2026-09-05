@@ -67,11 +67,12 @@ test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe na
   assert.match(rendered.html, /#3A342E/);
   assert.match(rendered.html, /#E8E1D3/);
   assert.match(rendered.html, /#c0392b/i);
-  assert.match(rendered.html, /editorial-masthead editorial-masthead-b/);
-  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="64" height="44"/);
-  assert.match(rendered.html, /class="email-masthead-logo-print"[^>]+cerberus-logo-square\.png[^>]+width="156" height="156"/);
-  assert.doesNotMatch(rendered.html, /class="email-masthead-logo"[^>]+(?:width|height):156px/i);
-  assert.doesNotMatch(rendered.html, /class="email-masthead-brand-mark"[^>]+(?:width|height):170px/i);
+  assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
+  assert.equal((rendered.html.match(/cerberus-logo-user-tight\.png/g) || []).length, 1);
+  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="96" height="70"/);
+  assert.match(rendered.html, /class="email-masthead-brand-mark" width="108" height="82"/);
+  assert.doesNotMatch(rendered.html, /class="email-masthead-logo-print"/);
+  assert.doesNotMatch(rendered.html, /class="email-masthead-image"/);
   assert.match(rendered.html, /CERBERUS FINDS/);
   assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
   assert.match(rendered.html, /EDIÇÃO/);
@@ -86,7 +87,6 @@ test("template usa preço canônico, tabelas, bgcolor, /go/:ref e unsubscribe na
   assert.match(rendered.html, /Termos e condições/);
   assert.match(rendered.html, /instagram\.png/);
   assert.doesNotMatch(rendered.html, /tiktok\.png/);
-  assert.match(rendered.html, /@media print\{\.email-masthead-brand-mark\{width:170px!important;height:170px!important;\}/);
   assert.match(rendered.html, /Encontre a Cerberus Finds/);
   assert.match(rendered.html, /R\$\s*10,00/);
   assert.match(rendered.html, /\/go\/REF-A/);
