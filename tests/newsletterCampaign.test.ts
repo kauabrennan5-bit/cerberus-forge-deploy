@@ -220,9 +220,10 @@ test("campaign list renders recovery buttons for existing statuses without touch
   const rendered = renderRecentCampaignsForTelegram([testSent, pending]);
   assert.match(rendered.text, /CAMPANHAS RECENTES/);
   assert.match(rendered.text, /test_sent/);
-  assert.equal(rendered.keyboard.length, 2);
-  assert.equal(rendered.keyboard[0][0].callback_data, `campaign_view:${testSent.id}`);
-  assert.equal(rendered.keyboard[1][0].callback_data, `campaign_view:${pending.id}`);
+  assert.equal(rendered.keyboard.length, 3);
+  assert.equal(rendered.keyboard[0][0].callback_data, "campaign_builder_start");
+  assert.equal(rendered.keyboard[1][0].callback_data, `campaign_view:${testSent.id}`);
+  assert.equal(rendered.keyboard[2][0].callback_data, `campaign_view:${pending.id}`);
 });
 
 test("test_sent keyboard is informational and exposes no operational actions", () => {
@@ -1736,4 +1737,66 @@ test("Brevo provider refuses a technical relay domain as public sender", () => {
     (error: unknown) => error instanceof NewsletterProviderError && error.code === "PROVIDER_PUBLIC_SENDER_REQUIRED",
   );
   assert.doesNotThrow(() => createBrevoNewsletterProvider({ apiKey: "opaque-test-key", senderEmail: "contato@brand.example.test" }));
+});
+
+
+test("telegram campaigns menu exposes Monte sua campanha before recent campaigns", () => {
+  const view = renderRecentCampaignsForTelegram([]);
+  assert.equal(view.keyboard[0][0].text, "🧩 Monte sua campanha");
+  assert.equal(view.keyboard[0][0].callback_data, "campaign_builder_start");
+});
+
+test("telegram custom campaign builder selects 1 to 10 products and creates a pending collection", async (t) => {
+  const { setTestUserStateHandlers } = await import("../server/repositories/telegramRepository.ts");
+  let state: any = null;
+  setTestUserStateHandlers({
+    set: async (_senderId, next) => { state = structuredClone(next); },
+    get: async () => state ? structuredClone(state) : null,
+    delete: async () => { state = null; },
+  });
+  t.after(() => setTestUserStateHandlers(null));
+
+  const store = new FakeCampaignStore();
+  const products = Array.from({ length: 12 }, (_, index) => makeCollectionProduct(index, { ativo: true, status: "published" }));
+  const answers: Array<{ text?: string; alert?: boolean }> = [];
+  const edits: Array<{ text: string; markup: any }> = [];
+  const deps = {
+    store,
+    productsLoader: async () => products,
+    verifyImageAccessibility: false,
+    answerCallbackQuery: async (_id: string, text?: string, alert?: boolean) => { answers.push({ text, alert }); },
+    editTelegramMessageText: async (_chat: string | number, _messageId: number, text: string, markup?: any) => { edits.push({ text, markup }); return { ok: true }; },
+    sendTelegramMessage: async () => ({ ok: true }),
+  };
+
+  await handleNewsletterCampaignCallback("campaign_builder_start", "cb-start", "admin-builder", 1, 100, deps);
+  assert.equal(state.action, "campaign_builder");
+  assert.equal(state.data.catalogProductIds.length, 12);
+  assert.equal(state.data.selectedProductIds.length, 0);
+  assert.match(edits.at(-1)!.text, /MONTE SUA CAMPANHA/);
+  for (const row of edits.at(-1)!.markup.inline_keyboard.flat()) {
+    if (row.callback_data) assert.ok(row.callback_data.length <= 64, `callback_data excedeu limite Telegram: ${row.callback_data}`);
+  }
+
+  for (let index = 0; index < 10; index++) {
+    await handleNewsletterCampaignCallback(`campaign_builder_toggle:${index}`, `cb-toggle-${index}`, "admin-builder", 1, 100, deps);
+  }
+  assert.equal(state.data.selectedProductIds.length, 10);
+  assert.equal(state.data.selectedProductIds[0], products[0].id);
+
+  await handleNewsletterCampaignCallback("campaign_builder_toggle:10", "cb-overflow", "admin-builder", 1, 100, deps);
+  assert.equal(state.data.selectedProductIds.length, 10);
+  assert.equal(answers.at(-1)?.alert, true);
+  assert.match(answers.at(-1)?.text || "", /Limite atingido/);
+
+  await handleNewsletterCampaignCallback("campaign_builder_done", "cb-done", "admin-builder", undefined, undefined, deps);
+  assert.equal(state, null, "builder state is cleared after campaign creation");
+  const created = [...store.campaigns.values()].at(-1)!;
+  assert.equal(created.campaignType, "collection");
+  assert.equal(created.status, "pending_approval");
+  assert.match(created.editionKey || "", /^manual:/);
+  assert.equal(store.campaignProducts.get(created.id)?.length, 10);
+  assert.equal(store.campaignProducts.get(created.id)?.[0].productId, products[0].id, "first selected product becomes HERO");
+  assert.equal(store.campaignProducts.get(created.id)?.[0].layout, "feature");
+  assert.equal(store.campaignProducts.get(created.id)?.[9].position, 10);
 });

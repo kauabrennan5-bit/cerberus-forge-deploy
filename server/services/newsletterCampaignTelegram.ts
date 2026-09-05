@@ -5,6 +5,7 @@ import {
   cancelCampaign,
   confirmGeneralSend,
   createCampaignForProduct,
+  createCustomCollectionCampaign,
   createWeeklyCollectionCampaign,
   createWelcomeCampaignForSubscribers,
   renderCampaignTelegramPreview,
@@ -30,6 +31,15 @@ import {
 } from "../repositories/newsletterCampaignRepository";
 
 const campaignCallbackLocks = new Map<string, Promise<void>>();
+const CAMPAIGN_BUILDER_ACTION = "campaign_builder";
+const CAMPAIGN_BUILDER_PAGE_SIZE = 6;
+const CAMPAIGN_BUILDER_MAX_PRODUCTS = 10;
+
+type CampaignBuilderState = {
+  catalogProductIds: string[];
+  selectedProductIds: string[];
+  page: number;
+};
 
 export type CampaignTelegramDeps = {
   answerCallbackQuery: (callbackId: string, text?: string, showAlert?: boolean) => Promise<unknown>;
@@ -89,6 +99,56 @@ async function handleNewsletterCampaignCallbackOnce(
 
   try {
     const store = deps.store || createSupabaseNewsletterCampaignStore();
+
+    if (data === "campaign_builder_start") {
+      return startCustomCampaignBuilder(callbackId, senderId, chatId, messageId, deps);
+    }
+    if (data.startsWith("campaign_builder_toggle:")) {
+      const index = Number(data.slice("campaign_builder_toggle:".length));
+      return toggleCustomCampaignProduct(callbackId, senderId, chatId, messageId, index, deps);
+    }
+    if (data.startsWith("campaign_builder_page:")) {
+      const page = Number(data.slice("campaign_builder_page:".length));
+      return changeCustomCampaignBuilderPage(callbackId, senderId, chatId, messageId, page, deps);
+    }
+    if (data === "campaign_builder_clear") {
+      return clearCustomCampaignBuilder(callbackId, senderId, chatId, messageId, deps);
+    }
+    if (data === "campaign_builder_cancel") {
+      await telegramRepo.deleteUserState(senderId);
+      await deps.answerCallbackQuery(callbackId, "Montagem cancelada. Nenhuma campanha foi criada.");
+      const view = renderRecentCampaignsForTelegram(await store.listRecentCampaigns(10));
+      if (chatId && messageId) await deps.editTelegramMessageText(chatId, messageId, view.text, { inline_keyboard: view.keyboard });
+      else if (chatId) await deps.sendTelegramMessage(chatId, view.text, { inline_keyboard: view.keyboard });
+      return true;
+    }
+    if (data === "campaign_builder_done") {
+      const builder = await readCustomCampaignBuilder(senderId);
+      if (!builder) {
+        await deps.answerCallbackQuery(callbackId, "A sessão de montagem expirou. Abra /campanhas e comece novamente.", true);
+        return true;
+      }
+      if (builder.selectedProductIds.length < 1) {
+        await deps.answerCallbackQuery(callbackId, "Selecione pelo menos 1 produto.", true);
+        return true;
+      }
+      if (builder.selectedProductIds.length > CAMPAIGN_BUILDER_MAX_PRODUCTS) {
+        await deps.answerCallbackQuery(callbackId, "O limite é de 10 produtos por campanha.", true);
+        return true;
+      }
+      const campaign = await createCustomCollectionCampaign(builder.selectedProductIds, senderId, {
+        store,
+        env,
+        productsLoader: deps.productsLoader,
+        now: deps.now,
+        verifyImageAccessibility: deps.verifyImageAccessibility,
+      });
+      const pending = await submitCampaignForApproval(campaign, senderId, { store, env });
+      await telegramRepo.deleteUserState(senderId);
+      await deps.answerCallbackQuery(callbackId, `Campanha montada com ${builder.selectedProductIds.length} produto(s). Revise a prévia antes de aprovar.`);
+      return renderCampaignWithFallback(deps, chatId, messageId, pending, campaignKeyboard(pending));
+    }
+
     if (data === "campaign_collection") {
       const campaign = await createWeeklyCollectionCampaign(senderId, {
         store,
@@ -516,11 +576,155 @@ export function renderRecentCampaignsForTelegram(campaigns: EmailCampaign[]): Te
         "Selecione uma campanha para reabrir o cartão e continuar somente pelo gate disponível.",
         ...visible.map((campaign, index) => `${index + 1}. <b>${escapeTelegram(campaign.status)}</b> · ${escapeTelegram(campaign.subject)}`),
       ].join("\n\n");
-  const keyboard = visible.map(campaign => [{
-    text: `${campaignStatusLabel(campaign.status)} · ${campaign.subject.slice(0, 42)}`,
-    callback_data: `campaign_view:${campaign.id}`,
-  }]);
+  const keyboard = [
+    [{ text: "🧩 Monte sua campanha", callback_data: "campaign_builder_start" }],
+    ...visible.map(campaign => [{
+      text: `${campaignStatusLabel(campaign.status)} · ${campaign.subject.slice(0, 42)}`,
+      callback_data: `campaign_view:${campaign.id}`,
+    }]),
+  ];
   return { text, keyboard };
+}
+
+function isCampaignBuilderProduct(product: import("../../src/types").Product): boolean {
+  const statusOk = !product.status || product.status === "approved" || product.status === "published";
+  return Boolean(product.id?.trim()) && product.ativo === true && statusOk;
+}
+
+function normalizeBuilderState(value: unknown): CampaignBuilderState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Partial<CampaignBuilderState>;
+  const catalogProductIds = Array.isArray(candidate.catalogProductIds)
+    ? candidate.catalogProductIds.map(String).map(item => item.trim()).filter(Boolean)
+    : [];
+  const selectedProductIds = Array.isArray(candidate.selectedProductIds)
+    ? candidate.selectedProductIds.map(String).map(item => item.trim()).filter(id => catalogProductIds.includes(id))
+    : [];
+  const page = Number.isInteger(candidate.page) ? Math.max(0, Number(candidate.page)) : 0;
+  if (catalogProductIds.length === 0) return null;
+  return { catalogProductIds, selectedProductIds: [...new Set(selectedProductIds)].slice(0, CAMPAIGN_BUILDER_MAX_PRODUCTS), page };
+}
+
+async function readCustomCampaignBuilder(senderId: string): Promise<CampaignBuilderState | null> {
+  const state = await telegramRepo.getUserState(senderId);
+  if (state?.action !== CAMPAIGN_BUILDER_ACTION) return null;
+  return normalizeBuilderState(state.data);
+}
+
+async function writeCustomCampaignBuilder(senderId: string, state: CampaignBuilderState): Promise<void> {
+  await telegramRepo.setUserState(senderId, { action: CAMPAIGN_BUILDER_ACTION, data: state });
+}
+
+async function startCustomCampaignBuilder(callbackId: string, senderId: string, chatId: number | string | undefined, messageId: number | undefined, deps: CampaignTelegramDeps): Promise<boolean> {
+  const products = await (deps.productsLoader || productsRepository.getProducts)();
+  const catalog = products.filter(isCampaignBuilderProduct).sort((a, b) => {
+    const right = typeof b.createdAt === "string" ? Date.parse(b.createdAt) : 0;
+    const left = typeof a.createdAt === "string" ? Date.parse(a.createdAt) : 0;
+    return (Number.isFinite(right) ? right : 0) - (Number.isFinite(left) ? left : 0);
+  });
+  if (catalog.length === 0) {
+    await deps.answerCallbackQuery(callbackId, "Não há produtos ativos disponíveis para montar campanha.", true);
+    return true;
+  }
+  const state: CampaignBuilderState = { catalogProductIds: catalog.map(product => product.id.trim()), selectedProductIds: [], page: 0 };
+  await writeCustomCampaignBuilder(senderId, state);
+  await deps.answerCallbackQuery(callbackId, "Selecione de 1 a 10 produtos. O primeiro selecionado será o HERO.");
+  return renderCustomCampaignBuilder(senderId, chatId, messageId, state, deps);
+}
+
+async function toggleCustomCampaignProduct(callbackId: string, senderId: string, chatId: number | string | undefined, messageId: number | undefined, index: number, deps: CampaignTelegramDeps): Promise<boolean> {
+  const state = await readCustomCampaignBuilder(senderId);
+  if (!state) {
+    await deps.answerCallbackQuery(callbackId, "A sessão de montagem expirou. Abra /campanhas novamente.", true);
+    return true;
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= state.catalogProductIds.length) {
+    await deps.answerCallbackQuery(callbackId, "Produto inválido nesta sessão.", true);
+    return true;
+  }
+  const productId = state.catalogProductIds[index];
+  const selected = [...state.selectedProductIds];
+  const currentIndex = selected.indexOf(productId);
+  if (currentIndex >= 0) selected.splice(currentIndex, 1);
+  else {
+    if (selected.length >= CAMPAIGN_BUILDER_MAX_PRODUCTS) {
+      await deps.answerCallbackQuery(callbackId, "Limite atingido: no máximo 10 produtos.", true);
+      return true;
+    }
+    selected.push(productId);
+  }
+  const next = { ...state, selectedProductIds: selected };
+  await writeCustomCampaignBuilder(senderId, next);
+  await deps.answerCallbackQuery(callbackId, currentIndex >= 0 ? `Produto removido · ${selected.length}/10` : `Produto adicionado · ${selected.length}/10`);
+  return renderCustomCampaignBuilder(senderId, chatId, messageId, next, deps);
+}
+
+async function changeCustomCampaignBuilderPage(callbackId: string, senderId: string, chatId: number | string | undefined, messageId: number | undefined, page: number, deps: CampaignTelegramDeps): Promise<boolean> {
+  const state = await readCustomCampaignBuilder(senderId);
+  if (!state) {
+    await deps.answerCallbackQuery(callbackId, "A sessão de montagem expirou. Abra /campanhas novamente.", true);
+    return true;
+  }
+  const maxPage = Math.max(0, Math.ceil(state.catalogProductIds.length / CAMPAIGN_BUILDER_PAGE_SIZE) - 1);
+  const next = { ...state, page: Math.max(0, Math.min(maxPage, Number.isFinite(page) ? Math.trunc(page) : 0)) };
+  await writeCustomCampaignBuilder(senderId, next);
+  await deps.answerCallbackQuery(callbackId);
+  return renderCustomCampaignBuilder(senderId, chatId, messageId, next, deps);
+}
+
+async function clearCustomCampaignBuilder(callbackId: string, senderId: string, chatId: number | string | undefined, messageId: number | undefined, deps: CampaignTelegramDeps): Promise<boolean> {
+  const state = await readCustomCampaignBuilder(senderId);
+  if (!state) {
+    await deps.answerCallbackQuery(callbackId, "A sessão de montagem expirou. Abra /campanhas novamente.", true);
+    return true;
+  }
+  const next = { ...state, selectedProductIds: [] };
+  await writeCustomCampaignBuilder(senderId, next);
+  await deps.answerCallbackQuery(callbackId, "Seleção limpa.");
+  return renderCustomCampaignBuilder(senderId, chatId, messageId, next, deps);
+}
+
+async function renderCustomCampaignBuilder(senderId: string, chatId: number | string | undefined, messageId: number | undefined, state: CampaignBuilderState, deps: CampaignTelegramDeps): Promise<boolean> {
+  if (!chatId) return true;
+  const products = await (deps.productsLoader || productsRepository.getProducts)();
+  const byId = new Map(products.map(product => [product.id, product] as const));
+  const maxPage = Math.max(0, Math.ceil(state.catalogProductIds.length / CAMPAIGN_BUILDER_PAGE_SIZE) - 1);
+  const page = Math.max(0, Math.min(maxPage, state.page));
+  const start = page * CAMPAIGN_BUILDER_PAGE_SIZE;
+  const ids = state.catalogProductIds.slice(start, start + CAMPAIGN_BUILDER_PAGE_SIZE);
+  const selectedSet = new Set(state.selectedProductIds);
+  const selectedLines = state.selectedProductIds.map((id, index) => {
+    const product = byId.get(id);
+    const title = product?.displayTitle || product?.produto || id;
+    return `${index + 1}. ${escapeTelegram(String(title).slice(0, 58))}${index === 0 ? " · <b>HERO</b>" : ""}`;
+  });
+  const text = [
+    "🧩 <b>MONTE SUA CAMPANHA</b>",
+    "Selecione de <b>1 a 10 produtos</b>. O primeiro selecionado vira o destaque/HERO.",
+    `Selecionados: <b>${state.selectedProductIds.length}/10</b> · Página <b>${page + 1}/${maxPage + 1}</b>`,
+    "",
+    selectedLines.length ? `<b>Ordem atual</b>\n${selectedLines.join("\n")}` : "Nenhum produto selecionado ainda.",
+    "",
+    "Toque nos produtos abaixo para adicionar/remover. Nada é enviado automaticamente.",
+  ].join("\n");
+  const keyboard: any[][] = ids.map((id, offset) => {
+    const product = byId.get(id);
+    const title = String(product?.displayTitle || product?.produto || "Produto indisponível").replace(/\s+/g, " ").trim();
+    const absoluteIndex = start + offset;
+    return [{ text: `${selectedSet.has(id) ? "✅" : "◻️"} ${absoluteIndex + 1}. ${title.slice(0, 42)}`, callback_data: `campaign_builder_toggle:${absoluteIndex}` }];
+  });
+  const navigation: any[] = [];
+  if (page > 0) navigation.push({ text: "⬅️ Anterior", callback_data: `campaign_builder_page:${page - 1}` });
+  if (page < maxPage) navigation.push({ text: "Próxima ➡️", callback_data: `campaign_builder_page:${page + 1}` });
+  if (navigation.length) keyboard.push(navigation);
+  if (state.selectedProductIds.length > 0) {
+    keyboard.push([{ text: `✅ Montar campanha (${state.selectedProductIds.length})`, callback_data: "campaign_builder_done" }]);
+    keyboard.push([{ text: "🗑 Limpar seleção", callback_data: "campaign_builder_clear" }]);
+  }
+  keyboard.push([{ text: "❌ Cancelar", callback_data: "campaign_builder_cancel" }]);
+  if (messageId) await deps.editTelegramMessageText(chatId, messageId, text, { inline_keyboard: keyboard });
+  else await deps.sendTelegramMessage(chatId, text, { inline_keyboard: keyboard });
+  return true;
 }
 
 function campaignStatusLabel(status: EmailCampaign["status"]): string {
@@ -905,6 +1109,9 @@ function campaignErrorMessage(error: unknown): string {
   if (message === "WEEKLY_MARKETING_PRODUCTION_APPROVAL_EXPIRED") {
     return "A aprovação expirou. A campanha precisa ser regenerada e aprovada novamente.";
   }
+  if (message === "CAMPAIGN_CUSTOM_SELECTION_REQUIRED") return "Selecione pelo menos 1 produto para montar a campanha.";
+  if (message === "CAMPAIGN_CUSTOM_SELECTION_LIMIT") return "O limite da campanha manual é de 10 produtos.";
+  if (message.startsWith("CAMPAIGN_CUSTOM_PRODUCT_NOT_READY:")) return "Um dos produtos selecionados não está pronto para campanha. Remova-o ou corrija o produto e tente novamente.";
   const known = new Set([
     "CAMPAIGN_PRODUCT_NOT_ELIGIBLE",
     "CAMPAIGN_PRODUCT_NOT_FOUND",

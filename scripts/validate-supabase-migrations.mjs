@@ -17,7 +17,7 @@ const expectedLiveTables = new Set([
   'operational_recovery_attempts', 'operator_state', 'policy_evaluations', 'product_availability_observed',
   'product_clicks', 'product_image_editorial_reviews', 'product_image_observed', 'product_price_observed',
   'product_publication_authorizations', 'product_rotation_requests', 'product_source_identities',
-  'product_source_observed', 'products', 'publication_executions', 'social_links', 'telegram_pending_reviews',
+  'product_source_observed', 'products', 'publication_executions', 'social_links', 'telegram_pending_reviews', 'telegram_user_states',
 ]);
 
 const errors = [];
