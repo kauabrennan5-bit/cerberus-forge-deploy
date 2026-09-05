@@ -99,8 +99,24 @@ export async function openAutonomousCuratorRun(input: {
       .maybeSingle();
     if (existingError) throw existingError;
     if (existing) {
+      const { data: reopened, error: reopenError } = await client
+        .from("autonomous_curator_runs")
+        .update({
+          status: "running",
+          completed_at: null,
+          categories_processed: 0,
+          auto_published: 0,
+          review_required: 0,
+          rejected: 0,
+          failed: 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id)
+        .select("id,run_date,status,dry_run")
+        .single();
+      if (reopenError) throw reopenError;
       return {
-        run: { id: String(existing.id), runDate: String(existing.run_date), status: existing.status, dryRun: false },
+        run: { id: String(reopened.id), runDate: String(reopened.run_date), status: reopened.status, dryRun: false },
         resumed: true,
       };
     }
