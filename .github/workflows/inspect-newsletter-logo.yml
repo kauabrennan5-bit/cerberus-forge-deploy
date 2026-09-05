@@ -1,0 +1,36 @@
+name: Inspect Newsletter Logo
+
+on:
+  push:
+    branches:
+      - fix/newsletter-logo-broken-asset
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect binary signatures
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for f in \
+            public/assets/newsletter/branding/cerberus-logo-user-tight.png \
+            public/assets/newsletter/branding/cerberus-logo-official.png \
+            public/assets/newsletter/branding/cerberus-logo-square.png; do
+            echo "--- $f"
+            file "$f" || true
+            wc -c "$f"
+            xxd -l 32 "$f"
+          done
+          python - <<'PY'
+          from pathlib import Path
+          sig=b'\x89PNG\r\n\x1a\n'
+          for name in ['cerberus-logo-user-tight.png','cerberus-logo-official.png','cerberus-logo-square.png']:
+              p=Path('public/assets/newsletter/branding')/name
+              b=p.read_bytes()
+              print(name, 'png_signature=', b.startswith(sig), 'first8=', b[:8].hex())
+          PY
