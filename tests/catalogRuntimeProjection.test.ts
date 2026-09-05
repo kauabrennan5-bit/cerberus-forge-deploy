@@ -67,9 +67,12 @@ test("frontend consumes the canonical Edge API instead of its branch-local produ
   assert.match(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
 });
 
-test("public Edge exposes only publication-authorized editorial rows", () => {
-  assert.match(edgeSource, /\.eq\("display_title_status", "reviewed"\)/);
-  assert.match(edgeSource, /\.eq\("image_editorial_status", "clean"\)/);
+test("public Edge exposes strict editorial rows plus technically authorized deficit fallback rows", () => {
+  assert.match(edgeSource, /isStrictEditorialRow/);
+  assert.match(edgeSource, /isDeficitFallbackPublicRow/);
+  assert.match(edgeSource, /AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue"/);
+  assert.match(edgeSource, /AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback"/);
+  assert.match(edgeSource, /image_review_fingerprint/);
+  assert.match(edgeSource, /validShopeeAffiliateLink/);
   assert.match(edgeSource, /\.not\("display_title", "is", null\)/);
-  assert.match(edgeSource, /image_curation->>status/);
 });
