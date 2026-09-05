@@ -13,6 +13,8 @@ begin
     return new;
   end if;
 
+  -- Serialize publication attempts for the same category so two concurrent
+  -- approvals cannot both observe 29 and create a 31st active product.
   perform pg_advisory_xact_lock(hashtext(new.categoria));
 
   select count(*)::integer
