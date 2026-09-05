@@ -638,6 +638,7 @@ async function discoverLiveCandidate(input: {
       input.diagnostics.candidatesReceived += search.items.length;
       if (search.items.length === 0) break;
       for (const item of search.items) {
+        if (!validateOfficialProductLink(item.productLink, item.shopId, item.itemId)) { bump(input.diagnostics, "OFFICIAL_PRODUCT_LINK_INVALID"); continue; }
         const poolDecision = evaluateSharedCandidatePoolEntry({ shopId: item.shopId, itemId: item.itemId, productLink: item.productLink, affiliateLink: item.offerLink, price: item.price, imageUrl: item.imageUrl }, { seenIdentityKeys: seen });
         if (!poolDecision.eligible) { bump(input.diagnostics, poolDecision.reason || "CANDIDATE_POOL_REJECTED"); continue; }
         if (!item.name?.trim()) { bump(input.diagnostics, "TITLE_MISSING"); continue; }

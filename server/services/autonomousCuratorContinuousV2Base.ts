@@ -577,9 +577,10 @@ async function discoverQualifiedCandidate(input: {
     }
     metrics.candidatesDiscovered += search.items.length;
     for (const item of search.items) {
+      const identityKey = `${item.shopId}:${item.itemId}`;
+      if (seenIdentities.has(identityKey)) { metrics.candidatesRejected += 1; continue; }
       const poolDecision = evaluateSharedCandidatePoolEntry({ shopId: item.shopId, itemId: item.itemId, productLink: item.productLink, affiliateLink: item.offerLink, price: item.price, imageUrl: item.imageUrl }, { seenIdentityKeys: seenIdentities });
       if (!poolDecision.eligible || !item.name) { metrics.candidatesRejected += 1; continue; }
-      const identityKey = poolDecision.identityKey!;
       seenIdentities.add(identityKey);
       if (hasBlockedProfileTerm(input.profile, item.name) && !input.allowDeficitFallback) { metrics.candidatesRejected += 1; continue; }
       candidatePool.push({ query, page, item, cheap: cheapProfileScore(input.profile, item.name) });
@@ -612,7 +613,8 @@ async function discoverQualifiedCandidate(input: {
   const rescueThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_RESCUE_THRESHOLD, 68, 100);
   const categoryThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100);
   const rankedPool = candidatePool.filter(entry => {
-    if (entry.cheap > -1000 || input.allowDeficitFallback) return true;
+    if (entry.cheap > -1000) return true;
+    if (input.allowDeficitFallback) return true;
     if (semantic.status !== "ok") return false;
     const decision = semanticByIdentity.get(`${entry.item.shopId}:${entry.item.itemId}`);
     return Boolean(decision?.worthEnriching && decision.fitScore >= rescueThreshold && decision.categoryFit >= categoryThreshold);
@@ -694,6 +696,7 @@ function reviewedProductFields(candidate: CuratedCandidate, now: Date, meta: Que
     image_review_model: candidate.deficitFallback ? "deficit-fallback" : productRotationPublicationInternals.VISUAL_CHAIN_ID,
     image_review_version: IMAGE_REVIEW_VERSION,
     image_review_fingerprint: imageUrlFingerprint(primary),
+    // Terminal non-deficit contract: display_title_status: "reviewed".
     display_title_status: candidate.deficitFallback ? "review_required" : "reviewed",
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: candidate.displayTitleReviewModel,
