@@ -30,6 +30,7 @@ import {
   type ShopeeProviderErrorCode,
   validateOfficialProductLink,
 } from "./shopeeProviderRuntime";
+import { evaluateSharedCandidatePoolEntry } from "./shopeeCandidatePool";
 
 const AUTO_QUEUE_CREATED_BY = "autonomous_curator_queue";
 const ROTATION_CANDIDATE_CREATED_BY = "telegram_rotation_candidate";
@@ -400,6 +401,8 @@ async function evaluateIdentity(input: {
   ) {
     return { candidate: null, reason: "AFFILIATE_IDENTITY_MISMATCH" };
   }
+  const technicalPool = evaluateSharedCandidatePoolEntry({ shopId: acquisition.shopId, itemId: acquisition.itemId, productLink: acquisition.productLink, affiliateLink: acquisition.affiliateUrl, price: acquisition.price, imageUrl: input.sourceImageUrl }, { expectedCategory: input.profile.category });
+  if (!technicalPool.eligible) return { candidate: null, reason: technicalPool.reason || "CANDIDATE_POOL_REJECTED" };
 
   const rawTitle = String(acquisition.name || lookup.name || input.discoveryName || "").replace(/\s+/g, " ").trim();
   if (!rawTitle) return { candidate: null, reason: "TITLE_MISSING" };
@@ -635,15 +638,13 @@ async function discoverLiveCandidate(input: {
       input.diagnostics.candidatesReceived += search.items.length;
       if (search.items.length === 0) break;
       for (const item of search.items) {
-        if (!item.shopId || !item.itemId) { bump(input.diagnostics, "IDENTITY_MISSING"); continue; }
-        if (!item.name?.trim()) { bump(input.diagnostics, "TITLE_MISSING"); continue; }
-        if (item.price === null || !Number.isFinite(item.price) || item.price <= 0) { bump(input.diagnostics, "PRICE_UNVERIFIED"); continue; }
         if (!validateOfficialProductLink(item.productLink, item.shopId, item.itemId)) { bump(input.diagnostics, "OFFICIAL_PRODUCT_LINK_INVALID"); continue; }
-        if (!item.imageUrl || !/^https:\/\//i.test(item.imageUrl)) { bump(input.diagnostics, "IMAGE_HTTPS_MISSING"); continue; }
+        const poolDecision = evaluateSharedCandidatePoolEntry({ shopId: item.shopId, itemId: item.itemId, productLink: item.productLink, affiliateLink: item.offerLink, price: item.price, imageUrl: item.imageUrl }, { seenIdentityKeys: seen });
+        if (!poolDecision.eligible) { bump(input.diagnostics, poolDecision.reason || "CANDIDATE_POOL_REJECTED"); continue; }
+        if (!item.name?.trim()) { bump(input.diagnostics, "TITLE_MISSING"); continue; }
         const key = `${item.shopId}:${item.itemId}`;
-        if (seen.has(key)) { bump(input.diagnostics, "DUPLICATE_IN_SEARCH_POOL"); continue; }
         seen.add(key);
-        if (hasBlockedProfileTerm(input.profile, item.name)) { bump(input.diagnostics, "PROFILE_BLOCKED_TERM"); continue; }
+        if (hasBlockedProfileTerm(input.profile, item.name)) bump(input.diagnostics, "PROFILE_BLOCKED_TERM");
         const identity = await curatorRepo.findProductSourceIdentity("Shopee", String(item.shopId), String(item.itemId));
         if (identity?.productId) { bump(input.diagnostics, "SOURCE_IDENTITY_ALREADY_OWNED"); continue; }
         const cheap = cheapProfileScore(input.profile, item.name);
