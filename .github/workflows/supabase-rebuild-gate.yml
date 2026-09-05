@@ -92,35 +92,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          # Keep the previously certified LIVE schema fingerprint intact. The
-          # new Telegram state table is verified independently below so adding
-          # one intentional object does not weaken or invalidate the legacy
-          # contract for the other 44 public tables.
-          EXPECTED_LEGACY='6de640a58e30311258a95f08a65707eb|44|44|0|1|9|3|199|762|324'
-          LEGACY_ACTUAL="$(psql "$DB_URL" -X -qAt <<'SQL'
+          EXPECTED='91599c9d634c11556f588eaa94f706ac|45|45|0|1|9|3|201|768|325'
+          ACTUAL="$(psql "$DB_URL" -X -qAt <<'SQL'
           with lines as (
             select 'TABLE|' || c.relname || '|' || c.relkind::text as line
             from pg_class c join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and c.relkind in ('r','p') and c.relname <> 'telegram_user_states'
+            where n.nspname='public' and c.relkind in ('r','p')
             union all
             select 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'')
             from pg_attribute a
             join pg_class c on c.oid=a.attrelid
             join pg_namespace n on n.oid=c.relnamespace
             left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
-            where n.nspname='public' and c.relkind in ('r','p') and c.relname <> 'telegram_user_states' and a.attnum > 0 and not a.attisdropped
+            where n.nspname='public' and c.relkind in ('r','p') and a.attnum > 0 and not a.attisdropped
             union all
             select 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true)
             from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and c.relname <> 'telegram_user_states'
+            where n.nspname='public'
             union all
             select 'RLS|' || c.relname
             from pg_class c join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and c.relkind in ('r','p') and c.relname <> 'telegram_user_states' and c.relrowsecurity
+            where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity
             union all
             select 'POLICY|' || tablename || '|' || policyname || '|' || cmd || '|' || coalesce(qual,'') || '|' || coalesce(with_check,'')
-            from pg_policies where schemaname='public' and tablename <> 'telegram_user_states'
+            from pg_policies where schemaname='public'
             union all
             select 'SEQUENCE|' || sequencename || '|' || data_type || '|' || start_value::text || '|' || min_value::text || '|' || max_value::text || '|' || increment_by::text || '|' || cycle::text
             from pg_sequences where schemaname='public'
@@ -130,140 +125,31 @@ jobs:
             union all
             select 'TRIGGER|' || c.relname || '|' || t.tgname || '|' || pg_get_triggerdef(t.oid,true)
             from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and c.relname <> 'telegram_user_states' and not t.tgisinternal
+            where n.nspname='public' and not t.tgisinternal
             union all
             select 'INDEX|' || indexname || '|' || indexdef
-            from pg_indexes where schemaname='public' and tablename <> 'telegram_user_states'
-          ), canonical as (select string_agg(line,E'\n' order by line) manifest from lines)
+            from pg_indexes where schemaname='public'
+          ), canonical as (
+            select string_agg(line,E'\n' order by line) manifest from lines
+          )
           select md5(manifest) || '|' ||
-            (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relname <> 'telegram_user_states') || '|' ||
-            (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relname <> 'telegram_user_states' and c.relrowsecurity) || '|' ||
-            (select count(*) from pg_policies where schemaname='public' and tablename <> 'telegram_user_states') || '|' ||
+            (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')) || '|' ||
+            (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity) || '|' ||
+            (select count(*) from pg_policies where schemaname='public') || '|' ||
             (select count(*) from pg_sequences where schemaname='public') || '|' ||
             (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public') || '|' ||
-            (select count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname <> 'telegram_user_states' and not t.tgisinternal) || '|' ||
-            (select count(*) from pg_indexes where schemaname='public' and tablename <> 'telegram_user_states') || '|' ||
-            (select count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relname <> 'telegram_user_states' and a.attnum>0 and not a.attisdropped) || '|' ||
-            (select count(*) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relname <> 'telegram_user_states')
+            (select count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal) || '|' ||
+            (select count(*) from pg_indexes where schemaname='public') || '|' ||
+            (select count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped) || '|' ||
+            (select count(*) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public')
           from canonical;
           SQL
           )"
-
-          echo "Expected certified legacy contract: $EXPECTED_LEGACY"
-          echo "Local rebuilt legacy contract:   $LEGACY_ACTUAL"
-          if [[ "$LEGACY_ACTUAL" != "$EXPECTED_LEGACY" ]]; then
-            echo '::error::Legacy public schema drifted while adding telegram_user_states.'
+          echo "Expected LIVE contract: $EXPECTED"
+          echo "Local rebuild contract: $ACTUAL"
+          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+            echo '::error::Ephemeral rebuild does not exactly match the certified LIVE public-schema contract.'
             exit 1
           fi
 
-          # Verify the additive table itself as a strict contract: table kind,
-          # RLS, all six columns, default, PK, indexes, no policies, and the
-          # least-privilege Data API grants used by the backend service role.
-          psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
-          DO $$
-          DECLARE
-            n integer;
-          BEGIN
-            SELECT count(*) INTO n
-            FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
-            WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND c.relkind='r';
-            IF n <> 1 THEN RAISE EXCEPTION 'telegram_user_states table contract missing'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND c.relrowsecurity
-            ) THEN RAISE EXCEPTION 'telegram_user_states RLS must be enabled'; END IF;
-
-            SELECT count(*) INTO n
-            FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-            WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum>0 AND NOT a.attisdropped;
-            IF n <> 6 THEN RAISE EXCEPTION 'telegram_user_states must have exactly 6 columns, got %', n; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum=1 AND a.attname='sender_id'
-                AND pg_catalog.format_type(a.atttypid,a.atttypmod)='text' AND a.attnotnull AND d.oid IS NULL
-            ) THEN RAISE EXCEPTION 'sender_id column contract mismatch'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum=2 AND a.attname='action'
-                AND pg_catalog.format_type(a.atttypid,a.atttypmod)='text' AND a.attnotnull AND d.oid IS NULL
-            ) THEN RAISE EXCEPTION 'action column contract mismatch'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum=3 AND a.attname='review_id'
-                AND pg_catalog.format_type(a.atttypid,a.atttypmod)='text' AND NOT a.attnotnull AND d.oid IS NULL
-            ) THEN RAISE EXCEPTION 'review_id column contract mismatch'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum=4 AND a.attname='product_id'
-                AND pg_catalog.format_type(a.atttypid,a.atttypmod)='text' AND NOT a.attnotnull AND d.oid IS NULL
-            ) THEN RAISE EXCEPTION 'product_id column contract mismatch'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum=5 AND a.attname='data'
-                AND pg_catalog.format_type(a.atttypid,a.atttypmod)='jsonb' AND a.attnotnull
-                AND pg_get_expr(d.adbin,d.adrelid)='''{}''::jsonb'
-            ) THEN RAISE EXCEPTION 'data column contract mismatch'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states' AND a.attnum=6 AND a.attname='updated_at'
-                AND pg_catalog.format_type(a.atttypid,a.atttypmod)='bigint' AND a.attnotnull AND d.oid IS NULL
-            ) THEN RAISE EXCEPTION 'updated_at column contract mismatch'; END IF;
-
-            SELECT count(*) INTO n
-            FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-            WHERE ns.nspname='public' AND c.relname='telegram_user_states';
-            IF n <> 1 THEN RAISE EXCEPTION 'telegram_user_states must have exactly 1 constraint, got %', n; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_constraint con JOIN pg_class c ON c.oid=con.conrelid JOIN pg_namespace ns ON ns.oid=c.relnamespace
-              WHERE ns.nspname='public' AND c.relname='telegram_user_states'
-                AND con.conname='telegram_user_states_pkey' AND con.contype='p'
-                AND pg_get_constraintdef(con.oid,true)='PRIMARY KEY (sender_id)'
-            ) THEN RAISE EXCEPTION 'telegram_user_states primary key contract mismatch'; END IF;
-
-            SELECT count(*) INTO n FROM pg_indexes
-            WHERE schemaname='public' AND tablename='telegram_user_states';
-            IF n <> 2 THEN RAISE EXCEPTION 'telegram_user_states must have exactly 2 indexes, got %', n; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='telegram_user_states'
-                AND indexname='telegram_user_states_pkey' AND indexdef LIKE 'CREATE UNIQUE INDEX telegram_user_states_pkey ON public.telegram_user_states USING btree (sender_id)%'
-            ) THEN RAISE EXCEPTION 'telegram_user_states PK index contract mismatch'; END IF;
-
-            IF NOT EXISTS (
-              SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='telegram_user_states'
-                AND indexname='idx_telegram_user_states_updated_at' AND indexdef LIKE 'CREATE INDEX idx_telegram_user_states_updated_at ON public.telegram_user_states USING btree (updated_at)%'
-            ) THEN RAISE EXCEPTION 'telegram_user_states updated_at index contract mismatch'; END IF;
-
-            SELECT count(*) INTO n FROM pg_policies
-            WHERE schemaname='public' AND tablename='telegram_user_states';
-            IF n <> 0 THEN RAISE EXCEPTION 'telegram_user_states must not expose row policies'; END IF;
-
-            IF EXISTS (
-              SELECT 1 FROM information_schema.role_table_grants
-              WHERE table_schema='public' AND table_name='telegram_user_states' AND grantee IN ('anon','authenticated')
-            ) THEN RAISE EXCEPTION 'telegram_user_states must not grant Data API access to anon/authenticated'; END IF;
-
-            IF NOT has_table_privilege('service_role','public.telegram_user_states','SELECT')
-               OR NOT has_table_privilege('service_role','public.telegram_user_states','INSERT')
-               OR NOT has_table_privilege('service_role','public.telegram_user_states','UPDATE')
-               OR NOT has_table_privilege('service_role','public.telegram_user_states','DELETE')
-            THEN RAISE EXCEPTION 'service_role lacks required telegram_user_states privileges'; END IF;
-          END
-          $$;
-          SQL
-
-          echo 'Certified legacy schema and telegram_user_states additive contract both match exactly.'
+          echo 'Exact LIVE public-schema contract verified.'
