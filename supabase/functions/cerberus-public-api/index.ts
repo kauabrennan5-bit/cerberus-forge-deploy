@@ -28,6 +28,32 @@ const PUBLIC_PRODUCT_COLUMNS = [
   "curator_note",
 ].join(",");
 
+const PUBLIC_ELIGIBILITY_COLUMNS = [
+  PUBLIC_PRODUCT_COLUMNS,
+  "display_title_status",
+  "image_editorial_status",
+  "image_curation",
+  "image_review_model",
+  "image_review_fingerprint",
+  "created_by",
+].join(",");
+
+const PUBLIC_PRODUCT_CATEGORIES = new Set([
+  "Iluminação",
+  "Decoração",
+  "Móveis",
+  "Cozinha & Mesa",
+  "Organização",
+  "Vestuário",
+  "Calçados & Acessórios",
+  "Tecnologia",
+  "Beleza & Bem-estar",
+  "Infantil",
+]);
+
+const AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue";
+const AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback";
+
 const RAW_PAYLOAD_MARKERS = [
   "[url final]",
   "[titulo identificado]",
@@ -41,6 +67,68 @@ function containsRawPayloadMarkers(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   return RAW_PAYLOAD_MARKERS.some((marker) => normalized.includes(marker));
+}
+
+function validHttpsUrl(value: unknown): boolean {
+  try {
+    return new URL(String(value || "").trim()).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function validShopeeAffiliateLink(value: unknown): boolean {
+  try {
+    const url = new URL(String(value || "").trim());
+    const host = url.hostname.toLowerCase();
+    return url.protocol === "https:" && (host === "shopee.com.br" || host.endsWith(".shopee.com.br"));
+  } catch {
+    return false;
+  }
+}
+
+function imageCurationRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function isStrictEditorialRow(row: Record<string, unknown>): boolean {
+  const imageCuration = imageCurationRecord(row.image_curation);
+  return String(row.display_title_status || "") === "reviewed"
+    && String(row.image_editorial_status || "") === "clean"
+    && String(imageCuration?.status || "") === "ready";
+}
+
+function isDeficitFallbackPublicRow(row: Record<string, unknown>): boolean {
+  const imageCuration = imageCurationRecord(row.image_curation);
+  const primaryImageUrl = imageCuration?.primaryImageUrl;
+  const displayTitle = String(row.display_title || "").trim();
+  const price = Number(row.preco);
+  return String(row.created_by || "") === AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY
+    && String(row.image_review_model || "") === AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL
+    && ["review_required", "reviewed"].includes(String(row.display_title_status || ""))
+    && ["review_required", "clean"].includes(String(row.image_editorial_status || ""))
+    && displayTitle.length > 0
+    && validHttpsUrl(primaryImageUrl)
+    && Boolean(String(row.image_review_fingerprint || "").trim())
+    && Number.isFinite(price)
+    && price > 0
+    && PUBLIC_PRODUCT_CATEGORIES.has(String(row.categoria || ""))
+    && validShopeeAffiliateLink(row.link);
+}
+
+function publicProjection(row: Record<string, unknown>): Record<string, unknown> {
+  const {
+    display_title_status: _displayTitleStatus,
+    image_editorial_status: _imageEditorialStatus,
+    image_curation: _imageCuration,
+    image_review_model: _imageReviewModel,
+    image_review_fingerprint: _imageReviewFingerprint,
+    created_by: _createdBy,
+    ...product
+  } = row;
+  return containsRawPayloadMarkers(product.descricao)
+    ? { ...product, descricao: "" }
+    : product;
 }
 
 function adminClient() {
@@ -80,21 +168,16 @@ Deno.serve(async (req: Request) => {
       const client = adminClient();
       const { data, error } = await client
         .from("products")
-        .select(PUBLIC_PRODUCT_COLUMNS)
+        .select(PUBLIC_ELIGIBILITY_COLUMNS)
         .eq("ativo", true)
         .eq("status", "published")
-        .eq("display_title_status", "reviewed")
-        .eq("image_editorial_status", "clean")
         .not("display_title", "is", null)
-        .eq("image_curation->>status", "ready")
         .order("created_at", { ascending: false });
       if (error) throw new Error(`PRODUCTS_QUERY_FAILED:${error.code || "unknown"}`);
 
-      const products = (Array.isArray(data) ? data : []).map((product: Record<string, unknown>) =>
-        containsRawPayloadMarkers(product.descricao)
-          ? { ...product, descricao: "" }
-          : product
-      );
+      const products = (Array.isArray(data) ? data : [])
+        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isDeficitFallbackPublicRow(product))
+        .map((product: Record<string, unknown>) => publicProjection(product));
 
       return json({ success: true, products, data: products, source: "supabase-edge" });
     }
