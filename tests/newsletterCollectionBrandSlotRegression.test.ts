@@ -51,13 +51,21 @@ function product(id: string, createdAt: string): Product {
   };
 }
 
-test("generic collection masthead uses Cerberus brand asset and never product #1 image", () => {
+function mastheadHtml(html: string): string {
+  const mastheadStart = html.indexOf('class="editorial-block editorial-masthead');
+  const heroStart = html.indexOf('class="editorial-block editorial-hero');
+  assert.ok(mastheadStart >= 0);
+  assert.ok(heroStart > mastheadStart);
+  return html.slice(mastheadStart, heroStart);
+}
+
+test("generic collection renders the user-selected black logo once and never duplicates it in the masthead image slot", () => {
   const products = [
     product("bag-1", "2026-09-05T12:00:00.000Z"),
     product("lamp-2", "2026-09-05T11:00:00.000Z"),
     product("chair-3", "2026-09-05T10:00:00.000Z"),
   ];
-  const brandIcon = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-official.png");
+  const brandIcon = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-user-tight.png");
   const rendered = renderNewsletterCollectionCampaign(products, {
     subject: "Novidades da semana — Edição de regressão",
     trackingCampaignId: "collection-brand-regression",
@@ -66,14 +74,35 @@ test("generic collection masthead uses Cerberus brand asset and never product #1
     mastheadLogoStatus: "available",
   });
 
-  const mastheadStart = rendered.html.indexOf('class="editorial-block editorial-masthead');
-  const heroStart = rendered.html.indexOf('class="editorial-block editorial-hero');
-  assert.ok(mastheadStart >= 0);
-  assert.ok(heroStart > mastheadStart);
-  const mastheadHtml = rendered.html.slice(mastheadStart, heroStart);
+  const masthead = mastheadHtml(rendered.html);
+  assert.equal(rendered.mastheadVariant, "A");
+  assert.equal(rendered.mastheadImageUrl, null);
+  assert.equal(rendered.mastheadLogoUrl, brandIcon);
+  assert.equal((masthead.match(/cerberus-logo-user-tight\.png/g) || []).length, 1);
+  assert.doesNotMatch(masthead, /email-masthead-image/);
+  assert.doesNotMatch(masthead, /email-masthead-logo-print/);
+  assert.match(masthead, /class="email-masthead-logo"[^>]+width="96" height="70"/);
+  assert.match(masthead, /class="email-masthead-brand-mark" width="108" height="82"/);
+  assert.doesNotMatch(masthead, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
+  assert.match(rendered.html, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
+});
 
-  assert.match(mastheadHtml, /cerberus-logo-official\.png/);
-  assert.doesNotMatch(mastheadHtml, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
+test("collection masthead never falls back to product #1 when no dedicated editorial masthead image exists", () => {
+  const products = [
+    product("bag-1", "2026-09-05T12:00:00.000Z"),
+    product("lamp-2", "2026-09-05T11:00:00.000Z"),
+  ];
+  const rendered = renderNewsletterCollectionCampaign(products, {
+    subject: "Novidades da semana — sem imagem editorial",
+    trackingCampaignId: "collection-no-product-fallback",
+    mastheadImageStatus: "clean",
+    mastheadLogoStatus: "available",
+  });
+
+  const masthead = mastheadHtml(rendered.html);
+  assert.equal(rendered.mastheadVariant, "A");
+  assert.equal(rendered.mastheadImageUrl, null);
+  assert.doesNotMatch(masthead, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
   assert.match(rendered.html, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
 });
 
