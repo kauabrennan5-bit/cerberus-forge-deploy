@@ -1,0 +1,105 @@
+{
+  "name": "CERBERUS — n8n Error Handler",
+  "nodes": [
+    {
+      "id": "a7efcb4a-f88d-4b3c-bf56-2b46cc42bbea",
+      "name": "Global Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "6c7fdb89-20b8-47c7-8e33-fcd3628efc90",
+      "name": "Normalize Safe Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "workflow",
+              "name": "workflow",
+              "value": "={{ $json.workflow.name }}",
+              "type": "string"
+            },
+            {
+              "id": "executionId",
+              "name": "executionId",
+              "value": "={{ $json.execution.id }}",
+              "type": "string"
+            },
+            {
+              "id": "node",
+              "name": "node",
+              "value": "={{ $json.execution.lastNodeExecuted }}",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ $json.error.message }}",
+              "type": "string"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "ERROR",
+              "type": "string"
+            },
+            {
+              "id": "alert",
+              "name": "alert",
+              "value": "CERBERUS — n8n ERROR (safe normalized alert; Telegram not configured)",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Global Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Safe Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "b1eba157-8306-454d-9fb2-f3998102f555",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "9TTHtabr81XMI3iq",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; production errors are handled by backend and GitHub Actions"
+}

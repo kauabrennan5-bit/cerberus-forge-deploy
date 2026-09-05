@@ -1,0 +1,90 @@
+{
+  "name": "CERBERUS — Archive Maintenance",
+  "nodes": [
+    {
+      "id": "69392428-51d2-4a75-9e45-e7857a1e08c6",
+      "name": "Daily Archive Maintenance 01:30 Fortaleza",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 30 1 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "e0740afa-7c1d-46d2-bfcd-9ddaa227acbf",
+      "name": "Blocked Until Official Archive Contract",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "BLOCKED_SAFE_MODE",
+              "type": "string"
+            },
+            {
+              "id": "reason",
+              "name": "reason",
+              "value": "No verified official archive endpoint or credential; no product is deleted or archived",
+              "type": "string"
+            },
+            {
+              "id": "checkedAt",
+              "name": "checkedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Archive Maintenance 01:30 Fortaleza": {
+      "main": [
+        [
+          {
+            "node": "Blocked Until Official Archive Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "17614aea-7033-4458-8b10-3fe54fab398c",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "91vO5b565CLrFPoF",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; no production execution"
+}

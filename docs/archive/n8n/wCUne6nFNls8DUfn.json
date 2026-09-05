@@ -1,0 +1,90 @@
+{
+  "name": "CERBERUS — Weekly Preflight",
+  "nodes": [
+    {
+      "id": "38f4009b-bfa5-4d76-b684-ff2f3a7c0020",
+      "name": "Weekly Preflight Friday 09:30 Fortaleza",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 30 9 * * 5"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3e5731c3-a453-4ef2-80c5-96c88a1b6c0b",
+      "name": "Read Only Preflight Blocked",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "BLOCKED_SAFE_MODE",
+              "type": "string"
+            },
+            {
+              "id": "reason",
+              "name": "reason",
+              "value": "Supabase, Telegram, OpenAI, Gemini and Brevo credentials/configuration are absent; no newsletter/campaign/sendNow action is called",
+              "type": "string"
+            },
+            {
+              "id": "checkedAt",
+              "name": "checkedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Weekly Preflight Friday 09:30 Fortaleza": {
+      "main": [
+        [
+          {
+            "node": "Read Only Preflight Blocked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "9a6dec1f-2892-426f-b9f9-d90bae04c64c",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "wCUne6nFNls8DUfn",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; weekly preflight belongs to GitHub Actions"
+}

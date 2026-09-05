@@ -1,0 +1,90 @@
+{
+  "name": "CERBERUS — Daily Production Invariant",
+  "nodes": [
+    {
+      "id": "8280474d-40a3-4368-a485-734cb5034b6e",
+      "name": "Daily Invariant 23:30 Fortaleza",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 30 23 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "a92c7730-ebe7-4b45-8371-aca20a891897",
+      "name": "Invariant Blocked Without Config Source",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "BLOCKED_SAFE_MODE",
+              "type": "string"
+            },
+            {
+              "id": "reason",
+              "name": "reason",
+              "value": "Target(category) and public counts require verified Supabase/catalog read contract; never emits PASS without all categories",
+              "type": "string"
+            },
+            {
+              "id": "checkedAt",
+              "name": "checkedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily Invariant 23:30 Fortaleza": {
+      "main": [
+        [
+          {
+            "node": "Invariant Blocked Without Config Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "b1a7c3fe-366d-462a-bd3d-179519d3aa83",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "s1jieM2W6qzyvMp9",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; production invariant belongs to GitHub Actions and backend"
+}

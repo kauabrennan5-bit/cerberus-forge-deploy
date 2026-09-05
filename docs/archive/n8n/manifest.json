@@ -1,0 +1,117 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-09-05T02:11:00Z",
+  "purpose": "CERBERUS n8n backup/laboratory only; no production dependency",
+  "n8nInstanceVersion": "unavailable via connector; node type versions are recorded in each export",
+  "verification": {
+    "N8N_PRODUCTION_DEPENDENCY": "NONE",
+    "N8N_BACKUP": "VERIFIED",
+    "ALL_WORKFLOWS_INACTIVE": true,
+    "secretsIncluded": false,
+    "restorationTest": "simulated import-shape validation only; no production calls"
+  },
+  "workflows": [
+    {
+      "id": "91vO5b565CLrFPoF",
+      "name": "CERBERUS — Archive Maintenance",
+      "versionId": "17614aea-7033-4458-8b10-3fe54fab398c",
+      "trigger": "Schedule: daily 01:30 Fortaleza",
+      "credentialsNecessary": [
+        "none configured; official archive contract absent"
+      ],
+      "endpoints": [],
+      "status": "active=false; unpublished; no public endpoint",
+      "productionSubstitute": "No production action; archive maintenance remains blocked/safe-mode."
+    },
+    {
+      "id": "Ji0w7aMeaBtXBHuD",
+      "name": "CERBERUS — Category Floor Recovery",
+      "versionId": "c2712d2c-05e8-4cfd-839e-291ac4439bbf",
+      "trigger": "Schedule: daily",
+      "credentialsNecessary": [
+        "Supabase/official recovery credential would be required, but none configured"
+      ],
+      "endpoints": [],
+      "status": "active=false; unpublished",
+      "productionSubstitute": "Autonomous Curator."
+    },
+    {
+      "id": "s1jieM2W6qzyvMp9",
+      "name": "CERBERUS — Daily Production Invariant",
+      "versionId": "b1a7c3fe-366d-462a-bd3d-179519d3aa83",
+      "trigger": "Schedule: daily 23:30 Fortaleza",
+      "credentialsNecessary": [
+        "Supabase/catalog read contract would be required, but none configured"
+      ],
+      "endpoints": [],
+      "status": "active=false; unpublished",
+      "productionSubstitute": "GitHub Actions and backend."
+    },
+    {
+      "id": "9TTHtabr81XMI3iq",
+      "name": "CERBERUS — n8n Error Handler",
+      "versionId": "b1eba157-8306-454d-9fb2-f3998102f555",
+      "trigger": "Global Error Trigger",
+      "credentialsNecessary": [
+        "none configured; Telegram not configured"
+      ],
+      "endpoints": [],
+      "status": "active=false; unpublished",
+      "productionSubstitute": "Backend and GitHub Actions."
+    },
+    {
+      "id": "NrRTBhxdZeZ56Laq",
+      "name": "CERBERUS — Post Publication Validator",
+      "versionId": "9bc53835-6ca4-4aff-a33d-7488318f15b0",
+      "trigger": "Schedule: hourly",
+      "credentialsNecessary": [
+        "Supabase/publication event contract would be required, but none configured"
+      ],
+      "endpoints": [],
+      "status": "active=false; unpublished",
+      "productionSubstitute": "Backend."
+    },
+    {
+      "id": "h00BWFQRxD8nO4RO",
+      "name": "CERBERUS — Production Smoke Test",
+      "versionId": "c2abbebf-e38f-4165-8317-308ad2bcb27a",
+      "trigger": "Webhook POST /cerberus-production-smoke-test (old public endpoint disabled by unpublish)",
+      "credentialsNecessary": [
+        "none configured in workflow; headerAuth mode retained as metadata"
+      ],
+      "endpoints": [
+        "https://cerberus-forge-deploy-backend.onrender.com/health",
+        "https://cerberus-design-static.onrender.com/"
+      ],
+      "status": "active=false; unpublished; public webhook disabled",
+      "productionSubstitute": "GitHub Actions."
+    },
+    {
+      "id": "TfjfDEtp4SsjOE9B",
+      "name": "CERBERUS — Watchdog",
+      "versionId": "48735e31-4597-489b-8d39-bc13a9284e60",
+      "trigger": "Schedule: hourly",
+      "credentialsNecessary": [
+        "none configured"
+      ],
+      "endpoints": [
+        "https://cerberus-forge-deploy-backend.onrender.com/health",
+        "https://cerberus-design-static.onrender.com/"
+      ],
+      "status": "active=false; unpublished",
+      "productionSubstitute": "GitHub Actions."
+    },
+    {
+      "id": "wCUne6nFNls8DUfn",
+      "name": "CERBERUS — Weekly Preflight",
+      "versionId": "9a6dec1f-2892-426f-b9f9-d90bae04c64c",
+      "trigger": "Schedule: Friday 09:30 Fortaleza",
+      "credentialsNecessary": [
+        "Supabase, Telegram, OpenAI, Gemini and Brevo would be required, but none configured"
+      ],
+      "endpoints": [],
+      "status": "active=false; unpublished",
+      "productionSubstitute": "GitHub Actions."
+    }
+  ]
+}

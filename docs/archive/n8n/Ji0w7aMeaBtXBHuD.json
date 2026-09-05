@@ -1,0 +1,90 @@
+{
+  "name": "CERBERUS — Category Floor Recovery",
+  "nodes": [
+    {
+      "id": "fa1fb7b6-84cc-4a48-abab-20d153cd5b95",
+      "name": "Category Floor Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "131658c6-676c-44aa-b044-12ef36c1b5b7",
+      "name": "Blocked Until Official Recovery Contract",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "BLOCKED_SAFE_MODE",
+              "type": "string"
+            },
+            {
+              "id": "reason",
+              "name": "reason",
+              "value": "No verified official recovery endpoint, Supabase credential or target configuration found; no category selection is performed in n8n",
+              "type": "string"
+            },
+            {
+              "id": "checkedAt",
+              "name": "checkedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Category Floor Check": {
+      "main": [
+        [
+          {
+            "node": "Blocked Until Official Recovery Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "c2712d2c-05e8-4cfd-839e-291ac4439bbf",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "Ji0w7aMeaBtXBHuD",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; category recovery belongs to Autonomous Curator"
+}

@@ -1,0 +1,90 @@
+{
+  "name": "CERBERUS — Post Publication Validator",
+  "nodes": [
+    {
+      "id": "9250cdc4-c599-4860-a3c8-cfeeb3f0f2e0",
+      "name": "Post Publication Validation",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "7fd63ab6-34cd-40cc-915e-bf357cbfd91c",
+      "name": "Blocked Until Publication Event Contract",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "BLOCKED_SAFE_MODE",
+              "type": "string"
+            },
+            {
+              "id": "reason",
+              "name": "reason",
+              "value": "No verified publication event/webhook payload or Supabase credential; never writes PUBLISHED_AND_PUBLICLY_VALIDATED",
+              "type": "string"
+            },
+            {
+              "id": "checkedAt",
+              "name": "checkedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Post Publication Validation": {
+      "main": [
+        [
+          {
+            "node": "Blocked Until Publication Event Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "9bc53835-6ca4-4aff-a33d-7488318f15b0",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "NrRTBhxdZeZ56Laq",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; post-publication validation belongs to backend"
+}

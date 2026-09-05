@@ -1,0 +1,159 @@
+{
+  "name": "CERBERUS — Production Smoke Test",
+  "nodes": [
+    {
+      "id": "1e69a744-4a4f-4adc-993f-7cfdd78df489",
+      "name": "Authenticated Smoke Test Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cerberus-production-smoke-test",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "responseData": "firstEntryJson"
+      },
+      "webhookId": "496d9f4b-85a7-43db-91af-3874db26827a"
+    },
+    {
+      "id": "0ab4d70e-2850-461a-b354-becb4efa9710",
+      "name": "Smoke Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://cerberus-forge-deploy-backend.onrender.com/health",
+        "timeout": 10000,
+        "response": {
+          "response": {
+            "fullResponse": true,
+            "neverError": true
+          }
+        }
+      }
+    },
+    {
+      "id": "c4ae0774-c907-443f-94b5-639e415f26b4",
+      "name": "Smoke Official Frontend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://cerberus-design-static.onrender.com/",
+        "timeout": 10000,
+        "response": {
+          "response": {
+            "fullResponse": true,
+            "neverError": true,
+            "responseFormat": "text"
+          }
+        }
+      }
+    },
+    {
+      "id": "6a4a24ee-10a1-4427-9e5e-e79e4b682135",
+      "name": "Structured Smoke Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "status",
+              "name": "status",
+              "value": "READ_ONLY_CHECK_COMPLETED",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "errors",
+              "name": "errors",
+              "value": "Backend, Supabase, catalog and category checks require endpoint/credential contract",
+              "type": "string"
+            },
+            {
+              "id": "warnings",
+              "name": "warnings",
+              "value": "No deployment or rollback performed",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Authenticated Smoke Test Webhook": {
+      "main": [
+        [
+          {
+            "node": "Smoke Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Smoke Backend": {
+      "main": [
+        [
+          {
+            "node": "Smoke Official Frontend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Smoke Official Frontend": {
+      "main": [
+        [
+          {
+            "node": "Structured Smoke Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "c2abbebf-e38f-4165-8317-308ad2bcb27a",
+  "meta": {
+    "exportedFor": "CERBERUS_BACKUP",
+    "secretsIncluded": false
+  },
+  "id": "h00BWFQRxD8nO4RO",
+  "tags": [
+    "ARCHIVED",
+    "NOT_PRODUCTION",
+    "CERBERUS_BACKUP"
+  ],
+  "description": "ARCHIVED | NOT_PRODUCTION | CERBERUS_BACKUP | backup-only; production smoke test belongs to GitHub Actions"
+}
