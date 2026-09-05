@@ -75,12 +75,11 @@ test("generic collection renders the user-selected black logo once and never dup
   });
 
   const masthead = mastheadHtml(rendered.html);
-  assert.equal(rendered.mastheadVariant, "A");
-  assert.equal(rendered.mastheadImageUrl, null);
-  assert.equal(rendered.mastheadLogoUrl, brandIcon);
+  assert.match(masthead, /editorial-masthead-a/);
+  assert.match(masthead, new RegExp(brandIcon.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.equal((masthead.match(/cerberus-logo-user-tight\.png/g) || []).length, 1);
-  assert.doesNotMatch(masthead, /email-masthead-image/);
-  assert.doesNotMatch(masthead, /email-masthead-logo-print/);
+  assert.doesNotMatch(masthead, /class="email-masthead-image"/);
+  assert.doesNotMatch(masthead, /class="email-masthead-logo-print"/);
   assert.match(masthead, /class="email-masthead-logo"[^>]+width="96" height="70"/);
   assert.match(masthead, /class="email-masthead-brand-mark" width="108" height="82"/);
   assert.doesNotMatch(masthead, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
@@ -100,8 +99,8 @@ test("collection masthead never falls back to product #1 when no dedicated edito
   });
 
   const masthead = mastheadHtml(rendered.html);
-  assert.equal(rendered.mastheadVariant, "A");
-  assert.equal(rendered.mastheadImageUrl, null);
+  assert.match(masthead, /editorial-masthead-a/);
+  assert.doesNotMatch(masthead, /class="email-masthead-image"/);
   assert.doesNotMatch(masthead, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
   assert.match(rendered.html, /https:\/\/cdn\.example\.com\/bag-1\.jpg/);
 });
