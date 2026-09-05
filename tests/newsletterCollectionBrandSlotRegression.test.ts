@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { Product } from "../src/types";
 import { renderNewsletterCollectionCampaign } from "../server/services/newsletterCampaignTemplate";
 import { buildNewsletterAssetUrl } from "../server/services/newsletterInstitutional";
@@ -58,6 +59,13 @@ function mastheadHtml(html: string): string {
   assert.ok(heroStart > mastheadStart);
   return html.slice(mastheadStart, heroStart);
 }
+
+test("user-selected masthead logo is a real PNG with the expected email-safe canvas", () => {
+  const png = readFileSync(new URL("../public/assets/newsletter/branding/cerberus-logo-user-tight.png", import.meta.url));
+  assert.equal(png.toString("hex", 0, 8), "89504e470d0a1a0a");
+  assert.equal(png.readUInt32BE(16), 384);
+  assert.equal(png.readUInt32BE(20), 280);
+});
 
 test("generic collection renders the user-selected black logo once and never duplicates it in the masthead image slot", () => {
   const products = [
