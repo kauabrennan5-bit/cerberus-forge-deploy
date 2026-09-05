@@ -295,7 +295,7 @@ export async function sendCampaignTest(
     const publicBaseUrl = (env.NEWSLETTER_PUBLIC_BASE_URL || env.PUBLIC_SITE_URL || env.APP_URL || "").trim();
     if (!publicBaseUrl) throw new Error("CAMPAIGN_PUBLIC_BASE_URL_MISSING");
     const unsubscribeUrl = buildUnsubscribeUrl(publicBaseUrl, token);
-    const testSubject = buildNewsletterCampaignTestSubject(current);
+    const testSubject = `[Teste controlado] ${current.subject}`;
     const htmlContent = current.bodyHtml.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
     const textContent = current.bodyText.split(UNSUBSCRIBE_URL_PLACEHOLDER).join(unsubscribeUrl);
     const provider: NewsletterCampaignProvider = options.provider || (env.DRY_RUN === "true"
