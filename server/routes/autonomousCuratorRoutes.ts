@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
 import { runAutonomousCuratorDaily } from "../services/autonomousCurator";
-import { runAutonomousCuratorContinuousV2 } from "../services/autonomousCuratorContinuousV2";
+import { readAutonomousCuratorInvariant, runAutonomousCuratorContinuousV2 } from "../services/autonomousCuratorContinuousV2";
 import { extractProductForReview } from "../services/productAutomation";
 import {
   recoverFailedAutonomousExtraction,
@@ -194,6 +194,15 @@ function alreadyRunning(res: Response) {
 }
 
 export function registerAutonomousCuratorRoutes(app: Express): void {
+  app.get("/api/internal/autonomous-curator/invariant", async (req, res) => {
+    if (!(await authorize(req, res))) return;
+    try {
+      return res.status(200).json(await readAutonomousCuratorInvariant());
+    } catch {
+      return res.status(503).json({ ok: false, code: "AUTONOMOUS_CURATOR_INVARIANT_UNAVAILABLE" });
+    }
+  });
+
   app.post("/api/internal/autonomous-curator/provider-health", async (req, res) => {
     if (!(await authorize(req, res))) return;
     try {

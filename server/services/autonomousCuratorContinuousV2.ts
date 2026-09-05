@@ -136,6 +136,24 @@ function dailyTargetPerCategory(products: readonly Product[], now: Date, env: No
   return Math.max(configuredFloor, today - start + 1);
 }
 
+export async function readAutonomousCuratorInvariant(now = new Date(), env: NodeJS.ProcessEnv = process.env) {
+  const products = await productsRepository.getProducts();
+  const dailyTarget = dailyTargetPerCategory(products, now, env);
+  const policy = calculateCategoryPolicy(products, dailyTarget);
+  return {
+    ok: policy.totalDeficit === 0,
+    policyVersion: CATEGORY_GROWTH_VERSION,
+    target: dailyTarget,
+    categoryCounts: policy.categoryCounts,
+    categoryDeficits: policy.categoryDeficits,
+    deficitCategories: policy.deficitCategories,
+    totalDeficit: policy.totalDeficit,
+    fulfilledCategories: policy.fulfilledCategories,
+    categoryCount: Object.keys(policy.categoryCounts).length,
+    evaluatedAt: now.toISOString(),
+  };
+}
+
 function totalDeficit(counts: CategoryCounts, target: number): number {
   return totalCategoryDeficit(categoryDeficits(counts, target));
 }

@@ -1,23 +1,20 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const DEFAULT_HEALTH_URL = "https://cerberus-forge-deploy-backend.onrender.com/health";
 const STATE_PATH = process.env.WATCHDOG_STATE_PATH || "state/watchdog-state.json";
 const healthUrl = process.env.CERBERUS_HEALTH_URL || DEFAULT_HEALTH_URL;
-const timeoutMs = Number.parseInt(process.env.WATCHDOG_TIMEOUT_MS || "10000", 10);
+const timeoutMs = Math.max(75_000, Number.parseInt(process.env.WATCHDOG_TIMEOUT_MS || "75000", 10));
+const maxAttempts = Math.min(2, Math.max(1, Number.parseInt(process.env.WATCHDOG_MAX_ATTEMPTS || "2", 10)));
 const botToken = process.env.TELEGRAM_BOT_TOKEN || "";
 const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID || "";
-
 const now = new Date().toISOString();
 
 async function readState() {
   try {
-    const raw = await readFile(STATE_PATH, "utf8");
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(await readFile(STATE_PATH, "utf8"));
     if (parsed && (parsed.status === "HEALTHY" || parsed.status === "DOWN")) return parsed;
-  } catch {
-    // A missing/invalid state starts a new observation; it is not a catalog source.
-  }
-  return { status: "HEALTHY", lastCheckedAt: null, lastHttpStatus: null, reason: null };
+  } catch {}
+  return { status: "HEALTHY", lastCheckedAt: null, lastHttpStatus: null, reason: null, classification: null };
 }
 
 async function writeOutput(name, value) {
@@ -26,32 +23,38 @@ async function writeOutput(name, value) {
   await writeFile(output, `${name}=${String(value).replaceAll("%", "%25").replaceAll("\n", "%0A")}\n`, { flag: "a" });
 }
 
-async function checkHealth() {
+async function checkHealth(attempt) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(healthUrl, {
       method: "GET",
-      headers: { "User-Agent": "cerberus-github-watchdog/1.0", Accept: "application/json" },
+      headers: { "User-Agent": "cerberus-github-watchdog/2.0", Accept: "application/json" },
       signal: controller.signal,
     });
     const body = await response.text();
-    if (response.status !== 200) {
-      return { status: "DOWN", httpStatus: response.status, reason: `HTTP ${response.status}`, body: body.slice(0, 300) };
-    }
-    return { status: "HEALTHY", httpStatus: response.status, reason: "HTTP 200" };
+    if (response.status !== 200) return { status: "DOWN", attempt, httpStatus: response.status, timedOut: false, reason: `HTTP ${response.status}`, body: body.slice(0, 300) };
+    return { status: "HEALTHY", attempt, httpStatus: 200, timedOut: false, reason: "HTTP 200" };
   } catch (error) {
-    const reason = error?.name === "AbortError" ? `timeout após ${timeoutMs}ms` : `erro de conexão: ${error?.message || String(error)}`;
-    return { status: "DOWN", httpStatus: null, reason };
+    const timedOut = error?.name === "AbortError";
+    return { status: "DOWN", attempt, httpStatus: null, timedOut, reason: timedOut ? `timeout após ${timeoutMs}ms` : `erro de conexão: ${error?.message || String(error)}` };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function sendTelegram(text) {
-  if (!botToken || !chatId) {
-    throw new Error("WATCHDOG_TELEGRAM_SECRETS_MISSING");
+async function checkWithBoundedRetry() {
+  const first = await checkHealth(1);
+  if (first.status === "HEALTHY" || maxAttempts === 1) return { ...first, classification: first.status === "HEALTHY" ? "HEALTHY" : "REAL_OUTAGE", attempts: 1 };
+  const second = await checkHealth(2);
+  if (second.status === "HEALTHY") {
+    return { ...second, classification: first.timedOut ? "COLD_START_RECOVERED" : "TRANSIENT_RECOVERED", attempts: 2, firstFailure: first.reason };
   }
+  return { ...second, classification: "REAL_OUTAGE", attempts: 2, firstFailure: first.reason };
+}
+
+async function sendTelegram(text) {
+  if (!botToken || !chatId) throw new Error("WATCHDOG_TELEGRAM_SECRETS_MISSING");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -69,31 +72,28 @@ async function sendTelegram(text) {
 }
 
 const previous = await readState();
-const current = await checkHealth();
+const current = await checkWithBoundedRetry();
 const transition = `${previous.status}->${current.status}`;
 const shouldAlert = transition === "HEALTHY->DOWN" || transition === "DOWN->HEALTHY";
 const stateChanged = previous.status !== current.status;
 const state = stateChanged || !previous.lastCheckedAt
-  ? {
-      status: current.status,
-      lastCheckedAt: now,
-      lastHttpStatus: current.httpStatus,
-      reason: current.reason,
-    }
-  : previous;
+  ? { status: current.status, lastCheckedAt: now, lastHttpStatus: current.httpStatus, reason: current.reason, classification: current.classification }
+  : { ...previous, lastCheckedAt: now, lastHttpStatus: current.httpStatus, reason: current.reason, classification: current.classification };
 
 await writeOutput("status", current.status);
 await writeOutput("transition", transition);
+await writeOutput("classification", current.classification);
+await writeOutput("attempts", current.attempts);
 await writeOutput("should_alert", shouldAlert ? "true" : "false");
 
-console.log(`[WATCHDOG] url=${healthUrl} status=${current.status} http=${current.httpStatus ?? "none"} reason=${current.reason}`);
+console.log(`[WATCHDOG] url=${healthUrl} status=${current.status} http=${current.httpStatus ?? "none"} classification=${current.classification} attempts=${current.attempts} reason=${current.reason}`);
 console.log(`[WATCHDOG] transition=${transition} alert=${shouldAlert ? "yes" : "no"}`);
 
 let alertConfirmed = true;
 if (shouldAlert) {
   const message = current.status === "DOWN"
-    ? `🚨 CERBERUS WATCHDOG\nBackend indisponível.\nURL: ${healthUrl}\nCausa: ${current.reason}\nHorário: ${now}`
-    : `✅ CERBERUS WATCHDOG\nBackend recuperado.\nURL: ${healthUrl}\nResposta: HTTP 200\nHorário: ${now}`;
+    ? `🚨 CERBERUS WATCHDOG\nREAL_OUTAGE: backend indisponível após ${current.attempts} tentativas de ${timeoutMs}ms.\nURL: ${healthUrl}\nCausa: ${current.reason}\nHorário: ${now}`
+    : `✅ CERBERUS WATCHDOG\n${current.classification}: backend recuperado.\nURL: ${healthUrl}\nResposta: HTTP 200 após ${current.attempts} tentativa(s).\nHorário: ${now}`;
   try {
     await sendTelegram(message);
     console.log(`[WATCHDOG] alerta enviado para transição ${transition}`);
@@ -103,7 +103,7 @@ if (shouldAlert) {
   }
 }
 
-if (alertConfirmed && (stateChanged || !previous.lastCheckedAt)) {
+if (alertConfirmed) {
   await mkdir(STATE_PATH.split("/").slice(0, -1).join("/") || ".", { recursive: true });
   await writeFile(STATE_PATH, JSON.stringify(state, null, 2) + "\n", "utf8");
 }
