@@ -76,17 +76,18 @@ test("queued product can revalidate its own bound Shopee identity but not anothe
   assert.match(source, /allowedProductId: input\.product\.id/);
 });
 
-test("production workflow runs scheduled quarter-hour cycles while deployment pushes remain read-only", async () => {
+test("production workflow sends scheduled discoveries to manual review while deployment pushes remain read-only", async () => {
   const workflow = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
   assert.match(workflow, /cron: "2,17,32,47 \* \* \* \*"/);
-  assert.match(workflow, /github\.event_name == 'schedule' && 'continuous'/);
+  assert.match(workflow, /github\.event_name == 'schedule' && 'manual_review'/);
   assert.match(workflow, /github\.event_name == 'push' && 'status'/);
+  assert.doesNotMatch(workflow, /github\.event_name == 'schedule' && 'continuous'/);
   assert.doesNotMatch(workflow, /github\.event_name == 'push' && 'continuous'/);
   assert.doesNotMatch(workflow, /github\.event_name == 'push' && 'dry_run'/);
   assert.match(workflow, /cerberus-autonomous-curator-status/);
   assert.match(workflow, /cerberus-autonomous-curator-production/);
   assert.match(workflow, /Wait for exact Render SHA after deployment/);
   assert.match(workflow, /api\/internal\/autonomous-curator\/status/);
-  assert.match(workflow, /api\/internal\/autonomous-curator\/continuous/);
-  assert.match(workflow, /continuous_cycle_id/);
+  assert.match(workflow, /api\/internal\/autonomous-curator\/daily/);
+  assert.doesNotMatch(workflow, /api\/internal\/autonomous-curator\/continuous/);
 });
