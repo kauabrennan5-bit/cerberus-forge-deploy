@@ -1,0 +1,41 @@
+name: Production Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/production-smoke-test.mjs"
+      - ".github/workflows/production-smoke-test.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      BACKEND_BASE_URL: https://cerberus-forge-deploy-backend.onrender.com
+      FRONTEND_URL: https://cerberus-design-static.onrender.com
+      PUBLIC_CATALOG_API_URL: https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products
+      OIDC_AUDIENCE: cerberus-weekly-automation
+      EXPECTED_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          set -euo pipefail
+          token_json="$(curl --fail --silent --show-error --max-time 20 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
+          token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Run read-only production smoke test
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: node scripts/production-smoke-test.mjs

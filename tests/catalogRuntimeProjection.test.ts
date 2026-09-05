@@ -21,6 +21,21 @@ test("catalog sync validates the new frontend runtime and no longer promotes a s
   assert.match(catalogSyncSource, /expectedPublicIds\.has\(productId\) && publicIds\.has\(productId\)/);
 });
 
+test("post-publication validation rejects preview/static-catalog targets", () => {
+  assert.doesNotThrow(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
+    "https://cerberus-design-static.onrender.com",
+    "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
+  ));
+  assert.throws(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
+    ["https://cerberus-design", "-preview.onrender.com"].join(""),
+    "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
+  ), /NON_CANONICAL_PUBLIC_VALIDATION_TARGET/);
+  assert.throws(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
+    ["https://cerberus-", "static-catalog.onrender.com"].join(""),
+    "https://legacy.example/catalog",
+  ), /NON_CANONICAL_PUBLIC_VALIDATION_TARGET/);
+});
+
 test("storefront runtime manifest proves frontend-only mode and canonical catalog API", () => {
   assert.deepEqual(runtimeManifest, {
     version: 2,

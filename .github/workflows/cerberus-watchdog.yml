@@ -39,12 +39,13 @@ jobs:
   health-check:
     if: github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch' && inputs.operation == 'health'
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
-      WATCHDOG_TIMEOUT_MS: "10000"
+      WATCHDOG_TIMEOUT_MS: "75000"
+      WATCHDOG_MAX_ATTEMPTS: "2"
       WATCHDOG_STATE_PATH: state/watchdog-state.json
     steps:
       - name: Checkout watchdog state

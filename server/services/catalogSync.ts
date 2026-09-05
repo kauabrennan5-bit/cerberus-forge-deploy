@@ -56,6 +56,18 @@ function publicCatalogApiUrl(env: NodeJS.ProcessEnv = process.env): string {
   return String(env.PUBLIC_CATALOG_API_URL || "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products").replace(/\/+$/, "");
 }
 
+function assertCanonicalRuntimeTargets(storefront: string, catalogApi: string): void {
+  if (/cerberus-design-preview|cerberus-static-catalog/i.test(`${storefront} ${catalogApi}`)) {
+    throw new Error("NON_CANONICAL_PUBLIC_VALIDATION_TARGET");
+  }
+  if (!/^https:\/\/cerberus-design-static\.onrender\.com$/i.test(storefront)) {
+    throw new Error("OFFICIAL_STOREFRONT_REQUIRED");
+  }
+  if (!/^https:\/\/juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api\/products$/i.test(catalogApi)) {
+    throw new Error("OFFICIAL_PUBLIC_CATALOG_API_REQUIRED");
+  }
+}
+
 async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<{ status: number; body: unknown }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -141,6 +153,12 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
   const release = await acquireCatalogSyncLock();
   const staticSiteUrl = storefrontUrl();
   const catalogApiUrl = publicCatalogApiUrl();
+  try {
+    assertCanonicalRuntimeTargets(staticSiteUrl, catalogApiUrl);
+  } catch (error) {
+    const diagnostic = diagnosticForFailure(operationId, "PUBLIC_CATALOG_VALIDATION", "Render Static Site", error, { code: "NON_CANONICAL_PUBLIC_VALIDATION_TARGET", message: "A validação pós-publicação exige o storefront oficial e a API pública canônica." });
+    return { success: false, operationId, product: productTitle, productId, supabaseCount: 0, jsonCount: 0, publicJsonCount: 0, productFoundPublic: false, staticSiteUrl, publicCatalogApiUrl: catalogApiUrl, storefrontHealthy: false, diagnostic, error: diagnostic.code };
+  }
   let supabaseCount = 0;
   let jsonCount = 0;
   let publicJsonCount = 0;
@@ -216,4 +234,4 @@ export async function syncCatalogAndDeploy(productTitle?: string, productId?: st
   }
 }
 
-export const catalogSyncInternals = { storefrontUrl, publicCatalogApiUrl, normalizeApiUrl, parseStorefrontManifest, publicListFromPayload, isPublicRow };
+export const catalogSyncInternals = { storefrontUrl, publicCatalogApiUrl, assertCanonicalRuntimeTargets, normalizeApiUrl, parseStorefrontManifest, publicListFromPayload, isPublicRow };
