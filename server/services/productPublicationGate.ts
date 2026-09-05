@@ -23,6 +23,8 @@ export type ProductPublicationEvidence = {
   lifecycleApproved: boolean;
   reviewState?: string | null;
   manualEditorialOverride?: boolean;
+  /** Permite publicar o melhor lote técnico durante déficit; nunca substitui os hard gates. */
+  deficitFallback?: boolean;
 };
 
 type SourceIdentity = {
@@ -85,19 +87,18 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
     ? Math.max(input.canonicalThreshold, Number(evidence.threshold))
     : input.canonicalThreshold;
   const manualEditorialOverride = evidence.source === "product_rotation" && evidence.manualEditorialOverride === true;
-  const primaryImageUrl = product.imageCuration?.status === "ready"
-    ? product.imageCuration.primaryImageUrl?.trim() || null
-    : null;
+  const deficitFallback = evidence.deficitFallback === true && (evidence.source === "autonomous_curator" || evidence.source === "recovery");
+  const primaryImageUrl = product.imageCuration?.primaryImageUrl?.trim() || product.imagens?.[0]?.trim() || null;
 
   if (!validOfficialShopeeIdentity(input.identity, product.id)) errors.push("PUBLICATION_SHOPEE_IDENTITY_INVALID");
   if (!input.identity?.shopId || !input.identity?.itemId) errors.push("PUBLICATION_SHOPEE_IDS_MISSING");
   if (!input.identity?.sourceProductUrl || !validHttpsUrl(input.identity.sourceProductUrl)) errors.push("PUBLICATION_SOURCE_URL_INVALID");
   if (!validAffiliateLink(product.link)) errors.push("PUBLICATION_AFFILIATE_LINK_INVALID");
   if (!isPublicProductCategory(product.categoria)) errors.push("PUBLICATION_CATEGORY_INVALID");
-  if (!manualEditorialOverride && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
+  if (!manualEditorialOverride && !deficitFallback && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
 
-  if (product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
-  if (!product.imageCuration || product.imageCuration.status !== "ready") errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
+  if (!deficitFallback && product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
+  if (!product.imageCuration || (!deficitFallback && product.imageCuration.status !== "ready")) errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
   if (!primaryImageUrl || !validHttpsUrl(primaryImageUrl)) errors.push("PUBLICATION_PRIMARY_IMAGE_MISSING");
   if (!product.imageReviewFingerprint || !primaryImageUrl || product.imageReviewFingerprint !== imageUrlFingerprint(primaryImageUrl)) {
     errors.push("PUBLICATION_IMAGE_FINGERPRINT_STALE");
@@ -105,27 +106,27 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   const primaryAssessment = primaryImageUrl
     ? product.imageCuration?.assessments.find(assessment => assessment.url === primaryImageUrl)
     : undefined;
-  if (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW") {
+  if (!deficitFallback && (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW")) {
     errors.push("PUBLICATION_IMAGE_PRIMARY_NOT_EDITORIALLY_APPROVED");
   }
-  if (product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {
+  if (!deficitFallback && product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {
     errors.push("PUBLICATION_IMAGE_OFF_BRAND");
   }
 
   const displayTitle = String(product.displayTitle || "").replace(/\s+/g, " ").trim();
   const rawTitle = String(product.rawTitle || product.produto || "").replace(/\s+/g, " ").trim();
-  if (product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
-  if (!displayTitle || (!manualEditorialOverride && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
+  if (!deficitFallback && product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
+  if (!displayTitle || (!manualEditorialOverride && !deficitFallback && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
   if (!Number.isFinite(Number(product.preco)) || Number(product.preco) <= 0) errors.push("PUBLICATION_PRICE_UNVERIFIED");
   if ((input.duplicateProductIds || []).some(id => id !== product.id)) errors.push("PUBLICATION_DUPLICATE_PRODUCT");
   if (input.identity?.productId && input.identity.productId !== product.id) errors.push("PUBLICATION_IDENTITY_OWNED_BY_OTHER_PRODUCT");
-  if (!manualEditorialOverride && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
+  if (!manualEditorialOverride && !deficitFallback && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
     errors.push("PUBLICATION_CATALOG_SIMILARITY_PROHIBITED");
   }
   if (evidence.categoryMismatch) errors.push("PUBLICATION_CATEGORY_MISMATCH");
-  if (!manualEditorialOverride && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
-  if (!manualEditorialOverride && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
-  if (!manualEditorialOverride && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
+  if (!manualEditorialOverride && !deficitFallback && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
+  if (!manualEditorialOverride && !deficitFallback && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
+  if (!manualEditorialOverride && !deficitFallback && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
 
   return { ok: errors.length === 0, errors: [...new Set(errors)], primaryImageUrl, threshold };
 }
@@ -211,6 +212,7 @@ export async function publishProductWithGate(input: {
   createdBy?: string;
 }): Promise<void> {
   const eligibility = await assertProductPublicationEligibility(input.product, input.evidence);
+  const deficitFallback = input.evidence.deficitFallback === true && (input.evidence.source === "autonomous_curator" || input.evidence.source === "recovery");
   const client = requireSupabase();
   const authorizationId = randomUUID();
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
@@ -230,6 +232,7 @@ export async function publishProductWithGate(input: {
       offBrand: input.evidence.offBrand,
       reviewState: input.evidence.reviewState || null,
       manualEditorialOverride: input.evidence.manualEditorialOverride === true,
+      deficitFallback,
     },
   });
   if (authorizationError) throw authorizationError;

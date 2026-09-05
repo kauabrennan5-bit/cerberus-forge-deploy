@@ -40,6 +40,7 @@ import {
   type SemanticDiscoveryCandidate,
   type SemanticDiscoveryDecision,
 } from "./autonomousCuratorSemanticDiscovery";
+import { evaluateSharedCandidatePoolEntry } from "./shopeeCandidatePool";
 
 const QUEUE_CREATED_BY = "autonomous_curator_queue";
 const QUEUE_NOTE_PREFIX = "AUTONOMOUS_CURATOR_QUEUE_V1:";
@@ -71,6 +72,7 @@ type QueueMetadata = {
   sourceProductUrl: string;
   imageUrl?: string | null;
   priceEvidence?: PriceEvidence | null;
+  warnings?: string[];
 };
 
 type CuratedCandidate = {
@@ -93,6 +95,8 @@ type CuratedCandidate = {
   score: number;
   breakdown: AutonomousCuratorScoreBreakdown;
   lifecycle: LifecycleRecord;
+  deficitFallback: boolean;
+  softWarnings: string[];
 };
 
 type RecoverySeed = {
@@ -406,7 +410,10 @@ async function evaluateIdentity(input: {
   extractor: typeof extractProductForReview;
   config: curatorRepo.AutonomousCuratorConfig;
   allowedProductId?: string | null;
+  allowDeficitFallback?: boolean;
 }): Promise<{ candidate: CuratedCandidate | null; reason: string }> {
+  const allowDeficitFallback = input.allowDeficitFallback === true;
+  const softWarnings: string[] = [];
   const sourceIdentity = await curatorRepo.findProductSourceIdentity("Shopee", input.shopId, input.itemId);
   const reservedUntil = sourceIdentity?.reservedUntil ? Date.parse(sourceIdentity.reservedUntil) : 0;
   if (sourceIdentity?.productId && sourceIdentity.productId !== input.allowedProductId) return { candidate: null, reason: "SOURCE_IDENTITY_ALREADY_OWNED" };
@@ -419,6 +426,8 @@ async function evaluateIdentity(input: {
   if (acquisition.shopId !== input.shopId || acquisition.itemId !== input.itemId || !sourceIdentityMatches(acquisition.productLink, input.shopId, input.itemId)) {
     return { candidate: null, reason: "AFFILIATE_IDENTITY_MISMATCH" };
   }
+  const technicalPool = evaluateSharedCandidatePoolEntry({ shopId: acquisition.shopId, itemId: acquisition.itemId, productLink: acquisition.productLink, affiliateLink: acquisition.affiliateUrl, price: acquisition.price, imageUrl: input.sourceImageUrl }, { expectedCategory: input.profile.category });
+  if (!technicalPool.eligible) return { candidate: null, reason: technicalPool.reason || "CANDIDATE_POOL_REJECTED" };
 
   const evidence = trustedEvidenceOverride(acquisition.name || input.discoveryName, input.sourceImageUrl);
   const extracted = await input.extractor(acquisition.productLink, evidence);
@@ -435,8 +444,13 @@ async function evaluateIdentity(input: {
   try {
     titleReview = await productRotationPublicationInternals.reviewDisplayTitle({ rawTitle, category: input.profile.category, env: input.env });
   } catch (error) {
+    if (allowDeficitFallback) {
+      titleReview = { displayTitle: (productRotationPublicationInternals.deterministicDisplayTitle(rawTitle) || rawTitle).slice(0, 120), model: "deficit-fallback" };
+      softWarnings.push(error instanceof Error ? error.message : "DISPLAY_TITLE_REVIEW_UNAVAILABLE");
+    } else {
     const reason = error instanceof Error ? error.message : "DISPLAY_TITLE_PROVIDER_UNAVAILABLE";
     return { candidate: null, reason: reviewRecoveryReason(reason) };
+    }
   }
   const displayTitle = titleReview.displayTitle.trim();
   const description = (data.descricao || "").trim();
@@ -451,15 +465,24 @@ async function evaluateIdentity(input: {
   const price = resolvedPriceEvidence?.price ?? Number.NaN;
   const imageCuration = data.imageCuration;
   const image = resolveCanonicalProductImage({ imagens: data.imagens, imageCuration, imageEditorialStatus: data.imageEditorialStatus });
+  const fallbackImages = (data.imagens || []).filter(imageUrl => /^https:\/\//i.test(String(imageUrl || "")));
 
   const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
-  if (blocked) return { candidate: null, reason: `PROFILE_BLOCKED_TERM:${blocked}` };
-  if (!displayTitle || displayTitle === rawTitle || description.length < 24) return { candidate: null, reason: "EDITORIAL_COPY_INCOMPLETE" };
+  if (blocked && !allowDeficitFallback) return { candidate: null, reason: `PROFILE_BLOCKED_TERM:${blocked}` };
+  if (blocked) softWarnings.push(`PROFILE_BLOCKED_TERM:${blocked}`);
+  if ((!displayTitle || displayTitle === rawTitle || description.length < 24) && !allowDeficitFallback) return { candidate: null, reason: "EDITORIAL_COPY_INCOMPLETE" };
+  if (!displayTitle || displayTitle === rawTitle) softWarnings.push("EDITORIAL_COPY_INCOMPLETE");
   if (category !== input.profile.category) return { candidate: null, reason: `CATEGORY_MISMATCH:${category || "unknown"}` };
   if (!resolvedPriceEvidence || !Number.isFinite(price) || price <= 0) return { candidate: null, reason: "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK" };
-  if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl) {
+  const usableImages = image.status === "ready" ? image.publicHttpsImageUrls : allowDeficitFallback ? fallbackImages : [];
+  const usablePrimaryImage = image.primaryImageUrl || usableImages[0] || null;
+  if (usableImages.length === 0 || !usablePrimaryImage) {
+    return { candidate: null, reason: "IMAGE_USABLE_MISSING" };
+  }
+  if (data.imageEditorialStatus !== "clean" || imageCuration.status !== "ready") {
     const reason = `IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR:${imageCuration?.reason || "unknown"}`;
-    return { candidate: null, reason: isTechnicalReviewFailure(reason) ? reviewRecoveryReason(reason) : reason };
+    if (!allowDeficitFallback) return { candidate: null, reason: isTechnicalReviewFailure(reason) ? reviewRecoveryReason(reason) : reason };
+    softWarnings.push(reason);
   }
 
   const sourceUrl = canonicalSourceUrl(input.shopId, input.itemId);
@@ -472,15 +495,15 @@ async function evaluateIdentity(input: {
     displayTitle,
     categoria: category,
     preco: price,
-    imagens: image.publicHttpsImageUrls,
+    imagens: usableImages,
     imagensOriginais: imageCuration.rawImageUrls,
     imageCuration,
-    imagemPrincipal: image.primaryImageUrl,
-    imagensGaleria: image.galleryImageUrls,
+    imagemPrincipal: usablePrimaryImage,
+    imagensGaleria: usableImages.slice(1),
     imageEditorialStatus: "clean",
     descricao: description,
   });
-  if (lifecycle.validation.outcome !== "PASS" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED" || lifecycle.curation.recommendation !== "PUBLISH") {
+  if (!allowDeficitFallback && (lifecycle.validation.outcome !== "PASS" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED" || lifecycle.curation.recommendation !== "PUBLISH")) {
     return { candidate: null, reason: `PIPELINE_NOT_AUTO_PUBLISHABLE:${lifecycle.validation.errors.join("|") || lifecycle.curation.recommendation}` };
   }
 
@@ -490,8 +513,8 @@ async function evaluateIdentity(input: {
   });
   const auditedBreakdown = breakdown as AutonomousCuratorScoreBreakdown & { priceEvidence?: PriceEvidence; semanticDiscovery?: Record<string, unknown> };
   auditedBreakdown.priceEvidence = resolvedPriceEvidence;
-  if (breakdown.maximumCatalogSimilarity >= 0.82) return { candidate: null, reason: `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}` };
-  if (!input.config.autoPublishEnabled || breakdown.finalScore < input.config.autoPublishThreshold) return { candidate: null, reason: `BELOW_AUTO_PUBLISH_THRESHOLD:${breakdown.finalScore}` };
+  if (breakdown.maximumCatalogSimilarity >= 0.82 && !allowDeficitFallback) return { candidate: null, reason: `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}` };
+  if ((!input.config.autoPublishEnabled || breakdown.finalScore < input.config.autoPublishThreshold) && !allowDeficitFallback) return { candidate: null, reason: `BELOW_AUTO_PUBLISH_THRESHOLD:${breakdown.finalScore}` };
 
   return {
     candidate: {
@@ -499,7 +522,9 @@ async function evaluateIdentity(input: {
       sourceProductUrl: sourceUrl, affiliateUrl: acquisition.affiliateUrl, sourceImageUrl: input.sourceImageUrl,
       rawTitle, displayTitle, displayTitleReviewModel: titleReview.model, description, category, price,
       priceEvidence: resolvedPriceEvidence,
-      images: image.publicHttpsImageUrls, imageCuration, score: breakdown.finalScore, breakdown, lifecycle,
+      images: usableImages, imageCuration: imageCuration || { status: "review_required", rawImageUrls: usableImages, primaryImageUrl: usablePrimaryImage, galleryImageUrls: usableImages.slice(1), assessments: [], reason: "image_review_unavailable" }, score: breakdown.finalScore, breakdown, lifecycle,
+      deficitFallback: allowDeficitFallback,
+      softWarnings,
     },
     reason: "QUALIFIED",
   };
@@ -525,6 +550,7 @@ async function discoverQualifiedCandidate(input: {
   env: NodeJS.ProcessEnv;
   extractor: typeof extractProductForReview;
   config: curatorRepo.AutonomousCuratorConfig;
+  allowDeficitFallback?: boolean;
 }): Promise<DiscoveryResult> {
   let examined = 0;
   let lastReason = "NO_QUALIFIED_CANDIDATE_THIS_CYCLE";
@@ -551,11 +577,11 @@ async function discoverQualifiedCandidate(input: {
     }
     metrics.candidatesDiscovered += search.items.length;
     for (const item of search.items) {
-      if (!item.shopId || !item.itemId || !item.productLink || !item.name) continue;
-      if (hasBlockedProfileTerm(input.profile, item.name)) { metrics.candidatesRejected += 1; continue; }
-      const identityKey = `${item.shopId}:${item.itemId}`;
-      if (seenIdentities.has(identityKey)) continue;
+      const poolDecision = evaluateSharedCandidatePoolEntry({ shopId: item.shopId, itemId: item.itemId, productLink: item.productLink, affiliateLink: item.offerLink, price: item.price, imageUrl: item.imageUrl }, { seenIdentityKeys: seenIdentities });
+      if (!poolDecision.eligible || !item.name) { metrics.candidatesRejected += 1; continue; }
+      const identityKey = poolDecision.identityKey!;
       seenIdentities.add(identityKey);
+      if (hasBlockedProfileTerm(input.profile, item.name) && !input.allowDeficitFallback) { metrics.candidatesRejected += 1; continue; }
       candidatePool.push({ query, page, item, cheap: cheapProfileScore(input.profile, item.name) });
     }
   };
@@ -586,7 +612,7 @@ async function discoverQualifiedCandidate(input: {
   const rescueThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_RESCUE_THRESHOLD, 68, 100);
   const categoryThreshold = positiveInt(input.env.OPENAI_AUTONOMOUS_DISCOVERY_CATEGORY_THRESHOLD, 70, 100);
   const rankedPool = candidatePool.filter(entry => {
-    if (entry.cheap > -1000) return true;
+    if (entry.cheap > -1000 || input.allowDeficitFallback) return true;
     if (semantic.status !== "ok") return false;
     const decision = semanticByIdentity.get(`${entry.item.shopId}:${entry.item.itemId}`);
     return Boolean(decision?.worthEnriching && decision.fitScore >= rescueThreshold && decision.categoryFit >= categoryThreshold);
@@ -608,7 +634,7 @@ async function discoverQualifiedCandidate(input: {
     const evaluated = await evaluateIdentity({
       profile: input.profile, query: entry.query, shopId, itemId, discoveryName: entry.item.name || "",
       discoveryPriceEvidence, sourceImageUrl: entry.item.imageUrl, products: input.products,
-      client: input.client, env: input.env, extractor: input.extractor, config: input.config,
+      client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowDeficitFallback: input.allowDeficitFallback,
     });
     lastReason = evaluated.reason;
     if (evaluated.reason.startsWith(REVIEW_RECOVERY_PREFIX)) {
@@ -662,13 +688,13 @@ function reviewedProductFields(candidate: CuratedCandidate, now: Date, meta: Que
     raw_title: candidate.rawTitle,
     display_title: candidate.displayTitle,
     curator_note: queueNote(meta),
-    image_editorial_status: "clean",
+    image_editorial_status: candidate.deficitFallback ? "review_required" : "clean",
     image_curation: candidate.imageCuration,
     image_reviewed_at: now.toISOString(),
-    image_review_model: productRotationPublicationInternals.VISUAL_CHAIN_ID,
+    image_review_model: candidate.deficitFallback ? "deficit-fallback" : productRotationPublicationInternals.VISUAL_CHAIN_ID,
     image_review_version: IMAGE_REVIEW_VERSION,
     image_review_fingerprint: imageUrlFingerprint(primary),
-    display_title_status: "reviewed",
+    display_title_status: candidate.deficitFallback ? "review_required" : "reviewed",
     display_title_reviewed_at: now.toISOString(),
     display_title_review_model: candidate.displayTitleReviewModel,
     display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
@@ -683,7 +709,7 @@ function applyReviewedFields(product: Product, candidate: CuratedCandidate, now:
   product.produto = candidate.displayTitle;
   product.rawTitle = candidate.rawTitle;
   product.displayTitle = candidate.displayTitle;
-  product.displayTitleStatus = "reviewed";
+  product.displayTitleStatus = candidate.deficitFallback ? "review_required" : "reviewed";
   product.displayTitleReviewedAt = now.toISOString();
   product.displayTitleReviewModel = candidate.displayTitleReviewModel;
   product.displayTitleReviewVersion = DISPLAY_TITLE_REVIEW_VERSION;
@@ -693,9 +719,9 @@ function applyReviewedFields(product: Product, candidate: CuratedCandidate, now:
   product.link = candidate.affiliateUrl;
   product.descricao = candidate.description;
   product.imageCuration = candidate.imageCuration;
-  product.imageEditorialStatus = "clean";
+  product.imageEditorialStatus = candidate.deficitFallback ? "review_required" : "clean";
   product.imageReviewedAt = now.toISOString();
-  product.imageReviewModel = productRotationPublicationInternals.VISUAL_CHAIN_ID;
+  product.imageReviewModel = candidate.deficitFallback ? "deficit-fallback" : productRotationPublicationInternals.VISUAL_CHAIN_ID;
   product.imageReviewVersion = IMAGE_REVIEW_VERSION;
   product.imageReviewFingerprint = imageUrlFingerprint(primary);
   product.curatorNote = queueNote(meta);
@@ -708,7 +734,7 @@ async function persistPausedCandidate(candidate: CuratedCandidate, now: Date, _e
   const suffix = randomUUID().replace(/-/g, "").slice(0, 10);
   const productId = `prod-${now.getTime()}-${suffix}`;
   if (!(await claimQueueIdentity(candidate, productId))) return null;
-  const meta: QueueMetadata = { score: candidate.score, profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION, queuedAt: now.toISOString(), publishedAt: null, query: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, imageUrl: candidate.sourceImageUrl, priceEvidence: candidate.priceEvidence };
+  const meta: QueueMetadata = { score: candidate.score, warnings: candidate.softWarnings, profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION, queuedAt: now.toISOString(), publishedAt: null, query: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, imageUrl: candidate.sourceImageUrl, priceEvidence: candidate.priceEvidence };
   const slug = `${generateSlug(candidate.displayTitle)}-${suffix.slice(0, 6)}`;
   const { error } = await requireSupabase().from("products").insert({
     id: productId, ref: `AUTOQ-${suffix.toUpperCase()}`, destaque: false, created_by: QUEUE_CREATED_BY, slug,
@@ -750,15 +776,15 @@ async function maybeQueueCandidate(candidate: CuratedCandidate, products: Produc
   return { queued: true, product, reason: "QUEUED_PAUSED_FOR_FUTURE_PUBLICATION" };
 }
 
-async function refreshQueuedCandidate(input: { product: Product; profile: AutonomousCuratorCategoryProfile; products: Product[]; client: ShopeeApiClient; env: NodeJS.ProcessEnv; extractor: typeof extractProductForReview; config: curatorRepo.AutonomousCuratorConfig; }) {
+async function refreshQueuedCandidate(input: { product: Product; profile: AutonomousCuratorCategoryProfile; products: Product[]; client: ShopeeApiClient; env: NodeJS.ProcessEnv; extractor: typeof extractProductForReview; config: curatorRepo.AutonomousCuratorConfig; allowDeficitFallback?: boolean; }) {
   const meta = parseQueueNote(input.product.curatorNote);
   if (!meta) return { candidate: null, reason: "QUEUE_METADATA_MISSING" };
-  return evaluateIdentity({ profile: input.profile, query: meta.query, shopId: meta.shopId, itemId: meta.itemId, discoveryName: input.product.rawTitle || input.product.produto, discoveryPriceEvidence: meta.priceEvidence || null, sourceImageUrl: meta.imageUrl || input.product.imagens?.[0] || null, products: input.products.filter(product => product.id !== input.product.id), client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowedProductId: input.product.id });
+  return evaluateIdentity({ profile: input.profile, query: meta.query, shopId: meta.shopId, itemId: meta.itemId, discoveryName: input.product.rawTitle || input.product.produto, discoveryPriceEvidence: meta.priceEvidence || null, sourceImageUrl: meta.imageUrl || input.product.imagens?.[0] || null, products: input.products.filter(product => product.id !== input.product.id), client: input.client, env: input.env, extractor: input.extractor, config: input.config, allowedProductId: input.product.id, allowDeficitFallback: input.allowDeficitFallback });
 }
 
 async function prepareQueuedProduct(product: Product, candidate: CuratedCandidate, now: Date): Promise<void> {
   const previous = parseQueueNote(product.curatorNote);
-  const meta: QueueMetadata = { score: candidate.score, profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION, queuedAt: previous?.queuedAt || product.createdAt || now.toISOString(), publishedAt: null, query: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, imageUrl: candidate.sourceImageUrl, priceEvidence: candidate.priceEvidence };
+  const meta: QueueMetadata = { score: candidate.score, warnings: candidate.softWarnings, profileVersion: AUTONOMOUS_CURATOR_PROFILE_VERSION, queuedAt: previous?.queuedAt || product.createdAt || now.toISOString(), publishedAt: null, query: candidate.query, shopId: candidate.shopId, itemId: candidate.itemId, sourceProductUrl: candidate.sourceProductUrl, imageUrl: candidate.sourceImageUrl, priceEvidence: candidate.priceEvidence };
   const { error } = await requireSupabase().from("products").update(reviewedProductFields(candidate, now, meta)).eq("id", product.id).eq("ativo", false);
   if (error) throw error;
   applyReviewedFields(product, candidate, now, meta);
@@ -766,7 +792,7 @@ async function prepareQueuedProduct(product: Product, candidate: CuratedCandidat
 
 async function publishQueuedProductWithHardGate(product: Product, candidate: CuratedCandidate, now: Date, config: curatorRepo.AutonomousCuratorConfig): Promise<void> {
   await prepareQueuedProduct(product, candidate, now);
-  await curatorRepo.saveProductImageEditorialReview({ productId: product.id, curation: candidate.imageCuration, model: productRotationPublicationInternals.VISUAL_CHAIN_ID, reviewVersion: "1.2" });
+  if (!candidate.deficitFallback) await curatorRepo.saveProductImageEditorialReview({ productId: product.id, curation: candidate.imageCuration, model: productRotationPublicationInternals.VISUAL_CHAIN_ID, reviewVersion: "1.2" });
   await publishProductWithGate({
     product,
     createdBy: QUEUE_CREATED_BY,
@@ -779,6 +805,7 @@ async function publishQueuedProductWithHardGate(product: Product, candidate: Cur
       offBrand: false,
       lifecycleApproved: candidate.lifecycle.validation.outcome === "PASS" && candidate.lifecycle.curation.recommendation === "PUBLISH",
       reviewState: candidate.lifecycle.state,
+      deficitFallback: candidate.deficitFallback,
     },
   });
   const previous = parseQueueNote(product.curatorNote);
@@ -901,6 +928,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       metrics.attemptedCategories += 1;
       metrics.attemptedCategoryNames.push(profile.category);
       try {
+        const categoryDeficitFallback = Boolean(dailyTarget && calculateCategoryPolicy(products, dailyTarget).categoryDeficits[profile.category] > 0);
         const last = await lastPublishedAt(profile.category, products);
         result.due = scopedRecoveryMode ? true : dueForCycle(last, now, emergencyMode, emergencyRefillRemaining);
         result.reason = scopedRecoveryMode ? `CATEGORY_DEFICIT_RECOVERY_TARGET_${dailyTarget}` : result.due ? "SEARCHING_FOR_DUE_PRODUCT" : `COOLDOWN_UNTIL_${new Date(Date.parse(last || now.toISOString()) + DAY_MS).toISOString()}`;
@@ -920,7 +948,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
           const recoverySeed = recoverySeedFromStored(previous);
           if (recoverySeed && budgetRemaining > 0) {
             metrics.candidatesExamined += 1; metrics.candidatesEnriched += 1; budgetRemaining -= 1;
-            const recovered = await evaluateIdentity({ profile, query: recoverySeed.query, shopId: recoverySeed.shopId, itemId: recoverySeed.itemId, discoveryName: recoverySeed.rawTitle, discoveryPriceEvidence: recoverySeed.priceEvidence, sourceImageUrl: recoverySeed.imageUrl, products, client, env, extractor, config });
+            const recovered = await evaluateIdentity({ profile, query: recoverySeed.query, shopId: recoverySeed.shopId, itemId: recoverySeed.itemId, discoveryName: recoverySeed.rawTitle, discoveryPriceEvidence: recoverySeed.priceEvidence, sourceImageUrl: recoverySeed.imageUrl, products, client, env, extractor, config, allowDeficitFallback: categoryDeficitFallback });
             if (recovered.candidate) {
               const queued = await maybeQueueCandidate(recovered.candidate, products, now, env);
               if (queued.product) await publishCandidate(queued.product, recovered.candidate, "PENDING_PUBLIC_CATALOG_VALIDATION_FROM_REVIEW_RECOVERY");
@@ -931,7 +959,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
 
           if (!result.published) {
             for (const queuedProduct of queuedForCategory(products, profile.category)) {
-              const refreshed = await refreshQueuedCandidate({ product: queuedProduct, profile, products, client, env, extractor, config });
+              const refreshed = await refreshQueuedCandidate({ product: queuedProduct, profile, products, client, env, extractor, config, allowDeficitFallback: categoryDeficitFallback });
               if (!refreshed.candidate) {
                 result.reason = refreshed.reason.startsWith(REVIEW_RECOVERY_PREFIX) ? refreshed.reason : `QUEUE_REVALIDATION_REJECTED:${refreshed.reason}`;
                 if (refreshed.reason.startsWith(REVIEW_RECOVERY_PREFIX)) metrics.technicalFailures += 1;
@@ -944,7 +972,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
           }
 
           if (!result.published && budgetRemaining > 0) {
-            const discovery = await discoverQualifiedCandidate({ profile, cycleNumber, budget: budgetRemaining, products, client, env, extractor, config });
+            const discovery = await discoverQualifiedCandidate({ profile, cycleNumber, budget: budgetRemaining, products, client, env, extractor, config, allowDeficitFallback: categoryDeficitFallback });
             mergeDiscoveryMetrics(metrics, discovery.metrics); budgetRemaining = Math.max(0, budgetRemaining - discovery.examined); result.searchedPages.push(...discovery.searchedPages);
             if (discovery.recoverySeed) { await persistReviewRecovery(runId, profile.category, discovery.recoverySeed); result.reason = discovery.recoverySeed.reason; }
             if (discovery.candidate) {
@@ -957,7 +985,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
 
         const allowFutureDiscovery = budgetRemaining > 0 && await categoryStillNeedsRecovery(profile.category, env);
         if (allowFutureDiscovery) {
-          const future = await discoverQualifiedCandidate({ profile, cycleNumber: cycleNumber + 1, budget: budgetRemaining, products, client, env, extractor, config });
+          const future = await discoverQualifiedCandidate({ profile, cycleNumber: cycleNumber + 1, budget: budgetRemaining, products, client, env, extractor, config, allowDeficitFallback: categoryDeficitFallback });
           mergeDiscoveryMetrics(metrics, future.metrics); result.searchedPages.push(...future.searchedPages);
           if (future.recoverySeed) await persistReviewRecovery(runId, profile.category, future.recoverySeed);
           if (future.candidate) {
