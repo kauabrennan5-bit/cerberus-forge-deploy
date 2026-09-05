@@ -34,3 +34,10 @@ jobs:
               b=p.read_bytes()
               print(name, 'png_signature=', b.startswith(sig), 'first8=', b[:8].hex())
           PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: valid-newsletter-logos
+          path: |
+            public/assets/newsletter/branding/cerberus-logo-official.png
+            public/assets/newsletter/branding/cerberus-logo-square.png
+          if-no-files-found: error
