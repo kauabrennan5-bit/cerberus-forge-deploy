@@ -147,8 +147,10 @@ test("design-test cria weekly-test sanitizada, não usa Gemini e não cria recip
   assert.equal(result.campaign.subject, "[Teste controlado] Novidades da semana — Edição 2026-08-30 · 8 novos achados");
   assert.match(result.campaign.bodyHtml, /Seleção Cerberus 3/);
   assert.doesNotMatch(result.campaign.bodyHtml, /Título marketplace cru c/);
-  assert.match(result.campaign.bodyHtml, /cerberus-logo-official\.png/);
-  assert.match(result.campaign.bodyHtml, /class="email-masthead-logo-print"[^>]+cerberus-logo-square\.png/);
+  assert.equal((result.campaign.bodyHtml.match(/cerberus-logo-user-tight\.png/g) || []).length, 1);
+  assert.match(result.campaign.bodyHtml, /class="email-masthead-logo"[^>]+width="96" height="70"/);
+  assert.doesNotMatch(result.campaign.bodyHtml, /class="email-masthead-logo-print"/);
+  assert.doesNotMatch(result.campaign.bodyHtml, /class="email-masthead-image"/);
   assert.match(result.campaign.bodyHtml, />08<\/font>/);
   assert.match(result.campaign.bodyHtml, /UM OLHAR ATENTO PARA O QUE ENTRA\./);
   assert.equal((result.campaign.bodyHtml.match(/class="editorial-block editorial-micro"/g) || []).length, 3);

@@ -47,12 +47,13 @@ const COLORS = {
   accent: "#E86B5F",
   cta: "#C0392B",
   white: "#FFFFFF",
+  brandPlate: "#F2EDE4",
 } as const;
 
 const EDITORIAL_VOICE_MICROTEXTS = CERBERUS_NEWSLETTER_MICROEDITORIALS.map(({ eyebrow, copy }) => [eyebrow, copy] as const);
 const MASTHEAD_THEMES = CERBERUS_NEWSLETTER_MASTHEAD_THEMES;
-const OFFICIAL_MASTHEAD_LOGO_URL = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-official.png");
-const PRINT_MASTHEAD_LOGO_URL = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-square.png");
+const OFFICIAL_MASTHEAD_LOGO_URL = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-user-tight.png");
+const BRAND_ASSET_PATH_PATTERN = /\/assets\/newsletter\/branding\/cerberus-logo-(?:official|square|user-tight)\.png(?:\?|$)/i;
 
 const RENDERED_PUBLIC_FIELDS = ["displayTitle/produto", "preco/ofertaPromocional", "categoria pública", "imagens canônicas", "destino rastreável"];
 const EXCLUDED_INTERNAL_FIELDS = ["id", "ref", "status", "lifecycleState", "createdBy", "rawRowIndex", "rawTitle", "createdAt", "destaque", "providerRef", "providerId", "archive fields", "infrastructure"];
@@ -211,20 +212,20 @@ function buildSequence(cards: ProductCard[], masthead: { mastheadVariant: "A" | 
   });
 }
 
-function resolveMastheadImageUrl(cards: ProductCard[], options: EditorialCollectionRenderOptions): string | null {
+function resolveMastheadImageUrl(_cards: ProductCard[], options: EditorialCollectionRenderOptions): string | null {
   if (options.mastheadImageStatus === "unavailable") return null;
   const dedicated = options.mastheadAssetUrl?.trim();
-  if (options.mastheadImageStatus === "clean" && dedicated && /^https:\/\/[^\s]+$/i.test(dedicated)) return dedicated;
-  const first = cards[0];
-  return first?.imageStatus === "clean" && /^https:\/\/[^\s]+$/i.test(first.imageUrl) ? first.imageUrl : null;
+  if (!dedicated) return null;
+  if (BRAND_ASSET_PATH_PATTERN.test(dedicated)) return null;
+  return options.mastheadImageStatus === "clean" && /^https:\/\/[^\s]+$/i.test(dedicated) ? dedicated : null;
 }
 
 function mastheadBlock(headline: string, deck: string, productCount: number, variant: "A" | "B", imageUrl: string | null, logoUrl: string | null): string {
   const editionNumber = String(productCount).padStart(2, "0");
   const brandMark = logoUrl
-    ? `<img class="email-masthead-logo" src="${escapeHtml(logoUrl)}" width="64" height="44" alt="Logo Cerberus Finds" style="display:block;width:64px!important;height:44px!important;object-fit:contain;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" /><img class="email-masthead-logo-print" src="${escapeHtml(PRINT_MASTHEAD_LOGO_URL)}" width="156" height="156" alt="Logo Cerberus Finds para impressão" style="display:none;width:156px;height:156px;object-fit:contain;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />`
+    ? `<img class="email-masthead-logo" src="${escapeHtml(logoUrl)}" width="96" height="70" alt="Logo Cerberus Finds" style="display:block;width:96px!important;height:70px!important;object-fit:contain;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" />`
     : `<span class="email-masthead-fallback" style="display:block;width:46px!important;height:46px!important;background:${COLORS.cta};background-color:${COLORS.cta};color:${COLORS.white};font:700 14px/46px Arial,Helvetica,sans-serif;text-align:center;">${white("CF")}</span>`;
-  const brand = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr><td class="email-masthead-brand-mark" width="72" height="52" valign="middle" bgcolor="${COLORS.surface}" style="width:72px!important;height:52px!important;background:${COLORS.surface};background-color:${COLORS.surface};">${brandMark}</td><td width="14" bgcolor="${COLORS.surface}" style="width:14px;font-size:0;line-height:0;background:${COLORS.surface};background-color:${COLORS.surface};">&nbsp;</td><td class="email-masthead-wordmark" valign="middle" bgcolor="${COLORS.surface}" style="background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 5px;color:${COLORS.ivory};font:700 16px/1.1 Arial,Helvetica,sans-serif;letter-spacing:2.8px;white-space:nowrap;">${ivory("CERBERUS FINDS")}</p><p style="margin:0;color:${COLORS.secondary};font:700 9px/1.4 Arial,Helvetica,sans-serif;letter-spacing:2.1px;text-transform:uppercase;">${ivory("CURADORIA INDEPENDENTE")}</p></td><td class="email-masthead-edition" width="74" align="right" valign="middle" bgcolor="${COLORS.surface}" style="width:74px!important;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 2px;color:${COLORS.secondary};font:700 8px/1.2 Arial,Helvetica,sans-serif;letter-spacing:1.8px;text-transform:uppercase;">${ivory("EDIÇÃO")}</p><p style="margin:0;color:${COLORS.accent};font:700 28px/1 Georgia,'Times New Roman',serif;text-align:right;">${accent(editionNumber)}</p></td></tr></table>`;
+  const brand = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${COLORS.surface}" style="width:100%;border-collapse:collapse;background:${COLORS.surface};background-color:${COLORS.surface};"><tr><td class="email-masthead-brand-mark" width="108" height="82" valign="middle" align="center" bgcolor="${COLORS.brandPlate}" style="width:108px!important;height:82px!important;padding:6px;background:${COLORS.brandPlate};background-color:${COLORS.brandPlate};">${brandMark}</td><td width="16" bgcolor="${COLORS.surface}" style="width:16px;font-size:0;line-height:0;background:${COLORS.surface};background-color:${COLORS.surface};">&nbsp;</td><td class="email-masthead-wordmark" valign="middle" bgcolor="${COLORS.surface}" style="background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 5px;color:${COLORS.ivory};font:700 16px/1.1 Arial,Helvetica,sans-serif;letter-spacing:2.8px;white-space:nowrap;">${ivory("CERBERUS FINDS")}</p><p style="margin:0;color:${COLORS.secondary};font:700 9px/1.4 Arial,Helvetica,sans-serif;letter-spacing:2.1px;text-transform:uppercase;">${ivory("CURADORIA INDEPENDENTE")}</p></td><td class="email-masthead-edition" width="74" align="right" valign="middle" bgcolor="${COLORS.surface}" style="width:74px!important;background:${COLORS.surface};background-color:${COLORS.surface};"><p style="margin:0 0 2px;color:${COLORS.secondary};font:700 8px/1.2 Arial,Helvetica,sans-serif;letter-spacing:1.8px;text-transform:uppercase;">${ivory("EDIÇÃO")}</p><p style="margin:0;color:${COLORS.accent};font:700 28px/1 Georgia,'Times New Roman',serif;text-align:right;">${accent(editionNumber)}</p></td></tr></table>`;
   const copy = `<td class="email-masthead-copy" width="${variant === "B" ? "58%" : "100%"}" valign="middle" bgcolor="${COLORS.surface}" style="width:${variant === "B" ? "58%" : "100%"};padding:${variant === "B" ? "0 20px 0 0" : "0"};background:${COLORS.surface};background-color:${COLORS.surface};"><h1 class="email-masthead-headline" style="margin:0 0 13px;color:${COLORS.white};font:700 38px/1.02 Georgia,'Times New Roman',serif;letter-spacing:-0.5px;">${white(headline)}</h1><p class="email-masthead-deck" style="margin:0;color:${COLORS.ivory};font:400 14px/1.6 Arial,Helvetica,sans-serif;">${ivory(deck)}</p></td>`;
   const image = variant === "B" && imageUrl
     ? `<td class="email-masthead-image" width="42%" valign="middle" align="center" bgcolor="${COLORS.surface}" style="width:42%;padding:0;background:${COLORS.surface};background-color:${COLORS.surface};"><img src="${escapeHtml(imageUrl)}" width="250" height="210" alt="Imagem editorial da edição Cerberus Finds" style="display:block;width:100%;max-width:250px;height:210px;object-fit:contain;border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;" /></td>`

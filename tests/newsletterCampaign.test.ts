@@ -1323,7 +1323,7 @@ test("collection visible surface uses only customer-safe fields and descriptive 
   assert.ok(rendered.publicFieldAudit?.excludedInternal.includes("providerRef"));
   assert.doesNotMatch(rendered.text, /db-internal-001|REF-INTERNAL-001|archive_pending|provider-secret-owner|BREVO_PROVIDER_ARCHIVE_TITLE|affiliate_preview|AFILIADO/i);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
-  assert.equal(imageTags.length, 3);
+  assert.equal(imageTags.length, 2);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /display\s*:\s*(?:flex|grid)|linear-gradient|mix-blend-mode|<script/i);
 });
@@ -1539,10 +1539,11 @@ test("MASTHEAD is the first editorial block and Variant A is universal", () => {
   assert.equal(rendered.mastheadVariant, "A");
   assert.equal(rendered.mastheadImageUrl, null);
   assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
-  assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-official.png");
-  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="64" height="44"/);
-  assert.match(rendered.html, /class="email-masthead-logo-print"[^>]+cerberus-logo-square\.png[^>]+width="156" height="156"/);
-  assert.match(rendered.html, /class="email-masthead-brand-mark" width="72" height="52"/);
+  assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-user-tight.png");
+  assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="96" height="70"/);
+  assert.doesNotMatch(rendered.html, /email-masthead-logo-print|cerberus-logo-square\.png/);
+  assert.match(rendered.html, /class="email-masthead-brand-mark" width="108" height="82"/);
+  assert.match(rendered.html, /class="email-masthead-brand-mark"[^>]+bgcolor="#F2EDE4"/);
   assert.match(rendered.html, /alt="Logo Cerberus Finds"/);
   assert.match(rendered.html, /CERBERUS FINDS/);
   assert.match(rendered.html, /CURADORIA INDEPENDENTE/);
@@ -1573,17 +1574,15 @@ test("MASTHEAD dedicated asset is optional, clean HTTPS only, and does not use a
   assert.equal(insecure.mastheadImageUrl, null);
 });
 
-test("MASTHEAD Variant B uses clean canonical hero imagery and falls back to A", () => {
+test("MASTHEAD never reuses product #1 imagery and falls back to A without a dedicated editorial asset", () => {
   const products = Array.from({ length: 5 }, (_, index) => makeCollectionProduct(index));
   products[0].imageEditorialStatus = "clean";
-  const variantB = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-masthead-b" });
-  assert.equal(variantB.mastheadVariant, "B");
-  assert.equal(variantB.mastheadImageUrl, products[0].imagens[0]);
-  assert.match(variantB.html, /editorial-masthead-b/);
-  assert.match(variantB.html, /class="email-masthead-image"/);
-  assert.match(variantB.html, /width="250" height="210"/);
-  assert.match(variantB.html, /alt="Imagem editorial da edição Cerberus Finds"/);
-  assert.doesNotMatch(variantB.html, /display\\s*:\\s*(?:flex|grid)/i);
+  const withoutDedicatedAsset = renderNewsletterProductCollection(products, { trackingCampaignId: "campaign-masthead-no-product-fallback" });
+  assert.equal(withoutDedicatedAsset.mastheadVariant, "A");
+  assert.equal(withoutDedicatedAsset.mastheadImageUrl, null);
+  assert.match(withoutDedicatedAsset.html, /editorial-masthead-a/);
+  assert.doesNotMatch(withoutDedicatedAsset.html, /class="email-masthead-image"/);
+  assert.equal((withoutDedicatedAsset.html.match(new RegExp(products[0].imagens[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length, 1);
 
   const fallback = renderNewsletterProductCollection(products, {
     trackingCampaignId: "campaign-masthead-fallback",
@@ -1628,7 +1627,7 @@ test("full collection campaign keeps the Cerberus editorial shell and email safe
   assert.match(rendered.html, /email-collection-grid-action a\{font-size:9px!important;padding:8px 8px!important;/);
   assert.match(rendered.html, /@media print\{\.email-masthead-brand-mark\{width:170px!important;height:170px!important;\}/);
   const imageTags = rendered.html.match(/<img\b[^>]*>/gi) || [];
-  assert.equal(imageTags.length, 11);
+  assert.equal(imageTags.length, 10);
   assert.ok(imageTags.every((tag) => /\balt="[^"]{3,}"/i.test(tag)));
   assert.doesNotMatch(rendered.html, /<script|gradient|mix-blend-mode|gmail-blend-screen|gmail-blend-difference|app store|google play|qr code|\bBREVO\b|\bSUPABASE\b|\bRender\b|email_campaign_products/i);
   assert.doesNotMatch(rendered.html, /NEWSLETTER_TEST_EMAIL|xkeysib-|sk-[A-Za-z0-9]{20,}|BEGIN .* PRIVATE KEY/i);
