@@ -40,7 +40,7 @@ const copy = {
   secondaryCaptions: {},
 };
 
-test("masthead semanal usa o ícone oficial e nunca a primeira imagem do produto no primeiro slot", () => {
+test("masthead semanal usa uma única logo preta ampliada e nunca a primeira imagem do produto no topo", () => {
   const products = [
     product("cadeira", "REF-A", 100),
     product("luminaria", "REF-B", 200),
@@ -51,10 +51,18 @@ test("masthead semanal usa o ícone oficial e nunca a primeira imagem do produto
     publicBaseUrl: "https://cerberus.example.com",
   });
 
-  const mastheadImageCell = rendered.html.match(/<td class="email-masthead-image"[\s\S]*?<\/td>/)?.[0] || "";
-  assert.ok(mastheadImageCell, "masthead image slot must exist");
-  assert.match(mastheadImageCell, /assets\/newsletter\/branding\/cerberus-logo-official\.png/);
-  assert.doesNotMatch(mastheadImageCell, /cdn\.example\.com\/cadeira\.jpg/);
+  const mastheadStart = rendered.html.indexOf('class="editorial-block editorial-masthead');
+  const heroStart = rendered.html.indexOf('class="editorial-block editorial-hero');
+  assert.ok(mastheadStart >= 0 && heroStart > mastheadStart);
+  const masthead = rendered.html.slice(mastheadStart, heroStart);
+
+  assert.match(masthead, /editorial-masthead-a/);
+  assert.doesNotMatch(masthead, /class="email-masthead-image"/);
+  assert.equal((masthead.match(/cerberus-logo-user-tight\.png/g) || []).length, 1);
+  assert.match(masthead, /class="email-masthead-logo"[^>]+width="96" height="70"/);
+  assert.match(masthead, /class="email-masthead-brand-mark" width="108" height="82"/);
+  assert.doesNotMatch(masthead, /email-masthead-logo-print/);
+  assert.doesNotMatch(masthead, /cdn\.example\.com\/cadeira\.jpg/);
   assert.match(rendered.html, /class="email-collection-image" src="https:\/\/cdn\.example\.com\/cadeira\.jpg"/);
 });
 
