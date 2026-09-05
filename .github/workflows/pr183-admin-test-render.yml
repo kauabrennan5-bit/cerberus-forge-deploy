@@ -61,7 +61,7 @@ jobs:
             imageReviewModel: "pr183-admin-test",
             imageReviewVersion: IMAGE_REVIEW_VERSION,
             imageReviewFingerprint: imageUrlFingerprint(heroImage),
-            link: "https://cerberus-design-static.onrender.com",
+            link: "https://shopee.com.br/product/1530442944/23794344926",
             ativo: true,
             destaque: true,
             status: "published",
