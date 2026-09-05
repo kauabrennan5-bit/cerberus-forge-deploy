@@ -1,4 +1,4 @@
-name: Inspect Newsletter Logo
+name: Regenerate Newsletter Logo Asset
 
 on:
   push:
@@ -6,38 +6,66 @@ on:
       - fix/newsletter-logo-broken-asset
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  inspect:
+  regenerate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect binary signatures
+        with:
+          ref: fix/newsletter-logo-broken-asset
+          fetch-depth: 2
+      - name: Build a valid dark-mode-safe PNG from the approved black mark
         shell: bash
         run: |
           set -euxo pipefail
-          for f in \
-            public/assets/newsletter/branding/cerberus-logo-user-tight.png \
-            public/assets/newsletter/branding/cerberus-logo-official.png \
-            public/assets/newsletter/branding/cerberus-logo-square.png; do
-            echo "--- $f"
-            file "$f" || true
-            wc -c "$f"
-            xxd -l 32 "$f"
-          done
+          python -m pip install --disable-pip-version-check --quiet pillow
           python - <<'PY'
           from pathlib import Path
-          sig=b'\x89PNG\r\n\x1a\n'
-          for name in ['cerberus-logo-user-tight.png','cerberus-logo-official.png','cerberus-logo-square.png']:
-              p=Path('public/assets/newsletter/branding')/name
-              b=p.read_bytes()
-              print(name, 'png_signature=', b.startswith(sig), 'first8=', b[:8].hex())
+          from PIL import Image
+
+          source = Path('public/assets/newsletter/branding/cerberus-logo-square.png')
+          target = Path('public/assets/newsletter/branding/cerberus-logo-user-tight.png')
+          cream = (242, 237, 228, 255)  # #F2EDE4
+
+          image = Image.open(source).convert('RGBA')
+          alpha = image.getchannel('A')
+          bbox = alpha.getbbox()
+          if not bbox:
+              raise SystemExit('approved logo has no visible pixels')
+          mark = image.crop(bbox)
+
+          # 384x280 is exactly the 96x70 e-mail display ratio at 4x density.
+          canvas = Image.new('RGBA', (384, 280), cream)
+          max_w, max_h = 360, 252
+          scale = min(max_w / mark.width, max_h / mark.height)
+          size = (max(1, round(mark.width * scale)), max(1, round(mark.height * scale)))
+          mark = mark.resize(size, Image.Resampling.LANCZOS)
+          left = (canvas.width - mark.width) // 2
+          top = (canvas.height - mark.height) // 2
+          canvas.alpha_composite(mark, (left, top))
+          canvas.convert('RGB').save(target, format='PNG', optimize=True, compress_level=9)
+
+          data = target.read_bytes()
+          if not data.startswith(b'\x89PNG\r\n\x1a\n'):
+              raise SystemExit('generated asset is not a PNG')
+          generated = Image.open(target)
+          if generated.size != (384, 280):
+              raise SystemExit(f'unexpected generated dimensions: {generated.size}')
+          if generated.getpixel((0, 0))[:3] != cream[:3]:
+              raise SystemExit('cream background was not baked into the asset')
+          print('generated', target, generated.size, target.stat().st_size)
           PY
-      - uses: actions/upload-artifact@v4
-        with:
-          name: valid-newsletter-logos
-          path: |
-            public/assets/newsletter/branding/cerberus-logo-official.png
-            public/assets/newsletter/branding/cerberus-logo-square.png
-          if-no-files-found: error
+          file public/assets/newsletter/branding/cerberus-logo-user-tight.png
+          xxd -l 24 public/assets/newsletter/branding/cerberus-logo-user-tight.png
+      - name: Persist repaired binary and remove one-off workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/inspect-newsletter-logo.yml
+          git add public/assets/newsletter/branding/cerberus-logo-user-tight.png
+          git diff --cached --check
+          git commit -m "fix: repair newsletter logo PNG for Gmail"
+          git push origin HEAD:fix/newsletter-logo-broken-asset
