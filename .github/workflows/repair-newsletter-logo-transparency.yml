@@ -89,15 +89,20 @@ jobs:
 
           file public/assets/newsletter/branding/cerberus-logo-user-tight.png
           python - <<'PY'
+          from pathlib import Path
           from PIL import Image
-          p='public/assets/newsletter/branding/cerberus-logo-user-tight.png'
+          p=Path('public/assets/newsletter/branding/cerberus-logo-user-tight.png')
           im=Image.open(p).convert('RGBA')
           print('alpha extrema', im.getchannel('A').getextrema(), 'corner', im.getpixel((0,0)))
           assert im.getchannel('A').getextrema() == (0,255)
           assert im.getpixel((0,0))[3] == 0
+          blocks=Path('server/services/newsletterCampaignBlocks.ts').read_text()
+          tag=blocks.split('<td class="email-masthead-brand-mark"',1)[1].split('</td>',1)[0]
+          assert 'bgcolor=' not in tag
+          assert '#F2EDE4' not in tag
+          assert 'background:transparent' in tag
+          assert 'border:0' in tag
           PY
-          if grep -n 'email-masthead-brand-mark.*bgcolor' server/services/newsletterCampaignBlocks.ts; then exit 1; fi
-          if grep -n 'email-masthead-brand-mark.*#F2EDE4' server/services/newsletterCampaignBlocks.ts; then exit 1; fi
           git diff --check
       - name: Persist fix and remove one-off workflow
         shell: bash
