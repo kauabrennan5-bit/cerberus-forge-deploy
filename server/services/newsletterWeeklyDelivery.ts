@@ -71,6 +71,22 @@ export function getWeeklyMarketingTestSendError(error: unknown): WeeklyMarketing
   return error instanceof WeeklyMarketingTestSendError ? error : null;
 }
 
+/**
+ * Assuntos de teste recebem um marcador inequívoco e estável por campanha.
+ * Isso separa teste de produção e evita que múltiplos testes de campanhas
+ * diferentes sejam agrupados pelo Gmail apenas por compartilharem o assunto.
+ */
+export function buildWeeklyTestProviderSubject(
+  campaign: Pick<EmailCampaign, "id" | "subject">,
+): string {
+  const baseSubject = campaign.subject
+    .trim()
+    .replace(/^\[(?:Teste controlado|TESTE CERBERUS[^\]]*)\]\s*/i, "")
+    .trim();
+  const marker = campaign.id.replace(/-/g, "").slice(0, 8).toUpperCase() || "SEMID";
+  return `[TESTE CERBERUS · ${marker}] ${baseSubject || "Newsletter semanal"}`.slice(0, 255);
+}
+
 export async function sendWeeklyMarketingTest(
   campaign: EmailCampaign,
   actorTelegramId: string,
@@ -89,7 +105,7 @@ export async function sendWeeklyMarketingTest(
       const created = await provider.createCampaign({
         campaignId: current.id,
         name: buildBrevoCampaignName(current),
-        subject: current.subject,
+        subject: buildWeeklyTestProviderSubject(current),
         htmlContent: current.bodyHtml,
       });
       brevoCampaignId = created.brevoCampaignId;
@@ -281,13 +297,17 @@ export async function sendWeeklyMarketingNow(
       });
     }
 
-    await provider.sendNow(brevoCampaignId);
+    // Claim persistente antes da mutação externa. Se o processo cair depois que
+    // a Brevo aceitar sendNow, um retry recarrega status=sending e não chama
+    // sendNow novamente. A reconciliação periódica decide o estado final.
     const sending = transitionCampaign(
       working,
       { type: "begin_sending", actorTelegramId },
       now,
     );
-    return options.store.updateCampaign(sending);
+    const claimed = await options.store.updateCampaign(sending);
+    await provider.sendNow(brevoCampaignId);
+    return claimed;
   });
 }
 
