@@ -6,8 +6,10 @@ import {
 } from "./newsletterCampaignTemplate";
 import type { WeeklyNewsletterCopy } from "./newsletterWeeklyCopy";
 import { validPromotionAt } from "./promotionOffer";
+import { buildNewsletterAssetUrl } from "./newsletterInstitutional";
 
 export const BREVO_NATIVE_UNSUBSCRIBE = "{{ unsubscribe }}";
+const WEEKLY_MASTHEAD_BRAND_ICON_URL = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-official.png");
 
 export function buildWeeklyGoUrl(
   publicBaseUrl: string,
@@ -100,6 +102,10 @@ export function renderWeeklyNewsletter(
     // A referência aprovada encerra com um único destino institucional.
     socialLinks: weeklyReferenceSocialLinks(options.socialLinks),
     mastheadLogoStatus: "available",
+    // O slot visual do masthead é institucional. Nunca deve herdar a imagem do
+    // primeiro produto, que já aparece uma única vez no bloco HERO abaixo.
+    mastheadImageStatus: "clean",
+    mastheadAssetUrl: WEEKLY_MASTHEAD_BRAND_ICON_URL,
   });
 
   return {
