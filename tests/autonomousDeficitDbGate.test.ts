@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const migrationUrl = new URL(
-  "../supabase/migrations/20260905205200_autonomous_deficit_fallback_publication.sql",
+  "../supabase/migrations/20260905204547_autonomous_deficit_gate_v2.sql",
   import.meta.url,
 );
 
