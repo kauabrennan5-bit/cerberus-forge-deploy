@@ -24,11 +24,15 @@ export const supabase: SupabaseClient | null = (supabaseUrl && supabaseServiceRo
   ? createClient(supabaseUrl, supabaseServiceRoleKey)
   : null;
 
-export interface UserState {
-  senderId: string;
+export type UserStateInput = {
   action: string;
   reviewId?: string;
   productId?: string;
+  data?: Record<string, unknown>;
+};
+
+export interface UserState extends UserStateInput {
+  senderId: string;
   updatedAt: number;
 }
 
@@ -75,8 +79,8 @@ function writeUserStatesToFile(states: Record<string, UserState>): void {
 let testOverrideSavePendingReview: ((review: PendingReview) => Promise<void>) | null = null;
 let testOverrideGetPendingReview: ((reviewId: string) => Promise<PendingReview | null>) | null = null;
 let testOverrideListReviewsByStatus: ((statuses: TelegramReviewStatus[], limit: number) => Promise<PendingReview[]>) | null = null;
-let testOverrideSetUserState: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null = null;
-let testOverrideGetUserState: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null = null;
+let testOverrideSetUserState: ((senderId: string | number, state: UserStateInput) => Promise<void>) | null = null;
+let testOverrideGetUserState: ((senderId: string | number) => Promise<UserStateInput | null>) | null = null;
 let testOverrideDeleteUserState: ((senderId: string | number) => Promise<void>) | null = null;
 
 export function setTestSavePendingReview(
@@ -99,8 +103,8 @@ export function setTestListReviewsByStatus(
 
 /** Isola a máquina de estados em testes sem tocar no arquivo/Supabase. */
 export function setTestUserStateHandlers(handlers: {
-  set?: ((senderId: string | number, state: { action: string; reviewId?: string; productId?: string }) => Promise<void>) | null;
-  get?: ((senderId: string | number) => Promise<{ action: string; reviewId?: string; productId?: string } | null>) | null;
+  set?: ((senderId: string | number, state: UserStateInput) => Promise<void>) | null;
+  get?: ((senderId: string | number) => Promise<UserStateInput | null>) | null;
   delete?: ((senderId: string | number) => Promise<void>) | null;
 } | null): void {
   testOverrideSetUserState = handlers?.set ?? null;
@@ -386,7 +390,7 @@ export async function deletePendingReview(reviewId: string): Promise<void> {
 
 export async function setUserState(
   senderId: string | number,
-  state: { action: string; reviewId?: string; productId?: string },
+  state: UserStateInput,
 ): Promise<void> {
   if (testOverrideSetUserState) {
     await testOverrideSetUserState(senderId, state);
@@ -398,6 +402,7 @@ export async function setUserState(
     action: state.action,
     reviewId: state.reviewId,
     productId: state.productId,
+    data: state.data,
     updatedAt: Date.now(),
   };
 
@@ -412,6 +417,7 @@ export async function setUserState(
         action: state.action,
         review_id: state.reviewId,
         product_id: state.productId,
+        data: state.data || {},
         updated_at: userStateObj.updatedAt,
       }, { onConflict: "sender_id" });
     } catch {
@@ -422,7 +428,7 @@ export async function setUserState(
 
 export async function getUserState(
   senderId: string | number,
-): Promise<{ action: string; reviewId?: string; productId?: string } | null> {
+): Promise<UserStateInput | null> {
   if (testOverrideGetUserState) return testOverrideGetUserState(senderId);
   const sId = String(senderId);
   let stateObj: UserState | null = null;
@@ -441,7 +447,8 @@ export async function getUserState(
           action: data.action,
           reviewId: data.review_id,
           productId: data.product_id,
-          updatedAt: data.updated_at || Date.now(),
+          data: data.data && typeof data.data === "object" && !Array.isArray(data.data) ? data.data : {},
+          updatedAt: Number(data.updated_at) || Date.now(),
         };
       }
     } catch {
@@ -461,7 +468,7 @@ export async function getUserState(
     return null;
   }
 
-  return { action: stateObj.action, reviewId: stateObj.reviewId, productId: stateObj.productId };
+  return { action: stateObj.action, reviewId: stateObj.reviewId, productId: stateObj.productId, data: stateObj.data };
 }
 
 export async function deleteUserState(senderId: string | number): Promise<void> {
