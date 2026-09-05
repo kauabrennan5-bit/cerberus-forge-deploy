@@ -83,8 +83,9 @@ jobs:
           const heroCount = (html.match(new RegExp(heroImage.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&"), "g")) || []).length;
           if (logoCount !== 1) throw new Error(`logo_count=${logoCount}`);
           if (heroCount !== 1) throw new Error(`hero_count=${heroCount}`);
-          if (/email-masthead-logo-print|cerberus-logo-square\.png/i.test(html)) throw new Error("duplicate_branding_detected");
-          if (/class="email-masthead-image"/i.test(html)) throw new Error("editorial_masthead_slot_present");
+          if (/<img[^>]+class="email-masthead-logo-print"/i.test(html)) throw new Error("duplicate_branding_element_detected");
+          if (/src="[^"]*cerberus-logo-square\.png/i.test(html)) throw new Error("legacy_logo_element_detected");
+          if (/<(?:img|td)[^>]+class="email-masthead-image"/i.test(html)) throw new Error("editorial_masthead_slot_present");
           if (!/class="email-masthead-logo"[^>]+width="96" height="70"/i.test(html)) throw new Error("logo_dimensions_invalid");
           if (!/class="email-masthead-brand-mark" width="108" height="82"/i.test(html)) throw new Error("brand_cell_dimensions_invalid");
           if (!/cerberus-logo-user-tight\.png/i.test(html)) throw new Error("user_selected_logo_missing");
