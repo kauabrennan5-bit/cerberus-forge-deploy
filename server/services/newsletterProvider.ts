@@ -209,7 +209,10 @@ export function createBrevoNewsletterProvider(options: BrevoNewsletterProviderOp
       if (!input.campaignId.trim() || !input.recipientId.trim()) {
         throw new NewsletterProviderError("permanent_4xx", "INVALID_CAMPAIGN_PROVIDER_INPUT", "Identidade da campanha inválida.");
       }
-      return sendMessage(input);
+      return sendMessage({
+        ...input,
+        subject: buildProviderCampaignSubject(input),
+      });
     },
   };
 }
@@ -224,13 +227,24 @@ export function createConfiguredNewsletterProvider(env: NodeJS.ProcessEnv = proc
   });
 }
 
+export function buildProviderCampaignSubject(
+  input: Pick<NewsletterCampaignProviderInput, "campaignId" | "recipientId" | "subject">,
+): string {
+  if (!input.recipientId.trim().startsWith("test:")) return input.subject;
+  const baseSubject = input.subject
+    .trim()
+    .replace(/^\[(?:Teste controlado|TESTE CERBERUS[^\]]*)\]\s*/i, "")
+    .trim();
+  const marker = input.campaignId.replace(/-/g, "").slice(0, 8).toUpperCase() || "SEMID";
+  return `[TESTE CERBERUS · ${marker}] ${baseSubject || "Newsletter"}`.slice(0, 255);
+}
+
 function toProviderUuid(idempotencyKey: string): string {
   const digest = createHash("sha256").update(idempotencyKey, "utf8").digest("hex").slice(0, 32).split("");
   digest[12] = "5";
   digest[16] = ((Number.parseInt(digest[16], 16) & 0x3) | 0x8).toString(16);
   return `${digest.slice(0, 8).join("")}-${digest.slice(8, 12).join("")}-${digest.slice(12, 16).join("")}-${digest.slice(16, 20).join("")}-${digest.slice(20, 32).join("")}`;
 }
-
 
 function isTechnicalBrevoRelayEmail(email: string): boolean {
   const domain = email.split("@").pop()?.toLowerCase() || "";

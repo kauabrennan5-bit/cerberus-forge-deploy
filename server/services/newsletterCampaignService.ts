@@ -33,6 +33,7 @@ import {
   selectNewestNewsletterProducts,
 } from "./newsletterCampaignCollection";
 import {
+  buildNewsletterAssetUrl,
   getNewsletterInstitutionalOptions,
 } from "./newsletterInstitutional";
 import {
@@ -42,6 +43,7 @@ import {
 import { normalizeNewsletterEmail } from "./newsletterConsent";
 
 const campaignTestLocks = new Map<string, Promise<void>>();
+const COLLECTION_MASTHEAD_BRAND_ICON_URL = buildNewsletterAssetUrl("assets/newsletter/branding/cerberus-logo-official.png");
 
 export type CampaignServiceOptions = {
   store?: NewsletterCampaignStore;
@@ -126,6 +128,11 @@ export async function createWeeklyCollectionCampaign(
     termsUrl: institutional.termsUrl,
     socialLinks: institutional.socialLinks,
     finalBrowseUrl: env.NEWSLETTER_COLLECTION_BROWSE_URL || undefined,
+    // Production collection campaigns must never inherit product #1 in this slot.
+    // The slot is institutional and always renders the official Cerberus mark.
+    mastheadImageStatus: "clean",
+    mastheadAssetUrl: COLLECTION_MASTHEAD_BRAND_ICON_URL,
+    mastheadLogoStatus: "available",
   });
   const collectionProducts: CampaignProductLink[] = selection.products.map((product, index) => ({
     productId: product.id,
@@ -155,6 +162,15 @@ export function buildNewsletterCollectionSubject(configuredSubject: string | und
   const base = configuredSubject?.trim() || "Novidades da semana";
   const dateKey = editionWindowStart.toISOString().slice(0, 10);
   return `${base} — Edição ${dateKey} · ${productCount} novos achados`.slice(0, 255);
+}
+
+export function buildNewsletterCampaignTestSubject(campaign: Pick<EmailCampaign, "id" | "subject">): string {
+  const baseSubject = campaign.subject
+    .trim()
+    .replace(/^\[(?:Teste controlado|TESTE CERBERUS[^\]]*)\]\s*/i, "")
+    .trim();
+  const marker = campaign.id.replace(/-/g, "").slice(0, 8).toUpperCase() || "SEMID";
+  return `[TESTE CERBERUS · ${marker}] ${baseSubject || "Newsletter"}`.slice(0, 255);
 }
 
 function isCollectionEditionConflict(error: unknown): boolean {
