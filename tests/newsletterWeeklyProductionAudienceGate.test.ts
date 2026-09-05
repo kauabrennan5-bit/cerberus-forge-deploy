@@ -33,13 +33,17 @@ function productionCampaign(): EmailCampaign {
   );
 }
 
-function memoryStore(initial: EmailCampaign) {
+function memoryStore(initial: EmailCampaign, order?: string[]) {
   let campaign = structuredClone(initial);
   let recipientCreates = 0;
   return {
     store: {
       async getCampaign(id: string) { return id === campaign.id ? structuredClone(campaign) : null; },
-      async updateCampaign(value: EmailCampaign) { campaign = structuredClone(value); return structuredClone(campaign); },
+      async updateCampaign(value: EmailCampaign) {
+        if (value.status === "sending" && campaign.status !== "sending") order?.push("persist:sending");
+        campaign = structuredClone(value);
+        return structuredClone(campaign);
+      },
       async createEligibleRecipients() { recipientCreates += 1; return 0; },
     } as any,
     readRecipientCreates: () => recipientCreates,
@@ -47,11 +51,12 @@ function memoryStore(initial: EmailCampaign) {
 }
 
 function provider(order: string[]) {
-  const calls = { create: 0, sendNow: 0, sendTest: 0, listIds: [] as number[] };
+  const calls = { create: 0, sendNow: 0, sendTest: 0, listIds: [] as number[], subject: "" };
   const value: WeeklyBrevoMarketingProvider = {
     async createCampaign(input) {
       calls.create += 1;
       calls.listIds = [...(input.listIds || [])];
+      calls.subject = input.subject;
       order.push("create");
       return { status: "succeeded", brevoCampaignId: "123", operation: "create", providerRef: "123", providerReference: "123" };
     },
@@ -68,10 +73,10 @@ function provider(order: string[]) {
   return { value, calls };
 }
 
-test("produção exige sync fresco e usa exatamente a lista verificada antes do sendNow", async () => {
+test("produção persiste sending antes de sendNow e preserva o assunto editorial de produção", async () => {
   const campaign = productionCampaign();
-  const memory = memoryStore(campaign);
   const order: string[] = [];
+  const memory = memoryStore(campaign, order);
   const mock = provider(order);
   const result = await sendWeeklyMarketingNow(campaign, "123", {
     store: memory.store,
@@ -84,8 +89,9 @@ test("produção exige sync fresco e usa exatamente a lista verificada antes do 
       return { listId: 77, eligibleSubscribers: 4, brevoMembers: 4 };
     },
   });
-  assert.deepEqual(order, ["sync", "create", "sendNow"]);
+  assert.deepEqual(order, ["sync", "create", "persist:sending", "sendNow"]);
   assert.deepEqual(mock.calls.listIds, [77]);
+  assert.equal(mock.calls.subject, "Weekly production");
   assert.equal(mock.calls.create, 1);
   assert.equal(mock.calls.sendNow, 1);
   assert.equal(mock.calls.sendTest, 0);
@@ -95,8 +101,8 @@ test("produção exige sync fresco e usa exatamente a lista verificada antes do 
 
 test("produção bloqueia audience mismatch antes de create/sendNow", async () => {
   const campaign = productionCampaign();
-  const memory = memoryStore(campaign);
   const order: string[] = [];
+  const memory = memoryStore(campaign, order);
   const mock = provider(order);
   await assert.rejects(
     sendWeeklyMarketingNow(campaign, "123", {
@@ -116,4 +122,32 @@ test("produção bloqueia audience mismatch antes de create/sendNow", async () =
   assert.equal(mock.calls.create, 0);
   assert.equal(mock.calls.sendNow, 0);
   assert.equal(memory.readRecipientCreates(), 0);
+});
+
+test("replay da mesma campanha não chama sendNow uma segunda vez", async () => {
+  const campaign = productionCampaign();
+  const order: string[] = [];
+  const memory = memoryStore(campaign, order);
+  const mock = provider(order);
+  const options = {
+    store: memory.store,
+    provider: mock.value,
+    env: {},
+    now: new Date("2026-08-29T18:03:00Z"),
+    productionEnabledCheck: async () => true,
+    productionAudienceSync: async () => {
+      order.push("sync");
+      return { listId: 77, eligibleSubscribers: 4, brevoMembers: 4 };
+    },
+  };
+
+  await sendWeeklyMarketingNow(campaign, "123", options);
+  await assert.rejects(
+    sendWeeklyMarketingNow(campaign, "123", options),
+    /WEEKLY_MARKETING_PRODUCTION_APPROVAL_REQUIRED/,
+  );
+
+  assert.equal(mock.calls.create, 1);
+  assert.equal(mock.calls.sendNow, 1);
+  assert.equal(order.filter(step => step === "sendNow").length, 1);
 });
