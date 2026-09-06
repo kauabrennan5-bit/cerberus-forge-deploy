@@ -48,7 +48,7 @@ test("deficit fallback keeps hard gates and converts editorial failures into ran
   };
   const result = validateProductPublicationEligibility({
     product,
-    identity: { marketplace: "Shopee", shopId: "111", itemId: "222", sourceProductUrl: technical.productLink, productId: product.id },
+    identity: { marketplace: "Shopee", shopId: "111", itemId: "222", sourceProductUrl: technical.productLink, productId: product.id, reviewId: null },
     canonicalThreshold: 88,
     duplicateProductIds: [],
     evidence: { source: "autonomous_curator", score: 52, threshold: 88, maximumCatalogSimilarity: 0.95, categoryMismatch: false, offBrand: true, lifecycleApproved: false, reviewState: "REVIEW_RECOVERY_PENDING", deficitFallback: true },
