@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Product } from "../../src/types";
 import type { PublicProductCategory } from "../../src/lib/productCategory";
 import { PUBLIC_PRODUCT_CATEGORIES } from "../../src/lib/productCategory";
-import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
+import { isPublicHttpsImageUrl, resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
 import { createShopeeApiClient, type ShopeeApiClient } from "../commercial/affiliate/shopeeApiClient";
 import * as productsRepository from "../repositories/productsRepository";
@@ -28,6 +28,8 @@ import {
 } from "./autonomousCuratorScoring";
 
 export type AutonomousCuratorDecision = "auto" | "review" | "reject" | "duplicate" | "none" | "failed";
+
+type HumanReviewImageEditorialStatus = "clean" | "overlay_suspected" | "review_required";
 
 export type AutonomousCuratorCategoryOutcome = {
   category: PublicProductCategory;
@@ -66,8 +68,10 @@ type CuratedCandidate = {
   category: PublicProductCategory;
   price: number;
   images: string[];
+  reviewImageUrl: string;
   imageCuration: NonNullable<Product["imageCuration"]>;
-  imageEditorialStatus: "clean";
+  imageEditorialStatus: HumanReviewImageEditorialStatus;
+  warnings: string[];
   score: number;
   breakdown: AutonomousCuratorScoreBreakdown;
   lifecycle: LifecycleRecord;
@@ -169,20 +173,109 @@ function exactExistingIdentity(products: readonly Product[], shopId: string, ite
   return null;
 }
 
+function uniquePublicImages(images: readonly string[] | undefined): string[] {
+  return (images || [])
+    .filter((value): value is string => isPublicHttpsImageUrl(value))
+    .map(value => value.trim())
+    .filter((value, index, list) => list.indexOf(value) === index);
+}
+
+function reviewableImageEvidence(data: {
+  imagens?: string[];
+  imageCuration?: Product["imageCuration"];
+  imageEditorialStatus?: Product["imageEditorialStatus"];
+}): {
+  images: string[];
+  primaryImageUrl: string;
+  imageCuration: NonNullable<Product["imageCuration"]>;
+  imageEditorialStatus: HumanReviewImageEditorialStatus;
+} | null {
+  const observedImages = uniquePublicImages(data.imagens);
+  if (observedImages.length === 0) return null;
+
+  const editorialStatus: HumanReviewImageEditorialStatus = data.imageEditorialStatus === "clean"
+    ? "clean"
+    : data.imageEditorialStatus === "overlay_suspected"
+      ? "overlay_suspected"
+      : "review_required";
+  const existingCuration = data.imageCuration;
+  const canonical = resolveCanonicalProductImage({
+    imagens: observedImages,
+    imageCuration: existingCuration,
+    imageEditorialStatus: editorialStatus,
+  });
+  const cleanPrimary = editorialStatus === "clean" && existingCuration?.status === "ready" && canonical.status === "ready"
+    ? canonical.primaryImageUrl
+    : undefined;
+  const primaryImageUrl = cleanPrimary || observedImages[0];
+  const images = [primaryImageUrl, ...observedImages.filter(image => image !== primaryImageUrl)];
+  const rawImageUrls = [...new Set([
+    ...uniquePublicImages(existingCuration?.rawImageUrls),
+    ...observedImages,
+  ])];
+  const galleryImageUrls = cleanPrimary
+    ? uniquePublicImages(existingCuration?.galleryImageUrls).filter(image => image !== primaryImageUrl)
+    : images.slice(1);
+  const imageCuration: NonNullable<Product["imageCuration"]> = existingCuration
+    ? {
+        ...existingCuration,
+        rawImageUrls,
+        primaryImageUrl,
+        galleryImageUrls,
+      }
+    : {
+        status: "review_required",
+        rawImageUrls,
+        primaryImageUrl,
+        galleryImageUrls,
+        assessments: [],
+        reason: "image_review_unavailable",
+      };
+
+  return { images, primaryImageUrl, imageCuration, imageEditorialStatus: editorialStatus };
+}
+
+function warningSeverity(warning: string): number {
+  if (warning.startsWith("CATEGORY_MISMATCH") || warning.startsWith("PROFILE_BLOCKED_TERM")) return 3;
+  if (warning.startsWith("IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR") || warning.startsWith("CATALOG_SIMILARITY")) return 2;
+  return 1;
+}
+
+function candidateWarningPenalty(candidate: CuratedCandidate): number {
+  return candidate.warnings.reduce((total, warning) => total + warningSeverity(warning), 0);
+}
+
+function isBetterCandidate(candidate: CuratedCandidate, current: CuratedCandidate | null): boolean {
+  if (!current) return true;
+  const candidatePenalty = candidateWarningPenalty(candidate);
+  const currentPenalty = candidateWarningPenalty(current);
+  if (candidatePenalty !== currentPenalty) return candidatePenalty < currentPenalty;
+  if (candidate.warnings.length !== current.warnings.length) return candidate.warnings.length < current.warnings.length;
+  if (candidate.score !== current.score) return candidate.score > current.score;
+  return candidate.itemId.localeCompare(current.itemId) < 0;
+}
+
 async function sendReviewCard(candidate: CuratedCandidate, review: PendingReview, deps: AutonomousCuratorDependencies): Promise<boolean> {
   const sendMessage = deps.sendMessage || sendTelegramMessage;
   const sendPhoto = deps.sendPhoto || sendTelegramPhoto;
+  const warnings = candidate.warnings.length > 0
+    ? `Avisos de curadoria: <code>${escapeHtml(candidate.warnings.join(" · "))}</code>`
+    : "Avisos de curadoria: <b>nenhum</b>";
+  const categoryContext = candidate.profile.category !== candidate.category
+    ? `Lote pesquisado: <b>${escapeHtml(candidate.profile.category)}</b> · categoria detectada: <b>${escapeHtml(candidate.category)}</b>`
+    : `Categoria: <b>${escapeHtml(candidate.category)}</b>`;
   const text = [
     "🧠 <b>CURADORIA AUTÔNOMA — REVISÃO HUMANA</b>",
     "",
     `<b>${escapeHtml(candidate.displayTitle)}</b>`,
-    `Categoria: <b>${escapeHtml(candidate.category)}</b>`,
+    categoryContext,
     `Preço-base observado: <b>R$ ${candidate.price.toFixed(2).replace(".", ",")}</b>`,
     `Cerberus Score: <b>${candidate.score}/100</b>`,
     `Novidade: ${candidate.breakdown.novelty} · Imagem: ${candidate.breakdown.imageQuality} · Estilo: ${candidate.breakdown.styleFit}`,
+    warnings,
     "",
-    "O produto passou pelos gates mínimos, mas não atingiu o threshold de publicação automática.",
-    "A decisão humana continua usando o pipeline canônico existente.",
+    "Selecionado como a melhor opção disponível deste lote. Avisos editoriais entram no ranking, mas não vetam o card.",
+    "A publicação é exclusivamente manual: você decide PUBLICAR ou DESCARTAR.",
   ].join("\n");
   const keyboard = {
     inline_keyboard: [
@@ -190,14 +283,11 @@ async function sendReviewCard(candidate: CuratedCandidate, review: PendingReview
       [{ text: "❌ DESCARTAR", callback_data: `cancel_rev:${review.id}` }],
     ],
   };
-  const primary = candidate.imageCuration.primaryImageUrl;
-  if (primary) {
-    try {
-      const sent = await sendPhoto(review.chatId, primary, text, keyboard);
-      if (sent.ok) return true;
-    } catch {
-      // fallback para texto abaixo
-    }
+  try {
+    const sent = await sendPhoto(review.chatId, candidate.reviewImageUrl, text, keyboard);
+    if (sent.ok) return true;
+  } catch {
+    // fallback para texto abaixo
   }
   try {
     const sent = await sendMessage(review.chatId, text, keyboard);
@@ -219,7 +309,6 @@ async function persistHumanReview(candidate: CuratedCandidate, runId: string, en
     username: "autonomous_curator",
     createdAt: Date.now(),
     expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-    // Produto canônico de fallback já é editorial; rawTitle fica separado para auditoria.
     produto: candidate.displayTitle,
     rawTitle: candidate.rawTitle,
     displayTitle: candidate.displayTitle,
@@ -227,9 +316,9 @@ async function persistHumanReview(candidate: CuratedCandidate, runId: string, en
     preco: candidate.price,
     imagens: candidate.images,
     imagensOriginais: candidate.imageCuration.rawImageUrls,
-    imagemPrincipal: candidate.imageCuration.primaryImageUrl,
-    imagensGaleria: candidate.imageCuration.galleryImageUrls,
-    imageEditorialStatus: "clean",
+    imagemPrincipal: candidate.reviewImageUrl,
+    imagensGaleria: candidate.images.slice(1),
+    imageEditorialStatus: candidate.imageEditorialStatus,
     normalizedUrl: candidate.sourceProductUrl,
     descricao: candidate.description,
     status: "pending",
@@ -274,6 +363,7 @@ async function prepareCategoryCandidate(input: {
   const pipeline = (input.deps.pipelineFactory || createProductionProductPipeline)();
   let examined = 0;
   let lastReason = "NO_ENRICHABLE_CANDIDATE";
+  let bestCandidate: CuratedCandidate | null = null;
 
   for (const entry of ranked) {
     if (examined >= input.config.maxEnrichPerCategory) break;
@@ -324,6 +414,7 @@ async function prepareCategoryCandidate(input: {
       lastReason = "SCRAPER_IDENTITY_MISMATCH";
       continue;
     }
+
     const rawTitle = (data.rawTitle || data.produto || acquisition.name || "").trim();
     const displayTitle = (data.displayTitle || "").trim();
     const description = (data.descricao || "").trim();
@@ -338,53 +429,57 @@ async function prepareCategoryCandidate(input: {
         : Number.isFinite(discoveryPrice) && discoveryPrice > 0
           ? discoveryPrice
           : Number.NaN;
-    const imageCuration = data.imageCuration;
-    const image = resolveCanonicalProductImage({
-      imagens: data.imagens,
-      imageCuration,
-      imageEditorialStatus: data.imageEditorialStatus,
-    });
+    const warnings: string[] = [];
 
-    const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
-    if (blocked) {
-      lastReason = `PROFILE_BLOCKED_TERM:${blocked}`;
+    if (!displayTitle) {
+      lastReason = "DISPLAY_TITLE_MISSING";
       continue;
     }
-    if (!displayTitle || displayTitle === rawTitle || description.length < 24) {
-      lastReason = "EDITORIAL_COPY_INCOMPLETE";
-      continue;
-    }
-    if (category !== input.profile.category) {
-      lastReason = `CATEGORY_MISMATCH:${category || "unknown"}`;
+    if (!PUBLIC_PRODUCT_CATEGORIES.includes(category)) {
+      lastReason = `PUBLIC_CATEGORY_INVALID:${category || "unknown"}`;
       continue;
     }
     if (!Number.isFinite(price) || price <= 0) {
       lastReason = "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK";
       continue;
     }
-    if (data.imageEditorialStatus !== "clean" || !imageCuration || imageCuration.status !== "ready" || image.status !== "ready" || !image.primaryImageUrl) {
-      lastReason = "IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR";
+
+    const imageEvidence = reviewableImageEvidence({
+      imagens: data.imagens,
+      imageCuration: data.imageCuration,
+      imageEditorialStatus: data.imageEditorialStatus,
+    });
+    if (!imageEvidence) {
+      lastReason = "PRODUCT_IMAGE_HTTPS_MISSING";
       continue;
+    }
+
+    const blocked = hasBlockedProfileTerm(input.profile, `${rawTitle} ${displayTitle} ${description}`);
+    if (blocked) warnings.push(`PROFILE_BLOCKED_TERM:${blocked}`);
+    if (displayTitle === rawTitle || description.length < 24) warnings.push("EDITORIAL_COPY_INCOMPLETE");
+    if (category !== input.profile.category) warnings.push(`CATEGORY_MISMATCH:${category || "unknown"}`);
+    if (imageEvidence.imageEditorialStatus !== "clean" || imageEvidence.imageCuration.status !== "ready") {
+      warnings.push(`IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR:${imageEvidence.imageCuration.reason || imageEvidence.imageEditorialStatus}`);
     }
 
     const lifecycle = await pipeline.evaluate({
       normalizedUrl: sourceUrl,
       link: acquisition.affiliateUrl,
       marketplace: "Shopee",
-      // Nunca deixar o título bruto virar fallback público.
       produto: displayTitle,
       rawTitle,
       displayTitle,
+      curatorNote: warnings.join(" | "),
       categoria: category,
       preco: price,
-      imagens: image.publicHttpsImageUrls,
-      imagensOriginais: imageCuration.rawImageUrls,
-      imageCuration,
-      imagemPrincipal: image.primaryImageUrl,
-      imagensGaleria: image.galleryImageUrls,
-      imageEditorialStatus: "clean",
+      imagens: imageEvidence.images,
+      imagensOriginais: imageEvidence.imageCuration.rawImageUrls,
+      imageCuration: imageEvidence.imageCuration,
+      imagemPrincipal: imageEvidence.primaryImageUrl,
+      imagensGaleria: imageEvidence.images.slice(1),
+      imageEditorialStatus: imageEvidence.imageEditorialStatus,
       descricao: description,
-    });
+    }, { humanReview: true });
     if (lifecycle.validation.outcome === "FAIL" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
       lastReason = `PIPELINE_REJECTED:${lifecycle.validation.errors.join("|")}`;
       continue;
@@ -397,45 +492,46 @@ async function prepareCategoryCandidate(input: {
       description,
       category,
       price,
-      imageCuration,
+      imageCuration: imageEvidence.imageCuration,
       pipelineScore: lifecycle.curation.score,
       existingProducts: input.existingProducts,
     });
-    if (breakdown.maximumCatalogSimilarity >= 0.82) {
-      lastReason = `CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}`;
-      continue;
-    }
-    if (breakdown.finalScore < input.config.reviewThreshold) {
-      lastReason = `BELOW_REVIEW_THRESHOLD:${breakdown.finalScore}`;
-      continue;
-    }
+    if (breakdown.maximumCatalogSimilarity >= 0.82) warnings.push(`CATALOG_SIMILARITY:${breakdown.maximumCatalogSimilarity}`);
+    if (breakdown.finalScore < input.config.reviewThreshold) warnings.push(`BELOW_REVIEW_THRESHOLD:${breakdown.finalScore}`);
 
-    return {
-      candidate: {
-        profile: input.profile,
-        query: input.query,
-        shopId,
-        itemId,
-        sourceProductUrl: sourceUrl,
-        affiliateUrl: acquisition.affiliateUrl,
-        rawTitle,
-        displayTitle,
-        description,
-        category,
-        price,
-        images: image.publicHttpsImageUrls,
-        imageCuration,
-        imageEditorialStatus: "clean",
-        score: breakdown.finalScore,
-        breakdown,
-        lifecycle,
-      },
-      decision: "none",
-      reason: "CURATED",
-      rawTitle,
+    const candidate: CuratedCandidate = {
+      profile: input.profile,
+      query: input.query,
       shopId,
       itemId,
-      sourceUrl,
+      sourceProductUrl: sourceUrl,
+      affiliateUrl: acquisition.affiliateUrl,
+      rawTitle,
+      displayTitle,
+      description,
+      category,
+      price,
+      images: imageEvidence.images,
+      reviewImageUrl: imageEvidence.primaryImageUrl,
+      imageCuration: imageEvidence.imageCuration,
+      imageEditorialStatus: imageEvidence.imageEditorialStatus,
+      warnings: [...new Set(warnings)],
+      score: breakdown.finalScore,
+      breakdown,
+      lifecycle,
+    };
+    if (isBetterCandidate(candidate, bestCandidate)) bestCandidate = candidate;
+  }
+
+  if (bestCandidate) {
+    return {
+      candidate: bestCandidate,
+      decision: "none",
+      reason: "CURATED_BEST_OF_LOT",
+      rawTitle: bestCandidate.rawTitle,
+      shopId: bestCandidate.shopId,
+      itemId: bestCandidate.itemId,
+      sourceUrl: bestCandidate.sourceProductUrl,
       examined,
     };
   }
@@ -496,7 +592,7 @@ async function publishAutoBatch(input: {
         link: candidate.affiliateUrl,
         descricao: candidate.description,
         status: "approved",
-        imageEditorialStatus: "clean",
+        imageEditorialStatus: candidate.imageEditorialStatus,
         imageCuration: candidate.imageCuration,
       }, { syncCatalog: false });
       const promoted = await updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
@@ -543,13 +639,13 @@ function summaryText(result: AutonomousCuratorDailyResult): string {
     `${icon} <b>CERBERUS AUTONOMOUS CURATOR</b>`,
     "",
     `Data: <code>${result.runDate}</code>${result.dryRun ? " · <b>DRY RUN</b>" : ""}`,
-    `Auto-publicados: <b>${result.autoPublished}</b> · revisão humana: <b>${result.reviewRequired}</b> · rejeitados/sem candidato: <b>${result.rejected}</b> · falhas: <b>${result.failed}</b>`,
+    `Auto-publicados: <b>${result.autoPublished}</b> · revisão humana: <b>${result.reviewRequired}</b> · rejeitados/sem candidato objetivo: <b>${result.rejected}</b> · falhas: <b>${result.failed}</b>`,
     "",
     ...lines,
     "",
     result.dryRun
       ? "Nenhum produto, review ou catálogo foi alterado neste dry-run."
-      : "Publicação é manual; categorias com 30 produtos ativos deixam de gerar novos cards.",
+      : "Publicação é manual; avisos editoriais entram no ranking e categorias com 30 produtos ativos deixam de gerar novos cards.",
   ].join("\n");
 }
 
@@ -634,15 +730,15 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
           deps,
         });
         enrichRemaining = Math.max(0, enrichRemaining - currentPrepared.examined);
-        prepared = currentPrepared;
-        if (currentPrepared.candidate) break;
+        if (currentPrepared.candidate) {
+          if (!prepared?.candidate || isBetterCandidate(currentPrepared.candidate, prepared.candidate)) prepared = currentPrepared;
+          continue;
+        }
         if (!strongestPrepared || decisionRank(currentPrepared.decision) > decisionRank(strongestPrepared.decision)) strongestPrepared = currentPrepared;
-        // Source-level failures affect every query; candidate-level rejections
-        // continue through the remaining deterministic alternatives.
-        if (currentPrepared.decision === "failed") break;
+        if (currentPrepared.decision === "failed" && !prepared?.candidate) break;
       }
+      if (!prepared && strongestPrepared) prepared = strongestPrepared;
       if (!prepared) throw new Error("AUTONOMOUS_CURATOR_QUERY_CYCLE_EMPTY");
-      if (!prepared.candidate && strongestPrepared && decisionRank(strongestPrepared.decision) > decisionRank(prepared.decision)) prepared = strongestPrepared;
       if (!prepared.candidate) {
         const decision = prepared.decision === "failed" ? "failed" : prepared.decision === "duplicate" ? "duplicate" : prepared.decision === "reject" ? "rejected" : "no_candidate";
         await saveResult({
@@ -661,29 +757,39 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
       }
 
       const candidate = prepared.candidate;
+      const activeInCandidateCategory = existingProducts.filter(product => product.ativo !== false && product.categoria === candidate.category).length;
+      if (!dryRun && activeInCandidateCategory >= config.maxDailyPerCategory) {
+        const reason = `CANDIDATE_CATEGORY_PUBLICATION_CEILING_REACHED:${candidate.category}:${activeInCandidateCategory}/${config.maxDailyPerCategory}`;
+        await saveResult({ runId: open.run.id, category: profile.category, searchQuery: candidate.query, decision: "no_candidate", reason });
+        outcomes.push({ category: profile.category, query: candidate.query, decision: "none", reason, score: candidate.score, title: candidate.displayTitle });
+        continue;
+      }
+
       const canAuto = config.autoPublishEnabled
         && candidate.score >= config.autoPublishThreshold
+        && candidate.warnings.length === 0
         && candidate.lifecycle.validation.outcome === "PASS"
         && candidate.lifecycle.curation.recommendation === "PUBLISH";
-      const canReview = candidate.score >= config.reviewThreshold;
+      const canReview = true;
+      const scoreBreakdown = { ...candidate.breakdown, warnings: candidate.warnings } as unknown as Record<string, unknown>;
 
       if (dryRun) {
-        const decision = canAuto ? "dry_run_auto" : canReview ? "dry_run_review" : "rejected";
+        const decision = canAuto ? "dry_run_auto" : "dry_run_review";
         await saveResult({
           runId: open.run.id,
           category: profile.category,
-          searchQuery: query,
+          searchQuery: candidate.query,
           shopId: candidate.shopId,
           itemId: candidate.itemId,
           sourceProductUrl: candidate.sourceProductUrl,
           rawTitle: candidate.rawTitle,
           displayTitle: candidate.displayTitle,
           score: candidate.score,
-          scoreBreakdown: candidate.breakdown as unknown as Record<string, unknown>,
+          scoreBreakdown,
           decision,
-          reason: canAuto ? "WOULD_AUTO_PUBLISH" : canReview ? "WOULD_REQUIRE_REVIEW" : "BELOW_REVIEW_THRESHOLD",
+          reason: canAuto ? "WOULD_AUTO_PUBLISH" : "WOULD_REQUIRE_HUMAN_REVIEW_BEST_OF_LOT",
         });
-        outcomes.push({ category: profile.category, query, decision: canAuto ? "auto" : canReview ? "review" : "reject", reason: canAuto ? "WOULD_AUTO_PUBLISH" : canReview ? "WOULD_REQUIRE_REVIEW" : "BELOW_REVIEW_THRESHOLD", score: candidate.score, title: candidate.displayTitle });
+        outcomes.push({ category: profile.category, query: candidate.query, decision: canAuto ? "auto" : "review", reason: canAuto ? "WOULD_AUTO_PUBLISH" : "WOULD_REQUIRE_HUMAN_REVIEW_BEST_OF_LOT", score: candidate.score, title: candidate.displayTitle });
         continue;
       }
 
@@ -691,19 +797,19 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
         await saveResult({
           runId: open.run.id,
           category: profile.category,
-          searchQuery: query,
+          searchQuery: candidate.query,
           shopId: candidate.shopId,
           itemId: candidate.itemId,
           sourceProductUrl: candidate.sourceProductUrl,
           rawTitle: candidate.rawTitle,
           displayTitle: candidate.displayTitle,
           score: candidate.score,
-          scoreBreakdown: candidate.breakdown as unknown as Record<string, unknown>,
+          scoreBreakdown,
           decision: "auto_selected",
           reason: "STRICT_AUTO_PUBLISH_GATES_PASSED",
         });
         autoCandidates.push(candidate);
-        outcomes.push({ category: profile.category, query, decision: "auto", reason: "AUTO_SELECTED", score: candidate.score, title: candidate.displayTitle });
+        outcomes.push({ category: profile.category, query: candidate.query, decision: "auto", reason: "AUTO_SELECTED", score: candidate.score, title: candidate.displayTitle });
         continue;
       }
 
@@ -712,37 +818,21 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
         await saveResult({
           runId: open.run.id,
           category: profile.category,
-          searchQuery: query,
+          searchQuery: candidate.query,
           shopId: candidate.shopId,
           itemId: candidate.itemId,
           sourceProductUrl: candidate.sourceProductUrl,
           rawTitle: candidate.rawTitle,
           displayTitle: candidate.displayTitle,
           score: candidate.score,
-          scoreBreakdown: candidate.breakdown as unknown as Record<string, unknown>,
+          scoreBreakdown,
           decision: "review_required",
-          reason: "BELOW_AUTO_THRESHOLD_OR_PIPELINE_WARNING",
+          reason: candidate.warnings.length > 0 ? "BEST_OF_LOT_WITH_EDITORIAL_WARNINGS" : "BEST_OF_LOT_MANUAL_REVIEW",
           reviewId,
         });
-        outcomes.push({ category: profile.category, query, decision: "review", reason: "HUMAN_REVIEW_REQUIRED", score: candidate.score, title: candidate.displayTitle, reviewId });
+        outcomes.push({ category: profile.category, query: candidate.query, decision: "review", reason: "HUMAN_REVIEW_REQUIRED", score: candidate.score, title: candidate.displayTitle, reviewId });
         continue;
       }
-
-      await saveResult({
-        runId: open.run.id,
-        category: profile.category,
-        searchQuery: query,
-        shopId: candidate.shopId,
-        itemId: candidate.itemId,
-        sourceProductUrl: candidate.sourceProductUrl,
-        rawTitle: candidate.rawTitle,
-        displayTitle: candidate.displayTitle,
-        score: candidate.score,
-        scoreBreakdown: candidate.breakdown as unknown as Record<string, unknown>,
-        decision: "rejected",
-        reason: "BELOW_REVIEW_THRESHOLD",
-      });
-      outcomes.push({ category: profile.category, query, decision: "reject", reason: "BELOW_REVIEW_THRESHOLD", score: candidate.score, title: candidate.displayTitle });
     } catch (error) {
       const reason = error instanceof Error ? error.message.slice(0, 120) : "CATEGORY_PROCESSING_FAILED";
       await saveResult({ runId: open.run.id, category: profile.category, searchQuery: query, decision: "failed", reason }).catch(() => undefined);
@@ -753,11 +843,11 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
   if (!dryRun && autoCandidates.length > 0) {
     const publication = await publishAutoBatch({ runId: open.run.id, candidates: autoCandidates, env, deps });
     for (const item of publication) {
-      const index = outcomes.findIndex(outcome => outcome.category === item.candidate.category);
+      const index = outcomes.findIndex(outcome => outcome.category === item.candidate.profile.category);
       if (item.ok) {
         await saveResult({
           runId: open.run.id,
-          category: item.candidate.category,
+          category: item.candidate.profile.category,
           searchQuery: item.candidate.query,
           shopId: item.candidate.shopId,
           itemId: item.candidate.itemId,
@@ -765,7 +855,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
           rawTitle: item.candidate.rawTitle,
           displayTitle: item.candidate.displayTitle,
           score: item.candidate.score,
-          scoreBreakdown: item.candidate.breakdown as unknown as Record<string, unknown>,
+          scoreBreakdown: { ...item.candidate.breakdown, warnings: item.candidate.warnings } as unknown as Record<string, unknown>,
           decision: "auto_published",
           reason: item.reason,
           productId: item.productId,
@@ -775,7 +865,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
         const duplicate = item.reason.includes("DUPLICATE") || item.reason.includes("RESERVED");
         await saveResult({
           runId: open.run.id,
-          category: item.candidate.category,
+          category: item.candidate.profile.category,
           searchQuery: item.candidate.query,
           shopId: item.candidate.shopId,
           itemId: item.candidate.itemId,
@@ -783,7 +873,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
           rawTitle: item.candidate.rawTitle,
           displayTitle: item.candidate.displayTitle,
           score: item.candidate.score,
-          scoreBreakdown: item.candidate.breakdown as unknown as Record<string, unknown>,
+          scoreBreakdown: { ...item.candidate.breakdown, warnings: item.candidate.warnings } as unknown as Record<string, unknown>,
           decision: duplicate ? "duplicate" : "failed",
           reason: item.reason,
           productId: item.productId,
@@ -831,4 +921,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
 export const autonomousCuratorInternals = {
   extractorTimeoutMs,
   withTimeout,
+  warningSeverity,
+  isBetterCandidate,
+  reviewableImageEvidence,
 };
