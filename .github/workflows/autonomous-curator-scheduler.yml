@@ -3,7 +3,7 @@ name: Cerberus Autonomous Curator Scheduler
 
 on:
   schedule:
-    - cron: "5,20,35,50 * * * *"
+    - cron: "*/10 * * * *"
   push:
     branches:
       - main
