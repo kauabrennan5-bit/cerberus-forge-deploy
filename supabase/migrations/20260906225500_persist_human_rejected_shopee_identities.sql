@@ -18,9 +18,7 @@ begin
 
   v_shop_id := nullif(btrim(coalesce(new.data #>> '{existingProduct,shopId}', '')), '');
   v_item_id := nullif(btrim(coalesce(new.data #>> '{existingProduct,itemId}', '')), '');
-  if v_shop_id is null or v_item_id is null then
-    return new;
-  end if;
+  if v_shop_id is null or v_item_id is null then return new; end if;
 
   v_source_url := coalesce(
     nullif(btrim(new.data ->> 'normalizedUrl'), ''),
@@ -29,27 +27,11 @@ begin
   );
 
   insert into public.product_source_identities (
-    marketplace,
-    shop_id,
-    item_id,
-    source_product_url,
-    product_id,
-    review_id,
-    source,
-    reserved_run_id,
-    reserved_until,
-    updated_at
+    marketplace, shop_id, item_id, source_product_url,
+    product_id, review_id, source, reserved_run_id, reserved_until, updated_at
   ) values (
-    'Shopee',
-    v_shop_id,
-    v_item_id,
-    v_source_url,
-    null,
-    new.id,
-    'human_rejected',
-    null,
-    '9999-12-31 23:59:59+00'::timestamptz,
-    now()
+    'Shopee', v_shop_id, v_item_id, v_source_url,
+    null, new.id, 'human_rejected', null, '9999-12-31 23:59:59+00'::timestamptz, now()
   )
   on conflict (marketplace, shop_id, item_id) do update
   set source_product_url = excluded.source_product_url,
