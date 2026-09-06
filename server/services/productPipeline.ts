@@ -44,6 +44,14 @@ export interface ProductPublicationContext {
   score?: number;
 }
 
+export interface ProductEvaluationOptions {
+  /**
+   * Permite que avisos estritamente editoriais sejam apresentados ao humano
+   * sem transformar o candidato em erro. Hard checks comerciais continuam FAIL.
+   */
+  humanReview?: boolean;
+}
+
 export interface PublicationVerification {
   success: boolean;
   operationId?: string;
@@ -93,13 +101,29 @@ function advance(record: LifecycleRecord, next: ProductLifecycleState, reason: s
   rememberLifecycleRecord(record);
 }
 
+function softenEditorialValidationForHumanReview(validation: ProductValidation, enabled: boolean): ProductValidation {
+  if (!enabled || validation.outcome !== "FAIL") return validation;
+  const editorialErrors = validation.errors.filter(error => error === "IMAGE_REVIEW_REQUIRED");
+  const hardErrors = validation.errors.filter(error => error !== "IMAGE_REVIEW_REQUIRED");
+  if (editorialErrors.length === 0 || hardErrors.length > 0) return validation;
+  return {
+    ...validation,
+    outcome: "WARNING",
+    errors: [],
+    warnings: [...new Set([...validation.warnings, ...editorialErrors])],
+  };
+}
+
 /**
  * Orquestra o processo, mas nunca descobre/publica autonomamente: publicar requer approve().
  */
 export class ProductPipeline {
   constructor(private readonly adapters: ProductPipelineAdapters) {}
 
-  async evaluate(input: Partial<ProductCandidate> & { normalizedUrl?: string; link?: string }): Promise<LifecycleRecord> {
+  async evaluate(
+    input: Partial<ProductCandidate> & { normalizedUrl?: string; link?: string },
+    options: ProductEvaluationOptions = {},
+  ): Promise<LifecycleRecord> {
     const candidate = normalizeCandidate(input);
     const record: LifecycleRecord = {
       id: lifecycleId(),
@@ -114,7 +138,10 @@ export class ProductPipeline {
     advance(record, "COLLECTED", "Dados disponíveis para normalização.", "PRODUCT_DISCOVERED");
     record.candidate = normalizeCandidate({ ...candidate, state: "COLLECTED" });
     advance(record, "VALIDATING", "Iniciando validação comercial e duplicidade.", "PRODUCT_DISCOVERED");
-    record.validation = validateCandidate(record.candidate, await this.adapters.getProducts());
+    record.validation = softenEditorialValidationForHumanReview(
+      validateCandidate(record.candidate, await this.adapters.getProducts()),
+      options.humanReview === true,
+    );
 
     if (record.validation.outcome === "FAIL") {
       advance(record, "ERROR", record.validation.errors.join(" ") || "Falha de validação.", "PRODUCT_REJECTED");
