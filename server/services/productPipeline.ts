@@ -2,6 +2,7 @@ import type { Product } from "../../src/types";
 import * as productsRepository from "../repositories/productsRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { createOperationId, type OperationalDiagnostic, type OperationalFailureCode } from "./operationalDiagnostics";
+import { publishProductWithGate } from "./productPublicationGate";
 import { revalidateShopeeCandidateBeforePublication } from "./shopeePublicationPreflight";
 import {
   curateCandidate,
@@ -32,6 +33,15 @@ export interface LifecycleRecord {
   diagnostic?: OperationalDiagnostic;
 }
 
+export interface ProductPublicationContext {
+  /** Aprovado explicitamente pelo botão PUBLICAR do Telegram. */
+  humanManualApproval?: boolean;
+  /** Review que mantém a reserva de identidade Shopee até a confirmação final. */
+  reviewId?: string;
+  /** Score observado no ciclo que gerou o card; apenas auditoria no modo humano. */
+  score?: number;
+}
+
 export interface PublicationVerification {
   success: boolean;
   operationId?: string;
@@ -42,9 +52,9 @@ export interface PublicationVerification {
 export interface ProductPipelineAdapters {
   getProducts: () => Promise<Product[]>;
   createCanonicalProduct: (candidate: ProductCandidate) => Promise<Product>;
-  syncAndValidatePublication: (product: Product, operationId: string) => Promise<PublicationVerification>;
+  syncAndValidatePublication: (product: Product, operationId: string, context?: ProductPublicationContext) => Promise<PublicationVerification>;
   pauseCanonicalProduct: (productId: string) => Promise<void>;
-  preflightPublication?: (candidate: ProductCandidate) => Promise<{ ok: boolean; code: string }>;
+  preflightPublication?: (candidate: ProductCandidate, context?: ProductPublicationContext) => Promise<{ ok: boolean; code: string }>;
 }
 
 const recentLifecycleRecords = new Map<string, LifecycleRecord>();
@@ -138,7 +148,7 @@ export class ProductPipeline {
     return record;
   }
 
-  async publish(record: LifecycleRecord): Promise<LifecycleRecord> {
+  async publish(record: LifecycleRecord, context: ProductPublicationContext = {}): Promise<LifecycleRecord> {
     if (record.state === "PUBLISHED") return record;
     if (record.state !== "APPROVED") throw new Error("APPROVAL_REQUIRED");
     if (record.validation.outcome === "FAIL") throw new Error("VALIDATION_ERROR");
@@ -149,8 +159,13 @@ export class ProductPipeline {
       return record;
     }
 
+    const publicationContext: ProductPublicationContext = {
+      ...context,
+      score: Number.isFinite(Number(context.score)) ? Number(context.score) : record.curation.score,
+    };
+
     if (this.adapters.preflightPublication) {
-      const preflight = await this.adapters.preflightPublication(record.candidate);
+      const preflight = await this.adapters.preflightPublication(record.candidate, publicationContext);
       if (!preflight.ok) {
         record.error = "VALIDATION_ERROR";
         record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PUBLICATION_PREFLIGHT_BLOCKED:${preflight.code}`));
@@ -165,7 +180,7 @@ export class ProductPipeline {
       const product = await this.adapters.createCanonicalProduct(record.candidate);
       record.publishedProductId = product.id;
       record.publishedProduct = product;
-      const verification = await this.adapters.syncAndValidatePublication(product, operationId);
+      const verification = await this.adapters.syncAndValidatePublication(product, operationId, publicationContext);
       if (!verification.success) {
         const verificationOperationId = verification.operationId || operationId;
         record.error = verification.diagnostic?.code || (verification.error as ProductPipelineError | undefined) || "PUBLICATION_ERROR";
@@ -222,7 +237,9 @@ export function createProductionProductPipeline(): ProductPipeline {
   if (testPipelineFactory) return testPipelineFactory();
   return new ProductPipeline({
     getProducts: () => productsRepository.getProducts(),
-    preflightPublication: async candidate => revalidateShopeeCandidateBeforePublication(candidate),
+    preflightPublication: async (candidate, context) => revalidateShopeeCandidateBeforePublication(candidate, process.env, {
+      humanManualApproval: context?.humanManualApproval === true,
+    }),
     createCanonicalProduct: candidate => productsRepository.createProduct({
       produto: candidate.produto,
       rawTitle: candidate.rawTitle,
@@ -239,11 +256,29 @@ export function createProductionProductPipeline(): ProductPipeline {
       ref: candidate.ref,
       ofertaPromocional: candidate.ofertaPromocional,
     }, { syncCatalog: false }),
-    syncAndValidatePublication: async (product, operationId) => {
-      const promoted = await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
-      if (!promoted) {
-        return { success: false, operationId, error: "PERSISTENCE_ERROR" };
+    syncAndValidatePublication: async (product, operationId, context) => {
+      if (context?.humanManualApproval === true) {
+        if (!context.reviewId) throw new Error("HUMAN_PUBLICATION_REVIEW_ID_MISSING");
+        await publishProductWithGate({
+          product,
+          evidence: {
+            source: "admin",
+            score: Number(context.score) || 0,
+            maximumCatalogSimilarity: 0,
+            categoryMismatch: false,
+            offBrand: false,
+            lifecycleApproved: true,
+            reviewState: "HUMAN_APPROVED",
+            humanManualApproval: true,
+            reviewId: context.reviewId,
+          },
+          createdBy: "telegram_manual",
+        });
+      } else {
+        const promoted = await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
+        if (!promoted) return { success: false, operationId, error: "PERSISTENCE_ERROR" };
       }
+
       const result = await syncCatalogAndDeploy(product.produto, product.id, operationId);
       if (result.success) {
         return { success: true, operationId, diagnostic: undefined };
