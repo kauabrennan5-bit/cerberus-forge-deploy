@@ -80,7 +80,7 @@ test("dedicated production scheduler sends discoveries to manual review while de
   const scheduler = await readFile(new URL("../.github/workflows/autonomous-curator-scheduler.yml", import.meta.url), "utf8");
   const workflow = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
 
-  assert.match(scheduler, /cron: "5,20,35,50 \* \* \* \*"/);
+  assert.match(scheduler, /cron: "\*\/10 \* \* \* \*"/);
   assert.match(scheduler, /cerberus-autonomous-curator-production/);
   assert.match(scheduler, /Wait for exact Render SHA/);
   assert.match(scheduler, /api\/internal\/autonomous-curator\/status/);
