@@ -1,4 +1,5 @@
 import { savePendingReview } from "../repositories/telegramRepository";
+import { releaseProductSourceIdentityByReview, reserveProductSourceIdentity } from "../repositories/autonomousCuratorRepository";
 import type { ProductImageCuration } from "../../src/lib/productImageCuration";
 import type { PendingReview } from "./telegramTypes";
 import { runShopeeManualDeliveryCommand } from "./shopeeManualDelivery";
@@ -93,10 +94,54 @@ export function applyShopeeManualImageAuthority(review: PendingReview): PendingR
   };
 }
 
+type ManualIdentityReservationInput = {
+  marketplace: "Shopee";
+  shopId: string;
+  itemId: string;
+  sourceProductUrl: string;
+  runId: string;
+  reviewId: string;
+  ttlMinutes: number;
+};
+
+function manualIdentityReservationInput(review: PendingReview, now = Date.now()): ManualIdentityReservationInput | null {
+  if (review.existingProduct?.manualDeliveryContract !== true) return null;
+  const meta = review.existingProduct as Record<string, unknown>;
+  const shopId = String(meta.shopId || "").trim();
+  const itemId = String(meta.itemId || "").trim();
+  const sourceProductUrl = String(review.normalizedUrl || "").trim();
+  if (!shopId || !itemId || !/^https:\/\/([^/]+\.)?shopee\.com\.br\//i.test(sourceProductUrl)) return null;
+  const expiresAt = Number(review.expiresAt || (review.createdAt || now) + 60 * 60 * 1000);
+  const ttlMinutes = Math.max(5, Math.ceil((expiresAt - now) / 60_000));
+  return {
+    marketplace: "Shopee",
+    shopId,
+    itemId,
+    sourceProductUrl,
+    runId: `telegram_manual:${review.id}`,
+    reviewId: review.id,
+    ttlMinutes,
+  };
+}
+
 export async function runShopeeManualDeliveryWithHumanAuthority(argsRaw: string): Promise<ShopeeLotResult> {
   return runShopeeManualDeliveryCommand(argsRaw, {
     saveReview: async review => {
-      await savePendingReview(applyShopeeManualImageAuthority(review));
+      const adapted = applyShopeeManualImageAuthority(review);
+      const identity = manualIdentityReservationInput(adapted);
+      if (!identity) throw new Error("SHOPEE_MANUAL_REVIEW_IDENTITY_METADATA_INVALID");
+      const reservation = await reserveProductSourceIdentity(identity);
+      if (!reservation.reserved) throw new Error("SHOPEE_MANUAL_REVIEW_IDENTITY_CONFLICT");
+      try {
+        await savePendingReview(adapted);
+      } catch (error) {
+        await releaseProductSourceIdentityByReview(adapted.id).catch(() => undefined);
+        throw error;
+      }
     },
   });
 }
+
+export const shopeeManualHumanAuthorityInternals = {
+  manualIdentityReservationInput,
+};
