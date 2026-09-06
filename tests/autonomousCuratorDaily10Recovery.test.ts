@@ -5,7 +5,7 @@ import { access, readFile } from "node:fs/promises";
 test("primary curator owns all quarter-hour manual-review triggers", async () => {
   const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
 
-  assert.match(primary, /cron: "2,17,32,47 \* \* \* \*"/);
+  assert.match(primary, /cron: "\*\/15 \* \* \* \*"/);
   assert.match(primary, /cerberus-autonomous-curator-production/);
   assert.match(primary, /cerberus-autonomous-curator-status/);
   assert.match(primary, /cancel-in-progress: true/);

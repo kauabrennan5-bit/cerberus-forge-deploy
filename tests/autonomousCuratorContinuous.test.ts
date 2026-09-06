@@ -78,7 +78,7 @@ test("queued product can revalidate its own bound Shopee identity but not anothe
 
 test("production workflow sends scheduled discoveries to manual review while deployment pushes remain read-only", async () => {
   const workflow = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
-  assert.match(workflow, /cron: "2,17,32,47 \* \* \* \*"/);
+  assert.match(workflow, /cron: "\*\/15 \* \* \* \*"/);
   assert.match(workflow, /github\.event_name == 'schedule' && 'manual_review'/);
   assert.match(workflow, /github\.event_name == 'push' && 'status'/);
   assert.doesNotMatch(workflow, /github\.event_name == 'schedule' && 'continuous'/);
