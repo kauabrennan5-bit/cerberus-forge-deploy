@@ -1,59 +1,27 @@
-name: Cerberus Autonomous Curator
-# Pushes remain read-only status checks; manual dispatch is available for controlled diagnostics.
-# Production scheduling is owned exclusively by autonomous-curator-scheduler.yml.
+name: Cerberus Autonomous Curator Scheduler
+# Dedicated production scheduler. Curated discoveries go to Telegram for a human publish/discard decision.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/autonomous-curator.yml"
-      - ".github/workflows/autonomous-curator-scheduler.yml"
-      - "server/services/autonomousCurator*.ts"
-      - "server/services/productAutomation.ts"
-      - "server/services/productImage*.ts"
-      - "server/services/productPipeline.ts"
-      - "server/services/catalogSync.ts"
-      - "server/services/githubCatalogSync.ts"
-      - "server/services/scraper.ts"
-      - "server/commercial/affiliate/shopee*.ts"
-      - "server/commercial/marketplace/shopeeIdentity.ts"
-      - "server/repositories/autonomousCuratorRepository.ts"
-      - "server/routes/autonomousCuratorRoutes.ts"
-      - "server/services/newsletterWeeklyAutomationAuth.ts"
-      - "src/lib/productImageCuration.ts"
-      - "src/lib/productCanonical.ts"
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: Execution mode
-        required: true
-        default: dry_run
-        type: choice
-        options:
-          - dry_run
-          - manual_review
-          - status
+  schedule:
+    - cron: "5,20,35,50 * * * *"
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: ${{ github.event_name == 'push' && 'cerberus-autonomous-curator-status' || 'cerberus-autonomous-curator-production' }}
+  group: cerberus-autonomous-curator-production
   cancel-in-progress: true
 
 jobs:
-  daily-curator:
+  manual-review-curator:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      MODE: ${{ github.event_name == 'push' && 'status' || inputs.mode }}
     steps:
-      - name: Wait for exact Render SHA after deployment
-        if: github.event_name == 'push'
+      - name: Wait for exact Render SHA
         shell: bash
         run: |
           set -euo pipefail
@@ -81,7 +49,7 @@ jobs:
             sleep 10
           done
 
-      - name: Start curator and wait for audited completion
+      - name: Start manual-review curator and wait for audited completion
         shell: bash
         run: |
           set -euo pipefail
@@ -97,26 +65,16 @@ jobs:
             printf '%s' "$token"
           }
 
-          status_file="$RUNNER_TEMP/autonomous-curator-status.json"
-          if [ "$MODE" = "status" ]; then
-            token="$(get_oidc_token)"
-            curl --fail-with-body --silent --show-error --max-time 30 \
-              -o "$status_file" -H "Authorization: Bearer ${token}" \
-              "$base/api/internal/autonomous-curator/status"
-            cat "$status_file"
-            exit 0
-          fi
-
           start_file="$RUNNER_TEMP/autonomous-curator-start.json"
+          status_file="$RUNNER_TEMP/autonomous-curator-status.json"
           token="$(get_oidc_token)"
-          dry_run=false
-          if [ "$MODE" = "dry_run" ]; then dry_run=true; fi
           curl --fail-with-body --silent --show-error --max-time 30 \
             -o "$start_file" \
             -H "Authorization: Bearer ${token}" \
             -H 'Content-Type: application/json' \
-            -d "{\"dryRun\":${dry_run},\"notify\":true}" \
+            -d '{"dryRun":false,"notify":true}' \
             "$base/api/internal/autonomous-curator/daily"
+
           node - "$start_file" <<'NODE'
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -132,10 +90,9 @@ jobs:
           expected_date="$(TZ=America/Fortaleza date +%F)"
           for attempt in $(seq 1 180); do
             token="$(get_oidc_token)"
-            filter="?dryRun=${dry_run}"
             if ! curl --fail-with-body --silent --show-error --max-time 45 \
               -o "$status_file" -H "Authorization: Bearer ${token}" \
-              "$base/api/internal/autonomous-curator/status${filter}"; then
+              "$base/api/internal/autonomous-curator/status?dryRun=false"; then
               echo "Autonomous Curator status poll transient failure; retrying."
               sleep 15
               continue
@@ -150,7 +107,7 @@ jobs:
             process.stdout.write('waiting');
             process.exit(0);
           }
-          const terminalStatus = ['completed','partial','failed','dry_run'].includes(String(run.status));
+          const terminalStatus = ['completed','partial','failed'].includes(String(run.status));
           if (terminalStatus && run.completed_at) {
             console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
             process.exit(0);
