@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 
-test("dedicated scheduler owns all quarter-hour manual-review triggers", async () => {
+test("dedicated scheduler owns all ten-minute manual-review triggers", async () => {
   const scheduler = await readFile(new URL("../.github/workflows/autonomous-curator-scheduler.yml", import.meta.url), "utf8");
   const primary = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
 
-  assert.match(scheduler, /cron: "5,20,35,50 \* \* \* \*"/);
+  assert.match(scheduler, /cron: "\*\/10 \* \* \* \*"/);
   assert.match(scheduler, /cerberus-autonomous-curator-production/);
   assert.match(scheduler, /cancel-in-progress: true/);
   assert.match(scheduler, /id-token: write/);
