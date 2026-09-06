@@ -4,6 +4,11 @@ name: Cerberus Autonomous Curator Scheduler
 on:
   schedule:
     - cron: "5,20,35,50 * * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/autonomous-curator-scheduler.yml"
 
 permissions:
   contents: read
@@ -15,6 +20,7 @@ concurrency:
 
 jobs:
   manual-review-curator:
+    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[prove-curator-flow]')
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
