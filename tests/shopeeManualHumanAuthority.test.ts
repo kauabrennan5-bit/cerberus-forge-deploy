@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyShopeeManualImageAuthority } from "../server/services/shopeeManualHumanAuthority";
+import { applyShopeeManualImageAuthority, shopeeManualHumanAuthorityInternals } from "../server/services/shopeeManualHumanAuthority";
 import type { PendingReview } from "../server/services/telegramTypes";
 
 const IMAGE = "https://down-br.img.susercontent.com/file/manual-authority-test";
@@ -12,7 +12,8 @@ function review(reason: string, visualReviewStatus: string = "NEEDS_HUMAN_REVIEW
     senderId: 123,
     firstName: "admin",
     username: "admin",
-    createdAt: Date.now(),
+    createdAt: 1_788_700_000_000,
+    expiresAt: 1_788_703_600_000,
     produto: "Luminária de mesa",
     rawTitle: "Luminária de mesa original",
     displayTitle: "Luminária de mesa",
@@ -24,13 +25,15 @@ function review(reason: string, visualReviewStatus: string = "NEEDS_HUMAN_REVIEW
     imagensGaleria: [],
     imageEditorialStatus: "review_required",
     imageCuration: { status: "review_required", rawImageUrls: [IMAGE], galleryImageUrls: [], assessments: [], reason: "image_review_unavailable" },
-    normalizedUrl: "https://shopee.com.br/Teste-i.123.456",
+    normalizedUrl: "https://shopee.com.br/product/123/456",
     descricao: "Descrição editorial suficiente para a publicação manual.",
     status: "pending",
     existingProduct: {
       source: "affiliate_preview",
       affiliateUrl: "https://s.shopee.com.br/teste",
       manualDeliveryContract: true,
+      shopId: "123",
+      itemId: "456",
       visualReviewStatus,
       manualReviewStatus: "NEEDS_HUMAN_REVIEW",
       manualReviewReasons: [reason],
@@ -67,5 +70,27 @@ describe("manual Shopee image authority", () => {
     const adapted = applyShopeeManualImageAuthority(original);
     assert.equal(adapted, original);
     assert.equal(adapted.imageEditorialStatus, "review_required");
+  });
+
+  it("builds the exact review-owned Shopee identity reservation required by publication gate", () => {
+    const input = shopeeManualHumanAuthorityInternals.manualIdentityReservationInput(
+      review("image_review_model_unavailable"),
+      1_788_700_000_000,
+    );
+    assert.deepEqual(input, {
+      marketplace: "Shopee",
+      shopId: "123",
+      itemId: "456",
+      sourceProductUrl: "https://shopee.com.br/product/123/456",
+      runId: "telegram_manual:review-manual-authority",
+      reviewId: "review-manual-authority",
+      ttlMinutes: 60,
+    });
+  });
+
+  it("refuses to invent manual identity metadata", () => {
+    const invalid = review("image_review_model_unavailable");
+    invalid.existingProduct.shopId = "";
+    assert.equal(shopeeManualHumanAuthorityInternals.manualIdentityReservationInput(invalid), null);
   });
 });
