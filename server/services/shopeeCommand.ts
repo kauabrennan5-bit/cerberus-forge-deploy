@@ -12,7 +12,7 @@ export * from "./shopeeCommandRanked";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { extractProductForReview } from "./productAutomation";
 import type { ShopeeImageQualification } from "./shopeeCandidateQualification";
-import { runShopeeManualDeliveryCommand } from "./shopeeManualDelivery";
+import { runShopeeManualDeliveryWithHumanAuthority } from "./shopeeManualHumanAuthority";
 import {
   parseShopeeCommand,
   runShopeeCommand as runRankedShopeeCommand,
@@ -94,7 +94,7 @@ export function setTestShopeeClient(client: Parameters<typeof setRankedTestShope
 export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult> {
   const parsed = parseShopeeCommand(argsRaw);
   if (!legacyTestClientActive && !parsed.error && (parsed.mode || "term") === "term") {
-    return runShopeeManualDeliveryCommand(argsRaw);
+    return runShopeeManualDeliveryWithHumanAuthority(argsRaw);
   }
 
   const result = await runRankedShopeeCommand(argsRaw);
