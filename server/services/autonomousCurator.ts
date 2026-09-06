@@ -29,6 +29,8 @@ import {
 
 export type AutonomousCuratorDecision = "auto" | "review" | "reject" | "duplicate" | "none" | "failed";
 
+type HumanReviewImageEditorialStatus = "clean" | "overlay_suspected" | "review_required";
+
 export type AutonomousCuratorCategoryOutcome = {
   category: PublicProductCategory;
   query: string;
@@ -68,7 +70,7 @@ type CuratedCandidate = {
   images: string[];
   reviewImageUrl: string;
   imageCuration: NonNullable<Product["imageCuration"]>;
-  imageEditorialStatus: NonNullable<Product["imageEditorialStatus"]>;
+  imageEditorialStatus: HumanReviewImageEditorialStatus;
   warnings: string[];
   score: number;
   breakdown: AutonomousCuratorScoreBreakdown;
@@ -186,12 +188,16 @@ function reviewableImageEvidence(data: {
   images: string[];
   primaryImageUrl: string;
   imageCuration: NonNullable<Product["imageCuration"]>;
-  imageEditorialStatus: NonNullable<Product["imageEditorialStatus"]>;
+  imageEditorialStatus: HumanReviewImageEditorialStatus;
 } | null {
   const observedImages = uniquePublicImages(data.imagens);
   if (observedImages.length === 0) return null;
 
-  const editorialStatus = data.imageEditorialStatus || "unreviewed";
+  const editorialStatus: HumanReviewImageEditorialStatus = data.imageEditorialStatus === "clean"
+    ? "clean"
+    : data.imageEditorialStatus === "overlay_suspected"
+      ? "overlay_suspected"
+      : "review_required";
   const existingCuration = data.imageCuration;
   const canonical = resolveCanonicalProductImage({
     imagens: observedImages,
