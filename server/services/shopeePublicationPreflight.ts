@@ -2,6 +2,7 @@ import type { ProductCandidate } from "./productLifecycle";
 import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
 import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import { extractProductForReview } from "./productAutomation";
+import { fetchProductDataFromUrl } from "./scraper";
 import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import {
   buildConfiguredShopeeClient,
@@ -88,6 +89,21 @@ function currentImageEvidence(current: {
   ]
     .map(image => String(image || "").trim())
     .filter(image => /^https:\/\//i.test(image));
+}
+
+function hasApprovedImageEvidence(savedImage: string, evidence: readonly string[]): boolean {
+  return evidence.some(image => sameShopeeImageAsset(savedImage, image));
+}
+
+async function fetchRawListingImageEvidence(productUrl: string): Promise<string[]> {
+  try {
+    const scraped = await fetchProductDataFromUrl(productUrl);
+    return (scraped.images || [])
+      .map(image => String(image || "").trim())
+      .filter(image => /^https:\/\//i.test(image));
+  } catch {
+    return [];
+  }
 }
 
 export async function revalidateShopeeCandidateBeforePublication(
@@ -196,8 +212,24 @@ export async function revalidateShopeeCandidateBeforePublication(
   }
 
   const savedImage = resolveCanonicalProductImage(candidate).primaryImageUrl || firstHttpsImage(candidate.imagens);
-  const liveImages = currentImageEvidence(current);
-  if (!savedImage || !liveImages.some(image => sameShopeeImageAsset(savedImage, image))) {
+  if (!savedImage) {
+    return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
+  }
+
+  const projectedEvidence = currentImageEvidence(current);
+  let approvedImageStillPresent = hasApprovedImageEvidence(savedImage, projectedEvidence);
+
+  // O reviewer visual pode remover do conjunto pós-curadoria uma imagem que
+  // continua presente no anúncio. Nesse caso, a decisão humana não deve receber
+  // um falso IMAGE_CHANGED: consultamos uma segunda vez o scraper canônico e
+  // usamos somente as imagens oficiais brutas da MESMA identidade Shopee.
+  // Se o asset realmente sumiu, o hard gate continua falhando.
+  if (!approvedImageStillPresent) {
+    const rawListingEvidence = await fetchRawListingImageEvidence(acquisition.productLink);
+    approvedImageStillPresent = hasApprovedImageEvidence(savedImage, rawListingEvidence);
+  }
+
+  if (!approvedImageStillPresent) {
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
   }
 
@@ -208,4 +240,5 @@ export const shopeePublicationPreflightInternals = {
   shopeeImageAssetKey,
   sameShopeeImageAsset,
   currentImageEvidence,
+  hasApprovedImageEvidence,
 };
