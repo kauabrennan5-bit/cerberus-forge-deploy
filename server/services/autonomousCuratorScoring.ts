@@ -1,6 +1,7 @@
 import type { Product } from "../../src/types";
 import type { ProductImageCuration } from "../../src/lib/productImageCuration";
 import type { AutonomousCuratorCategoryProfile } from "./autonomousCuratorProfiles";
+import { scoreAutonomousCuratorHumanTaste } from "./autonomousCuratorHumanTaste";
 
 export type AutonomousCuratorScoreBreakdown = {
   pipelineQuality: number;
@@ -16,6 +17,14 @@ export type AutonomousCuratorScoreBreakdown = {
   strongStyleHits: number;
   signatureHits: number;
   maximumCatalogSimilarity: number;
+  humanPreferenceFit: number;
+  humanPreferenceConfidence: number;
+  humanApprovedSimilarity: number;
+  humanRejectedSimilarity: number;
+  humanPreferenceLexicalSignal: number;
+  humanPreferenceAdjustment: number;
+  humanApprovedExamples: number;
+  humanRejectedExamples: number;
   finalScore: number;
 };
 
@@ -210,6 +219,10 @@ export function maximumCatalogSimilarity(displayTitle: string, category: string,
   return max;
 }
 
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
 export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): AutonomousCuratorScoreBreakdown {
   const blocked = hasBlockedProfileTerm(input.profile, `${input.rawTitle} ${input.displayTitle} ${input.description}`);
   if (blocked) {
@@ -227,6 +240,14 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
       strongStyleHits: 0,
       signatureHits: 0,
       maximumCatalogSimilarity: 1,
+      humanPreferenceFit: 50,
+      humanPreferenceConfidence: 0,
+      humanApprovedSimilarity: 0,
+      humanRejectedSimilarity: 0,
+      humanPreferenceLexicalSignal: 0,
+      humanPreferenceAdjustment: 0,
+      humanApprovedExamples: 0,
+      humanRejectedExamples: 0,
       finalScore: 0,
     };
   }
@@ -258,10 +279,10 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     + complete * 0.05,
   );
 
-  // Gates Cerberus remain absolute. Human feedback adds three requirements:
-  // a product must be desirable, fashion must have credible presentation, and
-  // a high relative price must be justified by stronger design distinction.
-  if (
+  // Os gates de qualidade continuam absolutos. Feedback humano pode reduzir
+  // ainda mais um candidato fraco, mas jamais elevar um item acima do teto de
+  // 71 quando um hard quality gate falhou.
+  const hardQualityCapped = (
     styleScore < 72
     || value === 0
     || categoryFit === 0
@@ -271,9 +292,18 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     || presentation < 80
     || priceRatio > 1
     || (priceRatio > 0.55 && styleScore < 94 && desirability < 90)
-  ) {
-    finalScore = Math.min(finalScore, 71);
-  }
+  );
+  if (hardQualityCapped) finalScore = Math.min(finalScore, 71);
+
+  const humanTaste = scoreAutonomousCuratorHumanTaste({
+    title: `${input.rawTitle} ${input.displayTitle}`,
+    description: input.description,
+    category: input.category,
+    price: input.price,
+  });
+  finalScore = hardQualityCapped
+    ? Math.max(0, Math.min(71, finalScore + Math.min(0, humanTaste.adjustment)))
+    : clampScore(finalScore + humanTaste.adjustment);
 
   return {
     pipelineQuality: pipeline,
@@ -289,6 +319,14 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     strongStyleHits: textualStyle.strong,
     signatureHits: textualStyle.signature,
     maximumCatalogSimilarity: Number(similarity.toFixed(4)),
+    humanPreferenceFit: humanTaste.fit,
+    humanPreferenceConfidence: humanTaste.confidence,
+    humanApprovedSimilarity: humanTaste.approvedSimilarity,
+    humanRejectedSimilarity: humanTaste.rejectedSimilarity,
+    humanPreferenceLexicalSignal: humanTaste.lexicalSignal,
+    humanPreferenceAdjustment: humanTaste.adjustment,
+    humanApprovedExamples: humanTaste.approvedExamples,
+    humanRejectedExamples: humanTaste.rejectedExamples,
     finalScore,
   };
 }

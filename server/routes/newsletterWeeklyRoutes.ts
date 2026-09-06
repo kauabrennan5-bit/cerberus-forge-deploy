@@ -23,11 +23,13 @@ import { sendTelegramMessage } from "../services/telegramBot";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 import { verifyWeeklyPreviewSignature } from "../services/newsletterWeeklyPreview";
 import { runWeeklyEditorialBackfill } from "../services/newsletterWeeklyEditorialBackfill";
+import { startAutonomousCuratorHumanTasteLearning } from "../services/autonomousCuratorHumanTasteLoader";
 
 export function registerNewsletterWeeklyRoutes(app: express.Express): void {
   // O mesmo registrador central já é conectado pelo server.ts; o Autonomous
   // Curator reutiliza a autenticação OIDC dos jobs internos sem acoplar sua
   // lógica à newsletter.
+  startAutonomousCuratorHumanTasteLearning();
   registerAutonomousCuratorRoutes(app);
   registerOperatorAutomationRoutes(app);
 
