@@ -72,10 +72,16 @@ function sameShopeeImageAsset(left: string, right: string): boolean {
 
 function currentImageEvidence(current: {
   imagens?: string[];
+  imagensOriginais?: string[];
+  imagensGaleria?: string[];
+  imagemPrincipal?: string;
   imageCuration?: ProductCandidate["imageCuration"];
 }): string[] {
   return [
     ...(current.imagens || []),
+    ...(current.imagensOriginais || []),
+    ...(current.imagensGaleria || []),
+    ...(current.imagemPrincipal ? [current.imagemPrincipal] : []),
     ...(current.imageCuration?.rawImageUrls || []),
     ...(current.imageCuration?.galleryImageUrls || []),
     ...(current.imageCuration?.primaryImageUrl ? [current.imageCuration.primaryImageUrl] : []),
