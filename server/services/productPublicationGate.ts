@@ -27,6 +27,8 @@ export type ProductPublicationEvidence = {
   humanManualApproval?: boolean;
   /** Review que reservou a identidade Shopee usada pela aprovação humana. */
   reviewId?: string | null;
+  /** URL oficial Shopee que identifica a reserva exclusiva do card. */
+  sourceProductUrl?: string | null;
   /** Permite publicar o melhor lote técnico durante déficit; nunca substitui os hard gates. */
   deficitFallback?: boolean;
 };
@@ -78,11 +80,12 @@ function validOfficialShopeeIdentity(
 ): boolean {
   if (!identity || identity.marketplace.toLowerCase() !== "shopee") return false;
   if (!identity.shopId || !identity.itemId) return false;
+  const reservedByReview = Boolean(evidence.reviewId) && identity.reviewId === evidence.reviewId;
+  const reservedBySource = Boolean(evidence.sourceProductUrl) && identity.sourceProductUrl === evidence.sourceProductUrl;
   const humanReservedIdentity = evidence.source === "admin"
     && evidence.humanManualApproval === true
-    && Boolean(evidence.reviewId)
-    && identity.reviewId === evidence.reviewId
-    && identity.productId === null;
+    && identity.productId === null
+    && (reservedByReview || reservedBySource);
   if (identity.productId !== productId && !humanReservedIdentity) return false;
   const parsed = extractShopeeIdentity(identity.sourceProductUrl);
   return parsed.shopId === identity.shopId && parsed.itemId === identity.itemId;
@@ -182,15 +185,27 @@ async function loadIdentity(productId: string, evidence: ProductPublicationEvide
   if (error) throw error;
   if (data) return mapIdentity(data);
 
-  if (evidence.source === "admin" && evidence.humanManualApproval === true && evidence.reviewId) {
-    const { data: reserved, error: reservedError } = await client
-      .from("product_source_identities")
-      .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
-      .eq("review_id", evidence.reviewId)
-      .is("product_id", null)
-      .maybeSingle();
-    if (reservedError) throw reservedError;
-    return mapIdentity(reserved);
+  if (evidence.source === "admin" && evidence.humanManualApproval === true) {
+    if (evidence.reviewId) {
+      const { data: byReview, error: reviewError } = await client
+        .from("product_source_identities")
+        .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+        .eq("review_id", evidence.reviewId)
+        .is("product_id", null)
+        .maybeSingle();
+      if (reviewError) throw reviewError;
+      if (byReview) return mapIdentity(byReview);
+    }
+    if (evidence.sourceProductUrl) {
+      const { data: bySource, error: sourceError } = await client
+        .from("product_source_identities")
+        .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+        .eq("source_product_url", evidence.sourceProductUrl)
+        .is("product_id", null)
+        .maybeSingle();
+      if (sourceError) throw sourceError;
+      return mapIdentity(bySource);
+    }
   }
   return null;
 }
@@ -270,6 +285,7 @@ export async function publishProductWithGate(input: {
       manualEditorialOverride: input.evidence.manualEditorialOverride === true,
       humanManualApproval,
       reviewId: input.evidence.reviewId || null,
+      sourceProductUrl: input.evidence.sourceProductUrl || null,
       deficitFallback,
     },
   });
