@@ -336,7 +336,23 @@ export async function bindProductSourceIdentityByReview(input: {
     updated_at: new Date().toISOString(),
   }).eq("review_id", input.reviewId).is("product_id", null).select("id").maybeSingle();
   if (error) throw error;
-  if (!data) throw new Error("AUTONOMOUS_CURATOR_REVIEW_IDENTITY_MISSING");
+  if (data) return;
+
+  // A publicação manual governada pode vincular a identidade de forma
+  // transacional no banco antes de o Telegram persistir status=published.
+  // Como product_id é UNIQUE quando não nulo, encontrar a identidade já
+  // vinculada ao mesmo produto prova que a operação foi consumida com sucesso
+  // e torna esta finalização idempotente. Vinculação a outro produto continua
+  // fail-closed porque não satisfaz esta consulta.
+  const { data: alreadyBound, error: alreadyBoundError } = await client
+    .from("product_source_identities")
+    .select("id")
+    .eq("product_id", input.productId)
+    .maybeSingle();
+  if (alreadyBoundError) throw alreadyBoundError;
+  if (alreadyBound) return;
+
+  throw new Error("AUTONOMOUS_CURATOR_REVIEW_IDENTITY_MISSING");
 }
 
 export async function releaseProductSourceIdentityByReview(reviewId: string): Promise<void> {
