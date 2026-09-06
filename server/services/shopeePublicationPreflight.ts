@@ -17,8 +17,8 @@ export type ShopeePublicationPreflightResult =
 export type ShopeePublicationPreflightOptions = {
   /**
    * A decisão humana final pode substituir somente gates editoriais/visuais.
-   * Identidade, disponibilidade, afiliado, preço e mutação da imagem continuam
-   * sendo revalidados no instante do clique em PUBLICAR.
+   * Identidade, disponibilidade, afiliado, preço e presença da imagem aprovada
+   * no anúncio continuam sendo revalidados no instante do clique em PUBLICAR.
    */
   humanManualApproval?: boolean;
 };
@@ -38,6 +38,50 @@ function numbersMateriallyDiffer(a: number, b: number): boolean {
 
 function firstHttpsImage(images: readonly string[] | undefined): string | null {
   return images?.find(image => /^https:\/\//i.test(String(image || "").trim()))?.trim() || null;
+}
+
+/**
+ * A Shopee serve o mesmo asset por aliases de CDN diferentes. Exemplo real de
+ * produção: `cf.shopee.com.br/file/<asset>` no card e
+ * `down-br.img.susercontent.com/file/<asset>` no re-scrape do clique.
+ * O identificador estável é o token após `/file/`, não o hostname da CDN.
+ */
+function shopeeImageAssetKey(rawUrl: string): string | null {
+  try {
+    const parsed = new URL(String(rawUrl || "").trim());
+    if (parsed.protocol !== "https:") return null;
+    const host = parsed.hostname.toLowerCase();
+    const knownShopeeImageHost = host === "cf.shopee.com.br" || host.endsWith(".img.susercontent.com");
+    if (!knownShopeeImageHost) return null;
+    const match = parsed.pathname.match(/^\/file\/([^/?#]+)$/i);
+    return match?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
+function sameShopeeImageAsset(left: string, right: string): boolean {
+  const normalizedLeft = String(left || "").trim();
+  const normalizedRight = String(right || "").trim();
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+  const leftKey = shopeeImageAssetKey(normalizedLeft);
+  const rightKey = shopeeImageAssetKey(normalizedRight);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
+function currentImageEvidence(current: {
+  imagens?: string[];
+  imageCuration?: ProductCandidate["imageCuration"];
+}): string[] {
+  return [
+    ...(current.imagens || []),
+    ...(current.imageCuration?.rawImageUrls || []),
+    ...(current.imageCuration?.galleryImageUrls || []),
+    ...(current.imageCuration?.primaryImageUrl ? [current.imageCuration.primaryImageUrl] : []),
+  ]
+    .map(image => String(image || "").trim())
+    .filter(image => /^https:\/\//i.test(image));
 }
 
 export async function revalidateShopeeCandidateBeforePublication(
@@ -144,10 +188,18 @@ export async function revalidateShopeeCandidateBeforePublication(
   ) {
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_NOT_CLEAN", transient: false };
   }
+
   const savedImage = resolveCanonicalProductImage(candidate).primaryImageUrl || firstHttpsImage(candidate.imagens);
-  if (!savedImage || savedImage !== currentPrimaryImage) {
+  const liveImages = currentImageEvidence(current);
+  if (!savedImage || !liveImages.some(image => sameShopeeImageAsset(savedImage, image))) {
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
   }
 
   return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" };
 }
+
+export const shopeePublicationPreflightInternals = {
+  shopeeImageAssetKey,
+  sameShopeeImageAsset,
+  currentImageEvidence,
+};
