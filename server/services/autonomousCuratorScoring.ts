@@ -54,6 +54,27 @@ function tokens(value: string): Set<string> {
   return new Set(normalize(value).split(" ").filter(token => token.length >= 3));
 }
 
+const DUPLICATE_TOKEN_STOPWORDS = new Set([
+  "para", "com", "sem", "uma", "uns", "umas", "dos", "das", "que", "por",
+  "novo", "nova", "oferta", "saldo", "fabrica", "promocao",
+  "estilo", "design", "vintage", "retro", "classico", "classica",
+  "moderno", "moderna", "elegante",
+]);
+
+function productIdentityTokens(value: string): Set<string> {
+  return new Set([...tokens(value)].filter(token => !DUPLICATE_TOKEN_STOPWORDS.has(token)));
+}
+
+function productIdentityJaccard(a: string, b: string): number {
+  const left = productIdentityTokens(a);
+  const right = productIdentityTokens(b);
+  if (left.size === 0 || right.size === 0) return 0;
+  let intersection = 0;
+  for (const token of left) if (right.has(token)) intersection += 1;
+  const union = left.size + right.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
 function includesTerm(normalizedText: string, term: string): boolean {
   const normalizedTerm = normalize(term);
   if (!normalizedTerm) return false;
@@ -208,11 +229,14 @@ function presentationFit(category: string, curation: ProductImageCuration): numb
   return 55;
 }
 
-export function maximumCatalogSimilarity(displayTitle: string, category: string, existingProducts: readonly Product[]): number {
+export function maximumCatalogSimilarity(candidateText: string, category: string, existingProducts: readonly Product[]): number {
   let max = 0;
   for (const product of existingProducts) {
-    const existingTitle = product.displayTitle || product.produto || "";
-    let similarity = tokenJaccard(displayTitle, existingTitle);
+    const existingText = `${product.rawTitle || ""} ${product.displayTitle || product.produto || ""}`.trim();
+    let similarity = Math.max(
+      tokenJaccard(candidateText, existingText),
+      productIdentityJaccard(candidateText, existingText),
+    );
     if (product.categoria === category) similarity = Math.min(1, similarity + 0.08);
     if (similarity > max) max = similarity;
   }
@@ -252,7 +276,7 @@ export function scoreAutonomousCandidate(input: AutonomousCuratorScoreInput): Au
     };
   }
 
-  const similarity = maximumCatalogSimilarity(input.displayTitle, input.category, input.existingProducts);
+  const similarity = maximumCatalogSimilarity(`${input.rawTitle} ${input.displayTitle}`, input.category, input.existingProducts);
   const novelty = Math.max(0, Math.min(100, Math.round((1 - similarity) * 100)));
   const textualStyle = styleFit(input.profile, `${input.rawTitle} ${input.displayTitle} ${input.description}`);
   const styleScore = Math.max(textualStyle.score, visualStyleEvidence(input.imageCuration));
@@ -337,4 +361,5 @@ export const autonomousCuratorScoringInternals = {
   desirabilityFit,
   presentationFit,
   priceToAutoCap,
+  productIdentityJaccard,
 };
