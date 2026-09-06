@@ -26,6 +26,8 @@ export interface LifecycleRecord {
   validation: ProductValidation;
   curation: ProductCuration;
   audit: ProductLifecycleEvent[];
+  /** Registrado exclusivamente por approve(); não vem da descoberta/curadoria. */
+  humanApproved?: boolean;
   publishedProductId?: string;
   publishedProduct?: Product;
   operationId?: string;
@@ -34,10 +36,10 @@ export interface LifecycleRecord {
 }
 
 export interface ProductPublicationContext {
-  /** Aprovado explicitamente pelo botão PUBLICAR do Telegram. */
+  /** Aprovado explicitamente por approve(), hoje acionado pelo botão PUBLICAR. */
   humanManualApproval?: boolean;
-  /** Review que mantém a reserva de identidade Shopee até a confirmação final. */
-  reviewId?: string;
+  /** URL oficial do anúncio que mantém a reserva de identidade do card. */
+  sourceProductUrl?: string;
   /** Score observado no ciclo que gerou o card; apenas auditoria no modo humano. */
   score?: number;
 }
@@ -137,6 +139,7 @@ export class ProductPipeline {
   approve(record: LifecycleRecord): LifecycleRecord {
     if (record.state === "APPROVED" || record.state === "PUBLISHED") return record;
     if (record.state !== "PENDING_APPROVAL") throw new Error("APPROVAL_REQUIRED");
+    record.humanApproved = true;
     advance(record, "APPROVED", "Administrador autorizou a publicação.", "PRODUCT_APPROVED");
     return record;
   }
@@ -161,6 +164,8 @@ export class ProductPipeline {
 
     const publicationContext: ProductPublicationContext = {
       ...context,
+      humanManualApproval: context.humanManualApproval ?? record.humanApproved === true,
+      sourceProductUrl: context.sourceProductUrl || record.candidate.normalizedUrl,
       score: Number.isFinite(Number(context.score)) ? Number(context.score) : record.curation.score,
     };
 
@@ -258,7 +263,6 @@ export function createProductionProductPipeline(): ProductPipeline {
     }, { syncCatalog: false }),
     syncAndValidatePublication: async (product, operationId, context) => {
       if (context?.humanManualApproval === true) {
-        if (!context.reviewId) throw new Error("HUMAN_PUBLICATION_REVIEW_ID_MISSING");
         await publishProductWithGate({
           product,
           evidence: {
@@ -270,7 +274,7 @@ export function createProductionProductPipeline(): ProductPipeline {
             lifecycleApproved: true,
             reviewState: "HUMAN_APPROVED",
             humanManualApproval: true,
-            reviewId: context.reviewId,
+            sourceProductUrl: context.sourceProductUrl || null,
           },
           createdBy: "telegram_manual",
         });
