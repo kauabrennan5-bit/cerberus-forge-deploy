@@ -66,7 +66,7 @@ function telegramManualProduct(overrides: Partial<Product> = {}): Product {
       primaryImageUrl: "https://cdn.example/manual.jpg",
       galleryImageUrls: [],
       assessments: [],
-      reason: "human_editorial_authority",
+      reason: "image_review_unavailable",
     },
     imagens: ["https://cdn.example/manual.jpg"],
     link: "https://s.shopee.com.br/manual",
