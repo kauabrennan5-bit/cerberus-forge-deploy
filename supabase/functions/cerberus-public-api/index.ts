@@ -53,6 +53,7 @@ const PUBLIC_PRODUCT_CATEGORIES = new Set([
 
 const AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue";
 const AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback";
+const TELEGRAM_MANUAL_CREATED_BY = "telegram_manual";
 
 const RAW_PAYLOAD_MARKERS = [
   "[url final]",
@@ -91,6 +92,13 @@ function imageCurationRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? value as Record<string, unknown> : null;
 }
 
+function rowPrimaryImage(row: Record<string, unknown>): string | null {
+  const imageCuration = imageCurationRecord(row.image_curation);
+  if (validHttpsUrl(imageCuration?.primaryImageUrl)) return String(imageCuration?.primaryImageUrl);
+  const images = Array.isArray(row.imagens) ? row.imagens : [];
+  return validHttpsUrl(images[0]) ? String(images[0]) : null;
+}
+
 function isStrictEditorialRow(row: Record<string, unknown>): boolean {
   const imageCuration = imageCurationRecord(row.image_curation);
   return String(row.display_title_status || "") === "reviewed"
@@ -110,6 +118,18 @@ function isDeficitFallbackPublicRow(row: Record<string, unknown>): boolean {
     && displayTitle.length > 0
     && validHttpsUrl(primaryImageUrl)
     && Boolean(String(row.image_review_fingerprint || "").trim())
+    && Number.isFinite(price)
+    && price > 0
+    && PUBLIC_PRODUCT_CATEGORIES.has(String(row.categoria || ""))
+    && validShopeeAffiliateLink(row.link);
+}
+
+function isTelegramManualPublicRow(row: Record<string, unknown>): boolean {
+  const displayTitle = String(row.display_title || row.produto || "").trim();
+  const price = Number(row.preco);
+  return String(row.created_by || "") === TELEGRAM_MANUAL_CREATED_BY
+    && displayTitle.length > 0
+    && Boolean(rowPrimaryImage(row))
     && Number.isFinite(price)
     && price > 0
     && PUBLIC_PRODUCT_CATEGORIES.has(String(row.categoria || ""))
@@ -176,7 +196,7 @@ Deno.serve(async (req: Request) => {
       if (error) throw new Error(`PRODUCTS_QUERY_FAILED:${error.code || "unknown"}`);
 
       const products = (Array.isArray(data) ? data : [])
-        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isDeficitFallbackPublicRow(product))
+        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isDeficitFallbackPublicRow(product) || isTelegramManualPublicRow(product))
         .map((product: Record<string, unknown>) => publicProjection(product));
 
       return json({ success: true, products, data: products, source: "supabase-edge" });
