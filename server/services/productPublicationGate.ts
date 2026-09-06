@@ -25,6 +25,8 @@ export type ProductPublicationEvidence = {
   manualEditorialOverride?: boolean;
   /** Aprovação humana explícita via Telegram. Substitui somente gates editoriais. */
   humanManualApproval?: boolean;
+  /** Review que reservou a identidade Shopee usada pela aprovação humana. */
+  reviewId?: string | null;
   /** Permite publicar o melhor lote técnico durante déficit; nunca substitui os hard gates. */
   deficitFallback?: boolean;
 };
@@ -35,6 +37,7 @@ type SourceIdentity = {
   itemId: string;
   sourceProductUrl: string;
   productId: string | null;
+  reviewId: string | null;
 };
 
 export type ProductPublicationEligibilityInput = {
@@ -68,9 +71,19 @@ function validAffiliateLink(link: string | undefined): boolean {
   return host === "shopee.com.br" || host.endsWith(".shopee.com.br");
 }
 
-function validOfficialShopeeIdentity(identity: SourceIdentity | null, productId: string): boolean {
+function validOfficialShopeeIdentity(
+  identity: SourceIdentity | null,
+  productId: string,
+  evidence: ProductPublicationEvidence,
+): boolean {
   if (!identity || identity.marketplace.toLowerCase() !== "shopee") return false;
-  if (!identity.shopId || !identity.itemId || identity.productId !== productId) return false;
+  if (!identity.shopId || !identity.itemId) return false;
+  const humanReservedIdentity = evidence.source === "admin"
+    && evidence.humanManualApproval === true
+    && Boolean(evidence.reviewId)
+    && identity.reviewId === evidence.reviewId
+    && identity.productId === null;
+  if (identity.productId !== productId && !humanReservedIdentity) return false;
   const parsed = extractShopeeIdentity(identity.sourceProductUrl);
   return parsed.shopId === identity.shopId && parsed.itemId === identity.itemId;
 }
@@ -94,7 +107,7 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   const deficitFallback = evidence.deficitFallback === true && (evidence.source === "autonomous_curator" || evidence.source === "recovery");
   const primaryImageUrl = product.imageCuration?.primaryImageUrl?.trim() || product.imagens?.[0]?.trim() || null;
 
-  if (!validOfficialShopeeIdentity(input.identity, product.id)) errors.push("PUBLICATION_SHOPEE_IDENTITY_INVALID");
+  if (!validOfficialShopeeIdentity(input.identity, product.id, evidence)) errors.push("PUBLICATION_SHOPEE_IDENTITY_INVALID");
   if (!input.identity?.shopId || !input.identity?.itemId) errors.push("PUBLICATION_SHOPEE_IDS_MISSING");
   if (!input.identity?.sourceProductUrl || !validHttpsUrl(input.identity.sourceProductUrl)) errors.push("PUBLICATION_SOURCE_URL_INVALID");
   if (!validAffiliateLink(product.link)) errors.push("PUBLICATION_AFFILIATE_LINK_INVALID");
@@ -147,13 +160,7 @@ async function canonicalAutoPublishThreshold(): Promise<number> {
   return threshold;
 }
 
-async function loadIdentity(productId: string): Promise<SourceIdentity | null> {
-  const { data, error } = await requireSupabase()
-    .from("product_source_identities")
-    .select("marketplace,shop_id,item_id,source_product_url,product_id")
-    .eq("product_id", productId)
-    .maybeSingle();
-  if (error) throw error;
+function mapIdentity(data: any): SourceIdentity | null {
   if (!data) return null;
   return {
     marketplace: String(data.marketplace || ""),
@@ -161,7 +168,31 @@ async function loadIdentity(productId: string): Promise<SourceIdentity | null> {
     itemId: String(data.item_id || ""),
     sourceProductUrl: String(data.source_product_url || ""),
     productId: data.product_id ? String(data.product_id) : null,
+    reviewId: data.review_id ? String(data.review_id) : null,
   };
+}
+
+async function loadIdentity(productId: string, evidence: ProductPublicationEvidence): Promise<SourceIdentity | null> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from("product_source_identities")
+    .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+    .eq("product_id", productId)
+    .maybeSingle();
+  if (error) throw error;
+  if (data) return mapIdentity(data);
+
+  if (evidence.source === "admin" && evidence.humanManualApproval === true && evidence.reviewId) {
+    const { data: reserved, error: reservedError } = await client
+      .from("product_source_identities")
+      .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+      .eq("review_id", evidence.reviewId)
+      .is("product_id", null)
+      .maybeSingle();
+    if (reservedError) throw reservedError;
+    return mapIdentity(reserved);
+  }
+  return null;
 }
 
 async function duplicateProductIds(product: Product, identity: SourceIdentity | null): Promise<string[]> {
@@ -197,7 +228,7 @@ export async function assertProductPublicationEligibility(
   evidence: ProductPublicationEvidence,
 ): Promise<ProductPublicationEligibility> {
   const canonicalThreshold = await canonicalAutoPublishThreshold();
-  const identity = await loadIdentity(product.id);
+  const identity = await loadIdentity(product.id, evidence);
   const duplicates = await duplicateProductIds(product, identity);
   const eligibility = validateProductPublicationEligibility({
     product,
@@ -238,6 +269,7 @@ export async function publishProductWithGate(input: {
       reviewState: input.evidence.reviewState || null,
       manualEditorialOverride: input.evidence.manualEditorialOverride === true,
       humanManualApproval,
+      reviewId: input.evidence.reviewId || null,
       deficitFallback,
     },
   });
