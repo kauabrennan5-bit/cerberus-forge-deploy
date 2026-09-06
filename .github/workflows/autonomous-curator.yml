@@ -1,15 +1,14 @@
 name: Cerberus Autonomous Curator
-# Production schedule: one bounded curation opportunity every 15 minutes.
-# Production discoveries are sent to Telegram for a human publish/discard decision.
+# Pushes remain read-only status checks; manual dispatch is available for controlled diagnostics.
+# Production scheduling is owned exclusively by autonomous-curator-scheduler.yml.
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/autonomous-curator.yml"
+      - ".github/workflows/autonomous-curator-scheduler.yml"
       - "server/services/autonomousCurator*.ts"
       - "server/services/productAutomation.ts"
       - "server/services/productImage*.ts"
@@ -51,9 +50,7 @@ jobs:
     env:
       CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
       OIDC_AUDIENCE: cerberus-weekly-automation
-      # Scheduled runs perform real curation but never auto-publish: the database
-      # keeps auto_publish_enabled=false and the daily path creates Telegram reviews.
-      MODE: ${{ github.event_name == 'schedule' && 'manual_review' || github.event_name == 'push' && 'status' || inputs.mode }}
+      MODE: ${{ github.event_name == 'push' && 'status' || inputs.mode }}
     steps:
       - name: Wait for exact Render SHA after deployment
         if: github.event_name == 'push'
