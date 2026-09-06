@@ -23,6 +23,12 @@ export type ProductPublicationEvidence = {
   lifecycleApproved: boolean;
   reviewState?: string | null;
   manualEditorialOverride?: boolean;
+  /** Aprovação humana explícita via Telegram. Substitui somente gates editoriais. */
+  humanManualApproval?: boolean;
+  /** Review que reservou a identidade Shopee usada pela aprovação humana. */
+  reviewId?: string | null;
+  /** URL oficial Shopee que identifica a reserva exclusiva do card. */
+  sourceProductUrl?: string | null;
   /** Permite publicar o melhor lote técnico durante déficit; nunca substitui os hard gates. */
   deficitFallback?: boolean;
 };
@@ -33,6 +39,7 @@ type SourceIdentity = {
   itemId: string;
   sourceProductUrl: string;
   productId: string | null;
+  reviewId: string | null;
 };
 
 export type ProductPublicationEligibilityInput = {
@@ -66,9 +73,20 @@ function validAffiliateLink(link: string | undefined): boolean {
   return host === "shopee.com.br" || host.endsWith(".shopee.com.br");
 }
 
-function validOfficialShopeeIdentity(identity: SourceIdentity | null, productId: string): boolean {
+function validOfficialShopeeIdentity(
+  identity: SourceIdentity | null,
+  productId: string,
+  evidence: ProductPublicationEvidence,
+): boolean {
   if (!identity || identity.marketplace.toLowerCase() !== "shopee") return false;
-  if (!identity.shopId || !identity.itemId || identity.productId !== productId) return false;
+  if (!identity.shopId || !identity.itemId) return false;
+  const reservedByReview = Boolean(evidence.reviewId) && identity.reviewId === evidence.reviewId;
+  const reservedBySource = Boolean(evidence.sourceProductUrl) && identity.sourceProductUrl === evidence.sourceProductUrl;
+  const humanReservedIdentity = evidence.source === "admin"
+    && evidence.humanManualApproval === true
+    && identity.productId === null
+    && (reservedByReview || reservedBySource);
+  if (identity.productId !== productId && !humanReservedIdentity) return false;
   const parsed = extractShopeeIdentity(identity.sourceProductUrl);
   return parsed.shopId === identity.shopId && parsed.itemId === identity.itemId;
 }
@@ -87,46 +105,48 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
     ? Math.max(input.canonicalThreshold, Number(evidence.threshold))
     : input.canonicalThreshold;
   const manualEditorialOverride = evidence.source === "product_rotation" && evidence.manualEditorialOverride === true;
+  const humanManualApproval = evidence.source === "admin" && evidence.humanManualApproval === true;
+  const editorialOverride = manualEditorialOverride || humanManualApproval;
   const deficitFallback = evidence.deficitFallback === true && (evidence.source === "autonomous_curator" || evidence.source === "recovery");
   const primaryImageUrl = product.imageCuration?.primaryImageUrl?.trim() || product.imagens?.[0]?.trim() || null;
 
-  if (!validOfficialShopeeIdentity(input.identity, product.id)) errors.push("PUBLICATION_SHOPEE_IDENTITY_INVALID");
+  if (!validOfficialShopeeIdentity(input.identity, product.id, evidence)) errors.push("PUBLICATION_SHOPEE_IDENTITY_INVALID");
   if (!input.identity?.shopId || !input.identity?.itemId) errors.push("PUBLICATION_SHOPEE_IDS_MISSING");
   if (!input.identity?.sourceProductUrl || !validHttpsUrl(input.identity.sourceProductUrl)) errors.push("PUBLICATION_SOURCE_URL_INVALID");
   if (!validAffiliateLink(product.link)) errors.push("PUBLICATION_AFFILIATE_LINK_INVALID");
   if (!isPublicProductCategory(product.categoria)) errors.push("PUBLICATION_CATEGORY_INVALID");
-  if (!manualEditorialOverride && !deficitFallback && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
+  if (!editorialOverride && !deficitFallback && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
 
-  if (!deficitFallback && product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
-  if (!product.imageCuration || (!deficitFallback && product.imageCuration.status !== "ready")) errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
+  if (!editorialOverride && !deficitFallback && product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
+  if (!editorialOverride && !deficitFallback && (!product.imageCuration || product.imageCuration.status !== "ready")) errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
   if (!primaryImageUrl || !validHttpsUrl(primaryImageUrl)) errors.push("PUBLICATION_PRIMARY_IMAGE_MISSING");
-  if (!product.imageReviewFingerprint || !primaryImageUrl || product.imageReviewFingerprint !== imageUrlFingerprint(primaryImageUrl)) {
+  if (!editorialOverride && (!product.imageReviewFingerprint || !primaryImageUrl || product.imageReviewFingerprint !== imageUrlFingerprint(primaryImageUrl))) {
     errors.push("PUBLICATION_IMAGE_FINGERPRINT_STALE");
   }
   const primaryAssessment = primaryImageUrl
     ? product.imageCuration?.assessments.find(assessment => assessment.url === primaryImageUrl)
     : undefined;
-  if (!deficitFallback && (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW")) {
+  if (!editorialOverride && !deficitFallback && (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW")) {
     errors.push("PUBLICATION_IMAGE_PRIMARY_NOT_EDITORIALLY_APPROVED");
   }
-  if (!deficitFallback && product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {
+  if (!editorialOverride && !deficitFallback && product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {
     errors.push("PUBLICATION_IMAGE_OFF_BRAND");
   }
 
   const displayTitle = String(product.displayTitle || "").replace(/\s+/g, " ").trim();
   const rawTitle = String(product.rawTitle || product.produto || "").replace(/\s+/g, " ").trim();
-  if (!deficitFallback && product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
-  if (!displayTitle || (!manualEditorialOverride && !deficitFallback && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
+  if (!editorialOverride && !deficitFallback && product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
+  if (!displayTitle || (!editorialOverride && !deficitFallback && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
   if (!Number.isFinite(Number(product.preco)) || Number(product.preco) <= 0) errors.push("PUBLICATION_PRICE_UNVERIFIED");
   if ((input.duplicateProductIds || []).some(id => id !== product.id)) errors.push("PUBLICATION_DUPLICATE_PRODUCT");
   if (input.identity?.productId && input.identity.productId !== product.id) errors.push("PUBLICATION_IDENTITY_OWNED_BY_OTHER_PRODUCT");
-  if (!manualEditorialOverride && !deficitFallback && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
+  if (!editorialOverride && !deficitFallback && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
     errors.push("PUBLICATION_CATALOG_SIMILARITY_PROHIBITED");
   }
   if (evidence.categoryMismatch) errors.push("PUBLICATION_CATEGORY_MISMATCH");
-  if (!manualEditorialOverride && !deficitFallback && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
-  if (!manualEditorialOverride && !deficitFallback && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
-  if (!manualEditorialOverride && !deficitFallback && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
+  if (!editorialOverride && !deficitFallback && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
+  if (!editorialOverride && !deficitFallback && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
+  if (!editorialOverride && !deficitFallback && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
 
   return { ok: errors.length === 0, errors: [...new Set(errors)], primaryImageUrl, threshold };
 }
@@ -143,13 +163,7 @@ async function canonicalAutoPublishThreshold(): Promise<number> {
   return threshold;
 }
 
-async function loadIdentity(productId: string): Promise<SourceIdentity | null> {
-  const { data, error } = await requireSupabase()
-    .from("product_source_identities")
-    .select("marketplace,shop_id,item_id,source_product_url,product_id")
-    .eq("product_id", productId)
-    .maybeSingle();
-  if (error) throw error;
+function mapIdentity(data: any): SourceIdentity | null {
   if (!data) return null;
   return {
     marketplace: String(data.marketplace || ""),
@@ -157,7 +171,43 @@ async function loadIdentity(productId: string): Promise<SourceIdentity | null> {
     itemId: String(data.item_id || ""),
     sourceProductUrl: String(data.source_product_url || ""),
     productId: data.product_id ? String(data.product_id) : null,
+    reviewId: data.review_id ? String(data.review_id) : null,
   };
+}
+
+async function loadIdentity(productId: string, evidence: ProductPublicationEvidence): Promise<SourceIdentity | null> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from("product_source_identities")
+    .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+    .eq("product_id", productId)
+    .maybeSingle();
+  if (error) throw error;
+  if (data) return mapIdentity(data);
+
+  if (evidence.source === "admin" && evidence.humanManualApproval === true) {
+    if (evidence.reviewId) {
+      const { data: byReview, error: reviewError } = await client
+        .from("product_source_identities")
+        .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+        .eq("review_id", evidence.reviewId)
+        .is("product_id", null)
+        .maybeSingle();
+      if (reviewError) throw reviewError;
+      if (byReview) return mapIdentity(byReview);
+    }
+    if (evidence.sourceProductUrl) {
+      const { data: bySource, error: sourceError } = await client
+        .from("product_source_identities")
+        .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+        .eq("source_product_url", evidence.sourceProductUrl)
+        .is("product_id", null)
+        .maybeSingle();
+      if (sourceError) throw sourceError;
+      return mapIdentity(bySource);
+    }
+  }
+  return null;
 }
 
 async function duplicateProductIds(product: Product, identity: SourceIdentity | null): Promise<string[]> {
@@ -193,7 +243,7 @@ export async function assertProductPublicationEligibility(
   evidence: ProductPublicationEvidence,
 ): Promise<ProductPublicationEligibility> {
   const canonicalThreshold = await canonicalAutoPublishThreshold();
-  const identity = await loadIdentity(product.id);
+  const identity = await loadIdentity(product.id, evidence);
   const duplicates = await duplicateProductIds(product, identity);
   const eligibility = validateProductPublicationEligibility({
     product,
@@ -213,6 +263,7 @@ export async function publishProductWithGate(input: {
 }): Promise<void> {
   const eligibility = await assertProductPublicationEligibility(input.product, input.evidence);
   const deficitFallback = input.evidence.deficitFallback === true && (input.evidence.source === "autonomous_curator" || input.evidence.source === "recovery");
+  const humanManualApproval = input.evidence.source === "admin" && input.evidence.humanManualApproval === true;
   const client = requireSupabase();
   const authorizationId = randomUUID();
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
@@ -232,6 +283,9 @@ export async function publishProductWithGate(input: {
       offBrand: input.evidence.offBrand,
       reviewState: input.evidence.reviewState || null,
       manualEditorialOverride: input.evidence.manualEditorialOverride === true,
+      humanManualApproval,
+      reviewId: input.evidence.reviewId || null,
+      sourceProductUrl: input.evidence.sourceProductUrl || null,
       deficitFallback,
     },
   });

@@ -14,6 +14,15 @@ export type ShopeePublicationPreflightResult =
   | { ok: true; code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" }
   | { ok: false; code: string; transient: boolean };
 
+export type ShopeePublicationPreflightOptions = {
+  /**
+   * A decisão humana final pode substituir somente gates editoriais/visuais.
+   * Identidade, disponibilidade, afiliado, preço e mutação da imagem continuam
+   * sendo revalidados no instante do clique em PUBLICAR.
+   */
+  humanManualApproval?: boolean;
+};
+
 let testPreflightOverride: ((candidate: ProductCandidate) => Promise<ShopeePublicationPreflightResult>) | null = null;
 
 export function setTestShopeePublicationPreflight(
@@ -27,9 +36,14 @@ function numbersMateriallyDiffer(a: number, b: number): boolean {
   return Math.abs(a - b) > 0.009;
 }
 
+function firstHttpsImage(images: readonly string[] | undefined): string | null {
+  return images?.find(image => /^https:\/\//i.test(String(image || "").trim()))?.trim() || null;
+}
+
 export async function revalidateShopeeCandidateBeforePublication(
   candidate: ProductCandidate,
   env: NodeJS.ProcessEnv = process.env,
+  options: ShopeePublicationPreflightOptions = {},
 ): Promise<ShopeePublicationPreflightResult> {
   if (testPreflightOverride) return testPreflightOverride(candidate);
   if (candidate.marketplace !== "Shopee") return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" };
@@ -117,16 +131,21 @@ export async function revalidateShopeeCandidateBeforePublication(
     imageCuration: current.imageCuration,
     imageEditorialStatus: current.imageEditorialStatus,
   });
+  const currentPrimaryImage = currentImage.primaryImageUrl || firstHttpsImage(current.imagens);
+  if (!currentPrimaryImage || !/^https:\/\//i.test(currentPrimaryImage)) {
+    return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_MISSING", transient: false };
+  }
   if (
-    current.imageEditorialStatus !== "clean"
-    || currentImage.status !== "ready"
-    || !currentImage.primaryImageUrl
-    || !/^https:\/\//i.test(currentImage.primaryImageUrl)
+    !options.humanManualApproval
+    && (
+      current.imageEditorialStatus !== "clean"
+      || currentImage.status !== "ready"
+    )
   ) {
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_NOT_CLEAN", transient: false };
   }
-  const savedImage = resolveCanonicalProductImage(candidate).primaryImageUrl;
-  if (!savedImage || savedImage !== currentImage.primaryImageUrl) {
+  const savedImage = resolveCanonicalProductImage(candidate).primaryImageUrl || firstHttpsImage(candidate.imagens);
+  if (!savedImage || savedImage !== currentPrimaryImage) {
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
   }
 

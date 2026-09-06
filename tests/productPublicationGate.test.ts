@@ -55,6 +55,7 @@ const identity = {
   itemId: "456",
   sourceProductUrl: "https://shopee.com.br/product/123/456",
   productId: "prod-reviewed",
+  reviewId: null,
 };
 
 function eligibility(product = reviewedProduct(), evidenceOverrides: Record<string, unknown> = {}) {
@@ -88,7 +89,7 @@ test("score 71 remains blocked when canonical threshold is 88", () => {
   assert.ok(result.errors.includes("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD"));
 });
 
-test("unreviewed display title and image can never become published", () => {
+test("unreviewed display title and image can never become autonomously published", () => {
   const result = eligibility(reviewedProduct({
     displayTitleStatus: "unreviewed",
     imageEditorialStatus: "unreviewed",
@@ -104,7 +105,7 @@ test("stale image fingerprint is blocked even if status says clean", () => {
   assert.ok(result.errors.includes("PUBLICATION_IMAGE_FINGERPRINT_STALE"));
 });
 
-test("off-brand, REVIEW state and prohibited similarity remain hard blockers", () => {
+test("off-brand, REVIEW state and prohibited similarity remain hard blockers for automatic authority", () => {
   const result = eligibility(reviewedProduct(), {
     offBrand: true,
     reviewState: "REVIEW_REQUIRED",
@@ -135,6 +136,62 @@ test("manual Product Rotation confirmation overrides editorial evidence but not 
   assert.ok(invalidLink.errors.includes("PUBLICATION_AFFILIATE_LINK_INVALID"));
 });
 
+test("Telegram PUBLICAR has final editorial authority but preserves objective hard blocks", () => {
+  const product = reviewedProduct({
+    displayTitleStatus: "unreviewed",
+    imageEditorialStatus: "unreviewed",
+    imageCuration: undefined,
+    imageReviewFingerprint: undefined,
+  });
+  const humanEvidence = {
+    source: "admin" as const,
+    humanManualApproval: true,
+    sourceProductUrl: identity.sourceProductUrl,
+    score: 10,
+    maximumCatalogSimilarity: 0.99,
+    categoryMismatch: false,
+    offBrand: true,
+    lifecycleApproved: false,
+    reviewState: "REVIEW_REQUIRED",
+  };
+  const result = validateProductPublicationEligibility({
+    product,
+    identity: { ...identity, productId: null, reviewId: "review-telegram-1" },
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: humanEvidence,
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.errors, []);
+
+  const invalidPrice = validateProductPublicationEligibility({
+    product: { ...product, preco: 0 },
+    identity: { ...identity, productId: null, reviewId: "review-telegram-1" },
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: humanEvidence,
+  });
+  assert.ok(invalidPrice.errors.includes("PUBLICATION_PRICE_UNVERIFIED"));
+
+  const missingImage = validateProductPublicationEligibility({
+    product: { ...product, imagens: [] },
+    identity: { ...identity, productId: null, reviewId: "review-telegram-1" },
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: humanEvidence,
+  });
+  assert.ok(missingImage.errors.includes("PUBLICATION_PRIMARY_IMAGE_MISSING"));
+
+  const duplicate = validateProductPublicationEligibility({
+    product,
+    identity: { ...identity, productId: null, reviewId: "review-telegram-1" },
+    canonicalThreshold: 88,
+    duplicateProductIds: ["another-product"],
+    evidence: humanEvidence,
+  });
+  assert.ok(duplicate.errors.includes("PUBLICATION_DUPLICATE_PRODUCT"));
+});
+
 test("database migration enforces authorization and never fabricates editorial review", async () => {
   const migration = await readFile(new URL("../supabase/migrations/20260903041603_product_publication_gate.sql", import.meta.url), "utf8");
   assert.match(migration, /products_publication_authorization_guard/);
@@ -154,4 +211,19 @@ test("manual rotation override exists only inside product_rotation authorization
   assert.match(migration, /AFFILIATE_LINK_INVALID/);
   assert.match(migration, /SHOPEE_IDENTITY_INVALID/);
   assert.match(migration, /PRICE_UNVERIFIED/);
+});
+
+test("Telegram human override migration keeps technical gates and reserved-card identity", async () => {
+  const migration = await readFile(new URL("../supabase/migrations/20260906004155_human_telegram_publication_editorial_override.sql", import.meta.url), "utf8");
+  assert.match(migration, /ppa\.source = 'admin'/);
+  assert.match(migration, /humanManualApproval/);
+  assert.match(migration, /sourceProductUrl/);
+  assert.match(migration, /psi\.review_id is not null/);
+  assert.match(migration, /PRIMARY_IMAGE_MISSING/);
+  assert.match(migration, /PRICE_UNVERIFIED/);
+  assert.match(migration, /CATEGORY_INVALID/);
+  assert.match(migration, /AFFILIATE_LINK_INVALID/);
+  assert.match(migration, /SHOPEE_IDENTITY_INVALID/);
+  assert.doesNotMatch(migration, /set\s+display_title_status\s*=\s*'reviewed'/i);
+  assert.doesNotMatch(migration, /set\s+image_editorial_status\s*=\s*'clean'/i);
 });
