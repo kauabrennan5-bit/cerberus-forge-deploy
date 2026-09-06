@@ -4,6 +4,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import type { PendingReview, TelegramReviewStatus } from "../services/telegramTypes";
 import { bindProductSourceIdentityByReview, releaseProductSourceIdentityByReview, reserveProductSourceIdentity } from "./autonomousCuratorRepository";
+import { isPublicHttpsImageUrl } from "../../src/lib/productCanonical";
 
 dotenv.config();
 
@@ -145,6 +146,95 @@ function normalizeReviewRow(row: any): PendingReview | null {
   return review;
 }
 
+const HUMAN_PUBLICATION_TECHNICAL_IMAGE_BLOCKERS = new Set([
+  "IMAGE_MISSING",
+  "IMAGE_HOST_INVALID",
+  "IMAGE_PLACEHOLDER",
+  "IMAGE_INACCESSIBLE",
+  "IMAGE_REDIRECT_HOST_INVALID",
+  "IMAGE_HTTP_ERROR",
+  "IMAGE_BODY_UNREADABLE",
+  "IMAGE_EMPTY",
+  "IMAGE_TOO_LARGE",
+  "IMAGE_BYTES_INVALID",
+  "IMAGE_MIME_UNSUPPORTED",
+  "IMAGE_DIMENSIONS_UNKNOWN",
+  "IMAGE_TOO_SMALL",
+  "IMAGE_INVALID",
+]);
+
+/**
+ * Compatibility view used only when a human is about to act on a review.
+ *
+ * The legacy confirm_pub handler historically treated imageEditorialStatus as
+ * a completeness requirement before ProductPipeline.approve() could establish
+ * human authority. For reviews that are explicitly manual (the /shopee manual
+ * delivery contract or Autonomous Curator cards), a review_required image is
+ * therefore projected in-memory as technically usable when—and only when—we
+ * already have a public HTTPS image and no objective image blocker.
+ *
+ * The original editorial state and reason stay in existingProduct for audit.
+ * This function does not publish, does not bind Shopee identity, does not touch
+ * price/category/link gates, and does not persist anything by itself. The
+ * canonical publication pipeline still revalidates image accessibility and all
+ * objective publication invariants after the human click.
+ */
+export function applyHumanPublicationImageView(review: PendingReview): PendingReview {
+  const meta = review.existingProduct && typeof review.existingProduct === "object"
+    ? review.existingProduct as Record<string, any>
+    : null;
+  const hasHumanAuthorityContract = meta?.manualDeliveryContract === true || meta?.source === "autonomous_curator";
+  if (!hasHumanAuthorityContract) return review;
+  if (review.status && !["pending", "error"].includes(review.status)) return review;
+  if (review.imageEditorialStatus === "clean") return review;
+
+  const reasons = Array.isArray(meta?.manualReviewReasons)
+    ? meta!.manualReviewReasons.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    : [];
+  if (reasons.some(reason => HUMAN_PUBLICATION_TECHNICAL_IMAGE_BLOCKERS.has(reason))) return review;
+
+  const observedImages = [
+    review.imagemPrincipal,
+    ...(review.imagens || []),
+    ...(review.imagensOriginais || []),
+    ...(review.imagensGaleria || []),
+  ]
+    .filter((value): value is string => isPublicHttpsImageUrl(value))
+    .map(value => value.trim())
+    .filter((value, index, list) => list.indexOf(value) === index);
+  const primaryImageUrl = observedImages[0];
+  if (!primaryImageUrl) return review;
+
+  const galleryImageUrls = observedImages.filter(url => url !== primaryImageUrl);
+  const originalImageEditorialStatus = review.imageEditorialStatus || "unreviewed";
+  const originalImageCurationStatus = review.imageCuration?.status || "missing";
+  const originalImageCurationReason = review.imageCuration?.reason || null;
+
+  return {
+    ...review,
+    imagens: observedImages,
+    imagensOriginais: observedImages,
+    imagemPrincipal: primaryImageUrl,
+    imagensGaleria: galleryImageUrls,
+    imageEditorialStatus: "clean",
+    imageCuration: {
+      status: "ready",
+      rawImageUrls: observedImages,
+      primaryImageUrl,
+      galleryImageUrls,
+      assessments: review.imageCuration?.assessments || [],
+    },
+    existingProduct: {
+      ...meta,
+      humanPublicationImageAuthorityApplied: true,
+      originalImageEditorialStatus,
+      originalImageCurationStatus,
+      originalImageCurationReason,
+      manualReviewReasons: reasons,
+    },
+  };
+}
+
 async function syncAutonomousCuratorReviewIdentity(review: PendingReview): Promise<void> {
   const meta = review.existingProduct as any;
   if (meta?.source !== "autonomous_curator") return;
@@ -230,7 +320,8 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
 
 export async function getPendingReview(reviewId: string): Promise<PendingReview | null> {
   if (testOverrideGetPendingReview) {
-    return await testOverrideGetPendingReview(reviewId);
+    const overridden = await testOverrideGetPendingReview(reviewId);
+    return overridden ? applyHumanPublicationImageView(overridden) : null;
   }
   let review: PendingReview | null = null;
 
@@ -265,6 +356,11 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
     review.status = "expired";
     await savePendingReview(review);
   }
+
+  // A view de autoridade humana é aplicada somente na leitura individual que
+  // antecede ações explícitas; listagens e persistência continuam exibindo a
+  // evidência editorial original até o administrador realmente agir.
+  review = applyHumanPublicationImageView(review);
 
   // A review expirada permanece consultável para auditoria e para mensagens
   // específicas de expiração, mas savePendingReview impede reativação/mutação.
