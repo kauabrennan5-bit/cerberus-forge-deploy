@@ -1,6 +1,9 @@
-import { createHash } from "node:crypto";
 import { savePendingReview } from "../repositories/telegramRepository";
-import { releaseProductSourceIdentityByReview, reserveProductSourceIdentity } from "../repositories/autonomousCuratorRepository";
+import { releaseProductSourceIdentityByReview } from "../repositories/autonomousCuratorRepository";
+import {
+  reserveManualShopeeIdentity,
+  type ManualShopeeIdentityReservationInput,
+} from "../repositories/manualShopeeIdentityRepository";
 import type { ProductImageCuration } from "../../src/lib/productImageCuration";
 import type { PendingReview } from "./telegramTypes";
 import { runShopeeManualDeliveryCommand } from "./shopeeManualDelivery";
@@ -95,28 +98,10 @@ export function applyShopeeManualImageAuthority(review: PendingReview): PendingR
   };
 }
 
-type ManualIdentityReservationInput = {
-  marketplace: "Shopee";
-  shopId: string;
-  itemId: string;
-  sourceProductUrl: string;
-  runId: string;
-  reviewId: string;
-  ttlMinutes: number;
-};
-
-/**
- * product_source_identities.reserved_run_id é UUID. Reviews manuais não têm um
- * autonomous_curator_run real, portanto derivamos um UUID estável somente para
- * satisfazer o contrato de armazenamento; a autoridade/ownership continua
- * sendo determinada pelo reviewId e pela URL oficial exata.
- */
-function manualReservationRunId(reviewId: string): string {
-  const hex = createHash("sha256").update(`telegram_manual:${reviewId}`).digest("hex").slice(0, 32);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-function manualIdentityReservationInput(review: PendingReview, now = Date.now()): ManualIdentityReservationInput | null {
+function manualIdentityReservationInput(
+  review: PendingReview,
+  now = Date.now(),
+): ManualShopeeIdentityReservationInput | null {
   if (review.existingProduct?.manualDeliveryContract !== true) return null;
   const meta = review.existingProduct as Record<string, unknown>;
   const shopId = String(meta.shopId || "").trim();
@@ -130,7 +115,6 @@ function manualIdentityReservationInput(review: PendingReview, now = Date.now())
     shopId,
     itemId,
     sourceProductUrl,
-    runId: manualReservationRunId(review.id),
     reviewId: review.id,
     ttlMinutes,
   };
@@ -142,7 +126,7 @@ export async function runShopeeManualDeliveryWithHumanAuthority(argsRaw: string)
       const adapted = applyShopeeManualImageAuthority(review);
       const identity = manualIdentityReservationInput(adapted);
       if (!identity) throw new Error("SHOPEE_MANUAL_REVIEW_IDENTITY_METADATA_INVALID");
-      const reservation = await reserveProductSourceIdentity(identity);
+      const reservation = await reserveManualShopeeIdentity(identity);
       if (!reservation.reserved) throw new Error("SHOPEE_MANUAL_REVIEW_IDENTITY_CONFLICT");
       try {
         await savePendingReview(adapted);
@@ -156,5 +140,4 @@ export async function runShopeeManualDeliveryWithHumanAuthority(argsRaw: string)
 
 export const shopeeManualHumanAuthorityInternals = {
   manualIdentityReservationInput,
-  manualReservationRunId,
 };
