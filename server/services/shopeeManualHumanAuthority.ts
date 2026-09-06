@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { savePendingReview } from "../repositories/telegramRepository";
 import { releaseProductSourceIdentityByReview, reserveProductSourceIdentity } from "../repositories/autonomousCuratorRepository";
 import type { ProductImageCuration } from "../../src/lib/productImageCuration";
@@ -104,6 +105,17 @@ type ManualIdentityReservationInput = {
   ttlMinutes: number;
 };
 
+/**
+ * product_source_identities.reserved_run_id é UUID. Reviews manuais não têm um
+ * autonomous_curator_run real, portanto derivamos um UUID estável somente para
+ * satisfazer o contrato de armazenamento; a autoridade/ownership continua
+ * sendo determinada pelo reviewId e pela URL oficial exata.
+ */
+function manualReservationRunId(reviewId: string): string {
+  const hex = createHash("sha256").update(`telegram_manual:${reviewId}`).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
 function manualIdentityReservationInput(review: PendingReview, now = Date.now()): ManualIdentityReservationInput | null {
   if (review.existingProduct?.manualDeliveryContract !== true) return null;
   const meta = review.existingProduct as Record<string, unknown>;
@@ -118,7 +130,7 @@ function manualIdentityReservationInput(review: PendingReview, now = Date.now())
     shopId,
     itemId,
     sourceProductUrl,
-    runId: `telegram_manual:${review.id}`,
+    runId: manualReservationRunId(review.id),
     reviewId: review.id,
     ttlMinutes,
   };
@@ -144,4 +156,5 @@ export async function runShopeeManualDeliveryWithHumanAuthority(argsRaw: string)
 
 export const shopeeManualHumanAuthorityInternals = {
   manualIdentityReservationInput,
+  manualReservationRunId,
 };
