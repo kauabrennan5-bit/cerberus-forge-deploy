@@ -72,17 +72,25 @@ describe("manual Shopee image authority", () => {
     assert.equal(adapted.imageEditorialStatus, "review_required");
   });
 
-  it("builds the exact review-owned Shopee identity reservation required by publication gate", () => {
-    const input = shopeeManualHumanAuthorityInternals.manualIdentityReservationInput(
+  it("builds review-owned Shopee identity with a stable UUID-safe reservation id", () => {
+    const first = shopeeManualHumanAuthorityInternals.manualIdentityReservationInput(
       review("image_review_model_unavailable"),
       1_788_700_000_000,
     );
-    assert.deepEqual(input, {
+    const second = shopeeManualHumanAuthorityInternals.manualIdentityReservationInput(
+      review("image_review_model_unavailable"),
+      1_788_700_000_000,
+    );
+    assert.ok(first);
+    assert.ok(second);
+    assert.equal(first.runId, second.runId);
+    assert.match(first.runId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.deepEqual({ ...first, runId: "<uuid>" }, {
       marketplace: "Shopee",
       shopId: "123",
       itemId: "456",
       sourceProductUrl: "https://shopee.com.br/product/123/456",
-      runId: "telegram_manual:review-manual-authority",
+      runId: "<uuid>",
       reviewId: "review-manual-authority",
       ttlMinutes: 60,
     });
