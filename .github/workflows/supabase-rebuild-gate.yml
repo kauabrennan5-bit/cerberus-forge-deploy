@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          EXPECTED='d513a5f0908f1619f59327a363d21eab|45|45|0|1|16|8|201|768|325'
+          EXPECTED='556b4d4ddb619de85ac271546bf06a3b|45|45|0|1|19|11|201|768|325'
           ACTUAL="$(psql "$DB_URL" -X -qAt <<'SQL'
           with lines as (
             select 'TABLE|' || c.relname || '|' || c.relkind::text as line
