@@ -72,7 +72,7 @@ describe("manual Shopee image authority", () => {
     assert.equal(adapted.imageEditorialStatus, "review_required");
   });
 
-  it("builds the exact review-owned Shopee identity reservation required by publication gate", () => {
+  it("builds review-owned Shopee identity without inventing an autonomous run id", () => {
     const input = shopeeManualHumanAuthorityInternals.manualIdentityReservationInput(
       review("image_review_model_unavailable"),
       1_788_700_000_000,
@@ -82,10 +82,10 @@ describe("manual Shopee image authority", () => {
       shopId: "123",
       itemId: "456",
       sourceProductUrl: "https://shopee.com.br/product/123/456",
-      runId: "telegram_manual:review-manual-authority",
       reviewId: "review-manual-authority",
       ttlMinutes: 60,
     });
+    assert.equal("runId" in (input || {}), false);
   });
 
   it("refuses to invent manual identity metadata", () => {
