@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { shopeePublicationPreflightInternals } from "../server/services/shopeePublicationPreflight";
 
-const { shopeeImageAssetKey, sameShopeeImageAsset } = shopeePublicationPreflightInternals;
+const { shopeeImageAssetKey, sameShopeeImageAsset, currentImageEvidence } = shopeePublicationPreflightInternals;
 
 describe("Shopee publication preflight image identity", () => {
   it("treats cf.shopee.com.br and img.susercontent.com aliases as the same asset", () => {
@@ -17,6 +17,16 @@ describe("Shopee publication preflight image identity", () => {
     const card = "https://cf.shopee.com.br/file/cn-11134207-820l4-mitvi9gtixona4";
     const live = "https://down-br.img.susercontent.com/file/cn-11134207-820l4-mitvi9gtixona4";
     assert.equal(sameShopeeImageAsset(card, live), true);
+  });
+
+  it("keeps raw/original listing images as live evidence even when curation selects another primary", () => {
+    const approved = "https://cf.shopee.com.br/file/cn-11134207-820l4-mitvi9gtixona4";
+    const evidence = currentImageEvidence({
+      imagens: ["https://down-br.img.susercontent.com/file/br-11134258-820m5-ml8a34rlu7t287"],
+      imagensOriginais: ["https://down-br.img.susercontent.com/file/cn-11134207-820l4-mitvi9gtixona4"],
+      imagemPrincipal: "https://down-br.img.susercontent.com/file/br-11134258-820m5-ml8a34rlu7t287",
+    });
+    assert.equal(evidence.some(image => sameShopeeImageAsset(approved, image)), true);
   });
 
   it("still blocks a genuinely different Shopee image asset", () => {
