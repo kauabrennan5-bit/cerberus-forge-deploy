@@ -41,6 +41,10 @@ test("menu nativo tem dez comandos, descrições válidas e preserva compatibili
   assert.ok(categorias && /taxonomia/i.test(categorias.description));
 });
 
+test("/shopee não converte estados estruturados do provider em erro de sintaxe", () => {
+  assert.match(telegramCoreSource, /result\.processed === 0 && !result\.errorCode/);
+});
+
 test("parser, aliases e atalhos naturais preservam o contrato V2", () => {
   assert.deepEqual(parseTelegramCommand("/status@CerberusBot agora"), { name: "status", args: "agora" });
   assert.deepEqual(parseTelegramCommand("/publicar rev_123"), { name: "publicar", args: "rev_123" });

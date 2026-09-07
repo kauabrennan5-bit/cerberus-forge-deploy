@@ -119,6 +119,8 @@ export interface ShopeeProductLookupResult {
   readonly name: string | null;
   readonly priceMinorUnits: number | null;
   readonly productLink: string | null;
+  /** Imagem principal retornada pelo mesmo nó oficial productOfferV2 exato. */
+  readonly imageUrl?: string | null;
   /** Status HTTP observado; null quando não houve resposta HTTP utilizável. */
   readonly httpStatus: number | null;
   readonly raw: unknown;
@@ -149,6 +151,8 @@ export interface ShopeeAffiliateAcquisitionResult {
   /** Preço atual retornado no mesmo nó oficial productOfferV2 do item exato.
    * null quando a fonte não o fornece ou a forma é inválida. */
   readonly price: number | null;
+  /** Imagem principal retornada pelo mesmo nó oficial productOfferV2 exato. */
+  readonly imageUrl?: string | null;
   readonly raw: unknown;
   readonly error: ShopeeClientError | null;
 }

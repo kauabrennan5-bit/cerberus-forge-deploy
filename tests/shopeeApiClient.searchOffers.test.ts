@@ -53,6 +53,7 @@ test("acquireAffiliateLink preserva o preço atual retornado para o item oficial
             price: "79.90",
             productLink: "https://shopee.com.br/product/1530442944/23794344926",
             offerLink: "https://s.shopee.com.br/teste",
+            imageUrl: "0123456789abcdefghijklmnopqrst",
           }],
         },
       },
@@ -63,6 +64,43 @@ test("acquireAffiliateLink preserva o preço atual retornado para o item oficial
 
   assert.equal(result.status, "link_acquired");
   assert.equal(result.price, 79.9);
+  assert.equal(result.imageUrl, "https://down-br.img.susercontent.com/file/0123456789abcdefghijklmnopqrst");
+});
+
+test("lookupProduct consulta identidade exata com imageUrl e sem keyword search", async () => {
+  let payload = "";
+  const client = createShopeeApiClient({
+    appId: "test-app",
+    secret: "test-secret",
+    transport: async (_url, init) => {
+      payload = init.body;
+      return new Response(JSON.stringify({
+        data: {
+          productOfferV2: {
+            nodes: [{
+              shopId: 1530442944,
+              itemId: 23794344926,
+              productName: "Luminária Oficial",
+              price: "79.90",
+              productLink: "https://shopee.com.br/product/1530442944/23794344926",
+              offerLink: "https://s.shopee.com.br/teste",
+              imageUrl: "0123456789abcdefghijklmnopqrst",
+            }],
+          },
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+
+  const result = await client.lookupProduct({ shopId: "1530442944", itemId: "23794344926" });
+
+  assert.equal(result.status, "found");
+  assert.equal(result.shopId, "1530442944");
+  assert.equal(result.itemId, "23794344926");
+  assert.equal(result.imageUrl, "https://down-br.img.susercontent.com/file/0123456789abcdefghijklmnopqrst");
+  assert.match(payload, /productOfferV2\(itemId: 23794344926, shopId: 1530442944, limit: 1\)/);
+  assert.match(payload, /offerLink imageUrl/);
+  assert.doesNotMatch(payload, /keyword:/);
 });
 
 test("inspectPromotionFields usa apenas introspecção e retorna nomes de campos promocionais disponíveis", async () => {

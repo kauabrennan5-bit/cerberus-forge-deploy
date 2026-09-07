@@ -1,9 +1,10 @@
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   rankManualShopeeCandidates,
   runShopeeManualDeliveryCommand,
 } from "../server/services/shopeeManualDelivery";
+import { setTestSearchProvider } from "../server/services/shopeeDiscovery";
 
 const SHOP_ID = "1530442944";
 const ITEM_1 = "23794344926";
@@ -46,6 +47,8 @@ function offer(itemId: string, name: string, productLink: string, imageUrl: stri
 }
 
 describe("manual /shopee delivery guarantee", () => {
+  afterEach(() => setTestSearchProvider(null));
+
   it("keeps hard-rejected candidates rankable instead of deleting the pool", () => {
     const ranked = rankManualShopeeCandidates([
       {
@@ -97,8 +100,24 @@ describe("manual /shopee delivery guarantee", () => {
     const saved: any[] = [];
     const photos: Array<{ caption: string }> = [];
     const texts: string[] = [];
+    let keywordSearchCalls = 0;
+    setTestSearchProvider(async () => ({
+      provider: "duckduckgo",
+      state: "DDG_OK",
+      httpStatus: 200,
+      reason: null,
+      candidates: offers.map(item => ({
+        url: `https://shopee.com.br/product/${item.shopId}/${item.itemId}`,
+        shopId: item.shopId,
+        itemId: item.itemId,
+        rawTitle: `DDG candidato ${item.itemId}`,
+      })),
+    }));
     const client = {
-      searchOffers: async () => ({ ok: true, items: offers, httpStatus: 200, error: null, reason: null }),
+      searchOffers: async () => {
+        keywordSearchCalls += 1;
+        return { ok: true, items: offers, httpStatus: 200, error: null, reason: null };
+      },
       acquireAffiliateLink: async ({ itemId }: { shopId: string; itemId: string }) => {
         const found = offers.find(item => item.itemId === itemId)!;
         return {
@@ -109,11 +128,26 @@ describe("manual /shopee delivery guarantee", () => {
           itemId: found.itemId,
           name: found.name,
           price: found.price,
+          imageUrl: found.imageUrl,
           raw: null,
           error: null,
         };
       },
-      lookupProduct: async () => ({ status: "not_found" }),
+      lookupProduct: async ({ itemId }: { shopId: string; itemId: string }) => {
+        const found = offers.find(item => item.itemId === itemId)!;
+        return {
+          status: "found",
+          shopId: found.shopId,
+          itemId: found.itemId,
+          name: found.name,
+          priceMinorUnits: found.price,
+          productLink: found.productLink,
+          imageUrl: found.imageUrl,
+          httpStatus: 200,
+          raw: null,
+          error: null,
+        };
+      },
       inspectPromotionFields: async () => ({ ok: false, nodeType: null, fields: [], reason: "not_tested" }),
       inspectPromotionOffer: async () => ({ ok: false, values: null, reason: "not_tested" }),
     } as any;
@@ -136,7 +170,10 @@ describe("manual /shopee delivery guarantee", () => {
     });
 
     assert.equal(result.countRequested, 2);
+    assert.equal(keywordSearchCalls, 0);
     assert.equal(result.candidatesReceived, 2);
+    assert.equal(result.candidatesDiscoveredViaDdg, 2);
+    assert.equal(result.candidatesValidatedByAffiliateApi, 2);
     assert.equal(result.ok, 2);
     assert.equal(result.failed, 0);
     assert.equal(result.errorCode, null);

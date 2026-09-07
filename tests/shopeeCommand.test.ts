@@ -12,6 +12,7 @@ import {
 import { setTestTelegramSenders } from "../server/services/telegramBot";
 import { setTestSavePendingReview } from "../server/repositories/telegramRepository";
 import { setTestExtractProductForReview } from "../server/services/productAutomation";
+import { setTestSearchProvider } from "../server/services/shopeeDiscovery";
 import {
   inspectShopeeProviderEnv,
   safeShopeeLog,
@@ -53,15 +54,17 @@ function offer(itemId: string, productLink: string, imageUrl = IMAGE_1) {
   };
 }
 
-function successAcquisition(itemId: string, productLink: string) {
+function successAcquisition(itemId: string, productLink: string, values: Record<string, any> = {}) {
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(values, key);
   return {
     status: "link_acquired",
     affiliateUrl: `https://s.shopee.com.br/aff-${itemId.slice(-4)}`,
     productLink,
     shopId: SHOP_ID,
     itemId,
-    name: itemId === ITEM_1 ? "Luminária Bauhaus de mesa" : "Luminária cogumelo de mesa",
-    price: itemId === ITEM_1 ? 79.9 : 89.9,
+    name: has("name") ? values.name : (itemId === ITEM_1 ? "Luminária Bauhaus de mesa" : "Luminária cogumelo de mesa"),
+    price: has("price") ? values.price : (itemId === ITEM_1 ? 79.9 : 89.9),
+    imageUrl: has("imageUrl") ? values.imageUrl : (itemId === ITEM_2 ? IMAGE_2 : IMAGE_1),
     raw: null,
     error: null,
   };
@@ -86,14 +89,38 @@ function validReviewData(normalizedUrl: string) {
 function clientWithOffers(items: any[], options: {
   search?: () => Promise<any>;
   acquire?: (input: { shopId: string; itemId: string }) => Promise<any>;
+  lookup?: (input: { shopId: string; itemId: string }) => Promise<any>;
+  discoveryState?: "DDG_OK" | "DDG_BLOCKED" | "DDG_UNAVAILABLE" | "DDG_NO_RESULTS";
 } = {}) {
+  const discoveryState = options.discoveryState ?? "DDG_OK";
+  setTestSearchProvider(async () => ({
+    provider: "duckduckgo",
+    state: discoveryState,
+    httpStatus: discoveryState === "DDG_OK" ? 200 : null,
+    reason: discoveryState === "DDG_OK" ? null : discoveryState.toLowerCase(),
+    candidates: discoveryState === "DDG_OK"
+      ? items.map(item => ({
+          url: `https://shopee.com.br/product/${item.shopId}/${item.itemId}`,
+          shopId: item.shopId,
+          itemId: item.itemId,
+          rawTitle: `DDG NÃO CANÔNICO ${item.itemId}`,
+        }))
+      : [],
+  }));
   return {
     searchOffers: options.search || (async () => ({ ok: true, items, httpStatus: 200, error: null, reason: null })),
     acquireAffiliateLink: options.acquire || (async ({ itemId }: { shopId: string; itemId: string }) => {
       const found = items.find((item) => item.itemId === itemId);
-      return successAcquisition(itemId, found?.productLink || PRODUCT_1);
+      return found
+        ? successAcquisition(itemId, found.productLink, found)
+        : { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: null };
     }),
-    lookupProduct: async () => ({ status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus: 200, raw: null, error: null }),
+    lookupProduct: options.lookup || (async ({ itemId }: { shopId: string; itemId: string }) => {
+      const found = items.find(item => item.itemId === itemId);
+      return found
+        ? { status: "found", shopId: found.shopId, itemId: found.itemId, name: found.name, priceMinorUnits: found.price, productLink: found.productLink, imageUrl: found.imageUrl, httpStatus: 200, raw: null, error: null }
+        : { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, imageUrl: null, httpStatus: 200, raw: null, error: null };
+    }),
     inspectPromotionFields: async () => ({ ok: false, nodeType: null, fields: [], reason: "not_tested" }),
     inspectPromotionOffer: async () => ({ ok: false, values: null, reason: "not_tested" }),
   } as any;
@@ -128,6 +155,7 @@ beforeEach(() => {
     },
   );
   setTestExtractProductForReview(async (url: string) => ({ success: true, data: validReviewData(url) as any }));
+  setTestSearchProvider(null);
 });
 
 afterEach(() => {
@@ -137,6 +165,7 @@ afterEach(() => {
   setTestSavePendingReview(null);
   setTestTelegramSenders(null, null);
   setTestExtractProductForReview(null);
+  setTestSearchProvider(null);
   restoreEnv("TELEGRAM_ALLOWED_USER_IDS", originalEnv.allowed);
   restoreEnv("SHOPEE_APP_ID", originalEnv.appId);
   restoreEnv("SHOPEE_APP_SECRET", originalEnv.appSecret);
@@ -213,6 +242,9 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     assert.equal(result.countRequested, 2);
     assert.equal(result.ok, 2);
     assert.equal(result.failed, 0);
+    assert.equal(result.discoverySource, "duckduckgo");
+    assert.equal(result.candidatesDiscoveredViaDdg, 2);
+    assert.equal(result.candidatesValidatedByAffiliateApi, 2);
     assert.equal(photoMessages.length, 2);
     assert.equal(savedReviews.length, 2);
     assert.deepEqual(savedReviews.map(review => review.existingProduct?.itemId), [ITEM_1, ITEM_2]);
@@ -228,6 +260,43 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     assert.equal(savedReviews[0]?.existingProduct?.itemId, ITEM_1);
     assert.equal(savedReviews[0]?.affiliateUrl, undefined);
     assert.equal(savedReviews[0]?.existingProduct?.affiliateUrl, `https://s.shopee.com.br/aff-${ITEM_1.slice(-4)}`);
+    assert.equal(photoMessages[0]?.photo, IMAGE_1);
+  });
+
+  it("substitui título, preço, link e imagem descobertos pelos dados oficiais", async () => {
+    const official = { ...offer(ITEM_1, PRODUCT_1), name: "Luminária Oficial Shopee", price: 123.45, imageUrl: "https://down-br.img.susercontent.com/file/imagem-oficial" };
+    setTestShopeeClient(clientWithOffers([official]));
+    setTestExtractProductForReview(async () => ({
+      success: true,
+      data: {
+        ...validReviewData(PRODUCT_1),
+        imagens: [official.imageUrl],
+        imagensOriginais: [official.imageUrl],
+        imagemPrincipal: official.imageUrl,
+      } as any,
+    }));
+    setTestSearchProvider(async () => ({
+      provider: "duckduckgo",
+      state: "DDG_OK",
+      httpStatus: 200,
+      reason: null,
+      candidates: [{
+        url: `https://shopee.com.br/product/${SHOP_ID}/${ITEM_1}`,
+        shopId: SHOP_ID,
+        itemId: ITEM_1,
+        rawTitle: "Título incorreto do DDG por R$ 1,00",
+      }],
+    }));
+
+    const result = await runShopeeCommand("luminária 1");
+
+    assert.equal(result.ok, 1);
+    assert.equal(savedReviews[0]?.rawTitle, "Luminária Oficial Shopee");
+    assert.equal(savedReviews[0]?.preco, 123.45);
+    assert.equal(savedReviews[0]?.normalizedUrl, PRODUCT_1);
+    assert.equal(savedReviews[0]?.imagemPrincipal, official.imageUrl);
+    assert.equal(photoMessages[0]?.photo, official.imageUrl);
+    assert.equal(JSON.stringify(savedReviews[0]).includes("Título incorreto do DDG"), false);
   });
 
   it("não expõe URL oficial completa nem link afiliado no card; usa referência mascarada", async () => {
@@ -262,6 +331,46 @@ describe("runShopeeCommand — discovery oficial e cards", () => {
     assert.equal(result.rejectionCounts.OFFICIAL_PRODUCT_LINK_INVALID, 1);
     assert.equal(savedReviews.length, 0);
     assert.equal(photoMessages.length, 0);
+  });
+
+  it("rejeita identidade DDG não confirmada pelo lookup oficial e não tenta aquisição", async () => {
+    let acquireCalls = 0;
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)], {
+      lookup: async () => ({ status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, imageUrl: null, httpStatus: 200, raw: null, error: null }),
+      acquire: async () => { acquireCalls += 1; return successAcquisition(ITEM_1, PRODUCT_1); },
+    }));
+
+    const result = await runShopeeCommand("luminária 1");
+
+    assert.equal(result.ok, 0);
+    assert.equal(result.rejectionCounts.OFFICIAL_IDENTITY_NOT_CONFIRMED, 1);
+    assert.equal(result.candidatesValidatedByAffiliateApi, 0);
+    assert.equal(acquireCalls, 0);
+    assert.equal(savedReviews.length, 0);
+  });
+
+  it("rejeita candidato sem disponibilidade afiliada confirmada pela API oficial", async () => {
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)], {
+      acquire: async () => ({
+        status: "not_eligible",
+        affiliateUrl: null,
+        productLink: PRODUCT_1,
+        shopId: SHOP_ID,
+        itemId: ITEM_1,
+        name: "Luminária Bauhaus de mesa",
+        price: 79.9,
+        imageUrl: IMAGE_1,
+        raw: null,
+        error: null,
+      }),
+    }));
+
+    const result = await runShopeeCommand("luminária 1");
+
+    assert.equal(result.ok, 0);
+    assert.equal(result.rejectionCounts.AFFILIATE_not_eligible, 1);
+    assert.equal(result.candidatesValidatedByAffiliateApi, 0);
+    assert.equal(savedReviews.length, 0);
   });
 
   it("rejeita identidade já pertencente ao catálogo", async () => {
@@ -334,7 +443,11 @@ describe("runShopeeCommand — configuração e falhas do provider", () => {
   it("TELEGRAM_ALLOWED_USER_IDS ausente bloqueia antes de qualquer consulta", async () => {
     delete process.env.TELEGRAM_ALLOWED_USER_IDS;
     let calls = 0;
-    setTestShopeeClient(clientWithOffers([], { search: async () => { calls += 1; return { ok: true, items: [], httpStatus: 200, error: null, reason: null }; } }));
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    setTestSearchProvider(async () => {
+      calls += 1;
+      return { provider: "duckduckgo", state: "DDG_NO_RESULTS", candidates: [], httpStatus: 200, reason: "test" };
+    });
 
     const result = await runShopeeCommand("copo 1");
 
@@ -358,8 +471,8 @@ describe("runShopeeCommand — configuração e falhas do provider", () => {
   });
 
   it("autenticação inválida retorna SHOPEE_PROVIDER_AUTH_FAILED", async () => {
-    setTestShopeeClient(clientWithOffers([], {
-      search: async () => ({ ok: false, items: [], httpStatus: 401, reason: "SHOPEE_AUTH_ERROR", error: { kind: "SHOPEE_AUTH_ERROR" } }),
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)], {
+      lookup: async () => ({ status: "error", error: { kind: "SHOPEE_AUTH_ERROR" } }),
     }));
 
     const result = await runShopeeCommand("copo 1");
@@ -370,8 +483,8 @@ describe("runShopeeCommand — configuração e falhas do provider", () => {
   });
 
   it("autorização insuficiente é distinta de autenticação inválida", async () => {
-    setTestShopeeClient(clientWithOffers([], {
-      search: async () => ({ ok: false, items: [], httpStatus: 403, reason: "SHOPEE_FORBIDDEN", error: { kind: "SHOPEE_FORBIDDEN" } }),
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)], {
+      lookup: async () => ({ status: "error", error: { kind: "SHOPEE_FORBIDDEN" } }),
     }));
 
     const result = await runShopeeCommand("copo 1");
@@ -381,21 +494,56 @@ describe("runShopeeCommand — configuração e falhas do provider", () => {
     assert.match(textMessages.map(message => message.text).join("\n"), /SHOPEE_PROVIDER_FORBIDDEN/);
   });
 
-  it("resposta vazia real retorna NO_RESULTS, não falha de infraestrutura", async () => {
-    setTestShopeeClient(clientWithOffers([]));
+  it("DDG sem resultados orienta o modo urls sem consultar a API oficial", async () => {
+    let lookupCalls = 0;
+    setTestShopeeClient(clientWithOffers([], {
+      discoveryState: "DDG_NO_RESULTS",
+      lookup: async () => { lookupCalls += 1; return { status: "not_found" }; },
+    }));
 
     const result = await runShopeeCommand("copo 1");
 
-    assert.equal(result.errorCode, "NO_RESULTS");
-    assert.equal(result.providerQueryExecuted, true);
+    assert.equal(result.errorCode, "DDG_NO_RESULTS");
+    assert.equal(result.providerQueryExecuted, false);
     assert.equal(result.candidatesReceived, 0);
     assert.equal(result.ok, 0);
-    assert.match(textMessages.map(message => message.text).join("\n"), /NO_RESULTS/);
+    assert.equal(lookupCalls, 0);
+    assert.match(textMessages.map(message => message.text).join("\n"), /descoberta automática.*não está disponível/is);
+    assert.match(textMessages.map(message => message.text).join("\n"), /\/shopee https:\/\/shopee\.com\.br\/product/);
+  });
+
+  for (const state of ["DDG_BLOCKED", "DDG_UNAVAILABLE"] as const) {
+    it(`${state} retorna estado claro e fallback para modo urls`, async () => {
+      setTestShopeeClient(clientWithOffers([], { discoveryState: state }));
+      const result = await runShopeeCommand("copo 1");
+      assert.equal(result.errorCode, state);
+      assert.equal(result.ok, 0);
+      const messages = textMessages.map(message => message.text).join("\n");
+      assert.match(messages, new RegExp(state));
+      assert.match(messages, /modo <code>urls<\/code>/);
+    });
+  }
+
+  it("preserva modo urls mesmo quando a descoberta DDG está bloqueada", async () => {
+    let ddgCalls = 0;
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)]));
+    setTestSearchProvider(async () => {
+      ddgCalls += 1;
+      return { provider: "duckduckgo", state: "DDG_BLOCKED", candidates: [], httpStatus: 202, reason: "test" };
+    });
+
+    const result = await runShopeeCommand(`${PRODUCT_1} 1`);
+
+    assert.equal(ddgCalls, 0);
+    assert.equal(result.errorCode, null);
+    assert.equal(result.ok, 1);
+    assert.equal(result.discoverySource, "direct_urls");
+    assert.equal(savedReviews[0]?.normalizedUrl, PRODUCT_1);
   });
 
   it("resposta incompatível do provider recebe código próprio", async () => {
-    setTestShopeeClient(clientWithOffers([], {
-      search: async () => ({ ok: false, items: [], httpStatus: 200, reason: "SHOPEE_INVALID_RESPONSE", error: { kind: "SHOPEE_INVALID_RESPONSE" } }),
+    setTestShopeeClient(clientWithOffers([offer(ITEM_1, PRODUCT_1)], {
+      lookup: async () => ({ status: "error", error: { kind: "SHOPEE_INVALID_RESPONSE" } }),
     }));
 
     const result = await runShopeeCommand("copo 1");
