@@ -14,10 +14,10 @@ test("prefixo interno e bloqueado independentemente de caixa", () => {
   );
 });
 
-test("nota editorial humana continua publica", () => {
+test("nota editorial humana tambem permanece privada", () => {
   assert.equal(
     sanitizePublicCuratorNote("  Seleção forte pela geometria e pelo contraste de materiais.  "),
-    "Seleção forte pela geometria e pelo contraste de materiais.",
+    undefined,
   );
 });
 
