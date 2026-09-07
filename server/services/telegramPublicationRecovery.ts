@@ -58,10 +58,16 @@ export async function runConfiguredShopeePublicationRecovery(
 
   const previousLifecycle = review.lifecycle;
   const previousOperationId = String(previousLifecycle?.operationId || "").trim() || undefined;
-  if (previousLifecycle?.diagnostic?.code !== LEGACY_CATEGORY_BLOCK) {
+  // Persisted reviews can contain diagnostic codes written by an older runtime.
+  // The legacy category hard-block was intentionally removed from the current
+  // OperationalFailureCode union, so consume this historical JSON as data.
+  const previousDiagnosticCode = String(
+    (previousLifecycle?.diagnostic as { code?: unknown } | undefined)?.code ?? "",
+  ).trim();
+  if (previousDiagnosticCode !== LEGACY_CATEGORY_BLOCK) {
     return { status: "skipped", reviewId, reason: "LEGACY_CATEGORY_BLOCK_NOT_PRESENT", previousOperationId };
   }
-  if (previousLifecycle.humanApproved !== true) {
+  if (previousLifecycle?.humanApproved !== true) {
     return { status: "skipped", reviewId, reason: "HUMAN_APPROVAL_NOT_PRESENT", previousOperationId };
   }
 
@@ -91,7 +97,7 @@ export async function runConfiguredShopeePublicationRecovery(
       {
         recoveryType: "LEGACY_SHOPEE_CATEGORY_DRIFT",
         previousOperationId: previousOperationId || null,
-        previousDiagnosticCode: LEGACY_CATEGORY_BLOCK,
+        previousDiagnosticCode,
         approvedCategory: review.categoria,
         requestedAt: new Date(now).toISOString(),
       },
