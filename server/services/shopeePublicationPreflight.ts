@@ -11,8 +11,18 @@ import {
   validateOfficialProductLink,
 } from "./shopeeProviderRuntime";
 
+export type ShopeePublicationPreflightWarning = {
+  code: "SHOPEE_PREFLIGHT_CATEGORY_DRIFT";
+  expectedCategory: string;
+  currentCategory: string;
+};
+
 export type ShopeePublicationPreflightResult =
-  | { ok: true; code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" }
+  | {
+      ok: true;
+      code: "SHOPEE_PUBLICATION_PREFLIGHT_OK";
+      warnings?: ShopeePublicationPreflightWarning[];
+    }
   | { ok: false; code: string; transient: boolean };
 
 export type ShopeePublicationPreflightOptions = {
@@ -49,6 +59,20 @@ function numbersMateriallyDiffer(a: number, b: number): boolean {
 
 function firstHttpsImage(images: readonly string[] | undefined): string | null {
   return images?.find(image => /^https:\/\//i.test(String(image || "").trim()))?.trim() || null;
+}
+
+function buildCategoryDriftWarning(
+  expectedCategoryRaw: string | null | undefined,
+  currentCategoryRaw: string | null | undefined,
+): ShopeePublicationPreflightWarning | null {
+  const expectedCategory = String(expectedCategoryRaw || "").trim();
+  const currentCategory = String(currentCategoryRaw || "").trim();
+  if (expectedCategory === currentCategory) return null;
+  return {
+    code: "SHOPEE_PREFLIGHT_CATEGORY_DRIFT",
+    expectedCategory,
+    currentCategory,
+  };
 }
 
 /**
@@ -118,8 +142,8 @@ function hasApprovedImageEvidence(savedImage: string, evidence: readonly string[
 
 /**
  * A imagem do anúncio é um campo mutável da listagem. Depois que identidade,
- * disponibilidade, link afiliado, categoria e preço já foram revalidados, uma
- * troca real do asset visual não pode anular uma aprovação humana explícita.
+ * disponibilidade, link afiliado e preço já foram revalidados, uma troca real
+ * do asset visual não pode anular uma aprovação humana explícita.
  * Nesse caso substituímos somente a projeção de imagem do candidato pela
  * evidência HTTPS atual da mesma listagem. A curadoria visual original continua
  * preservada no PendingReview; esta mutação existe apenas no lifecycle da
@@ -251,9 +275,17 @@ export async function revalidateShopeeCandidateBeforePublication(
     return { ok: false, code: "SHOPEE_PREFLIGHT_SCRAPER_IDENTITY_CHANGED", transient: false };
   }
 
-  const currentCategory = String(current.categoria || "").trim();
-  if (!currentCategory || currentCategory !== candidate.categoria) {
-    return { ok: false, code: "SHOPEE_PREFLIGHT_CATEGORY_CHANGED", transient: false };
+  const categoryDrift = buildCategoryDriftWarning(candidate.categoria, current.categoria);
+  const warnings = categoryDrift ? [categoryDrift] : undefined;
+  if (categoryDrift) {
+    console.warn("[SHOPEE PREFLIGHT] category_drift", {
+      code: categoryDrift.code,
+      shopId: expected.shopId,
+      itemId: expected.itemId,
+      expectedCategory: categoryDrift.expectedCategory,
+      currentCategory: categoryDrift.currentCategory,
+      humanManualApproval: options.humanManualApproval === true,
+    });
   }
 
   const observedPrice = Number(current.preco);
@@ -312,15 +344,16 @@ export async function revalidateShopeeCandidateBeforePublication(
       options.humanManualApproval
       && applyHumanManualLiveImageRefresh(candidate, current, currentPrimaryImage, rawListingEvidence)
     ) {
-      return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" };
+      return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK", warnings };
     }
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
   }
 
-  return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" };
+  return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK", warnings };
 }
 
 export const shopeePublicationPreflightInternals = {
+  buildCategoryDriftWarning,
   shopeeImageAssetKey,
   sameShopeeImageAsset,
   currentImageEvidence,
