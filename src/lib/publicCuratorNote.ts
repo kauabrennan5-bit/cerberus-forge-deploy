@@ -1,17 +1,13 @@
 const INTERNAL_CURATOR_NOTE_PATTERN = /^AUTONOMOUS_CURATOR_[A-Z0-9_]+\s*:/i;
 
 /**
- * Mantém a nota editorial humana disponível para a vitrine, mas bloqueia
- * metadados operacionais serializados pelo Autonomous Curator. Esses valores
- * são estado interno de fila/auditoria e nunca devem atravessar a fronteira
- * pública do catálogo.
+ * `curatorNote` permanece disponível internamente para fila, auditoria e
+ * operação editorial, mas nunca cruza a fronteira pública do storefront.
+ * A página de produto já possui descrição factual; notas do curador não são
+ * conteúdo público em nenhuma publicação.
  */
-export function sanitizePublicCuratorNote(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const note = value.trim();
-  if (!note) return undefined;
-  if (INTERNAL_CURATOR_NOTE_PATTERN.test(note)) return undefined;
-  return note;
+export function sanitizePublicCuratorNote(_value: unknown): string | undefined {
+  return undefined;
 }
 
 export const publicCuratorNoteInternals = {
