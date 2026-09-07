@@ -46,16 +46,24 @@ function firstHttpsImage(images: readonly string[] | undefined): string | null {
  * produção: `cf.shopee.com.br/file/<asset>` no card e
  * `down-br.img.susercontent.com/file/<asset>` no re-scrape do clique.
  * O identificador estável é o token após `/file/`, não o hostname da CDN.
+ *
+ * Alguns aliases adicionam segmentos/renditions depois do token ou querystring;
+ * por isso o parser não exige que `/file/<asset>` seja o pathname inteiro.
  */
 function shopeeImageAssetKey(rawUrl: string): string | null {
   try {
     const parsed = new URL(String(rawUrl || "").trim());
     if (parsed.protocol !== "https:") return null;
-    const host = parsed.hostname.toLowerCase();
-    const knownShopeeImageHost = host === "cf.shopee.com.br" || host.endsWith(".img.susercontent.com");
+    const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+    const knownShopeeImageHost =
+      host === "cf.shopee.com.br"
+      || host === "img.susercontent.com"
+      || host.endsWith(".img.susercontent.com");
     if (!knownShopeeImageHost) return null;
-    const match = parsed.pathname.match(/^\/file\/([^/?#]+)$/i);
-    return match?.[1] || null;
+    const match = parsed.pathname.match(/(?:^|\/)file\/([^/?#]+)/i);
+    if (!match?.[1]) return null;
+    const decoded = decodeURIComponent(match[1]).trim();
+    return decoded ? decoded.toLowerCase() : null;
   } catch {
     return null;
   }
@@ -92,6 +100,15 @@ function currentImageEvidence(current: {
 }
 
 function hasApprovedImageEvidence(savedImage: string, evidence: readonly string[]): boolean {
+  const savedKey = shopeeImageAssetKey(savedImage);
+  if (savedKey) {
+    const evidenceKeys = new Set(
+      evidence
+        .map(image => shopeeImageAssetKey(image))
+        .filter((key): key is string => Boolean(key)),
+    );
+    if (evidenceKeys.has(savedKey)) return true;
+  }
   return evidence.some(image => sameShopeeImageAsset(savedImage, image));
 }
 
@@ -104,6 +121,12 @@ async function fetchRawListingImageEvidence(productUrl: string): Promise<string[
   } catch {
     return [];
   }
+}
+
+async function fetchAllRawListingImageEvidence(urls: readonly string[]): Promise<string[]> {
+  const uniqueUrls = Array.from(new Set(urls.map(url => String(url || "").trim()).filter(Boolean)));
+  const batches = await Promise.all(uniqueUrls.map(url => fetchRawListingImageEvidence(url)));
+  return Array.from(new Set(batches.flat()));
 }
 
 export async function revalidateShopeeCandidateBeforePublication(
@@ -217,15 +240,19 @@ export async function revalidateShopeeCandidateBeforePublication(
   }
 
   const projectedEvidence = currentImageEvidence(current);
-  let approvedImageStillPresent = hasApprovedImageEvidence(savedImage, projectedEvidence);
+  let approvedImageStillPresent = hasApprovedImageEvidence(savedImage, projectedEvidence)
+    || sameShopeeImageAsset(savedImage, currentPrimaryImage);
 
   // O reviewer visual pode remover do conjunto pós-curadoria uma imagem que
   // continua presente no anúncio. Nesse caso, a decisão humana não deve receber
-  // um falso IMAGE_CHANGED: consultamos uma segunda vez o scraper canônico e
-  // usamos somente as imagens oficiais brutas da MESMA identidade Shopee.
+  // um falso IMAGE_CHANGED: consultamos o scraper canônico nas duas URLs oficiais
+  // já validadas da MESMA identidade Shopee e comparamos pelo asset estável de CDN.
   // Se o asset realmente sumiu, o hard gate continua falhando.
   if (!approvedImageStillPresent) {
-    const rawListingEvidence = await fetchRawListingImageEvidence(acquisition.productLink);
+    const rawListingEvidence = await fetchAllRawListingImageEvidence([
+      acquisition.productLink,
+      normalizedUrl,
+    ]);
     approvedImageStillPresent = hasApprovedImageEvidence(savedImage, rawListingEvidence);
   }
 

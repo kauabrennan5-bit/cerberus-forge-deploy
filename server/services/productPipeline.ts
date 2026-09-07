@@ -1,7 +1,7 @@
 import type { Product } from "../../src/types";
 import * as productsRepository from "../repositories/productsRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
-import { createOperationId, type OperationalDiagnostic, type OperationalFailureCode } from "./operationalDiagnostics";
+import { createOperationId, createOperationalDiagnostic, type OperationalDiagnostic, type OperationalFailureCode } from "./operationalDiagnostics";
 import { publishProductWithGate } from "./productPublicationGate";
 import { revalidateShopeeCandidateBeforePublication } from "./shopeePublicationPreflight";
 import {
@@ -64,7 +64,7 @@ export interface ProductPipelineAdapters {
   createCanonicalProduct: (candidate: ProductCandidate) => Promise<Product>;
   syncAndValidatePublication: (product: Product, operationId: string, context?: ProductPublicationContext) => Promise<PublicationVerification>;
   pauseCanonicalProduct: (productId: string) => Promise<void>;
-  preflightPublication?: (candidate: ProductCandidate, context?: ProductPublicationContext) => Promise<{ ok: boolean; code: string }>;
+  preflightPublication?: (candidate: ProductCandidate, context?: ProductPublicationContext) => Promise<{ ok: boolean; code: string; transient?: boolean }>;
 }
 
 const recentLifecycleRecords = new Map<string, LifecycleRecord>();
@@ -182,9 +182,16 @@ export class ProductPipeline {
     if (record.state === "PUBLISHED") return record;
     if (record.state !== "APPROVED") throw new Error("APPROVAL_REQUIRED");
     if (record.validation.outcome === "FAIL") throw new Error("VALIDATION_ERROR");
+
+    // A tentativa de publicação ganha correlação antes de qualquer preflight.
+    // Assim até um bloqueio anterior à persistência possui operationId real e
+    // nunca é reportado ao administrador como "sem-operation-id".
+    const operationId = record.operationId || createOperationId("PUB");
+    record.operationId = operationId;
+
     if (containsRawPayloadMarkers(record.candidate.descricao)) {
       record.error = "VALIDATION_ERROR";
-      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", "VALIDATION_ERROR: descrição contém payload técnico do scraper; publicação bloqueada."));
+      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `VALIDATION_ERROR: descrição contém payload técnico do scraper; publicação bloqueada; operação ${operationId}.`));
       rememberLifecycleRecord(record);
       return record;
     }
@@ -200,15 +207,28 @@ export class ProductPipeline {
       const preflight = await this.adapters.preflightPublication(record.candidate, publicationContext);
       if (!preflight.ok) {
         record.error = "VALIDATION_ERROR";
-        record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PUBLICATION_PREFLIGHT_BLOCKED:${preflight.code}`));
+        record.diagnostic = createOperationalDiagnostic({
+          operationId,
+          operation: "PRODUCT_PUBLICATION",
+          stage: "RECOVERY_VALIDATION",
+          dependency: "Backend",
+          // O contrato de OperationalDiagnostic é fechado para falhas comuns,
+          // mas o valor runtime precisa preservar o código específico do gate
+          // para o Telegram mostrar a causa real ao administrador.
+          code: preflight.code as OperationalFailureCode,
+          message: `Pré-publicação bloqueada por ${preflight.code}.`,
+          likelyCause: preflight.code,
+          impact: "Nenhum produto canônico foi criado ou publicado nesta tentativa.",
+          recoverability: preflight.transient === true ? "AUTO" : "MANUAL",
+          retryable: preflight.transient === true,
+        });
+        record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PUBLICATION_PREFLIGHT_BLOCKED:${preflight.code}; operação ${operationId}.`));
         rememberLifecycleRecord(record);
         return record;
       }
     }
 
     try {
-      const operationId = createOperationId("PUB");
-      record.operationId = operationId;
       const product = await this.adapters.createCanonicalProduct(record.candidate);
       record.publishedProductId = product.id;
       record.publishedProduct = product;
@@ -231,7 +251,7 @@ export class ProductPipeline {
       return record;
     } catch (error: any) {
       record.error = "PERSISTENCE_ERROR";
-      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PERSISTENCE_ERROR: ${error?.message || "Falha de persistência/publicação."}`));
+      record.audit.unshift(event("PRODUCT_PUBLICATION_FAILED", "APPROVED", `PERSISTENCE_ERROR: ${error?.message || "Falha de persistência/publicação."}; operação ${operationId}.`));
       rememberLifecycleRecord(record);
       return record;
     }
