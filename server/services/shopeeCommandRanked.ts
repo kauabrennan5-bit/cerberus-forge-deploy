@@ -1,7 +1,8 @@
 /**
  * Manual /shopee discovery and human-review flow.
- * Discovery, identity, price, productLink and primary image originate from the
- * official Shopee Affiliate API. No URL is reconstructed from identifiers.
+ * DDG only discovers candidate identities. Identity, availability, title,
+ * price, productLink, affiliateUrl and primary image are replaced by evidence
+ * from exact Shopee Affiliate API lookups before a candidate can be accepted.
  */
 import {
   createShopeeApiClient,
@@ -20,15 +21,14 @@ import {
   inspectShopeeProviderEnv,
   maskShopeeReference,
   newShopeeCorrelationId,
+  mapShopeeErrorKindToProviderCode,
   providerErrorFromAcquisitionStatus,
   safeShopeeLog,
-  searchShopeeOffersWithRetry,
   ShopeeProviderRuntimeError,
   type ShopeeProviderErrorCode,
   validateOfficialProductLink,
 } from "./shopeeProviderRuntime";
 import {
-  controlledShopeeQueryVariants,
   evaluateShopeeCandidateRelevance,
   qualifyOfficialShopeeImage,
   rankShopeeCandidates,
@@ -37,13 +37,12 @@ import {
   type ShopeeImageQualification,
   type ShopeeRankableCandidate,
 } from "./shopeeCandidateQualification";
+import { discoverShopeeProducts } from "./shopeeDiscovery";
+import type { ShopeeSearchState } from "./shopeeSearchProvider";
 
 const MIN_ITEMS = 1;
 const MAX_ITEMS = 10;
-const MIN_RANKING_POOL = 10;
 const MAX_DISCOVERY_CANDIDATES = 30;
-const MAX_SEARCH_CALLS = 6;
-const SEARCH_PAGE_LIMIT = 10;
 const LOT_PAUSE_MS = 3000;
 const REVIEW_TTL_MS = 24 * 60 * 60 * 1000;
 let lotPauseMs = LOT_PAUSE_MS;
@@ -217,6 +216,21 @@ function providerMessage(code: ShopeeCommandOutcomeCode): string {
   return "O provider oficial ficou indisponível, atingiu timeout ou rate limit.";
 }
 
+export function ddgDiscoveryUnavailableMessage(state: Exclude<ShopeeSearchState, "DDG_OK">): string {
+  const detail = state === "DDG_BLOCKED"
+    ? "O DuckDuckGo bloqueou temporariamente a consulta."
+    : state === "DDG_NO_RESULTS"
+      ? "O DuckDuckGo não retornou candidatos para este termo."
+      : "O DuckDuckGo está indisponível neste momento.";
+  return [
+    `⚠️ <b>${state}</b>`,
+    "",
+    `${detail} A descoberta automática por termo não está disponível agora.`,
+    "Envie links diretos da Shopee pelo modo <code>urls</code> já suportado:",
+    "<code>/shopee https://shopee.com.br/product/SHOP_ID/ITEM_ID 1</code>",
+  ].join("\n");
+}
+
 function buildImageCuration(imageUrl: string, qualification: ShopeeImageQualification): ProductImageCuration {
   if (qualification.state === "QUALIFIED") {
     return {
@@ -320,7 +334,8 @@ export interface ShopeeLotItemResult {
 export type ShopeeCommandOutcomeCode = ShopeeProviderErrorCode
   | "TELEGRAM_ALLOWED_USER_IDS_MISSING"
   | "SHOPEE_NO_RESULTS"
-  | "SHOPEE_CANDIDATES_REJECTED";
+  | "SHOPEE_CANDIDATES_REJECTED"
+  | Exclude<ShopeeSearchState, "DDG_OK">;
 
 export interface ShopeeLotResult {
   lotId: string;
@@ -347,6 +362,9 @@ export interface ShopeeLotResult {
   discoveryError: string | null;
   errorCode: ShopeeCommandOutcomeCode | null;
   providerQueryExecuted: boolean;
+  discoverySource: "duckduckgo" | "direct_urls" | null;
+  candidatesDiscoveredViaDdg: number;
+  candidatesValidatedByAffiliateApi: number;
   rejectionCounts: Record<string, number>;
   items: ShopeeLotItemResult[];
   chatTargetConfigured: boolean;
@@ -388,6 +406,9 @@ function emptyResult(input: {
     discoveryError: input.discoveryError ?? null,
     errorCode: input.errorCode ?? null,
     providerQueryExecuted: false,
+    discoverySource: null,
+    candidatesDiscoveredViaDdg: 0,
+    candidatesValidatedByAffiliateApi: 0,
     rejectionCounts: {},
     items: [],
     chatTargetConfigured: Boolean(input.chatConfigured),
@@ -399,102 +420,296 @@ type WorkingCandidate = ShopeeRankableCandidate & {
   candidateIndex: number;
   preRejectReason: string | null;
   duplicate: boolean;
+  affiliateUrl: string | null;
 };
+
+export interface OfficialDdgCandidate {
+  candidateIndex: number;
+  shopId: string;
+  itemId: string;
+  name: string;
+  price: number;
+  productLink: string;
+  affiliateUrl: string;
+  imageUrl: string;
+}
+
+export interface OfficialDdgCandidateRejection {
+  candidateIndex: number;
+  shopId: string;
+  itemId: string;
+  reason: string;
+}
+
+export interface OfficialDdgDiscoveryResult {
+  state: ShopeeSearchState;
+  discovered: number;
+  validated: number;
+  candidates: OfficialDdgCandidate[];
+  rejections: OfficialDdgCandidateRejection[];
+  officialLookupExecuted: boolean;
+}
+
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function lookupProviderFailure(errorKind: string | null | undefined): ShopeeProviderRuntimeError {
+  const code = mapShopeeErrorKindToProviderCode(errorKind);
+  return new ShopeeProviderRuntimeError(
+    code,
+    errorKind || "official_lookup_failed",
+    ["SHOPEE_PROVIDER_RATE_LIMITED", "SHOPEE_PROVIDER_TIMEOUT", "SHOPEE_PROVIDER_UNAVAILABLE"].includes(code),
+  );
+}
+
+class OfficialCandidateValidationError extends ShopeeProviderRuntimeError {
+  constructor(
+    failure: ShopeeProviderRuntimeError,
+    readonly discovered: number,
+    readonly validated: number,
+  ) {
+    super(failure.code, failure.providerReason, failure.transient);
+    this.name = "OfficialCandidateValidationError";
+  }
+}
+
+function officialValidationFailure(
+  errorKind: string | null | undefined,
+  discovered: number,
+  validated: number,
+): OfficialCandidateValidationError {
+  return new OfficialCandidateValidationError(lookupProviderFailure(errorKind), discovered, validated);
+}
+
+/**
+ * DDG supplies only identity candidates. Every unique candidate is confirmed
+ * by exact productOfferV2(shopId,itemId) lookup and exact affiliate acquisition
+ * before any web metadata may enter ranking or review state.
+ */
+export async function discoverOfficialDdgCandidates(params: {
+  client: ShopeeApiClient;
+  query: string;
+  limit?: number;
+  correlationId?: string;
+}): Promise<OfficialDdgDiscoveryResult> {
+  let discovery: Awaited<ReturnType<typeof discoverShopeeProducts>>;
+  try {
+    discovery = await discoverShopeeProducts(params.query, params.limit ?? MAX_DISCOVERY_CANDIDATES);
+  } catch {
+    return { state: "DDG_UNAVAILABLE", discovered: 0, validated: 0, candidates: [], rejections: [], officialLookupExecuted: false };
+  }
+  if (discovery.state !== "DDG_OK") {
+    return { state: discovery.state, discovered: 0, validated: 0, candidates: [], rejections: [], officialLookupExecuted: false };
+  }
+
+  const unique = Array.from(
+    new Map(discovery.products.map(candidate => [`${candidate.shopId}:${candidate.itemId}`, candidate])).values(),
+  ).slice(0, params.limit ?? MAX_DISCOVERY_CANDIDATES);
+  const candidates: OfficialDdgCandidate[] = [];
+  const rejections: OfficialDdgCandidateRejection[] = [];
+
+  for (let index = 0; index < unique.length; index += 1) {
+    const candidate = unique[index];
+    const candidateIndex = index + 1;
+    safeShopeeLog("shopee_candidate_discovered", {
+      correlationId: params.correlationId,
+      candidateIndex,
+      discoveryProvider: "duckduckgo",
+      identityStatus: "candidate_only",
+    });
+
+    let lookup: Awaited<ReturnType<ShopeeApiClient["lookupProduct"]>>;
+    try {
+      lookup = await params.client.lookupProduct({ shopId: candidate.shopId, itemId: candidate.itemId });
+    } catch {
+      throw officialValidationFailure("SHOPEE_UNKNOWN_ERROR", unique.length, candidates.length);
+    }
+    if (lookup.status === "error") {
+      throw officialValidationFailure(lookup.error?.kind, unique.length, candidates.length);
+    }
+    if (
+      lookup.status !== "found"
+      || lookup.shopId !== candidate.shopId
+      || lookup.itemId !== candidate.itemId
+    ) {
+      rejections.push({ candidateIndex, shopId: candidate.shopId, itemId: candidate.itemId, reason: "OFFICIAL_IDENTITY_NOT_CONFIRMED" });
+      continue;
+    }
+    if (!validateOfficialProductLink(lookup.productLink, candidate.shopId, candidate.itemId)) {
+      rejections.push({ candidateIndex, shopId: candidate.shopId, itemId: candidate.itemId, reason: "OFFICIAL_PRODUCT_LINK_INVALID" });
+      continue;
+    }
+
+    let acquisition: Awaited<ReturnType<ShopeeApiClient["acquireAffiliateLink"]>>;
+    try {
+      acquisition = await params.client.acquireAffiliateLink({ shopId: candidate.shopId, itemId: candidate.itemId });
+    } catch {
+      throw officialValidationFailure("SHOPEE_UNKNOWN_ERROR", unique.length, candidates.length);
+    }
+    if (acquisition.status !== "link_acquired") {
+      const infrastructure = providerErrorFromAcquisitionStatus(acquisition.status, acquisition.error?.kind);
+      if (infrastructure) {
+        throw new OfficialCandidateValidationError(infrastructure, unique.length, candidates.length);
+      }
+      rejections.push({
+        candidateIndex,
+        shopId: candidate.shopId,
+        itemId: candidate.itemId,
+        reason: `AFFILIATE_${acquisition.status}`,
+      });
+      continue;
+    }
+
+    const name = normalizeOfficialTitle(acquisition.name || lookup.name || "");
+    const price = Number(acquisition.price ?? lookup.priceMinorUnits);
+    const productLink = String(acquisition.productLink || "").trim();
+    const affiliateUrl = String(acquisition.affiliateUrl || "").trim();
+    const imageUrl = String(acquisition.imageUrl || lookup.imageUrl || "").trim();
+    const invalidEvidenceReason = acquisition.shopId !== candidate.shopId || acquisition.itemId !== candidate.itemId
+      ? "OFFICIAL_IDENTITY_NOT_CONFIRMED"
+      : !name
+        ? "TITLE_MISSING"
+        : !Number.isFinite(price) || price <= 0
+          ? "PRICE_MISSING"
+          : !validateOfficialProductLink(productLink, candidate.shopId, candidate.itemId)
+            ? "OFFICIAL_PRODUCT_LINK_INVALID"
+            : !isHttpsUrl(affiliateUrl)
+              ? "AFFILIATE_EVIDENCE_INVALID"
+              : null;
+    if (invalidEvidenceReason) {
+      rejections.push({ candidateIndex, shopId: candidate.shopId, itemId: candidate.itemId, reason: invalidEvidenceReason });
+      continue;
+    }
+
+    candidates.push({
+      candidateIndex,
+      shopId: candidate.shopId,
+      itemId: candidate.itemId,
+      name,
+      price,
+      productLink,
+      affiliateUrl,
+      imageUrl: isHttpsUrl(imageUrl) ? imageUrl : "",
+    });
+    safeShopeeLog("shopee_candidate_officially_validated", {
+      correlationId: params.correlationId,
+      candidateIndex,
+      validationProvider: "shopee_affiliate_api",
+      sourceOperation: "productOfferV2_exact",
+      identityStatus: "confirmed",
+      imageOfficial: isHttpsUrl(imageUrl),
+    });
+  }
+
+  return {
+    state: candidates.length > 0 || rejections.length > 0 ? "DDG_OK" : "DDG_NO_RESULTS",
+    discovered: unique.length,
+    validated: candidates.length,
+    candidates,
+    rejections,
+    officialLookupExecuted: unique.length > 0,
+  };
+}
 
 async function discoverTermCandidates(params: {
   client: ShopeeApiClient;
   query: string;
   rejectionCounts: Record<string, number>;
+  correlationId: string;
 }): Promise<{
   candidates: WorkingCandidate[];
   received: number;
   calls: number;
   sourceExhausted: boolean;
+  state: ShopeeSearchState;
+  validated: number;
+  officialLookupExecuted: boolean;
 }> {
-  const candidates: WorkingCandidate[] = [];
-  const seen = new Set<string>();
-  const variants = controlledShopeeQueryVariants(params.query);
-  let received = 0;
-  let calls = 0;
-  let sourceExhausted = true;
-
-  for (let variantIndex = 0; variantIndex < variants.length && calls < MAX_SEARCH_CALLS && candidates.length < MAX_DISCOVERY_CANDIDATES; variantIndex += 1) {
-    const variant = variants[variantIndex];
-    const pagesForVariant = variantIndex === 0 ? 3 : 1;
-    for (let page = 1; page <= pagesForVariant && calls < MAX_SEARCH_CALLS && candidates.length < MAX_DISCOVERY_CANDIDATES; page += 1) {
-      calls += 1;
-      const search = await searchShopeeOffersWithRetry({ client: params.client, query: variant, limit: SEARCH_PAGE_LIMIT, page });
-      received += search.items.length;
-      if (search.items.length === 0) break;
-      for (const raw of search.items) {
-        const shopId = String(raw.shopId || "").trim();
-        const itemId = String(raw.itemId || "").trim();
-        const name = normalizeOfficialTitle(raw.name || "");
-        const price = Number(raw.price);
-        const productLink = String(raw.productLink || "").trim();
-        const imageUrl = String(raw.imageUrl || "").trim();
-        let preRejectReason: string | null = null;
-        if (!shopId || !itemId) preRejectReason = "IDENTITY_MISSING";
-        else if (!name) preRejectReason = "TITLE_MISSING";
-        else if (!Number.isFinite(price) || price <= 0) preRejectReason = "PRICE_MISSING";
-        else if (!validateOfficialProductLink(productLink, shopId, itemId)) preRejectReason = "OFFICIAL_PRODUCT_LINK_INVALID";
-        const identity = `${shopId}:${itemId}`;
-        if (shopId && itemId && seen.has(identity)) {
-          params.rejectionCounts.DUPLICATE_DISCOVERY_IDENTITY = (params.rejectionCounts.DUPLICATE_DISCOVERY_IDENTITY || 0) + 1;
-          continue;
-        }
-        if (shopId && itemId) seen.add(identity);
-        const relevance = name ? evaluateShopeeCandidateRelevance(params.query, name) : { compatible: false, category: "", score: 0, reason: "TITLE_MISSING" };
-        if (!preRejectReason && !relevance.compatible) preRejectReason = relevance.reason;
-        candidates.push({
-          candidateIndex: candidates.length + 1,
-          shopId,
-          itemId,
-          name,
-          price: Number.isFinite(price) ? price : 0,
-          productLink,
-          imageUrl,
-          round: calls,
-          queryVariant: variant,
-          category: relevance.category,
-          relevanceScore: relevance.score,
-          preRejectReason,
-          duplicate: false,
-        });
-        if (candidates.length >= MAX_DISCOVERY_CANDIDATES) break;
-      }
-      if (search.items.length < SEARCH_PAGE_LIMIT) break;
-      sourceExhausted = false;
-    }
-    if (candidates.length >= Math.max(MIN_RANKING_POOL, params.query ? 10 : 10) && candidates.length >= MAX_DISCOVERY_CANDIDATES) break;
+  const discovered = await discoverOfficialDdgCandidates({
+    client: params.client,
+    query: params.query,
+    limit: MAX_DISCOVERY_CANDIDATES,
+    correlationId: params.correlationId,
+  });
+  const candidates: WorkingCandidate[] = discovered.candidates.map((official) => {
+    const relevance = evaluateShopeeCandidateRelevance(params.query, official.name);
+    return {
+      ...official,
+      round: 1,
+      queryVariant: "ddg",
+      category: relevance.category,
+      relevanceScore: relevance.score,
+      preRejectReason: !official.imageUrl ? "IMAGE_MISSING" : !relevance.compatible ? relevance.reason : null,
+      duplicate: false,
+    };
+  });
+  for (const rejected of discovered.rejections) {
+    candidates.push({
+      candidateIndex: rejected.candidateIndex,
+      shopId: rejected.shopId,
+      itemId: rejected.itemId,
+      name: "",
+      price: 0,
+      productLink: "",
+      affiliateUrl: null,
+      imageUrl: "",
+      round: 1,
+      queryVariant: "ddg",
+      category: "",
+      relevanceScore: 0,
+      preRejectReason: rejected.reason,
+      duplicate: false,
+    });
   }
-  return { candidates, received, calls, sourceExhausted };
+  candidates.sort((left, right) => left.candidateIndex - right.candidateIndex);
+  return {
+    candidates,
+    received: discovered.discovered,
+    calls: discovered.state === "DDG_OK" ? 1 : 0,
+    sourceExhausted: true,
+    state: discovered.state,
+    validated: discovered.validated,
+    officialLookupExecuted: discovered.officialLookupExecuted,
+  };
 }
 
 async function discoverDirectCandidates(params: {
   client: ShopeeApiClient;
   urls: string[];
-}): Promise<{ candidates: WorkingCandidate[]; received: number }> {
+}): Promise<{ candidates: WorkingCandidate[]; received: number; validated: number; officialLookupExecuted: boolean }> {
   const candidates: WorkingCandidate[] = [];
   const seen = new Set<string>();
+  let validated = 0;
+  let officialLookupExecuted = false;
   for (const original of params.urls) {
     const resolved = await resolveShortUrlIfNeeded(original);
     const supplied = resolved.resolvedUrl;
     const identity = extractShopeeIdentity(supplied);
     if (!identity.shopId || !identity.itemId || !validateOfficialProductLink(supplied, identity.shopId, identity.itemId)) {
-      candidates.push({ candidateIndex: candidates.length + 1, shopId: identity.shopId || "", itemId: identity.itemId || "", name: "", price: 0, productLink: supplied, imageUrl: "", round: 0, queryVariant: "direct", category: "", relevanceScore: 100, preRejectReason: "DIRECT_URL_IDENTITY_INVALID", duplicate: false });
+      candidates.push({ candidateIndex: candidates.length + 1, shopId: identity.shopId || "", itemId: identity.itemId || "", name: "", price: 0, productLink: supplied, affiliateUrl: null, imageUrl: "", round: 0, queryVariant: "direct", category: "", relevanceScore: 100, preRejectReason: "DIRECT_URL_IDENTITY_INVALID", duplicate: false });
       continue;
     }
     const key = `${identity.shopId}:${identity.itemId}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    officialLookupExecuted = true;
     const lookup = await params.client.lookupProduct({ shopId: identity.shopId, itemId: identity.itemId });
     if (lookup.status !== "found" || !lookup.productLink || !lookup.name || !lookup.priceMinorUnits || !validateOfficialProductLink(lookup.productLink, identity.shopId, identity.itemId)) {
-      candidates.push({ candidateIndex: candidates.length + 1, shopId: identity.shopId, itemId: identity.itemId, name: normalizeOfficialTitle(lookup.name || ""), price: Number(lookup.priceMinorUnits || 0), productLink: lookup.productLink || supplied, imageUrl: "", round: 0, queryVariant: "direct", category: resolvePublicProductCategory("", { title: lookup.name || "" }), relevanceScore: 100, preRejectReason: "DIRECT_LOOKUP_INCOMPLETE", duplicate: false });
+      candidates.push({ candidateIndex: candidates.length + 1, shopId: identity.shopId, itemId: identity.itemId, name: normalizeOfficialTitle(lookup.name || ""), price: Number(lookup.priceMinorUnits || 0), productLink: lookup.productLink || supplied, affiliateUrl: null, imageUrl: "", round: 0, queryVariant: "direct", category: resolvePublicProductCategory("", { title: lookup.name || "" }), relevanceScore: 100, preRejectReason: "DIRECT_LOOKUP_INCOMPLETE", duplicate: false });
       continue;
     }
-    const extracted = await extractProductForReview(lookup.productLink);
-    const imageUrl = extracted.success && extracted.data?.imagemPrincipal ? extracted.data.imagemPrincipal : "";
+    validated += 1;
+    let imageUrl = String(lookup.imageUrl || "").trim();
+    if (!imageUrl) {
+      const extracted = await extractProductForReview(lookup.productLink);
+      imageUrl = extracted.success && extracted.data?.imagemPrincipal ? extracted.data.imagemPrincipal : "";
+    }
     candidates.push({
       candidateIndex: candidates.length + 1,
       shopId: identity.shopId,
@@ -502,6 +717,7 @@ async function discoverDirectCandidates(params: {
       name: normalizeOfficialTitle(lookup.name),
       price: Number(lookup.priceMinorUnits),
       productLink: lookup.productLink,
+      affiliateUrl: null,
       imageUrl,
       round: 0,
       queryVariant: "direct",
@@ -511,7 +727,7 @@ async function discoverDirectCandidates(params: {
       duplicate: false,
     });
   }
-  return { candidates, received: candidates.length };
+  return { candidates, received: candidates.length, validated, officialLookupExecuted };
 }
 
 export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult> {
@@ -540,49 +756,88 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
   let sourceExhausted = false;
   let budgetExhausted = false;
   let providerQueryExecuted = false;
+  let discoverySource: ShopeeLotResult["discoverySource"] = null;
+  let candidatesDiscoveredViaDdg = 0;
+  let candidatesValidatedByAffiliateApi = 0;
+  let ddgState: ShopeeSearchState = "DDG_OK";
   let candidates: WorkingCandidate[] = [];
 
   try {
     if ((parsed.mode || "term") === "term") {
-      providerQueryExecuted = true;
-      const discovered = await discoverTermCandidates({ client, query: parsed.query, rejectionCounts });
+      discoverySource = "duckduckgo";
+      const discovered = await discoverTermCandidates({ client, query: parsed.query, rejectionCounts, correlationId });
       candidates = discovered.candidates;
       candidatesReceived = discovered.received;
       discoveryRounds = discovered.calls;
       sourceExhausted = discovered.sourceExhausted;
-      budgetExhausted = discovered.calls >= MAX_SEARCH_CALLS && candidates.length < MAX_DISCOVERY_CANDIDATES;
+      budgetExhausted = false;
+      ddgState = discovered.state;
+      providerQueryExecuted = discovered.officialLookupExecuted;
+      candidatesDiscoveredViaDdg = discovered.received;
+      candidatesValidatedByAffiliateApi = discovered.validated;
     } else {
+      discoverySource = "direct_urls";
       const discovered = await discoverDirectCandidates({ client, urls: parsed.urls || [] });
       candidates = discovered.candidates;
       candidatesReceived = discovered.received;
+      candidatesValidatedByAffiliateApi = discovered.validated;
+      providerQueryExecuted = discovered.officialLookupExecuted;
       sourceExhausted = true;
     }
   } catch (error) {
+    if (error instanceof OfficialCandidateValidationError) {
+      providerQueryExecuted = true;
+      discoveryRounds = 1;
+      candidatesDiscoveredViaDdg = error.discovered;
+      candidatesValidatedByAffiliateApi = error.validated;
+      candidatesReceived = error.discovered;
+    }
     const providerFailure = error instanceof ShopeeProviderRuntimeError
       ? error
       : new ShopeeProviderRuntimeError("SHOPEE_PROVIDER_UNAVAILABLE", "unexpected_search_failure", true);
     const code = publicProviderCode(providerFailure);
     await sendTelegramMessage(chatId, `⚠️ <b>${code}</b>\n\n${providerMessage(code)}`).catch(() => undefined);
     const base = emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: code, discoveryError: code });
-    return { ...base, providerQueryExecuted, discoveryRounds, candidatesReceived, poolCandidates: candidates.length, sourceExhausted, budgetExhausted };
-  }
-
-  if ((parsed.mode || "term") === "term" && providerQueryExecuted && candidatesReceived === 0) {
-    await sendTelegramMessage(chatId, `🔎 <b>SHOPEE_NO_RESULTS</b>\n\nA busca oficial foi executada, inclusive com variações controladas quando aplicável, e não retornou candidatos.`).catch(() => undefined);
     return {
-      ...emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: "SHOPEE_NO_RESULTS", discoveryError: "SHOPEE_NO_RESULTS" }),
-      providerQueryExecuted: true,
+      ...base,
+      providerQueryExecuted,
       discoveryRounds,
       candidatesReceived,
       poolCandidates: candidates.length,
       sourceExhausted,
       budgetExhausted,
+      discoverySource,
+      candidatesDiscoveredViaDdg,
+      candidatesValidatedByAffiliateApi,
     };
   }
 
+  if ((parsed.mode || "term") === "term" && ddgState !== "DDG_OK") {
+    const code = ddgState as Exclude<ShopeeSearchState, "DDG_OK">;
+    await sendTelegramMessage(chatId, ddgDiscoveryUnavailableMessage(code)).catch(() => undefined);
+    return {
+      ...emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: code, discoveryError: code }),
+      providerQueryExecuted,
+      discoveryRounds,
+      candidatesReceived,
+      poolCandidates: candidates.length,
+      sourceExhausted,
+      budgetExhausted,
+      discoverySource,
+      candidatesDiscoveredViaDdg,
+      candidatesValidatedByAffiliateApi,
+    };
+  }
+
+  const startDiscoverySummary = discoverySource === "duckduckgo"
+    ? `Descobertos via DDG: <b>${candidatesDiscoveredViaDdg}</b>\nValidados pela Shopee Affiliate API: <b>${candidatesValidatedByAffiliateApi}</b>`
+    : `URLs diretas avaliadas: <b>${candidatesReceived}</b>\nIdentidades validadas pela Shopee Affiliate API: <b>${candidatesValidatedByAffiliateApi}</b>`;
+  const startDiscoveryNote = discoverySource === "duckduckgo"
+    ? "DDG apenas sugere identidades. Dados e links usados no card vêm da validação oficial exata."
+    : "O modo urls foi preservado; dados e link final continuam vindo da API oficial.";
   await sendTelegramMessage(
     chatId,
-    `🛒 <b>LOTE SHOPEE INICIADO</b>\n\nSolicitados: <b>${parsed.count}</b>\nProvider: <code>ShopeeApiClient</code>\nCandidatos oficiais recebidos: <b>${candidatesReceived}</b>\nPool único para qualificação: <b>${candidates.length}</b>\n\n<i>Busca oficial → qualificação → ranking → card. Publicação só após aprovação humana e novo preflight.</i>`,
+    `🛒 <b>LOTE SHOPEE INICIADO</b>\n\nSolicitados: <b>${parsed.count}</b>\n${startDiscoverySummary}\nPool único para qualificação: <b>${candidates.length}</b>\n\n<i>${startDiscoveryNote}</i>`,
   ).catch(() => undefined);
 
   let hardRejectCount = 0;
@@ -633,7 +888,16 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     } catch {
       const code: ShopeeCommandOutcomeCode = "SHOPEE_PROVIDER_UNAVAILABLE";
       await sendTelegramMessage(chatId, `⚠️ <b>${code}</b>\n\nEstado canônico indisponível; a busca não foi convertida em falta de candidatos.`).catch(() => undefined);
-      return { ...emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: code, discoveryError: code }), providerQueryExecuted, candidatesReceived, discoveryRounds, poolCandidates: candidates.length };
+      return {
+        ...emptyResult({ count: parsed.count, lotId, correlationId, chatId, chatConfigured: true, clientAvailable: true, errorCode: code, discoveryError: code }),
+        providerQueryExecuted,
+        candidatesReceived,
+        discoveryRounds,
+        poolCandidates: candidates.length,
+        discoverySource,
+        candidatesDiscoveredViaDdg,
+        candidatesValidatedByAffiliateApi,
+      };
     }
 
     const qualification = await qualifyImage(candidate.imageUrl, candidate.name);
@@ -670,29 +934,57 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     const item = items.find(current => current.candidateIndex === candidate.candidateIndex)!;
     item.rank = rankIndex + 1;
 
-    const acquisition = await client.acquireAffiliateLink({ shopId: candidate.shopId, itemId: candidate.itemId });
-    if (acquisition.status !== "link_acquired") {
-      const infrastructure = providerErrorFromAcquisitionStatus(acquisition.status, acquisition.error?.kind);
-      if (infrastructure) {
-        providerFailure = infrastructure;
-        item.status = "provider_error";
-        item.reason = infrastructure.code;
-        break;
+    let officialProductLink = candidate.productLink;
+    let officialAffiliateUrl = candidate.affiliateUrl;
+    let officialName = candidate.name;
+    let officialPrice = Number(candidate.price);
+    let officialImageUrl = candidate.imageUrl;
+
+    // Term-mode candidates already passed exact lookup + acquisition. URL mode
+    // keeps its established path and acquires the official affiliate link here.
+    if (!officialAffiliateUrl) {
+      const acquisition = await client.acquireAffiliateLink({ shopId: candidate.shopId, itemId: candidate.itemId });
+      if (acquisition.status !== "link_acquired") {
+        const infrastructure = providerErrorFromAcquisitionStatus(acquisition.status, acquisition.error?.kind);
+        if (infrastructure) {
+          providerFailure = infrastructure;
+          item.status = "provider_error";
+          item.reason = infrastructure.code;
+          break;
+        }
+        item.status = "affiliate_not_eligible";
+        item.reason = `AFFILIATE_${acquisition.status}`;
+        hardRejectCount += 1;
+        rejectionCounts[item.reason] = (rejectionCounts[item.reason] || 0) + 1;
+        if (candidate.imageQualification?.state === "QUALIFIED") qualifiedCount -= 1;
+        if (candidate.imageQualification?.state === "NEEDS_HUMAN_REVIEW") needsHumanReviewCount -= 1;
+        continue;
       }
-      item.status = "affiliate_not_eligible";
-      item.reason = `AFFILIATE_${acquisition.status}`;
-      hardRejectCount += 1;
-      rejectionCounts[item.reason] = (rejectionCounts[item.reason] || 0) + 1;
-      if (candidate.imageQualification?.state === "QUALIFIED") qualifiedCount -= 1;
-      if (candidate.imageQualification?.state === "NEEDS_HUMAN_REVIEW") needsHumanReviewCount -= 1;
-      continue;
+      officialProductLink = String(acquisition.productLink || "").trim();
+      officialAffiliateUrl = String(acquisition.affiliateUrl || "").trim();
+      officialName = normalizeOfficialTitle(acquisition.name || candidate.name);
+      officialPrice = Number(acquisition.price ?? candidate.price);
+      officialImageUrl = String(acquisition.imageUrl || candidate.imageUrl || "").trim();
+      if (
+        acquisition.shopId !== candidate.shopId
+        || acquisition.itemId !== candidate.itemId
+        || !validateOfficialProductLink(officialProductLink, candidate.shopId, candidate.itemId)
+        || !isHttpsUrl(officialAffiliateUrl)
+      ) {
+        item.status = "affiliate_not_eligible";
+        item.reason = "AFFILIATE_EVIDENCE_INVALID";
+        hardRejectCount += 1;
+        rejectionCounts.AFFILIATE_EVIDENCE_INVALID = (rejectionCounts.AFFILIATE_EVIDENCE_INVALID || 0) + 1;
+        if (candidate.imageQualification?.state === "QUALIFIED") qualifiedCount -= 1;
+        if (candidate.imageQualification?.state === "NEEDS_HUMAN_REVIEW") needsHumanReviewCount -= 1;
+        continue;
+      }
     }
+
     if (
-      !acquisition.productLink
-      || !acquisition.affiliateUrl
-      || acquisition.shopId !== candidate.shopId
-      || acquisition.itemId !== candidate.itemId
-      || !validateOfficialProductLink(acquisition.productLink, candidate.shopId, candidate.itemId)
+      !validateOfficialProductLink(officialProductLink, candidate.shopId, candidate.itemId)
+      || !isHttpsUrl(officialAffiliateUrl)
+      || !officialName
     ) {
       item.status = "affiliate_not_eligible";
       item.reason = "AFFILIATE_EVIDENCE_INVALID";
@@ -703,7 +995,6 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       continue;
     }
 
-    const officialPrice = Number(acquisition.price ?? candidate.price);
     if (!Number.isFinite(officialPrice) || officialPrice <= 0) {
       item.status = "affiliate_not_eligible";
       item.reason = "PRICE_UNVERIFIED";
@@ -716,7 +1007,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
 
     const qualification = candidate.imageQualification!;
     const status = qualification.state as Exclude<ShopeeCandidateVisualState, "HARD_REJECT">;
-    const category = candidate.category || resolvePublicProductCategory("", { title: candidate.name });
+    const category = candidate.category || resolvePublicProductCategory("", { title: officialName });
     if (!category) {
       item.status = "image_hard_reject";
       item.reason = "PUBLIC_CATEGORY_UNRESOLVED";
@@ -727,36 +1018,36 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       continue;
     }
 
-    const reviewId = buildShopeeReviewId(acquisition.productLink, chatId);
-    const imageCuration = buildImageCuration(candidate.imageUrl, qualification);
+    const reviewId = buildShopeeReviewId(officialProductLink, chatId);
+    const imageCuration = buildImageCuration(officialImageUrl, qualification);
     const review: PendingReview = {
       id: reviewId,
       chatId,
       senderId: chatId,
       firstName: process.env.USER || "admin",
       username: process.env.USER || "admin",
-      produto: candidate.name,
-      rawTitle: candidate.name,
-      displayTitle: candidate.name,
+      produto: officialName,
+      rawTitle: officialName,
+      displayTitle: officialName,
       categoria: category,
       preco: officialPrice,
-      imagens: [candidate.imageUrl],
-      imagensOriginais: [candidate.imageUrl],
-      imagemPrincipal: candidate.imageUrl,
+      imagens: [officialImageUrl],
+      imagensOriginais: [officialImageUrl],
+      imagemPrincipal: officialImageUrl,
       imagensGaleria: [],
       imageEditorialStatus: status === "QUALIFIED" ? "clean" : "review_required",
       imageCuration,
-      normalizedUrl: acquisition.productLink,
+      normalizedUrl: officialProductLink,
       descricao: "",
       status: "pending",
       createdAt: Date.now(),
       expiresAt: Date.now() + REVIEW_TTL_MS,
       existingProduct: {
         source: "affiliate_preview",
-        affiliateUrl: acquisition.affiliateUrl,
+        affiliateUrl: officialAffiliateUrl,
         priceScaleVerified: true,
-        shopId: acquisition.shopId,
-        itemId: acquisition.itemId,
+        shopId: candidate.shopId,
+        itemId: candidate.itemId,
         visualReviewStatus: status,
       },
       promotionEvidence: null,
@@ -772,7 +1063,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
 
     const card = buildShopeeCardText({
       rank: rankIndex + 1,
-      name: candidate.name,
+      name: officialName,
       category,
       price: officialPrice,
       shopId: candidate.shopId,
@@ -781,7 +1072,7 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       reviewReason: qualification.reason,
       batchId: lotId,
     });
-    const sent = await sendShopeeCard({ chatId, text: card, imageUrl: candidate.imageUrl, reviewId });
+    const sent = await sendShopeeCard({ chatId, text: card, imageUrl: officialImageUrl, reviewId });
     item.reviewId = reviewId;
     item.imageCount = 1;
     if (!sent.ok) {
@@ -823,6 +1114,9 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
       discoveryError: code,
       errorCode: code,
       providerQueryExecuted,
+      discoverySource,
+      candidatesDiscoveredViaDdg,
+      candidatesValidatedByAffiliateApi,
       rejectionCounts,
       items,
       chatTargetConfigured,
@@ -837,9 +1131,12 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     .map(([reason, count]) => `${reason} ${count}`)
     .join(", ") || "nenhuma";
   const finalTitle = errorCode ? "⚠️ <b>SHOPEE_CANDIDATES_REJECTED</b>" : "🏁 <b>LOTE SHOPEE RANQUEADO</b>";
+  const finalDiscoverySummary = discoverySource === "duckduckgo"
+    ? `Descobertos via DDG: <b>${candidatesDiscoveredViaDdg}</b>`
+    : `URLs diretas avaliadas: <b>${candidatesReceived}</b>`;
   await sendTelegramMessage(
     chatId,
-    `${finalTitle}\n\nCandidatos oficiais recebidos: <b>${candidatesReceived}</b>\nHard reject: <b>${hardRejectCount}</b>\nNeeds human review: <b>${needsHumanReviewCount}</b>\nQualificados: <b>${qualifiedCount}</b>\nCards enviados: <b>${accepted}</b>\nMotivos principais: <code>${reasons}</code>${accepted < parsed.count ? "\n\nA Shopee retornou resultados, mas não houve candidatos utilizáveis suficientes após qualificação/ranking. Isso não é ausência de catálogo." : ""}`,
+    `${finalTitle}\n\n${finalDiscoverySummary}\nValidados pela Shopee Affiliate API: <b>${candidatesValidatedByAffiliateApi}</b>\nHard reject: <b>${hardRejectCount}</b>\nNeeds human review: <b>${needsHumanReviewCount}</b>\nQualificados: <b>${qualifiedCount}</b>\nCards enviados: <b>${accepted}</b>\nMotivos principais: <code>${reasons}</code>${accepted < parsed.count ? "\n\nHouve candidatos, mas não houve opções utilizáveis suficientes após validação oficial e qualificação." : ""}`,
   ).catch(() => undefined);
 
   safeShopeeLog("shopee_command_complete", {
@@ -847,6 +1144,9 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     requested: parsed.count,
     provider: "ShopeeApiClient",
     providerQueryExecuted,
+    discoverySource,
+    candidatesDiscoveredViaDdg,
+    candidatesValidatedByAffiliateApi,
     candidatesReceived,
     candidatesExamined: candidates.length,
     hardRejectCount,
@@ -882,6 +1182,9 @@ export async function runShopeeCommand(argsRaw: string): Promise<ShopeeLotResult
     discoveryError: errorCode,
     errorCode,
     providerQueryExecuted,
+    discoverySource,
+    candidatesDiscoveredViaDdg,
+    candidatesValidatedByAffiliateApi,
     rejectionCounts,
     items,
     chatTargetConfigured,

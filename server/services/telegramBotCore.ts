@@ -1911,7 +1911,7 @@ if (commandName === "weekly-test") {
     }
 
     // /shopee N — orquestrador de lote (FASE 25C):
-    //   discovery Shopee → aquisição oficial → scraper → identidade →
+    //   candidato DDG/URL → lookup e aquisição oficiais exatos → identidade →
     //   PendingReview → cards. ZERO publicação automática.
     if (text.startsWith("/shopee")) {
       const args = text.slice("/shopee".length).trim();
@@ -1925,7 +1925,7 @@ if (commandName === "weekly-test") {
               `${result.affiliateClientAvailable ? "" : "credenciais da Affiliate API ausentes."}` +
               "\nNenhuma consulta foi executada.",
           );
-        } else if (result.processed === 0) {
+        } else if (result.processed === 0 && !result.errorCode) {
           await sendTelegramMessage(
             chatId,
             "⚠️ <b>/shopee rejeitado</b>\n\nSintaxe: /shopee N [termo] — N inteiro entre 1 e 10.\nNenhuma ação foi executada.",

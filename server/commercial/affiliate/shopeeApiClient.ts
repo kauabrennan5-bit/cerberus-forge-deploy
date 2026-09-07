@@ -155,7 +155,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       "limit: 1",
     ].filter(Boolean).join(", ");
     return {
-      query: `{ productOfferV2(${args}) { nodes { itemId shopId productName price productLink offerLink } } }`,
+      query: `{ productOfferV2(${args}) { nodes { itemId shopId productName price productLink offerLink imageUrl } } }`,
       variables: {},
     };
   }
@@ -166,9 +166,9 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       return parseProductLookup(response.json, params.shopId ?? null, params.itemId ?? null, response.httpStatus);
     } catch (err) {
       if (err instanceof ShopeeClientError) {
-        return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus: err.httpStatus, raw: null, error: err };
+        return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, imageUrl: null, httpStatus: err.httpStatus, raw: null, error: err };
       }
-      return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+      return { status: "error", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, imageUrl: null, httpStatus: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
     }
   }
 
@@ -183,7 +183,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       } catch (err) {
         lastError = err;
         if (!(err instanceof ShopeeClientError)) {
-          return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+          return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
         }
         const transient = err.kind === "SHOPEE_RATE_LIMITED" || err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR";
         if (!transient || attempt >= MAX_ATTEMPTS) return mapKindToStatus(err);
@@ -191,14 +191,14 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       }
     }
     if (lastError instanceof ShopeeClientError) return mapKindToStatus(lastError);
-    return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
+    return { status: "error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: new ShopeeClientError("SHOPEE_UNKNOWN_ERROR", "unexpected") };
   }
 
   function parseProductLookup(json: unknown, wantShop: string | null, wantItem: string | null, httpStatus: number | null): ShopeeProductLookupResult {
     const nodes = extractOfferNodes(json);
-    if (nodes.length === 0) return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus, raw: json, error: null };
+    if (nodes.length === 0) return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, imageUrl: null, httpStatus, raw: json, error: null };
     const node = matchNode(nodes, wantShop, wantItem);
-    if (!node) return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, httpStatus, raw: json, error: null };
+    if (!node) return { status: "not_found", shopId: null, itemId: null, name: null, priceMinorUnits: null, productLink: null, imageUrl: null, httpStatus, raw: json, error: null };
     return {
       status: "found",
       shopId: node.shopId,
@@ -206,6 +206,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       name: node.name,
       priceMinorUnits: node.price,
       productLink: node.productLink,
+      imageUrl: node.imageUrl,
       httpStatus,
       raw: json,
       error: null,
@@ -214,12 +215,12 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
 
   function parseAffiliateAcquisition(json: unknown, wantShop: string | null, wantItem: string | null): ShopeeAffiliateAcquisitionResult {
     const nodes = extractOfferNodes(json);
-    if (nodes.length === 0) return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: json, error: null };
+    if (nodes.length === 0) return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: json, error: null };
     const node = matchNode(nodes, wantShop, wantItem);
-    if (!node) return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: json, error: null };
+    if (!node) return { status: "not_found", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: json, error: null };
     const url = node.offerLink;
     if (!url || typeof url !== "string") {
-      return { status: "not_eligible", affiliateUrl: null, productLink: node.productLink, shopId: node.shopId, itemId: node.itemId, name: node.name, price: node.price, raw: json, error: null };
+      return { status: "not_eligible", affiliateUrl: null, productLink: node.productLink, shopId: node.shopId, itemId: node.itemId, name: node.name, price: node.price, imageUrl: node.imageUrl, raw: json, error: null };
     }
     return {
       status: "link_acquired",
@@ -229,6 +230,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
       itemId: node.itemId,
       name: node.name,
       price: node.price,
+      imageUrl: node.imageUrl,
       raw: json,
       error: null,
     };
@@ -377,10 +379,10 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
   }
 
   function mapKindToStatus(err: ShopeeClientError): ShopeeAffiliateAcquisitionResult {
-    if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
-    if (err.kind === "SHOPEE_RATE_LIMITED") return { status: "rate_limited", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
-    if (err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR") return { status: "transient", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
-    return { status: "permanent", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, raw: null, error: err };
+    if (err.kind === "SHOPEE_AUTH_ERROR" || err.kind === "SHOPEE_FORBIDDEN") return { status: "auth_error", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: err };
+    if (err.kind === "SHOPEE_RATE_LIMITED") return { status: "rate_limited", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: err };
+    if (err.kind === "SHOPEE_TIMEOUT" || err.kind === "SHOPEE_NETWORK_ERROR") return { status: "transient", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: err };
+    return { status: "permanent", affiliateUrl: null, productLink: null, shopId: null, itemId: null, name: null, price: null, imageUrl: null, raw: null, error: err };
   }
 
   const SH_KEYWORD_MAX_LENGTH = 60;
@@ -485,6 +487,7 @@ interface OfferNode {
   price: number | null;
   productLink: string | null;
   offerLink: string | null;
+  imageUrl: string | null;
 }
 
 export function parseShopeePriceString(value: unknown): number | null {
@@ -519,6 +522,7 @@ export function extractOfferNodes(json: unknown): OfferNode[] {
         price: parseShopeePriceString(obj.price),
         productLink: typeof obj.productLink === "string" ? obj.productLink : null,
         offerLink: typeof obj.offerLink === "string" ? obj.offerLink : null,
+        imageUrl: normalizeShopeeImageReference(obj.imageUrl),
       };
     });
 }

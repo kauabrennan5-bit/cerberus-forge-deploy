@@ -1,6 +1,4 @@
 import { Router } from "express";
-import axios from "axios";
-import { GoogleGenAI } from "@google/genai";
 import { searchShopeeProductsDDG } from "../services/shopeeSearchProvider";
 import { discoverShopeeProducts } from "../services/shopeeDiscovery";
 
@@ -8,12 +6,13 @@ const router = Router();
 
 router.get("/diag/search-test", async (req, res) => {
   const query = (req.query.q as string) || "organizador cozinha";
-  const results = await searchShopeeProductsDDG(query, 5);
+  const result = await searchShopeeProductsDDG(query, 5);
   res.json({
     source: "DuckDuckGo Lite",
     query,
-    count: results.length,
-    results
+    state: result.state,
+    count: result.candidates.length,
+    results: result.candidates,
   });
 });
 

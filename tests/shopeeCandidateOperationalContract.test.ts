@@ -7,15 +7,21 @@ const qualification = fs.readFileSync("server/services/shopeeCandidateQualificat
 
 describe("ranked /shopee structural safety contract", () => {
   it("preserves provider productLink and never constructs a product URL from ids", () => {
-    assert.match(command, /(?:const\s+productLink\s*=\s*String\(raw\.productLink|productLink:\s*String\(raw\.productLink)/);
-    assert.match(command, /normalizedUrl:\s*acquisition\.productLink/);
+    assert.match(command, /validateOfficialProductLink\(lookup\.productLink, candidate\.shopId, candidate\.itemId\)/);
+    assert.match(command, /normalizedUrl:\s*officialProductLink/);
     assert.doesNotMatch(command, /`https:\/\/shopee\.com\.br\/product\/\$\{/);
   });
 
   it("uses official Affiliate imageUrl as the primary term-mode visual evidence", () => {
-    assert.match(command, /(?:const\s+imageUrl\s*=\s*String\(raw\.imageUrl|imageUrl:\s*String\(raw\.imageUrl)/);
+    assert.match(command, /acquisition\.imageUrl\s*\|\|\s*lookup\.imageUrl/);
     assert.match(command, /qualifyImage\(candidate\.imageUrl, candidate\.name\)/);
-    assert.match(command, /imagemPrincipal:\s*candidate\.imageUrl/);
+    assert.match(command, /imagemPrincipal:\s*officialImageUrl/);
+  });
+
+  it("validates DDG identities only with exact API operations, never keyword search", () => {
+    assert.match(command, /lookupProduct\(\{\s*shopId:\s*candidate\.shopId,\s*itemId:\s*candidate\.itemId\s*\}\)/);
+    assert.match(command, /acquireAffiliateLink\(\{\s*shopId:\s*candidate\.shopId,\s*itemId:\s*candidate\.itemId\s*\}\)/);
+    assert.doesNotMatch(command, /searchShopeeOffersWithRetry|\.searchOffers\(/);
   });
 
   it("retains explicit human approval callbacks and authoritative preflight boundary", () => {
