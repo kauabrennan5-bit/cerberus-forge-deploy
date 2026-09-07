@@ -10,6 +10,7 @@ import {
   handleProductRotationCallback,
   isProductRotationCallback,
 } from "./telegramProductRotation";
+import { runConfiguredShopeePublicationRecovery } from "./telegramPublicationRecovery";
 
 export * from "./telegramBotCore";
 
@@ -152,6 +153,19 @@ async function refreshActiveProductCallback(update: any, data: string): Promise<
     : 0;
   const listView = await renderActiveProductList(page);
   await core.editTelegramMessageText(chatId, messageId, listView.text, listView.keyboard);
+}
+
+/**
+ * Render starts Telegram through this wrapper. The legacy category-drift
+ * recovery is explicitly opt-in by reviewId, guarded by the prior human
+ * approval + exact legacy diagnostic, and idempotent once the review publishes.
+ */
+export async function startTelegramPolling(): Promise<void> {
+  await core.startTelegramPolling();
+  const recovery = await runConfiguredShopeePublicationRecovery();
+  if (recovery.status !== "disabled") {
+    console.info("[TELEGRAM PUBLICATION RECOVERY]", recovery);
+  }
 }
 
 // Structural Telegram V2 contract remains implemented in telegramBotCore.ts,
