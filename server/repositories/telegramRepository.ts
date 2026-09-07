@@ -268,6 +268,20 @@ async function syncAutonomousCuratorReviewIdentity(review: PendingReview): Promi
   if (!reservation.reserved) throw new Error("AUTONOMOUS_CURATOR_REVIEW_IDENTITY_CONFLICT");
 }
 
+function reviewRowPayload(review: PendingReview): Record<string, unknown> {
+  return {
+    id: review.id,
+    chat_id: String(review.chatId),
+    sender_id: String(review.senderId),
+    first_name: review.firstName,
+    username: review.username,
+    created_at: review.createdAt,
+    expires_at: review.expiresAt,
+    status: review.status,
+    data: review,
+  };
+}
+
 export async function savePendingReview(review: PendingReview): Promise<void> {
   if (testOverrideSavePendingReview) {
     await testOverrideSavePendingReview(review);
@@ -292,22 +306,47 @@ export async function savePendingReview(review: PendingReview): Promise<void> {
 
   await syncAutonomousCuratorReviewIdentity(normReview);
 
+  // A transição para publishing é um compare-and-set no Supabase. Dois
+  // callbacks que leram pending/error ao mesmo tempo não podem ambos adquirir
+  // a mesma review: somente o primeiro UPDATE que ainda encontra o status
+  // elegível recebe a linha de volta. Falha/zero linhas é fail-closed.
+  if (normReview.status === "publishing") {
+    if (supabase) {
+      const { data: claimed, error } = await supabase
+        .from("telegram_pending_reviews")
+        .update(reviewRowPayload(normReview))
+        .eq("id", normReview.id)
+        .in("status", ["pending", "error"])
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(`TELEGRAM_REVIEW_PUBLICATION_CLAIM_FAILED:${error.code || "unknown"}`);
+      }
+      if (!claimed) {
+        throw new Error("TELEGRAM_REVIEW_PUBLICATION_ALREADY_CLAIMED");
+      }
+    } else {
+      const previousStatus = previous?.status || "pending";
+      if (!["pending", "error"].includes(previousStatus)) {
+        throw new Error("TELEGRAM_REVIEW_PUBLICATION_ALREADY_CLAIMED");
+      }
+    }
+
+    reviews[normReview.id] = normReview;
+    writeReviewsToFile(reviews);
+    return;
+  }
+
   reviews[normReview.id] = normReview;
   writeReviewsToFile(reviews);
 
   if (supabase) {
     try {
-      const { error } = await supabase.from("telegram_pending_reviews").upsert({
-        id: normReview.id,
-        chat_id: String(normReview.chatId),
-        sender_id: String(normReview.senderId),
-        first_name: normReview.firstName,
-        username: normReview.username,
-        created_at: normReview.createdAt,
-        expires_at: normReview.expiresAt,
-        status: normReview.status,
-        data: normReview,
-      }, { onConflict: "id" });
+      const { error } = await supabase.from("telegram_pending_reviews").upsert(
+        reviewRowPayload(normReview),
+        { onConflict: "id" },
+      );
 
       if (error && error.code !== "PGRST205") {
         console.warn("[Telegram Repo Warning] Erro ao salvar revisão no Supabase:", error.message);
