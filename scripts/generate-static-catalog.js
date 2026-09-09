@@ -4,58 +4,13 @@ import https from 'https';
 import path from 'path';
 import dotenv from 'dotenv';
 import { resolvePublicProductCategory } from '../src/lib/productCategory.ts';
-import { sanitizePublicCuratorNote } from '../src/lib/publicCuratorNote.ts';
+import { toPublicProductDTO } from '../src/lib/publicProductDto.ts';
 
 dotenv.config();
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const publicCatalogUrl = process.env.PUBLIC_CATALOG_API_URL || process.env.PUBLIC_CATALOG_URL || 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products';
-
-const RAW_PAYLOAD_MARKERS = [
-  '[url final]',
-  '[titulo identificado]',
-  '[preco identificado]',
-  '[total imagens oficiais]',
-  '[imagens extraidas]',
-  '[conteudo da pagina]'
-];
-
-const PROMOTION_CONDITIONS = new Set([
-  'pix',
-  'pix_with_coupon',
-  'coupon',
-  'other'
-]);
-
-function containsRawPayloadMarkers(value) {
-  if (typeof value !== 'string') return false;
-  const normalized = value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  return RAW_PAYLOAD_MARKERS.some(marker => normalized.includes(marker));
-}
-
-// O build é executado diretamente pelo Node e não pode importar o módulo
-// TypeScript do runtime. Esta projeção reproduz somente o contrato público
-// validado: não calcula descontos, não aceita fonte não confirmada e não
-// transporta campos internos de review para o catálogo estático.
-function sanitizePromotionOffer(value) {
-  if (!value || typeof value !== 'object') return undefined;
-  const candidate = value;
-  if (typeof candidate.price !== 'number' || !Number.isFinite(candidate.price) || candidate.price <= 0) return undefined;
-  if (typeof candidate.condition !== 'string' || !PROMOTION_CONDITIONS.has(candidate.condition)) return undefined;
-  if (candidate.source !== 'admin_confirmed') return undefined;
-  if (typeof candidate.confirmedAt !== 'number' || !Number.isFinite(candidate.confirmedAt) || candidate.confirmedAt <= 0) return undefined;
-  const benefits = Array.isArray(candidate.benefits)
-    ? candidate.benefits.filter(benefit => typeof benefit === 'string' && benefit.trim().length > 0).map(benefit => benefit.trim()).slice(0, 8)
-    : [];
-  return {
-    price: candidate.price,
-    condition: candidate.condition,
-    benefits,
-    source: 'admin_confirmed',
-    confirmedAt: candidate.confirmedAt
-  };
-}
 
 function requestCanonicalJson(url, attempts = 3) {
   return new Promise((resolve, reject) => {
@@ -78,26 +33,32 @@ function requestCanonicalJson(url, attempts = 3) {
           }
 
           const error = new Error(`API retornou HTTP ${response.statusCode || 'desconhecido'}`);
-          if (attempt < attempts) {
-            setTimeout(run, 500 * attempt);
-          } else {
-            reject(error);
-          }
+          if (attempt < attempts) setTimeout(run, 500 * attempt);
+          else reject(error);
         });
       });
 
       request.setTimeout(20_000, () => request.destroy(new Error('Timeout ao buscar API canônica.')));
       request.on('error', error => {
-        if (attempt < attempts) {
-          setTimeout(run, 500 * attempt);
-        } else {
-          reject(error);
-        }
+        if (attempt < attempts) setTimeout(run, 500 * attempt);
+        else reject(error);
       });
     };
 
     run();
   });
+}
+
+function isValidPublicProduct(product) {
+  if (!product) return false;
+  if (!product.produto || typeof product.produto !== 'string' || product.produto.trim() === '') return false;
+  if (!product.link || typeof product.link !== 'string' || !/^https:\/\//i.test(product.link)) return false;
+  if (!Number.isFinite(Number(product.preco)) || Number(product.preco) <= 0) return false;
+  const category = resolvePublicProductCategory(product.categoria, {
+    title: product.displayTitle || product.produto,
+    description: product.descricao,
+  });
+  return Boolean(category);
 }
 
 async function generateStaticCatalog() {
@@ -135,9 +96,7 @@ async function generateStaticCatalog() {
     try {
       const json = await requestCanonicalJson(publicCatalogUrl);
       const products = json.products || json.data;
-      if (!Array.isArray(products)) {
-        throw new Error('Resposta da API não contém uma lista de produtos.');
-      }
+      if (!Array.isArray(products)) throw new Error('Resposta da API não contém uma lista de produtos.');
 
       rawProducts = products;
       sourceLoaded = true;
@@ -148,54 +107,23 @@ async function generateStaticCatalog() {
     }
   }
 
-  if (!sourceLoaded) {
-    throw new Error('Nenhuma fonte canônica carregada; products.json não será gerado a partir de dados locais.');
-  }
+  if (!sourceLoaded) throw new Error('Nenhuma fonte canônica carregada; products.json não será gerado a partir de dados locais.');
 
-  // Filtragem e sanitização da projeção pública.
-  const validProducts = rawProducts.filter((p) => {
-    if (!p.produto || typeof p.produto !== 'string' || p.produto.trim() === '') return false;
-    const productLink = p.link || p.affiliate_url;
-    if (!productLink || typeof productLink !== 'string' || productLink.trim() === '' || productLink.includes('exemplo.com')) return false;
-    const price = Number(p.preco);
-    if (Number.isNaN(price) || price <= 0) return false;
-    if (p.ativo === false || p.status !== 'published') return false;
-    const publicCategory = resolvePublicProductCategory(p.categoria || p.category, {
-      title: p.displayTitle || p.display_title || p.raw_title || p.produto || p.title || p.name,
-      description: p.descricao || p.description,
-    });
-    if (!publicCategory) {
-      console.warn(`[Build Catalog] Produto ${p.id || p.ref || 'sem-id'} omitido: PUBLIC_CATEGORY_REVIEW_REQUIRED.`);
-      return false;
-    }
-    return true;
-  }).map((p) => ({
-    id: p.id,
-    ref: p.ref,
-    slug: p.slug || p.id,
-    produto: p.produto.trim(),
-    displayTitle: typeof (p.displayTitle || p.display_title) === 'string' ? (p.displayTitle || p.display_title).trim() : undefined,
-    preco: Number(p.preco),
-    precoAntigo: p.precoAntigo || p.preco_antigo ? Number(p.precoAntigo || p.preco_antigo) : undefined,
-    imagens: Array.isArray(p.imagens) ? p.imagens : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : []),
-    link: p.link || p.affiliate_url,
-    categoria: resolvePublicProductCategory(p.categoria || p.category, {
-      title: p.displayTitle || p.display_title || p.raw_title || p.produto || p.title || p.name,
-      description: p.descricao || p.description,
-    }),
-    descricao: containsRawPayloadMarkers(p.descricao || p.description || '') ? '' : (p.descricao || p.description || ''),
-    curatorNote: sanitizePublicCuratorNote(p.curatorNote || p.curator_note),
-    paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',
-    createdAt: p.createdAt || p.created_at || undefined,
-    ofertaPromocional: sanitizePromotionOffer(p.ofertaPromocional || p.oferta_promocional),
-    ativo: true,
-    status: 'published'
-  }));
+  // A whitelist pública é compartilhada com a Edge e o restante da aplicação.
+  // Produtos inativos/não publicados retornam null; campos internos nunca chegam ao arquivo.
+  const validProducts = rawProducts
+    .map(product => toPublicProductDTO(product))
+    .filter(isValidPublicProduct)
+    .map(product => ({
+      ...product,
+      categoria: resolvePublicProductCategory(product.categoria, {
+        title: product.displayTitle || product.produto,
+        description: product.descricao,
+      }),
+    }));
 
   const publicDataDir = path.join(process.cwd(), 'public', 'data');
-  if (!fs.existsSync(publicDataDir)) {
-    fs.mkdirSync(publicDataDir, { recursive: true });
-  }
+  if (!fs.existsSync(publicDataDir)) fs.mkdirSync(publicDataDir, { recursive: true });
 
   const outputPath = path.join(publicDataDir, 'products.json');
   fs.writeFileSync(outputPath, JSON.stringify(validProducts, null, 2), 'utf-8');
