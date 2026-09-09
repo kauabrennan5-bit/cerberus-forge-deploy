@@ -8,10 +8,11 @@ test("Product Rotation proposal stays non-public until canonical publication rev
   assert.match(source, /publication_preflight: "real_editorial_review_pending"/);
   assert.match(source, /publication_preflight: "passed_canonical_hard_gate"/);
   assert.doesNotMatch(source, /from\("products"\)\.update\(\{\s*ativo: true,\s*status: "published",\s*created_by: AUTO_QUEUE_CREATED_BY/s);
+  assert.doesNotMatch(source, /update\(\{\s*created_by: AUTO_QUEUE_CREATED_BY,\s*curator_note: candidateNote/s);
   assert.doesNotMatch(source, /refreshCandidateProduct\([^\n]+,\s*true\)/);
 });
 
-test("rotation publication preflight performs real image title pipeline score and central gate", async () => {
+test("rotation publication preflight preserves AI state and requires Telegram proof at the central gate", async () => {
   const source = await readFile(new URL("../server/services/productRotationPublication.ts", import.meta.url), "utf8");
   assert.match(source, /reviewDisplayTitle/);
   assert.match(source, /reviewProductImages/);
@@ -19,9 +20,13 @@ test("rotation publication preflight performs real image title pipeline score an
   assert.match(source, /scoreAutonomousCandidate/);
   assert.match(source, /config\.autoPublishThreshold/);
   assert.match(source, /display_title_status: "reviewed"/);
-  assert.match(source, /image_editorial_status: "clean"/);
+  assert.match(source, /image_editorial_status: imageEditorialStatus/);
   assert.match(source, /publishProductWithGate/);
   assert.match(source, /source: "product_rotation"/);
+  assert.match(source, /humanManualApproval: true/);
+  assert.match(source, /reviewId: input\.approval\.reviewId/);
+  assert.match(source, /primaryImageFingerprint: input\.approval\.primaryImageFingerprint/);
+  assert.match(source, /humanApprovalEvidence: input\.approval\.humanApprovalEvidence/);
   assert.match(source, /REVIEW_RECOVERY_PENDING:/);
 });
 

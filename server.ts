@@ -32,6 +32,7 @@ import { getExpectedTelegramWebhookUrl, getTelegramWebhookDiagnostics } from "./
 // FASE 25B (Commit 1) — Painel de leitura Telegram: registro do menu via setMyCommands.
 import { registerTelegramCommands } from "./server/services/telegramPanel";
 import { containsRawPayloadMarkers } from "./server/services/productLifecycle";
+import { toPublicProductDTO, toPublicProductDTOs } from "./supabase/functions/_shared/publicProductDTO";
 import { listPublicSocialLinks } from "./server/services/socialLinks";
 import { setCommercialBrainClient } from "./server/repositories/commercialBrainRepository";
 import { registerCommercialBrainRoutes } from "./server/routes/commercialBrainRoutes";
@@ -410,9 +411,7 @@ async function startServer() {
     if (!enforceRateLimit(catalogRateLimiter, req, res)) return;
     try {
       const products = await productsRepository.getProducts();
-      const publicProducts = products.map(product => containsRawPayloadMarkers(product.descricao)
-        ? { ...product, descricao: "" }
-        : product);
+      const publicProducts = toPublicProductDTOs(products);
       return res.json({ success: true, products: publicProducts, data: publicProducts });
     } catch (err: any) {
       console.error("❌ [/api/products] Erro de repositório:", err.message);
@@ -429,12 +428,10 @@ async function startServer() {
     try {
       const { idOrSlug } = req.params;
       const product = await productsRepository.getProductByIdOrSlug(idOrSlug);
-      if (!product) {
+      const publicProduct = toPublicProductDTO(product);
+      if (!publicProduct) {
         return res.status(404).json({ success: false, error: "Produto não encontrado" });
       }
-      const publicProduct = containsRawPayloadMarkers(product.descricao)
-        ? { ...product, descricao: "" }
-        : product;
       return res.json({ success: true, product: publicProduct });
     } catch (err: any) {
       console.error("❌ [/api/products/:idOrSlug] Erro de repositório:", err.message);
@@ -713,8 +710,7 @@ async function startServer() {
   // GET /api/meta-feed.csv - Meta Commerce Manager CSV Feed
   app.get(["/api/meta-feed.csv", "/feed.csv"], async (req, res) => {
     try {
-      const allProducts = await productsRepository.getProducts();
-      const products = allProducts.filter((p: any) => p.ativo !== false);
+      const products = toPublicProductDTOs(await productsRepository.getProducts());
       const host = req.headers.host || "localhost:3000";
       const protocol = req.headers["x-forwarded-proto"] || "https";
       const baseUrl = `${protocol}://${host}`;
@@ -755,8 +751,7 @@ async function startServer() {
   // GET /api/meta-feed.xml - Meta Commerce Manager RSS XML Feed
   app.get(["/api/meta-feed.xml", "/feed.xml"], async (req, res) => {
     try {
-      const allProducts = await productsRepository.getProducts();
-      const products = allProducts.filter((p: any) => p.ativo !== false);
+      const products = toPublicProductDTOs(await productsRepository.getProducts());
       const host = req.headers.host || "localhost:3000";
       const protocol = req.headers["x-forwarded-proto"] || "https";
       const baseUrl = `${protocol}://${host}`;
@@ -1368,13 +1363,13 @@ NUNCA modifique ou invente preços ou imagens.`,
         return redirectToPublicSite(req, res);
       }
       try {
-        const product = await productsRepository.getProductByIdOrSlug(req.params.slug);
-        if (!product || product.ativo === false || product.status !== "published") {
+        const product = toPublicProductDTO(await productsRepository.getProductByIdOrSlug(req.params.slug));
+        if (!product) {
           return res.status(404).type("html").send("<!doctype html><html lang=\"pt-BR\"><meta charset=\"utf-8\"><title>Produto não encontrado</title><p>Produto não encontrado.</p></html>");
         }
         const publicOrigin = publicSiteBase;
         const title = product.displayTitle || product.produto;
-        const description = (product.curatorNote || product.descricao || "Peça selecionada pela curadoria Cerberus Finds.").replace(/\s+/g, " ").trim().slice(0, 180);
+        const description = (product.descricao || "Peça selecionada pela curadoria Cerberus Finds.").replace(/\s+/g, " ").trim().slice(0, 180);
         const image = Array.isArray(product.imagens) ? product.imagens[0] : "";
         const canonicalUrl = `${publicOrigin}/produto/${encodeURIComponent(product.slug || product.id)}`;
         const imageTag = image ? `<meta property="og:image" content="${escapeHtml(image)}"><meta name="twitter:image" content="${escapeHtml(image)}">` : "";

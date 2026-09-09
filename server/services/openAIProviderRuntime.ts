@@ -106,6 +106,11 @@ function safeErrorScalar(value: unknown, max = 80): string | null {
   return /^[a-z0-9_.-]+$/.test(normalized) && normalized.length <= max ? normalized : null;
 }
 
+function safeErrorParam(value: unknown, max = 120): string | null {
+  const normalized = String(value ?? "").trim();
+  return /^[a-zA-Z0-9_.\[\]-]+$/.test(normalized) && normalized.length <= max ? normalized : null;
+}
+
 function parseRetryAfter(value: string | null, nowMs: number): number | null {
   const text = String(value || "").trim();
   if (!text) return null;
@@ -120,7 +125,7 @@ function parseErrorBody(value: string): { code: string | null; param: string | n
     const parsed = JSON.parse(value) as { error?: { code?: unknown; type?: unknown; param?: unknown } };
     return {
       code: safeErrorScalar(parsed?.error?.code) || safeErrorScalar(parsed?.error?.type),
-      param: safeErrorScalar(parsed?.error?.param),
+      param: safeErrorParam(parsed?.error?.param),
     };
   } catch {
     return { code: null, param: null };
@@ -380,7 +385,12 @@ async function execute(input: RuntimeOptions): Promise<unknown> {
       }
     }
     const finalError = lastError || new OpenAIProviderError({ code: "OPENAI_PROVIDER_UNAVAILABLE", retryable: false });
-    setCircuit(input.apiKey, model, finalError, now());
+    // HTTP 400/shape errors can be request-feature specific. Opening a model
+    // circuit here would make a broken structured/vision canary suppress a
+    // healthy text request and recreate the false OPENAI_DOWN incident.
+    if (finalError.code !== "OPENAI_INVALID_RESPONSE") {
+      setCircuit(input.apiKey, model, finalError, now());
+    }
     throw finalError;
   } finally {
     releaseConcurrency();
@@ -399,6 +409,19 @@ export async function callOpenAIResponses(input: RuntimeOptions): Promise<unknow
   });
   singleFlight.set(key, operation);
   return operation;
+}
+
+/**
+ * Transporte de um único probe, sem single-flight/circuit breaker. O health
+ * check precisa medir o estado atual e não repetir um circuito aberto por uma
+ * chamada funcional anterior com payload diferente.
+ */
+export async function callOpenAIHealthProbe(input: Pick<RuntimeOptions, "apiKey" | "request" | "timeoutMs" | "fetchImpl" | "now">): Promise<unknown> {
+  if (!String(input.apiKey || "").trim()) {
+    throw new OpenAIProviderError({ code: "OPENAI_AUTH_ERROR", retryable: false });
+  }
+  const now = input.now || Date.now;
+  return fetchOnce({ ...input }, now());
 }
 
 export function getOpenAIRuntimeHealth(model?: string | null): RuntimeHealth | null {

@@ -1,6 +1,5 @@
 import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
-import { resolvePublicProductCategory } from "../lib/productCategory";
-import { sanitizePublicCuratorNote } from "../lib/publicCuratorNote";
+import { toPublicProductDTOs } from "../../supabase/functions/_shared/publicProductDTO";
 
 export interface CreateProductInput {
   senha?: string;
@@ -95,32 +94,9 @@ export async function getProducts(): Promise<any[]> {
   }
 
   console.log(`[Catalog] ${list.length} registros carregados da API pública canônica.`);
-  const normalized = list.map((p: any) => ({
-    ...p,
-    id: String(p.id || ''),
-    produto: p.produto || '',
-    displayTitle: typeof (p.displayTitle || p.display_title) === 'string' ? (p.displayTitle || p.display_title).trim() : undefined,
-    curatorNote: sanitizePublicCuratorNote(p.curatorNote || p.curator_note),
-    preco: Number(p.preco) || 0,
-    imagens: Array.isArray(p.imagens)
-      ? p.imagens
-      : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
-    link: p.link || p.url || '',
-    categoria: resolvePublicProductCategory(p.categoria || p.category, {
-      title: p.displayTitle || p.display_title || p.produto || p.title || p.name,
-      description: p.descricao || p.description,
-    }),
-    createdAt: typeof (p.createdAt || p.created_at) === 'string' ? (p.createdAt || p.created_at) : undefined,
-    ativo: p.ativo !== false,
-    status: p.status || 'published'
-  }));
-  const publicProducts = normalized.filter((product: any) =>
-    product.ativo !== false
-    && product.status === 'published'
-    && Boolean(product.categoria)
-  );
-  if (publicProducts.length !== normalized.length) {
-    console.warn(`[Catalog] ${normalized.length - publicProducts.length} registro(s) omitido(s): não publicados/ativos ou PUBLIC_CATEGORY_REVIEW_REQUIRED.`);
+  const publicProducts = toPublicProductDTOs(list);
+  if (publicProducts.length !== list.length) {
+    console.warn(`[Catalog] ${list.length - publicProducts.length} registro(s) omitido(s) pela projeção pública canônica.`);
   }
   return publicProducts;
 }

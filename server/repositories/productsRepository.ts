@@ -95,9 +95,9 @@ async function saveProducts(products: Product[], syncCatalog = true): Promise<vo
       preco: Number(p.preco) || 0,
       imagens: p.imagens,
       link: p.link,
-      ativo: p.ativo !== undefined ? p.ativo : true,
+      ativo: p.ativo === true,
       destaque: Boolean(p.destaque),
-      status: p.status || "published",
+      status: p.status || "paused",
       created_by: p.createdBy || "system",
       slug: p.slug || generateSlug(p.produto),
       descricao: p.descricao || "",
@@ -116,6 +116,11 @@ async function saveProducts(products: Product[], syncCatalog = true): Promise<vo
       image_review_model: p.imageReviewModel || null,
       image_review_version: p.imageReviewVersion || null,
       image_review_fingerprint: p.imageReviewFingerprint || null,
+      human_editorial_approved_at: p.humanEditorialApprovedAt || null,
+      human_editorial_image_url: p.humanEditorialImageUrl || null,
+      human_editorial_image_fingerprint: p.humanEditorialImageFingerprint || null,
+      human_editorial_review_id: p.humanEditorialReviewId || null,
+      human_editorial_authorization_id: p.humanEditorialAuthorizationId || null,
     };
     return productRow;
   });
@@ -156,7 +161,7 @@ export async function getProducts(): Promise<Product[]> {
   }
 
   if (Array.isArray(data)) {
-    const mapped = data.map((item: any) => ({
+    const mapped: Product[] = data.map((item: any) => ({
       id: item.id,
       ref: item.ref || item.ref_code,
       produto: item.produto || item.title || item.name,
@@ -182,10 +187,15 @@ export async function getProducts(): Promise<Product[]> {
       imageReviewModel: item.image_review_model || undefined,
       imageReviewVersion: item.image_review_version || undefined,
       imageReviewFingerprint: item.image_review_fingerprint || undefined,
+      humanEditorialApprovedAt: item.human_editorial_approved_at || undefined,
+      humanEditorialImageUrl: item.human_editorial_image_url || undefined,
+      humanEditorialImageFingerprint: item.human_editorial_image_fingerprint || undefined,
+      humanEditorialReviewId: item.human_editorial_review_id || undefined,
+      humanEditorialAuthorizationId: item.human_editorial_authorization_id || undefined,
       link: item.link || item.affiliate_url,
-      ativo: item.ativo !== undefined ? item.ativo : true,
+      ativo: item.ativo === true,
       destaque: Boolean(item.destaque),
-      status: item.status || "published",
+      status: item.status || "paused",
       createdBy: item.created_by || item.createdBy,
       slug: item.slug || generateSlug(item.produto || ""),
       descricao: item.descricao || item.description || "",
@@ -195,7 +205,34 @@ export async function getProducts(): Promise<Product[]> {
       createdAt: item.created_at || item.createdAt,
     }));
 
-    return mapped.filter((p: Product) => isValidProductLink(p.link));
+    const validProducts = mapped.filter((p: Product) => isValidProductLink(p.link));
+    if (validProducts.length === 0) return validProducts;
+
+    // A Weekly precisa provar a identidade Shopee na fonte canônica. Uma falha
+    // nessa leitura não torna o produto elegível por inferência: ele permanece
+    // sem sourceIdentity e o gate editorial fecha com segurança.
+    const { data: identities, error: identityError } = await client
+      .from("product_source_identities")
+      .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
+      .in("product_id", validProducts.map(product => product.id));
+    if (identityError) {
+      console.error("❌ [Supabase] Falha ao carregar identidades técnicas dos produtos:", identityError.message);
+      return validProducts;
+    }
+    const byProduct = new Map<string, Product["sourceIdentity"]>();
+    for (const row of identities || []) {
+      const productId = String(row.product_id || "").trim();
+      if (!productId || byProduct.has(productId)) continue;
+      byProduct.set(productId, {
+        marketplace: String(row.marketplace || "").trim(),
+        shopId: String(row.shop_id || "").trim(),
+        itemId: String(row.item_id || "").trim(),
+        sourceProductUrl: String(row.source_product_url || "").trim(),
+        reviewId: row.review_id ? String(row.review_id) : undefined,
+      });
+    }
+    for (const product of validProducts) product.sourceIdentity = byProduct.get(product.id);
+    return validProducts;
   }
 
   return [];
@@ -233,6 +270,9 @@ export async function createProduct(input: {
   imageEditorialStatus?: Product["imageEditorialStatus"];
   imageCuration?: Product["imageCuration"];
 }, options: { syncCatalog?: boolean } = {}): Promise<Product> {
+  if (input.status === "published") {
+    throw new Error("PRODUCT_PUBLICATION_REQUIRES_TELEGRAM_APPROVAL");
+  }
   const products = await getProducts();
   const publicCategory = resolveProductCategoryForPersistence(input);
   const inputLink = input.link.trim();
@@ -271,7 +311,7 @@ export async function createProduct(input: {
       curatorNote: input.curatorNote?.trim() || existingProduct.curatorNote,
       imageEditorialStatus: input.imageEditorialStatus || existingProduct.imageEditorialStatus,
       imageCuration: input.imageCuration || existingProduct.imageCuration,
-      status: input.status || "published",
+      status: input.status || "approved",
       ofertaPromocional: normalizePromotionOffer(input.ofertaPromocional) || existingProduct.ofertaPromocional,
     }, options);
 
@@ -291,6 +331,7 @@ export async function createProduct(input: {
     ? input.imagens.split(" | ").filter(Boolean)
     : [];
 
+  const initialStatus = input.status || "approved";
   const newProduct: Product = {
     id,
     ref,
@@ -299,9 +340,11 @@ export async function createProduct(input: {
     preco: Number(input.preco) || 0,
     imagens: imagesArray,
     link: inputLink,
-    ativo: true,
+    // Generic creation is deliberately non-public. The only public transition
+    // is performed by publishProductWithGate after a persisted Telegram claim.
+    ativo: false,
     destaque: Boolean(input.destaque),
-    status: input.status || "published",
+    status: initialStatus,
     slug,
     descricao: (input.descricao || "").trim(),
     rawTitle: input.rawTitle?.trim() || input.produto.trim(),
@@ -337,6 +380,11 @@ export async function updateProduct(
     ...updateData,
     ...(updateData.produto ? { slug: generateSlug(updateData.produto) } : {})
   };
+  const wasPublic = products[index].ativo === true && products[index].status === "published";
+  const wouldBecomePublic = mergedProduct.ativo === true && mergedProduct.status === "published";
+  if (!wasPublic && wouldBecomePublic) {
+    throw new Error("PRODUCT_PUBLICATION_REQUIRES_TELEGRAM_APPROVAL");
+  }
   let updatedProduct: Product = {
     ...mergedProduct,
     categoria: resolveProductCategoryForPersistence(mergedProduct),
@@ -411,10 +459,6 @@ export async function deleteProduct(id: string): Promise<boolean> {
 
 export async function pauseProduct(id: string): Promise<Product | null> {
   return updateProduct(id, { ativo: false, status: "paused" });
-}
-
-export async function reactivateProduct(id: string): Promise<Product | null> {
-  return updateProduct(id, { ativo: true, status: "published" });
 }
 
 /**

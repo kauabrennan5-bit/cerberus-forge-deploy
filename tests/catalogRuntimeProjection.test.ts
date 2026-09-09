@@ -62,17 +62,17 @@ test("frontend consumes the canonical Edge API instead of its branch-local produ
   );
   assert.match(getProductsBody, /getPublicCatalogApiUrl\(\)/);
   assert.equal(getProductsBody.includes("/data/products.json"), false);
-  assert.match(getProductsBody, /product\.ativo !== false/);
-  assert.match(getProductsBody, /product\.status === 'published'/);
+  assert.match(getProductsBody, /toPublicProductDTOs\(list\)/);
+  assert.doesNotMatch(getProductsBody, /ativo\s*!==\s*false/);
   assert.match(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
 });
 
-test("public Edge exposes strict editorial rows plus technically authorized deficit fallback rows", () => {
-  assert.match(edgeSource, /isStrictEditorialRow/);
-  assert.match(edgeSource, /isDeficitFallbackPublicRow/);
-  assert.match(edgeSource, /AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue"/);
-  assert.match(edgeSource, /AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback"/);
-  assert.match(edgeSource, /image_review_fingerprint/);
-  assert.match(edgeSource, /validShopeeAffiliateLink/);
-  assert.match(edgeSource, /\.not\("display_title", "is", null\)/);
+test("public Edge uses the shared whitelist and fetches human proof only for filtering", () => {
+  assert.match(edgeSource, /toPublicProductDTOs/);
+  assert.match(edgeSource, /\.eq\("ativo", true\)/);
+  assert.match(edgeSource, /\.eq\("status", "published"\)/);
+  assert.match(edgeSource, /human_editorial_review_id/);
+  assert.match(edgeSource, /human_editorial_authorization_id/);
+  assert.doesNotMatch(edgeSource, /curator_note/);
+  assert.doesNotMatch(edgeSource, /AUTONOMOUS_DEFICIT_FALLBACK/);
 });

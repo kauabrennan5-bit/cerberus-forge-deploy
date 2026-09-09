@@ -82,14 +82,16 @@ test("continuous discovery compares qualified finalists instead of publishing th
   assert.match(source, /for \(const page of pages\.slice\(1\)\)/);
 });
 
-test("deficit recovery skips complete categories before expensive work and rechecks before publication", async () => {
+test("deficit recovery skips complete categories and rechecks public plus pending coverage before a card", async () => {
   const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
   const saturationIndex = source.indexOf('result.reason = "CATEGORY_TARGET_ALREADY_SATISFIED_WHILE_DEFICITS_EXIST"');
   const attemptIndex = source.indexOf("metrics.attemptedCategories += 1");
   assert.ok(saturationIndex >= 0);
   assert.ok(attemptIndex > saturationIndex);
-  assert.match(source, /assertFreshCategoryPublicationAllowed\(profile\.category, env\)/);
-  assert.match(source, /categoryStillNeedsRecovery\(profile\.category, env\)/);
+  assert.match(source, /assertFreshCategoryPublicationAllowed\(candidate\.category, env, now\)/);
+  assert.match(source, /calculateCategoryCoveragePolicy\(products, reviews, dailyTarget, now\.getTime\(\)\)/);
+  assert.match(source, /categoryStillNeedsRecovery\(profile\.category, env, now\)/);
+  assert.match(source, /FUTURE_DISCOVERY_CANDIDATE/);
 });
 
 test("official image evidence is injected only as data and still goes through canonical image review", () => {
@@ -128,7 +130,7 @@ test("legacy paused rejects do not poison catalog similarity, but active and fut
     categoria: "Decoração",
     preco: 100,
     imagens: ["https://example.com/image.jpg"],
-    link: `https://example.com/${id}`,
+    link: `https://s.shopee.com.br/${id}`,
     ativo,
     destaque: false,
     status,
@@ -239,7 +241,7 @@ test("progressive coordinator enforces an absolute five-per-category public floo
   assert.equal(dailyTargetPerCategory([first], now, { AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-29" } as NodeJS.ProcessEnv), 5);
 });
 
-test("category deficits use today's cumulative target instead of an exact-two cap", () => {
+test("category deficits use the configured coverage floor instead of an exact-two cap", () => {
   const product = (id: string, category: Product["categoria"], status: Product["status"] = "published", ativo = true): Product => ({
     id,
     produto: id,
@@ -250,7 +252,7 @@ test("category deficits use today's cumulative target instead of an exact-two ca
     categoria: category,
     preco: 100,
     imagens: ["https://example.com/a.jpg"],
-    link: `https://example.com/${id}`,
+    link: `https://s.shopee.com.br/${id}`,
     ativo,
     destaque: false,
     status,

@@ -10,7 +10,6 @@ import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import * as telegramRepo from "../repositories/telegramRepository";
 import type { PendingReview } from "./telegramTypes";
 import { extractProductForReview } from "./productAutomation";
-import { resolveProductImageReviewModel } from "./productImageReview";
 import { createProductionProductPipeline, type LifecycleRecord } from "./productPipeline";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { sendTelegramMessage, sendTelegramPhoto, type TelegramDeliveryResult } from "./telegramBot";
@@ -20,6 +19,7 @@ import {
   queryForProfile,
   type AutonomousCuratorCategoryProfile,
 } from "./autonomousCuratorProfiles";
+import { calculateCategoryCoveragePolicy } from "./autonomousCuratorCategoryPolicy";
 import {
   cheapProfileScore,
   hasBlockedProfileTerm,
@@ -100,7 +100,10 @@ type AutonomousCuratorDependencies = {
   savePendingReview?: typeof telegramRepo.savePendingReview;
   sendMessage?: typeof sendTelegramMessage;
   sendPhoto?: typeof sendTelegramPhoto;
+  listReviewsByStatus?: typeof telegramRepo.listReviewsByStatus;
 };
+
+const AUTONOMOUS_CATEGORY_FLOOR = 5;
 
 function localRunDate(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -539,89 +542,6 @@ async function prepareCategoryCandidate(input: {
   return { candidate: null, decision: lastReason === "SOURCE_IDENTITY_ALREADY_PUBLISHED" ? "duplicate" : "reject", reason: lastReason, examined };
 }
 
-async function rollbackCreatedProducts(productIds: string[], deps: AutonomousCuratorDependencies): Promise<void> {
-  const updateProduct = deps.updateProduct || productsRepository.updateProduct;
-  for (const id of productIds) {
-    await updateProduct(id, { ativo: false, status: "error" }, { syncCatalog: false }).catch(() => null);
-  }
-  if (productIds.length > 0) await (deps.catalogSync || syncCatalogAndDeploy)("rollback autonomous curator").catch(() => undefined);
-}
-
-async function publishAutoBatch(input: {
-  runId: string;
-  candidates: CuratedCandidate[];
-  env: NodeJS.ProcessEnv;
-  deps: AutonomousCuratorDependencies;
-}): Promise<Array<{ candidate: CuratedCandidate; ok: boolean; productId: string | null; reason: string }>> {
-  const reserve = input.deps.reserveSourceIdentity || curatorRepo.reserveProductSourceIdentity;
-  const bind = input.deps.bindSourceIdentity || curatorRepo.bindProductSourceIdentity;
-  const release = input.deps.releaseSourceIdentity || curatorRepo.releaseProductSourceIdentity;
-  const saveImageReview = input.deps.saveImageReview || curatorRepo.saveProductImageEditorialReview;
-  const createProduct = input.deps.createProduct || productsRepository.createProduct;
-  const updateProduct = input.deps.updateProduct || productsRepository.updateProduct;
-  const productsLoader = input.deps.productsLoader || productsRepository.getProducts;
-  const created: Array<{ candidate: CuratedCandidate; productId: string }> = [];
-  const results: Array<{ candidate: CuratedCandidate; ok: boolean; productId: string | null; reason: string }> = [];
-
-  for (const candidate of input.candidates) {
-    const latestProducts = await productsLoader();
-    if (exactExistingIdentity(latestProducts, candidate.shopId, candidate.itemId) || latestProducts.some(product => product.link === candidate.affiliateUrl)) {
-      results.push({ candidate, ok: false, productId: null, reason: "DUPLICATE_AT_COMMIT" });
-      continue;
-    }
-    const reservation = await reserve({
-      marketplace: "Shopee",
-      shopId: candidate.shopId,
-      itemId: candidate.itemId,
-      sourceProductUrl: candidate.sourceProductUrl,
-      runId: input.runId,
-    });
-    if (!reservation.reserved) {
-      results.push({ candidate, ok: false, productId: reservation.identity?.productId || null, reason: "SOURCE_IDENTITY_RESERVED" });
-      continue;
-    }
-
-    try {
-      const product = await createProduct({
-        produto: candidate.displayTitle,
-        rawTitle: candidate.rawTitle,
-        displayTitle: candidate.displayTitle,
-        categoria: candidate.category,
-        preco: candidate.price,
-        imagens: candidate.images,
-        link: candidate.affiliateUrl,
-        descricao: candidate.description,
-        status: "approved",
-        imageEditorialStatus: candidate.imageEditorialStatus,
-        imageCuration: candidate.imageCuration,
-      }, { syncCatalog: false });
-      const promoted = await updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
-      if (!promoted) throw new Error("PRODUCT_PROMOTION_FAILED");
-      await bind({ marketplace: "Shopee", shopId: candidate.shopId, itemId: candidate.itemId, runId: input.runId, productId: product.id });
-      await saveImageReview({
-        productId: product.id,
-        curation: candidate.imageCuration,
-        model: resolveProductImageReviewModel(input.env),
-        reviewVersion: "1.0",
-      });
-      created.push({ candidate, productId: product.id });
-    } catch (error) {
-      await release({ marketplace: "Shopee", shopId: candidate.shopId, itemId: candidate.itemId, runId: input.runId }).catch(() => undefined);
-      results.push({ candidate, ok: false, productId: null, reason: error instanceof Error ? error.message.slice(0, 80) : "PERSISTENCE_FAILED" });
-    }
-  }
-
-  if (created.length === 0) return results;
-  const sync = await (input.deps.catalogSync || syncCatalogAndDeploy)("autonomous curator daily");
-  if (!sync.success) {
-    await rollbackCreatedProducts(created.map(item => item.productId), input.deps);
-    for (const item of created) results.push({ candidate: item.candidate, ok: false, productId: item.productId, reason: sync.error || "CATALOG_SYNC_FAILED" });
-    return results;
-  }
-  for (const item of created) results.push({ candidate: item.candidate, ok: true, productId: item.productId, reason: "PUBLISHED_AND_PUBLICLY_VALIDATED" });
-  return results;
-}
-
 function resultStatus(outcomes: AutonomousCuratorCategoryOutcome[], dryRun: boolean): AutonomousCuratorDailyResult["status"] {
   if (dryRun) return "dry_run";
   const failed = outcomes.filter(item => item.decision === "failed").length;
@@ -639,7 +559,7 @@ function summaryText(result: AutonomousCuratorDailyResult): string {
     `${icon} <b>CERBERUS AUTONOMOUS CURATOR</b>`,
     "",
     `Data: <code>${result.runDate}</code>${result.dryRun ? " · <b>DRY RUN</b>" : ""}`,
-    `Auto-publicados: <b>${result.autoPublished}</b> · revisão humana: <b>${result.reviewRequired}</b> · rejeitados/sem candidato objetivo: <b>${result.rejected}</b> · falhas: <b>${result.failed}</b>`,
+    `Publicações autônomas: <b>0</b> · revisão humana: <b>${result.reviewRequired}</b> · rejeitados/sem candidato objetivo: <b>${result.rejected}</b> · falhas: <b>${result.failed}</b>`,
     "",
     ...lines,
     "",
@@ -649,7 +569,7 @@ function summaryText(result: AutonomousCuratorDailyResult): string {
   ].join("\n");
 }
 
-export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; notify?: boolean } = {}, deps: AutonomousCuratorDependencies = {}): Promise<AutonomousCuratorDailyResult> {
+export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; notify?: boolean; manual?: boolean } = {}, deps: AutonomousCuratorDependencies = {}): Promise<AutonomousCuratorDailyResult> {
   const env = deps.env || process.env;
   const now = deps.now || new Date();
   const runDate = localRunDate(now);
@@ -672,14 +592,30 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
 
   const productsLoader = deps.productsLoader || productsRepository.getProducts;
   const existingProducts = await productsLoader();
+  const coverageReviews = await (deps.listReviewsByStatus || telegramRepo.listReviewsByStatus)(
+    ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
+    1_000,
+    { includeExpiredPending: true, maximumLimit: 1_000 },
+  );
+  const coveragePolicy = calculateCategoryCoveragePolicy(existingProducts, coverageReviews, AUTONOMOUS_CATEGORY_FLOOR, now.getTime());
+  const cardsRemaining = { ...coveragePolicy.cardsNeeded };
+  const profiles = coveragePolicy.prioritizedCategories
+    .map(category => AUTONOMOUS_CURATOR_PROFILES.find(profile => profile.category === category))
+    .filter((profile): profile is AutonomousCuratorCategoryProfile => Boolean(profile));
   const outcomes: AutonomousCuratorCategoryOutcome[] = [];
-  const autoCandidates: CuratedCandidate[] = [];
   const saveResult = deps.saveCategoryResult || curatorRepo.saveAutonomousCuratorCategoryResult;
   const getPrevious = deps.getCategoryResult || curatorRepo.getAutonomousCuratorCategoryResult;
 
-  for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
+  for (const profile of profiles) {
     const primaryQuery = queryForProfile(profile, runDate);
     let query = primaryQuery;
+    if (options.manual !== true && (cardsRemaining[profile.category] || 0) <= 0) {
+      const coverage = coveragePolicy.categoryCoverage[profile.category];
+      const reason = `CATEGORY_COVERAGE_SATISFIED:${coverage.public_count}+${coverage.actionable_pending}/${AUTONOMOUS_CATEGORY_FLOOR}`;
+      await saveResult({ runId: open.run.id, category: profile.category, searchQuery: query, decision: "no_candidate", reason });
+      outcomes.push({ category: profile.category, query, decision: "none", reason, score: null, title: null });
+      continue;
+    }
     const previous = await getPrevious(open.run.id, profile.category);
     if (!dryRun && previous && terminalDecision(previous.decision)) {
       outcomes.push({
@@ -699,7 +635,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
       outcomes.push({ category: profile.category, query, decision: "none", reason: "CATEGORY_DAILY_LIMIT_ZERO", score: null, title: null });
       continue;
     }
-    const activeInCategory = existingProducts.filter(product => product.ativo !== false && product.categoria === profile.category).length;
+    const activeInCategory = existingProducts.filter(product => product.ativo === true && product.status === "published" && product.categoria === profile.category).length;
     if (!dryRun && activeInCategory >= config.maxDailyPerCategory) {
       const reason = `CATEGORY_PUBLICATION_CEILING_REACHED:${activeInCategory}/${config.maxDailyPerCategory}`;
       await saveResult({ runId: open.run.id, category: profile.category, searchQuery: query, decision: "no_candidate", reason });
@@ -757,7 +693,14 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
       }
 
       const candidate = prepared.candidate;
-      const activeInCandidateCategory = existingProducts.filter(product => product.ativo !== false && product.categoria === candidate.category).length;
+      if (options.manual !== true && (cardsRemaining[candidate.category] || 0) <= 0) {
+        const coverage = coveragePolicy.categoryCoverage[candidate.category];
+        const reason = `CANDIDATE_CATEGORY_COVERAGE_SATISFIED:${candidate.category}:${coverage.public_count}+${coverage.actionable_pending}/${AUTONOMOUS_CATEGORY_FLOOR}`;
+        await saveResult({ runId: open.run.id, category: profile.category, searchQuery: candidate.query, decision: "no_candidate", reason });
+        outcomes.push({ category: profile.category, query: candidate.query, decision: "none", reason, score: candidate.score, title: candidate.displayTitle });
+        continue;
+      }
+      const activeInCandidateCategory = existingProducts.filter(product => product.ativo === true && product.status === "published" && product.categoria === candidate.category).length;
       if (!dryRun && activeInCandidateCategory >= config.maxDailyPerCategory) {
         const reason = `CANDIDATE_CATEGORY_PUBLICATION_CEILING_REACHED:${candidate.category}:${activeInCandidateCategory}/${config.maxDailyPerCategory}`;
         await saveResult({ runId: open.run.id, category: profile.category, searchQuery: candidate.query, decision: "no_candidate", reason });
@@ -765,16 +708,9 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
         continue;
       }
 
-      const canAuto = config.autoPublishEnabled
-        && candidate.score >= config.autoPublishThreshold
-        && candidate.warnings.length === 0
-        && candidate.lifecycle.validation.outcome === "PASS"
-        && candidate.lifecycle.curation.recommendation === "PUBLISH";
-      const canReview = true;
       const scoreBreakdown = { ...candidate.breakdown, warnings: candidate.warnings } as unknown as Record<string, unknown>;
 
       if (dryRun) {
-        const decision = canAuto ? "dry_run_auto" : "dry_run_review";
         await saveResult({
           runId: open.run.id,
           category: profile.category,
@@ -786,53 +722,32 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
           displayTitle: candidate.displayTitle,
           score: candidate.score,
           scoreBreakdown,
-          decision,
-          reason: canAuto ? "WOULD_AUTO_PUBLISH" : "WOULD_REQUIRE_HUMAN_REVIEW_BEST_OF_LOT",
+          decision: "dry_run_review",
+          reason: "WOULD_REQUIRE_HUMAN_REVIEW",
         });
-        outcomes.push({ category: profile.category, query: candidate.query, decision: canAuto ? "auto" : "review", reason: canAuto ? "WOULD_AUTO_PUBLISH" : "WOULD_REQUIRE_HUMAN_REVIEW_BEST_OF_LOT", score: candidate.score, title: candidate.displayTitle });
+        outcomes.push({ category: profile.category, query: candidate.query, decision: "review", reason: "WOULD_REQUIRE_HUMAN_REVIEW", score: candidate.score, title: candidate.displayTitle });
         continue;
       }
 
-      if (canAuto) {
-        await saveResult({
-          runId: open.run.id,
-          category: profile.category,
-          searchQuery: candidate.query,
-          shopId: candidate.shopId,
-          itemId: candidate.itemId,
-          sourceProductUrl: candidate.sourceProductUrl,
-          rawTitle: candidate.rawTitle,
-          displayTitle: candidate.displayTitle,
-          score: candidate.score,
-          scoreBreakdown,
-          decision: "auto_selected",
-          reason: "STRICT_AUTO_PUBLISH_GATES_PASSED",
-        });
-        autoCandidates.push(candidate);
-        outcomes.push({ category: profile.category, query: candidate.query, decision: "auto", reason: "AUTO_SELECTED", score: candidate.score, title: candidate.displayTitle });
-        continue;
-      }
-
-      if (canReview) {
-        const reviewId = await persistHumanReview(candidate, open.run.id, env, deps);
-        await saveResult({
-          runId: open.run.id,
-          category: profile.category,
-          searchQuery: candidate.query,
-          shopId: candidate.shopId,
-          itemId: candidate.itemId,
-          sourceProductUrl: candidate.sourceProductUrl,
-          rawTitle: candidate.rawTitle,
-          displayTitle: candidate.displayTitle,
-          score: candidate.score,
-          scoreBreakdown,
-          decision: "review_required",
-          reason: candidate.warnings.length > 0 ? "BEST_OF_LOT_WITH_EDITORIAL_WARNINGS" : "BEST_OF_LOT_MANUAL_REVIEW",
-          reviewId,
-        });
-        outcomes.push({ category: profile.category, query: candidate.query, decision: "review", reason: "HUMAN_REVIEW_REQUIRED", score: candidate.score, title: candidate.displayTitle, reviewId });
-        continue;
-      }
+      const reviewId = await persistHumanReview(candidate, open.run.id, env, deps);
+      cardsRemaining[candidate.category] = Math.max(0, (cardsRemaining[candidate.category] || 0) - 1);
+      await saveResult({
+        runId: open.run.id,
+        category: profile.category,
+        searchQuery: candidate.query,
+        shopId: candidate.shopId,
+        itemId: candidate.itemId,
+        sourceProductUrl: candidate.sourceProductUrl,
+        rawTitle: candidate.rawTitle,
+        displayTitle: candidate.displayTitle,
+        score: candidate.score,
+        scoreBreakdown,
+        decision: "review_required",
+        reason: candidate.warnings.length > 0 ? "BEST_OF_LOT_WITH_EDITORIAL_WARNINGS" : "BEST_OF_LOT_MANUAL_REVIEW",
+        reviewId,
+      });
+      outcomes.push({ category: profile.category, query: candidate.query, decision: "review", reason: "HUMAN_REVIEW_REQUIRED", score: candidate.score, title: candidate.displayTitle, reviewId });
+      continue;
     } catch (error) {
       const reason = error instanceof Error ? error.message.slice(0, 120) : "CATEGORY_PROCESSING_FAILED";
       await saveResult({ runId: open.run.id, category: profile.category, searchQuery: query, decision: "failed", reason }).catch(() => undefined);
@@ -840,50 +755,7 @@ export async function runAutonomousCuratorDaily(options: { dryRun?: boolean; not
     }
   }
 
-  if (!dryRun && autoCandidates.length > 0) {
-    const publication = await publishAutoBatch({ runId: open.run.id, candidates: autoCandidates, env, deps });
-    for (const item of publication) {
-      const index = outcomes.findIndex(outcome => outcome.category === item.candidate.profile.category);
-      if (item.ok) {
-        await saveResult({
-          runId: open.run.id,
-          category: item.candidate.profile.category,
-          searchQuery: item.candidate.query,
-          shopId: item.candidate.shopId,
-          itemId: item.candidate.itemId,
-          sourceProductUrl: item.candidate.sourceProductUrl,
-          rawTitle: item.candidate.rawTitle,
-          displayTitle: item.candidate.displayTitle,
-          score: item.candidate.score,
-          scoreBreakdown: { ...item.candidate.breakdown, warnings: item.candidate.warnings } as unknown as Record<string, unknown>,
-          decision: "auto_published",
-          reason: item.reason,
-          productId: item.productId,
-        });
-        if (index >= 0) outcomes[index] = { ...outcomes[index], decision: "auto", reason: item.reason, productId: item.productId };
-      } else {
-        const duplicate = item.reason.includes("DUPLICATE") || item.reason.includes("RESERVED");
-        await saveResult({
-          runId: open.run.id,
-          category: item.candidate.profile.category,
-          searchQuery: item.candidate.query,
-          shopId: item.candidate.shopId,
-          itemId: item.candidate.itemId,
-          sourceProductUrl: item.candidate.sourceProductUrl,
-          rawTitle: item.candidate.rawTitle,
-          displayTitle: item.candidate.displayTitle,
-          score: item.candidate.score,
-          scoreBreakdown: { ...item.candidate.breakdown, warnings: item.candidate.warnings } as unknown as Record<string, unknown>,
-          decision: duplicate ? "duplicate" : "failed",
-          reason: item.reason,
-          productId: item.productId,
-        });
-        if (index >= 0) outcomes[index] = { ...outcomes[index], decision: duplicate ? "duplicate" : "failed", reason: item.reason, productId: item.productId };
-      }
-    }
-  }
-
-  const autoPublished = outcomes.filter(item => item.decision === "auto" && (!dryRun ? Boolean(item.productId) : true)).length;
+  const autoPublished = 0;
   const reviewRequired = outcomes.filter(item => item.decision === "review").length;
   const failed = outcomes.filter(item => item.decision === "failed").length;
   const rejected = outcomes.filter(item => ["reject", "duplicate", "none"].includes(item.decision)).length;

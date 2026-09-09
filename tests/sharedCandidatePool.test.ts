@@ -27,7 +27,7 @@ test("Curator, rotation and recovery share one technical candidate pool contract
   assert.equal(evaluateSharedCandidatePoolEntry(technical, { seenIdentityKeys: new Set(["111:222"]) }).reason, "DUPLICATE_IN_SEARCH_POOL");
 });
 
-test("deficit fallback keeps hard gates and converts editorial failures into ranking warnings", () => {
+test("deficit fallback keeps hard gates and never grants publication authority", () => {
   const image = technical.imageUrl;
   const product: Product = {
     id: "deficit-candidate",
@@ -53,8 +53,11 @@ test("deficit fallback keeps hard gates and converts editorial failures into ran
     duplicateProductIds: [],
     evidence: { source: "autonomous_curator", score: 52, threshold: 88, maximumCatalogSimilarity: 0.95, categoryMismatch: false, offBrand: true, lifecycleApproved: false, reviewState: "REVIEW_RECOVERY_PENDING", deficitFallback: true },
   });
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.errors, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("PUBLICATION_HUMAN_APPROVAL_REQUIRED"));
+  assert.equal(result.errors.includes("PUBLICATION_AFFILIATE_LINK_INVALID"), false);
+  assert.equal(result.errors.includes("PUBLICATION_PRICE_UNVERIFIED"), false);
+  assert.equal(result.errors.includes("PUBLICATION_CATEGORY_INVALID"), false);
 });
 
 test("manual Confirmar rotação remains a separate authority", async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Product } from "../../src/types";
+import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { resolvePublicProductCategory, type PublicProductCategory } from "../../src/lib/productCategory";
 import { generateSlug } from "../../src/data/initialProducts";
 import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
@@ -10,6 +11,9 @@ import * as curatorRepo from "../repositories/autonomousCuratorRepository";
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { buildDeterministicEditorialFallback } from "./productAutomation";
 import { reviewAndPublishRotationCandidate } from "./productRotationPublication";
+import { createOperationId } from "./operationalDiagnostics";
+import { imageUrlFingerprint } from "./productEditorialReview";
+import type { TelegramHumanApprovalProof } from "./productPublicationGate";
 import {
   AUTONOMOUS_CURATOR_PROFILES,
   AUTONOMOUS_CURATOR_PROFILE_VERSION,
@@ -284,6 +288,119 @@ async function patchRequest(id: string, patch: Record<string, unknown>): Promise
     .single();
   if (error) throw error;
   return mapRequest(data);
+}
+
+export async function claimProductRotationTelegramApproval(input: {
+  requestId: string;
+  approverUserId: string | number;
+  telegramChatId: string | number;
+  messageId?: number | null;
+  callbackQueryId: string;
+  now?: Date;
+}): Promise<{ request: ProductRotationRequest; approval: TelegramHumanApprovalProof }> {
+  const request = await getRequest(input.requestId);
+  if (!request) throw new Error("ROTATION_REQUEST_NOT_FOUND");
+  if (request.status !== "candidate_ready" || !request.candidateProductId) {
+    throw new Error(`ROTATION_APPROVAL_NOT_CLAIMABLE:${request.status}`);
+  }
+
+  const candidate = await productsRepository.getProductByIdOrSlug(request.candidateProductId);
+  if (!candidate || candidate.status !== "paused" || candidate.ativo !== false) {
+    throw new Error("ROTATION_CANDIDATE_STATE_CHANGED");
+  }
+  const primaryImageUrl = resolveCanonicalProductImage(candidate).primaryImageUrl?.trim() || "";
+  if (!/^https:\/\//i.test(primaryImageUrl)) throw new Error("ROTATION_APPROVAL_IMAGE_INVALID");
+  const { data: identity, error: identityError } = await requireSupabase()
+    .from("product_source_identities")
+    .select("marketplace,shop_id,item_id,source_product_url")
+    .eq("product_id", candidate.id)
+    .maybeSingle();
+  if (identityError) throw identityError;
+  const shopId = String(identity?.shop_id || "").trim();
+  const itemId = String(identity?.item_id || "").trim();
+  const sourceProductUrl = String(identity?.source_product_url || "").trim();
+  if (String(identity?.marketplace || "").toLowerCase() !== "shopee"
+    || !shopId
+    || !itemId
+    || !sourceIdentityMatches(sourceProductUrl, shopId, itemId)) {
+    throw new Error("ROTATION_APPROVAL_SHOPEE_IDENTITY_INVALID");
+  }
+
+  const approvedAt = (input.now || new Date()).toISOString();
+  const operationId = createOperationId("PUB");
+  const primaryImageFingerprint = imageUrlFingerprint(primaryImageUrl);
+  const humanApprovalEvidence: Record<string, unknown> = {
+    kind: "product_rotation_telegram_callback",
+    origin: "telegram",
+    reviewId: request.id,
+    operationId,
+    approvedAt,
+    approverUserId: String(input.approverUserId),
+    chatId: String(input.telegramChatId),
+    messageId: input.messageId ?? null,
+    callbackQueryId: input.callbackQueryId,
+    candidateProductId: candidate.id,
+    sourceProductId: request.sourceProductId,
+    shopId,
+    itemId,
+    sourceProductUrl,
+    primaryImageUrl,
+    primaryImageFingerprint,
+  };
+  const approval: TelegramHumanApprovalProof = {
+    reviewId: request.id,
+    approvedAt,
+    operationId,
+    approvalOrigin: "telegram",
+    primaryImageUrl,
+    primaryImageFingerprint,
+    humanApprovalEvidence,
+  };
+
+  const { data, error } = await requireSupabase()
+    .from("product_rotation_requests")
+    .update({
+      status: "applying",
+      reason: null,
+      updated_at: approvedAt,
+      metadata: {
+        ...request.metadata,
+        human_approval: humanApprovalEvidence,
+        publication_preflight: "human_approval_claimed",
+      },
+    })
+    .eq("id", request.id)
+    .eq("status", "candidate_ready")
+    .eq("candidate_product_id", candidate.id)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("ROTATION_APPROVAL_ALREADY_CLAIMED");
+  return { request: mapRequest(data), approval };
+}
+
+function telegramApprovalFromRequest(request: ProductRotationRequest): TelegramHumanApprovalProof | null {
+  const raw = request.metadata.human_approval;
+  if (!raw || typeof raw !== "object") return null;
+  const evidence = raw as Record<string, unknown>;
+  const reviewId = String(evidence.reviewId || "").trim();
+  const approvedAt = String(evidence.approvedAt || "").trim();
+  const operationId = String(evidence.operationId || "").trim();
+  const primaryImageUrl = String(evidence.primaryImageUrl || "").trim();
+  const primaryImageFingerprint = String(evidence.primaryImageFingerprint || "").trim();
+  if (evidence.origin !== "telegram" || evidence.kind !== "product_rotation_telegram_callback") return null;
+  if (reviewId !== request.id || !operationId || !Number.isFinite(Date.parse(approvedAt))) return null;
+  if (!/^https:\/\//i.test(primaryImageUrl) || primaryImageFingerprint !== imageUrlFingerprint(primaryImageUrl)) return null;
+  if (String(evidence.candidateProductId || "") !== String(request.candidateProductId || "")) return null;
+  if (String(evidence.sourceProductId || "") !== request.sourceProductId) return null;
+  const shopId = String(evidence.shopId || "").trim();
+  const itemId = String(evidence.itemId || "").trim();
+  const sourceProductUrl = String(evidence.sourceProductUrl || "").trim();
+  if (!shopId || !itemId || !sourceIdentityMatches(sourceProductUrl, shopId, itemId)) return null;
+  return {
+    reviewId, approvedAt, operationId, approvalOrigin: "telegram",
+    primaryImageUrl, primaryImageFingerprint, humanApprovalEvidence: evidence,
+  };
 }
 
 export async function getProductRotationRequest(id: string): Promise<ProductRotationRequest | null> {
@@ -883,7 +1000,9 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
     if (!source || !replacement) throw new Error("ROTATION_COMPLETED_PRODUCTS_MISSING");
     return { request, source, replacement };
   }
-  if (request.status !== "candidate_ready" || !request.candidateProductId) throw new Error(`ROTATION_CANDIDATE_NOT_READY:${request.status}`);
+  if (request.status !== "applying" || !request.candidateProductId) throw new Error(`ROTATION_APPROVAL_NOT_CLAIMED:${request.status}`);
+  const approval = telegramApprovalFromRequest(request);
+  if (!approval) throw new Error("ROTATION_TELEGRAM_APPROVAL_PROOF_INVALID");
 
   const source = await productsRepository.getProductByIdOrSlug(request.sourceProductId);
   const candidateProduct = await productsRepository.getProductByIdOrSlug(request.candidateProductId);
@@ -908,7 +1027,6 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
   }
   await refreshCandidateProduct(candidateProduct, revalidated.candidate);
   request = await patchRequest(request.id, {
-    status: "applying",
     reason: null,
     metadata: {
       ...request.metadata,
@@ -916,6 +1034,19 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
       proposal_score: revalidated.candidate.score,
     },
   });
+  const refreshedCandidate = await productsRepository.getProductByIdOrSlug(candidateProduct.id);
+  if (!refreshedCandidate || refreshedCandidate.status !== "paused" || refreshedCandidate.ativo !== false) {
+    throw new Error("ROTATION_CANDIDATE_STATE_CHANGED_AFTER_REVALIDATION");
+  }
+  const refreshedPrimaryImage = resolveCanonicalProductImage(refreshedCandidate).primaryImageUrl?.trim() || "";
+  if (refreshedPrimaryImage !== approval.primaryImageUrl) {
+    await patchRequest(request.id, {
+      status: "candidate_ready",
+      reason: "APPROVED_IMAGE_CHANGED_REQUIRES_NEW_HUMAN_APPROVAL",
+      metadata: { ...request.metadata, publication_preflight: "approved_image_changed" },
+    });
+    throw new Error("ROTATION_APPROVED_IMAGE_CHANGED");
+  }
 
   const clientDb = requireSupabase();
   let sourceArchived = false;
@@ -923,9 +1054,10 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
   try {
     const publication = await reviewAndPublishRotationCandidate({
       source,
-      candidate: candidateProduct,
+      candidate: refreshedCandidate,
       profile,
       query: revalidated.candidate.query,
+      approval,
       env,
     });
     candidatePublished = true;
@@ -945,7 +1077,6 @@ export async function approveProductRotation(requestId: string, env: NodeJS.Proc
       warnings: revalidated.candidate.warnings,
     });
     const { error: noteError } = await clientDb.from("products").update({
-      created_by: AUTO_QUEUE_CREATED_BY,
       curator_note: candidateNote,
     }).eq("id", candidateProduct.id).eq("status", "published").eq("ativo", true);
     if (noteError) throw noteError;

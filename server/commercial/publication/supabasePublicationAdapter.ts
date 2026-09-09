@@ -108,33 +108,8 @@ export const supabasePublicationAdapter: PublicationRepositoryAdapter = {
   },
 
   async createCanonicalProduct(input) {
-    const result = await productsRepository.createProduct(
-      {
-        produto: input.produto,
-        categoria: input.categoria,
-        preco: input.preco,
-        imagens: input.imagens ? [...input.imagens] : [],
-        link: input.link,
-        descricao: input.descricao ?? undefined,
-        status: "published",
-      },
-      { syncCatalog: input.syncCatalog ?? false }
-    );
-    if (!result) {
-      throw new Error("createProduct_failed: retorno nulo");
-    }
-    return Object.freeze({
-      id: result.id,
-      produto: result.produto,
-      slug: result.slug ?? "",
-      link: result.link,
-      preco: typeof result.preco === "number" ? result.preco : 0,
-      categoria: result.categoria,
-      ref: typeof result.ref === "string" ? result.ref : null,
-      created_by: input.createdBy,
-      status: result.status ?? "published",
-      ativo: result.ativo ?? true,
-    });
+    void input;
+    throw new Error("PRODUCT_PUBLICATION_BLOCKED:TELEGRAM_HUMAN_APPROVAL_REQUIRED");
   },
 
   async linkPromotion(candidateId, productId, decisionId) {

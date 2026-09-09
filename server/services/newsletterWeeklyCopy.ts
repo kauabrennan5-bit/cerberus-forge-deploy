@@ -49,7 +49,7 @@ function safeEditorialProduct(product: Product) {
     id: product.id,
     title,
     category: clean(product.categoria, 80),
-    description: clean(product.curatorNote || product.descricao, 500),
+    description: clean(product.descricao, 500),
   };
 }
 

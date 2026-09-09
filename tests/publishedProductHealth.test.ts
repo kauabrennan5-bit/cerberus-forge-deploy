@@ -66,6 +66,7 @@ test("balanced curator removes dead listings before calculating replacement defi
   assert.ok(auditIndex >= 0);
   assert.ok(archiveIndex > auditIndex);
   assert.ok(countIndex > archiveIndex);
-  assert.match(source, /published product health rollback/);
+  assert.doesNotMatch(source, /published product health rollback/);
+  assert.match(source, /Availability recovery must never republish/);
   assert.match(source, /Links Shopee indisponíveis removidos/);
 });

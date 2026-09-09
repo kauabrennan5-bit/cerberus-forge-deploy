@@ -42,6 +42,20 @@ export interface Product {
   imageReviewModel?: string;
   imageReviewVersion?: string;
   imageReviewFingerprint?: string;
+  /** Autoridade editorial humana derivada de uma autorização Telegram persistida. */
+  humanEditorialApprovedAt?: string;
+  humanEditorialImageUrl?: string;
+  humanEditorialImageFingerprint?: string;
+  humanEditorialReviewId?: string;
+  humanEditorialAuthorizationId?: string;
+  /** Identidade técnica interna; nunca faz parte do DTO público. */
+  sourceIdentity?: {
+    marketplace: string;
+    shopId: string;
+    itemId: string;
+    sourceProductUrl: string;
+    reviewId?: string;
+  };
   link: string;
   ativo: boolean;
   destaque: boolean;
@@ -51,7 +65,7 @@ export interface Product {
   descricao?: string;
   paginaPonteUrl?: string;
   ofertaPromocional?: PromotionOffer;
-  /** Nota editorial opcional escrita pelo curador; não renderiza se ausente. */
+  /** Nota editorial interna. É proibida em APIs, páginas e metadados públicos. */
   curatorNote?: string;
   rawRowIndex?: number;
   lifecycleState?: string;

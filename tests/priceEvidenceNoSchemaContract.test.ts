@@ -5,6 +5,6 @@ import { readFile } from "node:fs/promises";
 test("Shopee price provenance is persisted in existing curator audit metadata without a new public products column", async () => {
   const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
   assert.match(source, /priceEvidence: candidate\.priceEvidence/);
-  assert.match(source, /scoreBreakdown: auditedBreakdown/);
+  assert.match(source, /scoreBreakdown: \{ \.\.\.\(candidate\.breakdown as unknown as Record<string, unknown>\), priceEvidence: candidate\.priceEvidence \}/);
   assert.doesNotMatch(source, /price_evidence\s*:/);
 });

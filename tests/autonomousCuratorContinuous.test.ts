@@ -66,14 +66,22 @@ test("transient revalidation failures do not permanently discard a queued find",
   assert.equal(revalidationPermanentFailure("AFFILIATE_rate_limited"), false);
   assert.equal(revalidationPermanentFailure("IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR:image_review_model_unavailable"), false);
   assert.equal(revalidationPermanentFailure("PROFILE_BLOCKED_TERM:eiffel"), true);
-  assert.equal(revalidationPermanentFailure("BELOW_AUTO_PUBLISH_THRESHOLD:81"), true);
+  assert.equal(revalidationPermanentFailure("AFFILIATE_LINK_INVALID"), true);
 });
 
 test("queued product can revalidate its own bound Shopee identity but not another product identity", async () => {
-  const source = await readFile(new URL("../server/services/autonomousCuratorContinuous.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
   assert.match(source, /allowedProductId\?: string \| null/);
   assert.match(source, /sourceIdentity\.productId !== input\.allowedProductId/);
   assert.match(source, /allowedProductId: input\.product\.id/);
+});
+
+test("legacy Continuous entrypoint delegates to review-only V2 and cannot publish", async () => {
+  const source = await readFile(new URL("../server/services/autonomousCuratorContinuous.ts", import.meta.url), "utf8");
+  assert.match(source, /runAutonomousCuratorContinuousV2\(options\)/);
+  assert.match(source, /publishedThisCycle: 0/);
+  assert.match(source, /published: false/);
+  assert.doesNotMatch(source, /publishProductWithGate|createProduct\(|updateProduct\(/);
 });
 
 test("dedicated production scheduler sends discoveries to manual review while deployment pushes remain read-only", async () => {

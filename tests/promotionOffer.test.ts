@@ -8,6 +8,7 @@ import {
   promotionConditionLabel,
 } from "../server/services/promotionOffer";
 import { orderCatalogProducts } from "../src/lib/catalogOrder";
+import { toPublicProductDTO } from "../supabase/functions/_shared/publicProductDTO";
 
 const confirmedOffer = {
   price: 264,
@@ -78,7 +79,22 @@ test("projeção pública e renderização tratam a oferta como campo separado e
   const cardSource = readFileSync(new URL("../src/components/ProductCard.tsx", import.meta.url), "utf8");
   const detailSource = readFileSync(new URL("../src/components/ProductDetail.tsx", import.meta.url), "utf8");
 
-  assert.match(exportSource, /ofertaPromocional: p\.ofertaPromocional/);
+  const normalizedOffer = normalizePromotionOffer(confirmedOffer);
+  const projected = toPublicProductDTO({
+    id: "promo-public",
+    produto: "Luminária promocional",
+    categoria: "Iluminação",
+    preco: 299,
+    imagens: ["https://images.example.test/luminaria.jpg"],
+    link: "https://s.shopee.com.br/oferta-confirmada",
+    ativo: true,
+    destaque: false,
+    status: "published",
+    oferta_promocional: normalizedOffer,
+  });
+  assert.equal(projected?.preco, 299, "preço-base público permanece separado");
+  assert.deepEqual(projected?.ofertaPromocional, normalizedOffer);
+  assert.match(exportSource, /toPublicProductDTOs\(rawProducts\)/);
   assert.ok(cardSource.indexOf('PREÇO VERIFICADO') < cardSource.indexOf('Preço do anúncio:'), 'card prioriza a oferta acima da referência');
   assert.match(cardSource, /Condições finais de pagamento e frete são confirmadas na loja oficial/i);
   assert.ok(detailSource.indexOf('PREÇO VERIFICADO') < detailSource.indexOf('Preço do anúncio:'), 'detalhe prioriza a oferta acima da referência');

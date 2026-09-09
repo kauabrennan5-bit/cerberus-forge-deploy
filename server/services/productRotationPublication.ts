@@ -17,7 +17,7 @@ import {
   imageUrlFingerprint,
   isEditorialDisplayTitle,
 } from "./productEditorialReview";
-import { publishProductWithGate } from "./productPublicationGate";
+import { publishProductWithGate, type TelegramHumanApprovalProof } from "./productPublicationGate";
 
 const TITLE_PRIMARY_MODEL = "gemini-3.5-flash-lite";
 const TITLE_FALLBACK_MODEL = "gemini-3.7-flash";
@@ -116,16 +116,21 @@ function publicHttpsImages(images: readonly string[]): string[] {
     .filter((image, index, all) => all.indexOf(image) === index);
 }
 
-function manualImageCuration(images: readonly string[], automated: ProductImageCuration): ProductImageCuration {
+function manualImageCuration(
+  images: readonly string[],
+  automated: ProductImageCuration,
+  approvedPrimaryImageUrl: string,
+): ProductImageCuration {
   const rawImageUrls = publicHttpsImages(automated.rawImageUrls.length > 0 ? automated.rawImageUrls : images);
   if (rawImageUrls.length === 0) throw new Error("ROTATION_PUBLICATION_PRIMARY_IMAGE_MISSING");
-  const primaryImageUrl = rawImageUrls[0];
+  if (!rawImageUrls.includes(approvedPrimaryImageUrl)) throw new Error("ROTATION_APPROVED_IMAGE_NO_LONGER_AVAILABLE");
+  const primaryImageUrl = approvedPrimaryImageUrl;
   const priorReason = safeText(automated.reason || "automated_review_not_clean", 120);
   return {
     status: "ready",
     rawImageUrls,
     primaryImageUrl,
-    galleryImageUrls: rawImageUrls.slice(1),
+    galleryImageUrls: rawImageUrls.filter(url => url !== primaryImageUrl),
     assessments: rawImageUrls.map(url => ({
       url,
       decision: "clean",
@@ -160,12 +165,15 @@ export async function reviewAndPublishRotationCandidate(input: {
   candidate: Product;
   profile: AutonomousCuratorCategoryProfile;
   query: string;
+  approval: TelegramHumanApprovalProof;
   env?: NodeJS.ProcessEnv;
 }): Promise<RotationPublicationReviewResult> {
   const env = input.env || process.env;
   if (input.candidate.status !== "paused" || input.candidate.ativo !== false) throw new Error("ROTATION_CANDIDATE_STATE_CHANGED");
   if (input.source.status !== "published" || input.source.ativo === false) throw new Error("ROTATION_SOURCE_NO_LONGER_ACTIVE");
   if (input.candidate.categoria !== input.source.categoria || input.profile.category !== input.source.categoria) throw new Error("ROTATION_CATEGORY_MISMATCH");
+  if (input.approval.reviewId.length === 0 || input.approval.approvalOrigin !== "telegram") throw new Error("ROTATION_TELEGRAM_APPROVAL_MISSING");
+  if (input.approval.primaryImageFingerprint !== imageUrlFingerprint(input.approval.primaryImageUrl)) throw new Error("ROTATION_APPROVED_IMAGE_FINGERPRINT_INVALID");
 
   const identity = await loadIdentity(input.candidate.id);
   const rawTitle = safeText(input.candidate.rawTitle || input.candidate.produto, 180);
@@ -199,14 +207,15 @@ export async function reviewAndPublishRotationCandidate(input: {
     : undefined;
   const automatedImageApproved = Boolean(
     automatedImageCuration.status === "ready"
-    && automatedImageCuration.primaryImageUrl
+    && automatedImageCuration.primaryImageUrl === input.approval.primaryImageUrl
     && automatedPrimaryAssessment?.decision === "clean"
     && automatedPrimaryAssessment.confidence !== "LOW",
   );
   const automatedOffBrand = automatedImageCuration.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW");
   const imageCuration = automatedImageApproved
     ? automatedImageCuration
-    : manualImageCuration(input.candidate.imagens || [], automatedImageCuration);
+    : manualImageCuration(input.candidate.imagens || [], automatedImageCuration, input.approval.primaryImageUrl);
+  const imageEditorialStatus = automatedImageApproved ? "clean" as const : "review_required" as const;
 
   const price = Number(input.candidate.preco);
   if (!Number.isFinite(price) || price <= 0) throw new Error("ROTATION_PUBLICATION_PRICE_UNVERIFIED");
@@ -229,7 +238,7 @@ export async function reviewAndPublishRotationCandidate(input: {
     imageCuration,
     imagemPrincipal: imageCuration.primaryImageUrl,
     imagensGaleria: imageCuration.galleryImageUrls,
-    imageEditorialStatus: "clean",
+    imageEditorialStatus,
     descricao: description,
   });
   const lifecycleApproved = pipeline.validation.outcome === "PASS"
@@ -264,12 +273,12 @@ export async function reviewAndPublishRotationCandidate(input: {
     display_title_reviewed_at: reviewedAt,
     display_title_review_model: titleReview.model,
     display_title_review_version: DISPLAY_TITLE_REVIEW_VERSION,
-    image_editorial_status: "clean",
+    image_editorial_status: imageEditorialStatus,
     image_curation: imageCuration,
-    image_reviewed_at: reviewedAt,
-    image_review_model: automatedImageApproved ? VISUAL_CHAIN_ID : MANUAL_ROTATION_REVIEW_MODEL,
-    image_review_version: IMAGE_REVIEW_VERSION,
-    image_review_fingerprint: imageUrlFingerprint(imageCuration.primaryImageUrl || ""),
+    image_reviewed_at: automatedImageApproved ? reviewedAt : null,
+    image_review_model: automatedImageApproved ? VISUAL_CHAIN_ID : null,
+    image_review_version: automatedImageApproved ? IMAGE_REVIEW_VERSION : null,
+    image_review_fingerprint: automatedImageApproved ? imageUrlFingerprint(imageCuration.primaryImageUrl || "") : null,
     ativo: false,
     status: "paused",
   }).eq("id", input.candidate.id).eq("status", "paused").eq("ativo", false);
@@ -288,12 +297,12 @@ export async function reviewAndPublishRotationCandidate(input: {
     preco: price,
     imagens: publicImages,
     descricao: description,
-    imageEditorialStatus: "clean",
+    imageEditorialStatus,
     imageCuration,
-    imageReviewedAt: reviewedAt,
-    imageReviewModel: automatedImageApproved ? VISUAL_CHAIN_ID : MANUAL_ROTATION_REVIEW_MODEL,
-    imageReviewVersion: IMAGE_REVIEW_VERSION,
-    imageReviewFingerprint: imageUrlFingerprint(imageCuration.primaryImageUrl || ""),
+    imageReviewedAt: automatedImageApproved ? reviewedAt : undefined,
+    imageReviewModel: automatedImageApproved ? VISUAL_CHAIN_ID : undefined,
+    imageReviewVersion: automatedImageApproved ? IMAGE_REVIEW_VERSION : undefined,
+    imageReviewFingerprint: automatedImageApproved ? imageUrlFingerprint(imageCuration.primaryImageUrl || "") : undefined,
     ativo: false,
     status: "paused",
   };
@@ -311,6 +320,14 @@ export async function reviewAndPublishRotationCandidate(input: {
       lifecycleApproved,
       reviewState: pipeline.state,
       manualEditorialOverride: true,
+      humanManualApproval: true,
+      reviewId: input.approval.reviewId,
+      approvedAt: input.approval.approvedAt,
+      operationId: input.approval.operationId,
+      approvalOrigin: input.approval.approvalOrigin,
+      primaryImageFingerprint: input.approval.primaryImageFingerprint,
+      humanApprovalEvidence: input.approval.humanApprovalEvidence,
+      sourceProductUrl: identity.sourceProductUrl,
     },
   });
 

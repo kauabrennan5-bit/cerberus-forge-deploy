@@ -141,98 +141,21 @@ function normalizeReviewRow(row: any): PendingReview | null {
   if (!row?.data || typeof row.data !== "object") return null;
   const review = { ...row.data } as PendingReview;
   if (row.created_at && !review.createdAt) review.createdAt = Number(row.created_at);
+  if (row.updated_at && !review.updatedAt) {
+    const updatedAt = Date.parse(String(row.updated_at));
+    if (Number.isFinite(updatedAt)) review.updatedAt = updatedAt;
+  }
   if (row.expires_at) review.expiresAt = Number(row.expires_at);
   if (row.status) review.status = row.status as TelegramReviewStatus;
   return review;
 }
 
-const HUMAN_PUBLICATION_TECHNICAL_IMAGE_BLOCKERS = new Set([
-  "IMAGE_MISSING",
-  "IMAGE_HOST_INVALID",
-  "IMAGE_PLACEHOLDER",
-  "IMAGE_INACCESSIBLE",
-  "IMAGE_REDIRECT_HOST_INVALID",
-  "IMAGE_HTTP_ERROR",
-  "IMAGE_BODY_UNREADABLE",
-  "IMAGE_EMPTY",
-  "IMAGE_TOO_LARGE",
-  "IMAGE_BYTES_INVALID",
-  "IMAGE_MIME_UNSUPPORTED",
-  "IMAGE_DIMENSIONS_UNKNOWN",
-  "IMAGE_TOO_SMALL",
-  "IMAGE_INVALID",
-]);
-
 /**
- * Compatibility view used only when a human is about to act on a review.
- *
- * The legacy confirm_pub handler historically treated imageEditorialStatus as
- * a completeness requirement before ProductPipeline.approve() could establish
- * human authority. For reviews that are explicitly manual (the /shopee manual
- * delivery contract or Autonomous Curator cards), a review_required image is
- * therefore projected in-memory as technically usable when—and only when—we
- * already have a public HTTPS image and no objective image blocker.
- *
- * The original editorial state and reason stay in existingProduct for audit.
- * This function does not publish, does not bind Shopee identity, does not touch
- * price/category/link gates, and does not persist anything by itself. The
- * canonical publication pipeline still revalidates image accessibility and all
- * objective publication invariants after the human click.
+ * Kept as a compatibility API for older callers. Human authority is persisted
+ * separately and must never rewrite or project the automatic editorial state.
  */
 export function applyHumanPublicationImageView(review: PendingReview): PendingReview {
-  const meta = review.existingProduct && typeof review.existingProduct === "object"
-    ? review.existingProduct as Record<string, any>
-    : null;
-  const hasHumanAuthorityContract = meta?.manualDeliveryContract === true || meta?.source === "autonomous_curator";
-  if (!hasHumanAuthorityContract) return review;
-  if (review.status && !["pending", "error"].includes(review.status)) return review;
-  if (review.imageEditorialStatus === "clean") return review;
-
-  const reasons = Array.isArray(meta?.manualReviewReasons)
-    ? meta!.manualReviewReasons.map((value: unknown) => String(value || "").trim()).filter(Boolean)
-    : [];
-  if (reasons.some(reason => HUMAN_PUBLICATION_TECHNICAL_IMAGE_BLOCKERS.has(reason))) return review;
-
-  const observedImages = [
-    review.imagemPrincipal,
-    ...(review.imagens || []),
-    ...(review.imagensOriginais || []),
-    ...(review.imagensGaleria || []),
-  ]
-    .filter((value): value is string => isPublicHttpsImageUrl(value))
-    .map(value => value.trim())
-    .filter((value, index, list) => list.indexOf(value) === index);
-  const primaryImageUrl = observedImages[0];
-  if (!primaryImageUrl) return review;
-
-  const galleryImageUrls = observedImages.filter(url => url !== primaryImageUrl);
-  const originalImageEditorialStatus = review.imageEditorialStatus || "unreviewed";
-  const originalImageCurationStatus = review.imageCuration?.status || "missing";
-  const originalImageCurationReason = review.imageCuration?.reason || null;
-
-  return {
-    ...review,
-    imagens: observedImages,
-    imagensOriginais: observedImages,
-    imagemPrincipal: primaryImageUrl,
-    imagensGaleria: galleryImageUrls,
-    imageEditorialStatus: "clean",
-    imageCuration: {
-      status: "ready",
-      rawImageUrls: observedImages,
-      primaryImageUrl,
-      galleryImageUrls,
-      assessments: review.imageCuration?.assessments || [],
-    },
-    existingProduct: {
-      ...meta,
-      humanPublicationImageAuthorityApplied: true,
-      originalImageEditorialStatus,
-      originalImageCurationStatus,
-      originalImageCurationReason,
-      manualReviewReasons: reasons,
-    },
-  };
+  return review;
 }
 
 async function syncAutonomousCuratorReviewIdentity(review: PendingReview): Promise<void> {
@@ -253,6 +176,34 @@ async function syncAutonomousCuratorReviewIdentity(review: PendingReview): Promi
   }
   if (["rejected", "cancelled", "expired"].includes(status)) {
     await releaseProductSourceIdentityByReview(review.id);
+    return;
+  }
+  const queuedProductId = String(meta.existingQueuedProductId || "").trim();
+  if (queuedProductId) {
+    const client = supabase;
+    if (!client) return;
+    const { data: identity, error: identityError } = await client
+      .from("product_source_identities")
+      .select("product_id,review_id,shop_id,item_id,source_product_url")
+      .eq("product_id", queuedProductId)
+      .eq("shop_id", shopId)
+      .eq("item_id", itemId)
+      .maybeSingle();
+    if (identityError) throw identityError;
+    if (!identity || identity.source_product_url !== review.normalizedUrl) {
+      throw new Error("AUTONOMOUS_CURATOR_QUEUED_REVIEW_IDENTITY_MISSING");
+    }
+    if (identity.review_id === review.id) return;
+    if (identity.review_id) throw new Error("AUTONOMOUS_CURATOR_QUEUED_REVIEW_IDENTITY_CONFLICT");
+    const { data: attached, error: attachError } = await client
+      .from("product_source_identities")
+      .update({ review_id: review.id, reserved_run_id: runId, reserved_until: new Date(review.expiresAt || Date.now()).toISOString(), updated_at: new Date().toISOString() })
+      .eq("product_id", queuedProductId)
+      .is("review_id", null)
+      .select("id")
+      .maybeSingle();
+    if (attachError) throw attachError;
+    if (!attached) throw new Error("AUTONOMOUS_CURATOR_QUEUED_REVIEW_IDENTITY_CONFLICT");
     return;
   }
   const ttlMinutes = Math.max(5, Math.ceil(((review.expiresAt || (Date.now() + SESSION_EXPIRATION_MS)) - Date.now()) / 60_000));
@@ -279,7 +230,48 @@ function reviewRowPayload(review: PendingReview): Record<string, unknown> {
     expires_at: review.expiresAt,
     status: review.status,
     data: review,
+    updated_at: new Date().toISOString(),
   };
+}
+
+/**
+ * Persiste progresso somente depois que o CAS pending/error -> publishing já
+ * foi adquirido.  Esta escrita nunca pode adquirir uma claim nem reabrir uma
+ * review; ela apenas anexa a prova humana/operationId à claim vigente.
+ */
+export async function persistClaimedPublishingReview(review: PendingReview): Promise<void> {
+  if (review.status !== "publishing") throw new Error("TELEGRAM_REVIEW_NOT_PUBLISHING");
+  if (testOverrideSavePendingReview) {
+    await testOverrideSavePendingReview(review);
+    return;
+  }
+
+  const normReview: PendingReview = {
+    ...review,
+    createdAt: review.createdAt || Date.now(),
+    expiresAt: review.expiresAt || ((review.createdAt || Date.now()) + SESSION_EXPIRATION_MS),
+    status: "publishing",
+  };
+  await syncAutonomousCuratorReviewIdentity(normReview);
+
+  if (supabase) {
+    const { data: persisted, error } = await supabase
+      .from("telegram_pending_reviews")
+      .update(reviewRowPayload(normReview))
+      .eq("id", normReview.id)
+      .eq("status", "publishing")
+      .select("id")
+      .maybeSingle();
+    if (error) throw new Error(`TELEGRAM_REVIEW_PROGRESS_PERSIST_FAILED:${error.code || "unknown"}`);
+    if (!persisted) throw new Error("TELEGRAM_REVIEW_PUBLICATION_CLAIM_LOST");
+  } else {
+    const current = readReviewsFromFile()[normReview.id];
+    if (!current || current.status !== "publishing") throw new Error("TELEGRAM_REVIEW_PUBLICATION_CLAIM_LOST");
+  }
+
+  const reviews = readReviewsFromFile();
+  reviews[normReview.id] = normReview;
+  writeReviewsToFile(reviews);
 }
 
 export async function savePendingReview(review: PendingReview): Promise<void> {
@@ -396,9 +388,8 @@ export async function getPendingReview(reviewId: string): Promise<PendingReview 
     await savePendingReview(review);
   }
 
-  // A view de autoridade humana é aplicada somente na leitura individual que
-  // antecede ações explícitas; listagens e persistência continuam exibindo a
-  // evidência editorial original até o administrador realmente agir.
+  // A leitura individual preserva exatamente a evidência automática. O clique
+  // humano cria uma autoridade separada, vinculada ao fingerprint atual.
   review = applyHumanPublicationImageView(review);
 
   // A review expirada permanece consultável para auditoria e para mensagens
@@ -461,10 +452,12 @@ export async function getLatestPendingReviewForUser(
 export async function listReviewsByStatus(
   statuses: TelegramReviewStatus[],
   limit = 20,
+  options: { includeExpiredPending?: boolean; maximumLimit?: number } = {},
 ): Promise<PendingReview[]> {
   const uniqueStatuses = Array.from(new Set(statuses)).filter(Boolean);
   if (uniqueStatuses.length === 0) return [];
-  const safeLimit = Math.min(Math.max(1, Math.trunc(limit || 20)), 100);
+  const maximumLimit = Math.min(Math.max(100, Math.trunc(options.maximumLimit || 100)), 1_000);
+  const safeLimit = Math.min(Math.max(1, Math.trunc(limit || 20)), maximumLimit);
 
   if (testOverrideListReviewsByStatus) {
     return testOverrideListReviewsByStatus(uniqueStatuses, safeLimit);
@@ -474,7 +467,7 @@ export async function listReviewsByStatus(
     try {
       const { data, error } = await supabase
         .from("telegram_pending_reviews")
-        .select("data, created_at, expires_at, status")
+        .select("data, created_at, updated_at, expires_at, status")
         .in("status", uniqueStatuses)
         .order("created_at", { ascending: false })
         .limit(safeLimit);
@@ -483,7 +476,9 @@ export async function listReviewsByStatus(
         return data
           .map(normalizeReviewRow)
           .filter((review): review is PendingReview => Boolean(review))
-          .filter(review => review.status !== "pending" || isActivePendingReview(review, now));
+          .filter(review => options.includeExpiredPending === true
+            || review.status !== "pending"
+            || isActivePendingReview(review, now));
       }
     } catch {
       // Fallback local quando a tabela operacional estiver indisponível.
@@ -496,7 +491,9 @@ export async function listReviewsByStatus(
     .filter((review) => {
       const status = review.status || "pending";
       if (!statusSet.has(status)) return false;
-      return status !== "pending" || isActivePendingReview(review, now);
+      return options.includeExpiredPending === true
+        || status !== "pending"
+        || isActivePendingReview(review, now);
     })
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, safeLimit);

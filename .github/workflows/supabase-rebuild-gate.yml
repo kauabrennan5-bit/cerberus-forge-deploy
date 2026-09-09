@@ -88,11 +88,59 @@ jobs:
             psql "$DB_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
           done < <(node scripts/supabase-rebuild-order.mjs)
 
+      - name: Verify human approval publication boundary behavior
+        run: psql "$DB_URL" -X -v ON_ERROR_STOP=1 -f scripts/test-human-approval-publication-boundary.sql
+
+      - name: Verify reconciler concurrency with two PostgreSQL sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          race_id='ci-reconciler-race'
+          now_ms="$(date +%s%3N)"
+          expires_ms="$((now_ms + 3600000))"
+          psql "$DB_URL" -X -v ON_ERROR_STOP=1 \
+            -v race_id="$race_id" -v now_ms="$now_ms" -v expires_ms="$expires_ms" <<'SQL'
+          delete from public.telegram_pending_reviews where id = :'race_id';
+          insert into public.telegram_pending_reviews (
+            id, chat_id, sender_id, created_at, expires_at, status, data, updated_at
+          ) values (
+            :'race_id', 'ci-chat', 'ci-sender', :now_ms, :expires_ms, 'publishing',
+            jsonb_build_object('id', :'race_id', 'status', 'publishing'),
+            now() - interval '1 hour'
+          );
+          SQL
+
+          first="$RUNNER_TEMP/reconciler-first.txt"
+          (
+            psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 <<'SQL'
+          begin;
+          select count(*) from public.reconcile_stale_telegram_publications(interval '15 minutes', 1);
+          select pg_sleep(3);
+          commit;
+          SQL
+          ) >"$first" &
+          first_pid=$!
+          sleep 1
+          second_count="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 \
+            -c "select count(*) from public.reconcile_stale_telegram_publications(interval '15 minutes', 1)")"
+          wait "$first_pid"
+          first_count="$(head -n 1 "$first" | tr -d '[:space:]')"
+          final_status="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 \
+            -c "select status from public.telegram_pending_reviews where id = 'ci-reconciler-race'")"
+          repeat_count="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 \
+            -c "select count(*) from public.reconcile_stale_telegram_publications(interval '15 minutes', 1)")"
+          test "$first_count" = "1"
+          test "$second_count" = "0"
+          test "$final_status" = "error"
+          test "$repeat_count" = "0"
+          psql "$DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -c "delete from public.telegram_pending_reviews where id = 'ci-reconciler-race'"
+
       - name: Verify exact LIVE schema contract
         shell: bash
         run: |
           set -euo pipefail
-          EXPECTED='556b4d4ddb619de85ac271546bf06a3b|45|45|0|1|19|11|201|768|325'
+          EXPECTED='8d484200894cc4b9248c0c14815ca7cd|45|45|0|1|22|13|205|783|332'
           ACTUAL="$(psql "$DB_URL" -X -qAt <<'SQL'
           with lines as (
             select 'TABLE|' || c.relname || '|' || c.relkind::text as line

@@ -9,10 +9,12 @@ import { createProductionProductPipeline, restoreLifecycleRecord, type Lifecycle
 import { syncCatalogAndDeploy } from "./catalogSync";
 import { detectMarketplace } from "./marketplace";
 import { stripRawAffiliateProvenance } from "./productLifecycle";
-import { formatDiagnosticForAdmin } from "./operationalDiagnostics";
+import { createOperationId, formatDiagnosticForAdmin } from "./operationalDiagnostics";
+import { imageUrlFingerprint } from "./productEditorialReview";
+import { extractShopeeIdentity } from "../commercial/marketplace/shopeeIdentity";
 import { normalizePromotionOffer } from "./promotionOffer";
 import { markTelegramBackendReady } from "./telegramDiagnostics";
-import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
+import { isPublicHttpsImageUrl, normalizeProductImageUrls, resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import { PUBLIC_PRODUCT_CATEGORIES, resolvePublicProductCategory } from "../../src/lib/productCategory";
 import * as commercialCockpit from "./commercialCockpit";
 import { runDiscoverCommand } from "./discoveryCommands";
@@ -457,21 +459,15 @@ function getPublicationLink(review: PendingReview): { link?: string; error?: str
 function getPublicationCompletenessErrors(review: PendingReview): string[] {
   const errors: string[] = [];
   const rawTitle = review.rawTitle?.trim() || review.produto?.trim() || "";
-  const displayTitle = review.displayTitle?.trim() || "";
-  const description = stripRawAffiliateProvenance(review.descricao || "").trim();
+  const displayTitle = review.displayTitle?.trim() || rawTitle;
   const publicCategory = resolveTelegramReviewCategory(review);
   if (!publicCategory) errors.push("PUBLIC_CATEGORY_REVIEW_REQUIRED");
 
   if (!rawTitle) errors.push("título de origem ausente");
-  // O título público deve resultar da curadoria, não de um fallback silencioso
-  // para o título longo recebido do marketplace.
-  if (!displayTitle || displayTitle === rawTitle) errors.push("título editorial ausente");
+  if (!displayTitle) errors.push("título válido ausente");
   if (!Number.isFinite(review.preco) || review.preco <= 0) errors.push("preço válido ausente");
-  if (!Array.isArray(review.imagens) || review.imagens.filter((image) => typeof image === "string" && image.trim()).length === 0) {
-    errors.push("imagem comercial válida ausente");
-  }
-  if (review.imageEditorialStatus === "review_required" || review.imageEditorialStatus === "overlay_suspected") errors.push("IMAGE_REVIEW_REQUIRED");
-  if (description.length < 24) errors.push("descrição editorial ausente");
+  const images = [review.imagemPrincipal, ...(review.imagens || []), ...(review.imagensOriginais || []), ...(review.imagensGaleria || [])];
+  if (!images.some(isPublicHttpsImageUrl)) errors.push("imagem HTTPS válida ausente");
 
   return errors;
 }
@@ -482,7 +478,7 @@ function getReviewImageCandidate(review: PendingReview): {
   imagemPrincipal?: string;
   imagensGaleria: string[];
   imageCuration?: {
-    status: "ready";
+    status: "ready" | "review_required";
     rawImageUrls: string[];
     primaryImageUrl: string;
     galleryImageUrls: string[];
@@ -490,25 +486,31 @@ function getReviewImageCandidate(review: PendingReview): {
   };
   imageEditorialStatus: "clean" | "review_required";
 } {
-  const canonical = resolveCanonicalProductImage(review);
-  const primaryImageUrl = review.imagemPrincipal || canonical.primaryImageUrl;
-  const galleryImageUrls = review.imagensGaleria ?? canonical.galleryImageUrls;
-  const ready = Boolean(primaryImageUrl && canonical.status === "ready");
+  const observedImages = normalizeProductImageUrls([
+    review.imagemPrincipal,
+    ...(review.imagens || []),
+    ...(review.imagensOriginais || []),
+    ...(review.imagensGaleria || []),
+  ]).filter(isPublicHttpsImageUrl);
+  const primaryImageUrl = [review.imagemPrincipal, review.imageCuration?.primaryImageUrl, ...observedImages]
+    .find(isPublicHttpsImageUrl);
+  const galleryImageUrls = observedImages.filter(url => url !== primaryImageUrl);
+  const imageEditorialStatus = review.imageEditorialStatus === "clean" ? "clean" : "review_required";
   return {
-    imagens: canonical.publicHttpsImageUrls,
-    imagensOriginais: review.imagensOriginais ?? canonical.rawImageUrls,
+    imagens: primaryImageUrl ? [primaryImageUrl, ...galleryImageUrls] : [],
+    imagensOriginais: normalizeProductImageUrls(review.imagensOriginais ?? observedImages).filter(isPublicHttpsImageUrl),
     imagemPrincipal: primaryImageUrl,
     imagensGaleria: galleryImageUrls,
-    imageCuration: ready && primaryImageUrl
+    imageCuration: primaryImageUrl
       ? {
-          status: "ready",
-          rawImageUrls: review.imagensOriginais ?? canonical.rawImageUrls,
+          status: imageEditorialStatus === "clean" ? "ready" : "review_required",
+          rawImageUrls: normalizeProductImageUrls(review.imagensOriginais ?? observedImages).filter(isPublicHttpsImageUrl),
           primaryImageUrl,
           galleryImageUrls,
           assessments: review.imageCuration?.assessments || [],
         }
       : undefined,
-    imageEditorialStatus: review.imageEditorialStatus === "clean" ? "clean" : review.imageEditorialStatus ? "review_required" : (ready ? "clean" : "review_required"),
+    imageEditorialStatus,
   };
 }
 
@@ -1136,11 +1138,11 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         if (product.ativo !== false) {
           await productsRepository.pauseProduct(product.id);
         } else {
-          await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
-          const publication = await syncCatalogAndDeploy(product.produto, product.id);
-          if (!publication.success) {
-            await productsRepository.pauseProduct(product.id);
-            throw new Error(publication.error || "PUBLICATION_ERROR");
+          if (chatId) {
+            await sendTelegramMessage(
+              chatId,
+              "🔒 <b>REATIVAÇÃO EXIGE NOVA APROVAÇÃO</b>\n\nProdutos inativos não voltam ao catálogo por toggle. Gere uma review válida e confirme a publicação no Telegram para criar uma nova autorização auditável.",
+            );
           }
         }
       }
@@ -1468,6 +1470,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         if (chatId) await sendTelegramMessage(chatId, `⚠️ ${validation.reason}`);
         return;
       }
+      let publicationClaimAcquired = false;
       try {
         const completenessErrors = getPublicationCompletenessErrors(review);
         if (completenessErrors.length > 0) {
@@ -1486,6 +1489,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         // Supabase → GitHub → catálogo público está em andamento.
         review.status = "publishing";
         await telegramRepo.savePendingReview(review);
+        publicationClaimAcquired = true;
         const pipeline = createProductionProductPipeline();
         const publicationLink = getPublicationLink(review);
         if (!publicationLink.link) {
@@ -1497,6 +1501,7 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         // O lifecycle é reavaliado com a review integral no instante de
         // publicação. Assim, um preview salvo antes de edições de preço ou da
         // curadoria não descarta displayTitle, descrição, oferta ou link.
+        const reviewImage = getReviewImageCandidate(review);
         let lifecycle = await pipeline.evaluate({
           produto: review.produto,
           rawTitle: review.rawTitle,
@@ -1504,12 +1509,12 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           curatorNote: review.curatorNote,
           categoria: review.categoria,
           preco: review.preco,
-          ...getReviewImageCandidate(review),
+          ...reviewImage,
           normalizedUrl: review.normalizedUrl,
           link: publicationLink.link,
           descricao: stripRawAffiliateProvenance(review.descricao),
           marketplace: detectMarketplace(review.normalizedUrl),
-        });
+        }, { humanReview: true });
         // A oferta humana confirmada acompanha o candidato exclusivamente como
         // metadado separado. O pipeline preserva review.preco como preço-base.
         const promotionOffer = normalizePromotionOffer(review.promotionReview);
@@ -1521,7 +1526,54 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
           throw new Error(lifecycle.validation.errors.join(" ") || "VALIDATION_ERROR");
         }
         lifecycle = pipeline.approve(lifecycle);
-        lifecycle = await pipeline.publish(lifecycle);
+        lifecycle.operationId ||= createOperationId("PUB");
+        const approvedAt = lifecycle.audit.find(item => item.type === "PRODUCT_APPROVED")?.timestamp;
+        const primaryImageUrl = reviewImage.imageCuration?.primaryImageUrl || reviewImage.imagens[0];
+        const parsedIdentity = extractShopeeIdentity(review.normalizedUrl);
+        const meta = review.existingProduct && typeof review.existingProduct === "object"
+          ? review.existingProduct as Record<string, any>
+          : {};
+        const shopId = String(meta.shopId || parsedIdentity.shopId || "").trim();
+        const itemId = String(meta.itemId || parsedIdentity.itemId || "").trim();
+        if (!approvedAt || !primaryImageUrl || !shopId || !itemId) {
+          throw new Error("TELEGRAM_HUMAN_APPROVAL_EVIDENCE_INCOMPLETE");
+        }
+        const primaryImageFingerprint = imageUrlFingerprint(primaryImageUrl);
+        const humanApprovalEvidence = {
+          origin: "telegram" as const,
+          reviewId: review.id,
+          operationId: lifecycle.operationId,
+          approvedAt,
+          approverUserId: String(senderId),
+          chatId: String(chatId),
+          messageId: messageId || null,
+          callbackQueryId: callbackId,
+          shopId,
+          itemId,
+          sourceProductUrl: review.normalizedUrl,
+          primaryImageUrl,
+          primaryImageFingerprint,
+        };
+        review.lifecycle = lifecycle;
+        review.existingProduct = {
+          ...meta,
+          shopId,
+          itemId,
+          humanApproval: humanApprovalEvidence,
+        };
+        // A prova precisa estar durável antes de criar a autorização e antes de
+        // qualquer transição do produto para ativo+published.
+        await telegramRepo.persistClaimedPublishingReview(review);
+        lifecycle = await pipeline.publish(lifecycle, {
+          humanManualApproval: true,
+          reviewId: review.id,
+          approvedAt,
+          approvalOrigin: "telegram",
+          primaryImageFingerprint,
+          humanApprovalEvidence,
+          sourceProductUrl: review.normalizedUrl,
+          score: lifecycle.curation.score,
+        });
         review.lifecycle = lifecycle;
         if (lifecycle.state !== "PUBLISHED" || !lifecycle.publishedProductId) {
           review.status = "error";
@@ -1547,9 +1599,23 @@ export async function handleTelegramWebhookUpdate(update: any): Promise<void> {
         // texto e não pode ser a única confirmação de publicação.
         if (chatId) await sendTelegramMessage(chatId, successText);
       } catch (err: any) {
-        review.status = "error";
-        await telegramRepo.savePendingReview(review).catch(() => undefined);
-        if (chatId) await sendTelegramMessage(chatId, "❌ <b>PERSISTENCE_ERROR</b>\n\nNão foi possível concluir a persistência canônica. Consulte o Operator para diagnóstico e operation ID.");
+        // Um callback concorrente que perdeu o CAS não é dono da claim e não
+        // pode sobrescrever o worker vencedor como `error`. Somente o fluxo
+        // que efetivamente adquiriu pending/error -> publishing pode liberar a
+        // própria claim após uma falha.
+        if (publicationClaimAcquired) {
+          review.status = "error";
+          await telegramRepo.savePendingReview(review).catch(() => undefined);
+        }
+        if (chatId) {
+          const alreadyClaimed = String(err?.message || err).includes("TELEGRAM_REVIEW_PUBLICATION_ALREADY_CLAIMED");
+          await sendTelegramMessage(
+            chatId,
+            alreadyClaimed
+              ? "ℹ️ <b>PUBLICAÇÃO JÁ EM ANDAMENTO</b>\n\nOutro callback já adquiriu esta review. Nenhuma segunda publicação foi iniciada."
+              : "❌ <b>PERSISTENCE_ERROR</b>\n\nNão foi possível concluir a persistência canônica. Consulte o Operator para diagnóstico e operation ID.",
+          );
+        }
       }
       return;
     }

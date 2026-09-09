@@ -39,9 +39,9 @@ function reviewFixture(): PendingReview {
 }
 
 describe("Telegram publication recovery", () => {
-  it("reopens only the approved legacy category-drift failure and produces a new operationId", async () => {
+  it("reopens only the approved legacy category-drift failure for a fresh human click", async () => {
     let stored = reviewFixture();
-    let callbackData = "";
+    let notified = false;
     const now = 1_788_800_000_000;
 
     const result = await runConfiguredShopeePublicationRecovery(
@@ -50,29 +50,18 @@ describe("Telegram publication recovery", () => {
         now: () => now,
         getReview: async () => stored,
         saveReview: async review => { stored = review; },
-        handleUpdate: async update => {
-          callbackData = update.callback_query.data;
-          assert.equal(stored.status, "pending", "review must be explicitly reopened before replay");
-          assert.equal(stored.categoria, "Tecnologia", "approved category must remain authoritative");
-          stored = {
-            ...stored,
-            status: "published",
-            lifecycle: {
-              ...(stored.lifecycle as any),
-              state: "PUBLISHED",
-              operationId: "PUB-20260907180000-0005",
-              publishedProductId: "prod-recovered",
-            } as any,
-          };
+        notifyReview: async review => {
+          notified = true;
+          assert.equal(review.status, "pending");
         },
       },
     );
 
-    assert.equal(callbackData, `confirm_pub:${stored.id}`);
-    assert.equal(result.status, "published");
+    assert.equal(result.status, "reopened");
     assert.equal(result.previousOperationId, "PUB-20260907164604-0004");
-    assert.equal(result.operationId, "PUB-20260907180000-0005");
-    assert.equal(result.publishedProductId, "prod-recovered");
+    assert.equal(stored.status, "pending");
+    assert.equal(stored.lifecycle?.operationId, "PUB-20260907164604-0004");
+    assert.equal(notified, true);
     assert.deepEqual(stored.existingProduct.publicationRecoveryHistory, [{
       recoveryType: "LEGACY_SHOPEE_CATEGORY_DRIFT",
       previousOperationId: "PUB-20260907164604-0004",
@@ -85,7 +74,7 @@ describe("Telegram publication recovery", () => {
   it("fails closed when the previous failure was not the legacy category block", async () => {
     const stored = reviewFixture();
     (stored.lifecycle as any).diagnostic.code = "SHOPEE_PREFLIGHT_SCRAPER_IDENTITY_CHANGED";
-    let replayed = false;
+    let notified = false;
 
     const result = await runConfiguredShopeePublicationRecovery(
       { SHOPEE_PUBLICATION_RECOVERY_REVIEW_ID: stored.id } as NodeJS.ProcessEnv,
@@ -93,20 +82,20 @@ describe("Telegram publication recovery", () => {
         now: () => 1_788_800_000_000,
         getReview: async () => stored,
         saveReview: async () => undefined,
-        handleUpdate: async () => { replayed = true; },
+        notifyReview: async () => { notified = true; },
       },
     );
 
     assert.equal(result.status, "skipped");
     assert.equal(result.reason, "LEGACY_CATEGORY_BLOCK_NOT_PRESENT");
-    assert.equal(replayed, false);
+    assert.equal(notified, false);
     assert.equal(stored.status, "error");
   });
 
   it("fails closed without prior human approval", async () => {
     const stored = reviewFixture();
     (stored.lifecycle as any).humanApproved = false;
-    let replayed = false;
+    let notified = false;
 
     const result = await runConfiguredShopeePublicationRecovery(
       { SHOPEE_PUBLICATION_RECOVERY_REVIEW_ID: stored.id } as NodeJS.ProcessEnv,
@@ -114,12 +103,12 @@ describe("Telegram publication recovery", () => {
         now: () => 1_788_800_000_000,
         getReview: async () => stored,
         saveReview: async () => undefined,
-        handleUpdate: async () => { replayed = true; },
+        notifyReview: async () => { notified = true; },
       },
     );
 
     assert.equal(result.status, "skipped");
     assert.equal(result.reason, "HUMAN_APPROVAL_NOT_PRESENT");
-    assert.equal(replayed, false);
+    assert.equal(notified, false);
   });
 });

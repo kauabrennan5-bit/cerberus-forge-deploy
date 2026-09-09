@@ -48,6 +48,7 @@ import {
   type OperatorHealthObservation,
 } from "./operatorHealthChecksV2";
 import { synchronizeOperatorIncidents } from "./operatorIncidentRecovery";
+import { reconcileStaleTelegramPublications } from "./telegramPublicationReconciler";
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_HISTORY_RECORDS = 100;
@@ -98,6 +99,20 @@ export function isExternalOperatorScheduler(env: NodeJS.ProcessEnv = process.env
 
 export async function runSystemHealthCheck(): Promise<OperatorSystemReport> {
   machine.beginHealthCheck("Início de health check V2 periódico ou manual.");
+  try {
+    const reconciliation = await reconcileStaleTelegramPublications();
+    if (reconciliation.inspected > 0) {
+      console.info(
+        `[TELEGRAM PUBLICATION RECONCILER] inspected=${reconciliation.inspected} published=${reconciliation.published} released=${reconciliation.released} active=${reconciliation.active}`,
+      );
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Reconciliation is isolated from provider observations: a transient RPC
+    // failure must not hide the health report, and the next periodic run is
+    // safe because the database operation is idempotent.
+    console.error(`[TELEGRAM PUBLICATION RECONCILER] failed=${message.slice(0, 180)}`);
+  }
   const result = await runOperatorHealthChecksV2();
   if (machine.getState() === "CHECKING") {
     machine.transition("DIAGNOSING", "Health V2 coletado; reconciliando incidentes persistidos.");

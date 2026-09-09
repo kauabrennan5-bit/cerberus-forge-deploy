@@ -49,24 +49,19 @@ function legacyReview(overrides: Partial<PendingReview> = {}): PendingReview {
   };
 }
 
-test("legacy manual review gets a publication-only image compatibility view without losing audit provenance", () => {
+test("legacy manual review preserves automatic editorial evidence before human approval", () => {
   const original = legacyReview();
   const adapted = applyHumanPublicationImageView(original);
 
-  assert.notEqual(adapted, original);
+  assert.equal(adapted, original);
   assert.equal(original.imageEditorialStatus, "review_required");
-  assert.equal(adapted.imageEditorialStatus, "clean");
-  assert.equal(adapted.imageCuration?.status, "ready");
-  assert.equal(adapted.imageCuration?.primaryImageUrl, PUBLIC_IMAGE);
+  assert.equal(adapted.imageEditorialStatus, "review_required");
+  assert.equal(adapted.imageCuration?.status, "review_required");
   assert.deepEqual(adapted.imagens, [PUBLIC_IMAGE]);
-  assert.equal(adapted.existingProduct.humanPublicationImageAuthorityApplied, true);
-  assert.equal(adapted.existingProduct.originalImageEditorialStatus, "review_required");
-  assert.equal(adapted.existingProduct.originalImageCurationStatus, "review_required");
-  assert.equal(adapted.existingProduct.originalImageCurationReason, "image_review_unavailable");
   assert.deepEqual(adapted.existingProduct.manualReviewReasons, ["image_review_model_unavailable"]);
 });
 
-test("Autonomous Curator pending review receives the same human-authority view", () => {
+test("Autonomous Curator pending review is never projected as AI-clean", () => {
   const adapted = applyHumanPublicationImageView(legacyReview({
     id: "autocur-human-authority",
     existingProduct: {
@@ -78,9 +73,8 @@ test("Autonomous Curator pending review receives the same human-authority view",
     },
   }));
 
-  assert.equal(adapted.imageEditorialStatus, "clean");
-  assert.equal(adapted.imageCuration?.status, "ready");
-  assert.equal(adapted.existingProduct.originalImageEditorialStatus, "review_required");
+  assert.equal(adapted.imageEditorialStatus, "review_required");
+  assert.equal(adapted.imageCuration?.status, "review_required");
 });
 
 test("objective technical image blockers stay fail-closed", () => {
@@ -129,15 +123,14 @@ test("terminal reviews are never rewritten by the compatibility view", () => {
   }
 });
 
-test("individual Telegram review read applies the compatibility view used by confirm_pub", async () => {
+test("individual Telegram review read preserves evidence used by confirm_pub", async () => {
   setTestGetPendingReview(async () => legacyReview());
   try {
     const loaded = await getPendingReview("affprev-human-authority");
     assert.ok(loaded);
-    assert.equal(loaded.imageEditorialStatus, "clean");
-    assert.equal(loaded.imageCuration?.status, "ready");
+    assert.equal(loaded.imageEditorialStatus, "review_required");
+    assert.equal(loaded.imageCuration?.status, "review_required");
     assert.equal(loaded.imagemPrincipal, PUBLIC_IMAGE);
-    assert.equal(loaded.existingProduct.originalImageEditorialStatus, "review_required");
   } finally {
     setTestGetPendingReview(null);
   }
