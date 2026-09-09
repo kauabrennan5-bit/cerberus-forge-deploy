@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAutomationAuth";
 import { runAutonomousCuratorDaily } from "../services/autonomousCurator";
-import { readAutonomousCuratorInvariant, runAutonomousCuratorContinuousV2 } from "../services/autonomousCuratorContinuousV2";
+import { readAutonomousCuratorInvariant } from "../services/autonomousCuratorContinuousV2";
 import { extractProductForReview } from "../services/productAutomation";
 import {
   recoverFailedAutonomousExtraction,
@@ -193,6 +193,16 @@ function alreadyRunning(res: Response) {
   return res.status(202).json({ ok: true, accepted: true, status: "already_running", mode: activeMode, cycleId: activeCycleId });
 }
 
+function manualOnlyCuratorDependencies() {
+  return {
+    extractor: extractForAutonomousCurator,
+    getConfig: async () => ({
+      ...(await getAutonomousCuratorConfig()),
+      autoPublishEnabled: false,
+    }),
+  };
+}
+
 export function registerAutonomousCuratorRoutes(app: Express): void {
   app.get("/api/internal/autonomous-curator/invariant", async (req, res) => {
     if (!(await authorize(req, res))) return;
@@ -223,12 +233,12 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
       if (!dryRun && !config.enabled) return res.status(200).json({ ok: true, accepted: false, status: "disabled" });
       if (activeExecution) return alreadyRunning(res);
       if (wait) {
-        const result = await runAutonomousCuratorDaily({ dryRun, notify }, { extractor: extractForAutonomousCurator });
+        const result = await runAutonomousCuratorDaily({ dryRun, notify }, manualOnlyCuratorDependencies());
         return res.status(200).json({ ok: true, accepted: true, result });
       }
       activeMode = "daily";
       activeCycleId = null;
-      activeExecution = runAutonomousCuratorDaily({ dryRun, notify }, { extractor: extractForAutonomousCurator })
+      activeExecution = runAutonomousCuratorDaily({ dryRun, notify }, manualOnlyCuratorDependencies())
         .then(result => console.info(`[AUTONOMOUS-CURATOR] background_complete status=${result.status} run=${result.runId || "none"}`))
         .catch(error => console.error(`[AUTONOMOUS-CURATOR] background_failed code=${safeCode(error)}`))
         .finally(() => { activeExecution = null; activeMode = null; activeCycleId = null; });
@@ -249,17 +259,21 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
       if (!config.enabled) return res.status(200).json({ ok: true, accepted: false, status: "disabled" });
       if (activeExecution) return alreadyRunning(res);
       const cycleId = `continuous-${randomUUID()}`;
+
+      // Compatibility endpoint only. Continuous V2 is never allowed to execute
+      // its historical publication coordinator; it delegates to the canonical
+      // daily manual-review flow and therefore can only create Telegram reviews.
       if (wait) {
-        const result = await runAutonomousCuratorContinuousV2({ cycleId, notify, extractor: extractForAutonomousCurator });
-        return res.status(200).json({ ok: true, accepted: true, cycleId, result });
+        const result = await runAutonomousCuratorDaily({ dryRun: false, notify }, manualOnlyCuratorDependencies());
+        return res.status(200).json({ ok: true, accepted: true, cycleId, mode: "manual_review", result });
       }
       activeMode = "continuous";
       activeCycleId = cycleId;
-      activeExecution = runAutonomousCuratorContinuousV2({ cycleId, notify, extractor: extractForAutonomousCurator })
-        .then(result => console.info(`[AUTONOMOUS-CURATOR] continuous_v2_complete status=${result.status} run=${result.runId || "none"} cycle=${cycleId}`))
-        .catch(error => console.error(`[AUTONOMOUS-CURATOR] continuous_v2_failed cycle=${cycleId} code=${safeCode(error)}`))
+      activeExecution = runAutonomousCuratorDaily({ dryRun: false, notify }, manualOnlyCuratorDependencies())
+        .then(result => console.info(`[AUTONOMOUS-CURATOR] continuous_manual_review_complete status=${result.status} run=${result.runId || "none"} cycle=${cycleId}`))
+        .catch(error => console.error(`[AUTONOMOUS-CURATOR] continuous_manual_review_failed cycle=${cycleId} code=${safeCode(error)}`))
         .finally(() => { activeExecution = null; activeMode = null; activeCycleId = null; });
-      return res.status(202).json({ ok: true, accepted: true, status: "started", mode: "continuous", cycleId });
+      return res.status(202).json({ ok: true, accepted: true, status: "started", mode: "manual_review", cycleId });
     } catch (error) {
       const code = safeCode(error);
       console.error(`[AUTONOMOUS-CURATOR] continuous_start_failed code=${code}`);
@@ -305,7 +319,7 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
         activeMode,
         activeCycleId,
         enabled: config.enabled,
-        autoPublishEnabled: config.autoPublishEnabled,
+        autoPublishEnabled: false,
         autoPublishThreshold: config.autoPublishThreshold,
         reviewThreshold: config.reviewThreshold,
         maxDailyPerCategory: config.maxDailyPerCategory,

@@ -5,6 +5,10 @@ import { deriveConfidenceV2, deriveMinSampleSize, confidenceV2ToScore } from "..
 import { isValidProductLink } from "../repositories/productsRepository";
 import { validPromotionAt } from "./promotionOffer";
 import { isDisplayTitleReviewCurrent, isImageReviewCurrent } from "./productEditorialReview";
+import {
+  getWeeklyHumanEditorialAuthority,
+  isWeeklyHumanEditorialAuthorityCurrent,
+} from "./newsletterWeeklyHumanEditorialAuthority";
 
 export type WeeklyCompositionMode = "thematic" | "diversified";
 
@@ -56,6 +60,13 @@ function destinationIdentity(value: string): string {
   }
 }
 
+function currentPrimaryImage(product: Product): string {
+  const curated = clean(product.imageCuration?.primaryImageUrl);
+  if (curated && /^https:\/\//i.test(curated)) return curated;
+  const fallback = clean(product.imagens?.[0]);
+  return /^https:\/\//i.test(fallback) ? fallback : "";
+}
+
 export function evaluateWeeklyProductEligibility(product: Product, now = new Date()): WeeklyProductEligibility {
   const reasons: string[] = [];
   if (product.ativo !== true) reasons.push("PRODUCT_INACTIVE");
@@ -63,23 +74,34 @@ export function evaluateWeeklyProductEligibility(product: Product, now = new Dat
   const ref = clean(product.ref);
   if (!ref || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,119}$/.test(ref)) reasons.push("PRODUCT_REF_INVALID");
   if (!isValidProductLink(product.link)) reasons.push("PRODUCT_LINK_INVALID");
-  if (!isDisplayTitleReviewCurrent(product)) reasons.push("DISPLAY_TITLE_REVIEW_REQUIRED");
-  if (!isImageReviewCurrent(product)) reasons.push("IMAGE_REVIEW_REQUIRED");
+
+  const humanAuthorityCurrent = isWeeklyHumanEditorialAuthorityCurrent(product);
+  const automaticTitleCurrent = isDisplayTitleReviewCurrent(product);
+  const automaticImageCurrent = isImageReviewCurrent(product);
+  if (!automaticTitleCurrent && !humanAuthorityCurrent) reasons.push("DISPLAY_TITLE_REVIEW_REQUIRED");
+  if (!automaticImageCurrent && !humanAuthorityCurrent) reasons.push("IMAGE_REVIEW_REQUIRED");
+
   const category = clean(product.categoria);
   if (!PUBLIC_PRODUCT_CATEGORIES.includes(category as (typeof PUBLIC_PRODUCT_CATEGORIES)[number])) reasons.push("PRODUCT_CATEGORY_INVALID");
   const canonicalPrice = Number(product.preco);
   if (!Number.isFinite(canonicalPrice) || canonicalPrice <= 0) reasons.push("PRODUCT_BASE_PRICE_INVALID");
 
-  const primaryImageUrl = product.imageCuration?.status === "ready"
-    ? clean(product.imageCuration.primaryImageUrl)
-    : "";
-  const imageReviewFingerprint = clean(product.imageReviewFingerprint);
-  const imageReviewVersion = clean(product.imageReviewVersion);
+  const primaryImageUrl = currentPrimaryImage(product);
+  if (!primaryImageUrl) reasons.push("PRODUCT_PRIMARY_IMAGE_INVALID");
   const displayTitle = clean(product.displayTitle);
+  if (!displayTitle) reasons.push("PRODUCT_DISPLAY_TITLE_INVALID");
   const linkIdentity = destinationIdentity(product.link);
+  if (!linkIdentity) reasons.push("PRODUCT_LINK_INVALID");
+
+  const humanAuthority = humanAuthorityCurrent ? getWeeklyHumanEditorialAuthority(product) : null;
+  const imageReviewFingerprint = humanAuthority?.imageFingerprint || clean(product.imageReviewFingerprint);
+  const imageReviewVersion = humanAuthority ? "human-editorial-approval-v1" : clean(product.imageReviewVersion);
+  if (!imageReviewFingerprint) reasons.push("IMAGE_REVIEW_FINGERPRINT_MISSING");
+  if (!imageReviewVersion) reasons.push("IMAGE_REVIEW_VERSION_MISSING");
+
   const promotion = validPromotionAt(product.ofertaPromocional, now) || null;
 
-  if (reasons.length > 0) return { eligible: false, reasons, snapshot: null };
+  if (reasons.length > 0) return { eligible: false, reasons: [...new Set(reasons)], snapshot: null };
   return {
     eligible: true,
     reasons: [],

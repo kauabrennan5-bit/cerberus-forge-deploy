@@ -1,6 +1,5 @@
 import { SOCIAL_LABELS, type SocialNetwork } from "../config/institutional";
 import { resolvePublicProductCategory } from "../lib/productCategory";
-import { sanitizePublicCuratorNote } from "../lib/publicCuratorNote";
 
 export interface CreateProductInput {
   senha?: string;
@@ -36,7 +35,6 @@ function getApiUrl(path: string): string {
   try {
     if (typeof window !== 'undefined' && window.location) {
       const hostname = window.location.hostname;
-      // No storefront estático de produção, operações não-catálogo usam o backend canônico.
       if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-design-static')) {
         return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
       }
@@ -57,6 +55,7 @@ function getPublicCatalogApiUrl(): string {
 /**
  * Leituras públicas do catálogo são servidas exclusivamente pela Edge Function.
  * O backend Render permanece reservado a operações administrativas e mutações.
+ * Campos internos/editoriais nunca são reconstruídos no cliente.
  */
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   try {
@@ -96,26 +95,30 @@ export async function getProducts(): Promise<any[]> {
 
   console.log(`[Catalog] ${list.length} registros carregados da API pública canônica.`);
   const normalized = list.map((p: any) => ({
-    ...p,
     id: String(p.id || ''),
+    ref: p.ref,
     produto: p.produto || '',
     displayTitle: typeof (p.displayTitle || p.display_title) === 'string' ? (p.displayTitle || p.display_title).trim() : undefined,
-    curatorNote: sanitizePublicCuratorNote(p.curatorNote || p.curator_note),
+    categoria: resolvePublicProductCategory(p.categoria || p.category, {
+      title: p.displayTitle || p.display_title || p.produto || p.title || p.name,
+      description: p.descricao || p.description,
+    }),
     preco: Number(p.preco) || 0,
     imagens: Array.isArray(p.imagens)
       ? p.imagens
       : (typeof p.imagens === 'string' ? JSON.parse(p.imagens) : (p.imagem ? [p.imagem] : [])),
     link: p.link || p.url || '',
-    categoria: resolvePublicProductCategory(p.categoria || p.category, {
-      title: p.displayTitle || p.display_title || p.produto || p.title || p.name,
-      description: p.descricao || p.description,
-    }),
+    ativo: p.ativo === true,
+    destaque: Boolean(p.destaque),
+    status: p.status,
+    slug: p.slug,
+    descricao: typeof p.descricao === 'string' ? p.descricao : '',
+    paginaPonteUrl: p.paginaPonteUrl || p.pagina_ponte_url || '',
+    ofertaPromocional: p.ofertaPromocional || p.oferta_promocional || undefined,
     createdAt: typeof (p.createdAt || p.created_at) === 'string' ? (p.createdAt || p.created_at) : undefined,
-    ativo: p.ativo !== false,
-    status: p.status || 'published'
   }));
   const publicProducts = normalized.filter((product: any) =>
-    product.ativo !== false
+    product.ativo === true
     && product.status === 'published'
     && Boolean(product.categoria)
   );
@@ -147,8 +150,7 @@ export async function createProduct(payload: any, password?: string): Promise<Ap
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, senha: password || payload.senha })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao criar produto.' };
   }
@@ -161,8 +163,7 @@ export async function updateProduct(id: string, payload: any, password?: string)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, senha: password || payload.senha })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao atualizar produto.' };
   }
@@ -175,8 +176,7 @@ export async function deleteProduct(id: string, password?: string): Promise<ApiR
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ senha: password })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao remover produto.' };
   }
@@ -228,26 +228,11 @@ export async function subscribeNewsletter(email: string, marketingConsent: boole
       return successResponse;
     }
 
-    if (res.status === 400 && payload.code === 'INVALID_EMAIL') {
-      return { success: false, error: 'E-mail inválido. Verifique e tente novamente.' };
-    }
-
-    if (res.status === 400 && payload.code === 'CONSENT_REQUIRED') {
-      return { success: false, error: 'Confirme que deseja receber novas seleções, recomendações e ofertas.' };
-    }
-
-    if (res.status === 409 && payload.code === 'RECONSENT_REQUIRED') {
-      return { success: false, error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.' };
-    }
-
-    if (res.status === 409 && payload.code === 'IDEMPOTENCY_COLLISION') {
-      return { success: false, error: 'A intenção de inscrição não coincide com a intenção já registrada.' };
-    }
-
-    if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') {
-      return { success: false, error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' };
-    }
-
+    if (res.status === 400 && payload.code === 'INVALID_EMAIL') return { success: false, error: 'E-mail inválido. Verifique e tente novamente.' };
+    if (res.status === 400 && payload.code === 'CONSENT_REQUIRED') return { success: false, error: 'Confirme que deseja receber novas seleções, recomendações e ofertas.' };
+    if (res.status === 409 && payload.code === 'RECONSENT_REQUIRED') return { success: false, error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.' };
+    if (res.status === 409 && payload.code === 'IDEMPOTENCY_COLLISION') return { success: false, error: 'A intenção de inscrição não coincide com a intenção já registrada.' };
+    if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') return { success: false, error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' };
     return { success: false, error: payload.error || 'Cadastro indisponível.' };
   } catch {
     return { success: false, error: 'Não foi possível conectar. Se o site acabou de carregar, aguarde alguns segundos e tente novamente.' };
@@ -261,8 +246,7 @@ export async function extractProduct(url: string, rawText?: string, adminPass?: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, rawText, senha: adminPass })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao extrair produto com IA.' };
   }
@@ -273,7 +257,7 @@ export async function verifyPasswordApi(password: string): Promise<boolean> {
   return res.success;
 }
 
-export async function fetchProxyCsv(url: string): Promise<string> {
+export async function fetchProxyCsv(_url: string): Promise<string> {
   return '';
 }
 

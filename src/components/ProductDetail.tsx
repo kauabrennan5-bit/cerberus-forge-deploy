@@ -374,17 +374,6 @@ export const ProductDetail: React.FC<ProductDetailProps> = ({
               </div>
             )}
 
-            {product.curatorNote?.trim() && (
-              <div className="border-l border-[#8A1F1F] pl-3 text-xs text-[#E8E1D3]/80 leading-relaxed space-y-1.5">
-                <span className="text-[9px] sm:text-[10px] uppercase font-display tracking-widest text-[#8A1F1F] block font-bold">
-                  NOTA DO CURADOR
-                </span>
-                <p className="font-condensed text-xs sm:text-sm text-[#E8E1D3]">
-                  {product.curatorNote.trim()}
-                </p>
-              </div>
-            )}
-
             <div className="p-2.5 sm:p-3 bg-[#141210] border border-[#3A342E] rounded-none space-y-1.5 text-xs text-[#E8E1D3]/70">
               <div className="flex items-center space-x-2 font-display uppercase tracking-wider text-[#E8E1D3]">
                 <ShieldCheck className="w-3.5 h-3.5 text-[#8A1F1F]" />

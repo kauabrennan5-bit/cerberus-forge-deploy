@@ -4,6 +4,7 @@ import { loadLastSuccessfulWeeklySentAt, loadProductClickCounts } from "./newsle
 import { composeWeeklyEdition, evaluateWeeklyProductEligibility, rankWeeklyCandidates, weeklyFreshnessMs, type WeeklyCompositionMode } from "./newsletterWeeklyEditorial";
 import { evaluateWeeklyRuntimePreflight, type WeeklyRuntimePreflight } from "./newsletterWeeklyRuntimePreflight";
 import { getWeeklyCopyBudgetStatus, type WeeklyCopyBudgetStatus } from "./newsletterWeeklyCopy";
+import { loadWeeklyProductsWithHumanEditorialAuthority } from "./newsletterWeeklyHumanEditorialAuthority";
 
 export type WeeklyProductionPreflight = {
   ready: boolean;
@@ -42,7 +43,7 @@ export async function runWeeklyProductionPreflight(deps: WeeklyProductionPreflig
   const env = deps.env || process.env;
   const now = deps.now || new Date();
   const [products, lastWeeklySentAt, production, geminiBudget] = await Promise.all([
-    (deps.productsLoader || productsRepository.getProducts)(),
+    (deps.productsLoader || loadWeeklyProductsWithHumanEditorialAuthority)(),
     (deps.lastSentAtLoader || loadLastSuccessfulWeeklySentAt)(),
     (deps.runtimeLoader || (() => evaluateWeeklyRuntimePreflight()))(),
     Promise.resolve((deps.geminiBudgetLoader || getWeeklyCopyBudgetStatus)()),

@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { toPublicProductDTO } from "../../../src/lib/publicProductDto.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,7 +26,6 @@ const PUBLIC_PRODUCT_COLUMNS = [
   "created_at",
   "oferta_promocional",
   "display_title",
-  "curator_note",
 ].join(",");
 
 const PUBLIC_ELIGIBILITY_COLUMNS = [
@@ -51,24 +51,7 @@ const PUBLIC_PRODUCT_CATEGORIES = new Set([
   "Infantil",
 ]);
 
-const AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue";
-const AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback";
 const TELEGRAM_MANUAL_CREATED_BY = "telegram_manual";
-
-const RAW_PAYLOAD_MARKERS = [
-  "[url final]",
-  "[titulo identificado]",
-  "[preco identificado]",
-  "[total imagens oficiais]",
-  "[imagens extraidas]",
-  "[conteudo da pagina]",
-];
-
-function containsRawPayloadMarkers(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  return RAW_PAYLOAD_MARKERS.some((marker) => normalized.includes(marker));
-}
 
 function validHttpsUrl(value: unknown): boolean {
   try {
@@ -106,24 +89,6 @@ function isStrictEditorialRow(row: Record<string, unknown>): boolean {
     && String(imageCuration?.status || "") === "ready";
 }
 
-function isDeficitFallbackPublicRow(row: Record<string, unknown>): boolean {
-  const imageCuration = imageCurationRecord(row.image_curation);
-  const primaryImageUrl = imageCuration?.primaryImageUrl;
-  const displayTitle = String(row.display_title || "").trim();
-  const price = Number(row.preco);
-  return String(row.created_by || "") === AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY
-    && String(row.image_review_model || "") === AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL
-    && ["review_required", "reviewed"].includes(String(row.display_title_status || ""))
-    && ["review_required", "clean"].includes(String(row.image_editorial_status || ""))
-    && displayTitle.length > 0
-    && validHttpsUrl(primaryImageUrl)
-    && Boolean(String(row.image_review_fingerprint || "").trim())
-    && Number.isFinite(price)
-    && price > 0
-    && PUBLIC_PRODUCT_CATEGORIES.has(String(row.categoria || ""))
-    && validShopeeAffiliateLink(row.link);
-}
-
 function isTelegramManualPublicRow(row: Record<string, unknown>): boolean {
   const displayTitle = String(row.display_title || row.produto || "").trim();
   const price = Number(row.preco);
@@ -134,21 +99,6 @@ function isTelegramManualPublicRow(row: Record<string, unknown>): boolean {
     && price > 0
     && PUBLIC_PRODUCT_CATEGORIES.has(String(row.categoria || ""))
     && validShopeeAffiliateLink(row.link);
-}
-
-function publicProjection(row: Record<string, unknown>): Record<string, unknown> {
-  const {
-    display_title_status: _displayTitleStatus,
-    image_editorial_status: _imageEditorialStatus,
-    image_curation: _imageCuration,
-    image_review_model: _imageReviewModel,
-    image_review_fingerprint: _imageReviewFingerprint,
-    created_by: _createdBy,
-    ...product
-  } = row;
-  return containsRawPayloadMarkers(product.descricao)
-    ? { ...product, descricao: "" }
-    : product;
 }
 
 function adminClient() {
@@ -196,8 +146,9 @@ Deno.serve(async (req: Request) => {
       if (error) throw new Error(`PRODUCTS_QUERY_FAILED:${error.code || "unknown"}`);
 
       const products = (Array.isArray(data) ? data : [])
-        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isDeficitFallbackPublicRow(product) || isTelegramManualPublicRow(product))
-        .map((product: Record<string, unknown>) => publicProjection(product));
+        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isTelegramManualPublicRow(product))
+        .map((product: Record<string, unknown>) => toPublicProductDTO(product))
+        .filter((product): product is NonNullable<typeof product> => product !== null);
 
       return json({ success: true, products, data: products, source: "supabase-edge" });
     }
