@@ -51,8 +51,6 @@ const PUBLIC_PRODUCT_CATEGORIES = new Set([
   "Infantil",
 ]);
 
-const AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue";
-const AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback";
 const TELEGRAM_MANUAL_CREATED_BY = "telegram_manual";
 
 function validHttpsUrl(value: unknown): boolean {
@@ -89,24 +87,6 @@ function isStrictEditorialRow(row: Record<string, unknown>): boolean {
   return String(row.display_title_status || "") === "reviewed"
     && String(row.image_editorial_status || "") === "clean"
     && String(imageCuration?.status || "") === "ready";
-}
-
-function isDeficitFallbackPublicRow(row: Record<string, unknown>): boolean {
-  const imageCuration = imageCurationRecord(row.image_curation);
-  const primaryImageUrl = imageCuration?.primaryImageUrl;
-  const displayTitle = String(row.display_title || "").trim();
-  const price = Number(row.preco);
-  return String(row.created_by || "") === AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY
-    && String(row.image_review_model || "") === AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL
-    && ["review_required", "reviewed"].includes(String(row.display_title_status || ""))
-    && ["review_required", "clean"].includes(String(row.image_editorial_status || ""))
-    && displayTitle.length > 0
-    && validHttpsUrl(primaryImageUrl)
-    && Boolean(String(row.image_review_fingerprint || "").trim())
-    && Number.isFinite(price)
-    && price > 0
-    && PUBLIC_PRODUCT_CATEGORIES.has(String(row.categoria || ""))
-    && validShopeeAffiliateLink(row.link);
 }
 
 function isTelegramManualPublicRow(row: Record<string, unknown>): boolean {
@@ -166,7 +146,7 @@ Deno.serve(async (req: Request) => {
       if (error) throw new Error(`PRODUCTS_QUERY_FAILED:${error.code || "unknown"}`);
 
       const products = (Array.isArray(data) ? data : [])
-        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isDeficitFallbackPublicRow(product) || isTelegramManualPublicRow(product))
+        .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isTelegramManualPublicRow(product))
         .map((product: Record<string, unknown>) => toPublicProductDTO(product))
         .filter((product): product is NonNullable<typeof product> => product !== null);
 
