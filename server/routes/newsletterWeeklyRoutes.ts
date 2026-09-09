@@ -19,6 +19,7 @@ import { authorizeWeeklyAutomationRequest } from "../services/newsletterWeeklyAu
 import { registerAutonomousCuratorRoutes } from "./autonomousCuratorRoutes";
 import { registerOperatorAutomationRoutes } from "./operatorAutomationRoutes";
 import { runWeeklyProductionPreflight, renderWeeklyPreflightTelegram } from "../services/newsletterWeeklyPreflight";
+import { loadWeeklyProductsWithHumanEditorialAuthority } from "../services/newsletterWeeklyHumanEditorialAuthority";
 import { sendTelegramMessage } from "../services/telegramBot";
 import { createSupabaseNewsletterCampaignStore } from "../repositories/newsletterCampaignRepository";
 import { verifyWeeklyPreviewSignature } from "../services/newsletterWeeklyPreview";
@@ -95,7 +96,12 @@ export function registerNewsletterWeeklyRoutes(app: express.Express): void {
       const runtimeEnv = testMode
         ? process.env
         : { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" };
-      const result = await runWeeklyDraftCycle({ testMode, designTestMode, env: runtimeEnv });
+      const result = await runWeeklyDraftCycle({
+        testMode,
+        designTestMode,
+        env: runtimeEnv,
+        productsLoader: loadWeeklyProductsWithHumanEditorialAuthority,
+      });
       return res.status(result.status === "created" ? 201 : 200).json({ success: true, status: result.status, mode: designTestMode ? "design-test" : testMode ? "test" : "production", reason: result.status === "skipped" ? result.reason : undefined, campaignId: result.status === "created" ? result.campaign.id : undefined });
     } catch (error) {
       console.error(`[NEWSLETTER-WEEKLY] draft_failed reason=${error instanceof Error ? error.message.replace(/[^A-Z0-9_:-]/gi, "_").slice(0, 120) : "unknown"}`);
