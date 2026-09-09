@@ -42,6 +42,16 @@ export interface ProductPublicationContext {
   sourceProductUrl?: string;
   /** Score observado no ciclo que gerou o card; apenas auditoria no modo humano. */
   score?: number;
+  /** Review Telegram que contém a decisão humana persistida. */
+  reviewId?: string;
+  /** Instante da decisão humana, preservado na autorização. */
+  approvedAt?: string;
+  /** A origem humana é fechada; nenhuma origem autônoma é aceita. */
+  approvalOrigin?: "telegram";
+  /** Fingerprint da imagem exibida no card aprovado. */
+  primaryImageFingerprint?: string;
+  /** Evidência mínima do callback, sem tokens ou segredos. */
+  humanApprovalEvidence?: Record<string, unknown>;
 }
 
 export interface ProductEvaluationOptions {
@@ -321,13 +331,18 @@ export function createProductionProductPipeline(): ProductPipeline {
             lifecycleApproved: true,
             reviewState: "HUMAN_APPROVED",
             humanManualApproval: true,
+            reviewId: context.reviewId || null,
+            approvedAt: context.approvedAt || null,
+            operationId,
+            approvalOrigin: context.approvalOrigin || null,
+            primaryImageFingerprint: context.primaryImageFingerprint || null,
+            humanApprovalEvidence: context.humanApprovalEvidence || null,
             sourceProductUrl: context.sourceProductUrl || null,
           },
           createdBy: "telegram_manual",
         });
       } else {
-        const promoted = await productsRepository.updateProduct(product.id, { ativo: true, status: "published" }, { syncCatalog: false });
-        if (!promoted) return { success: false, operationId, error: "PERSISTENCE_ERROR" };
+        return { success: false, operationId, error: "PUBLICATION_HUMAN_APPROVAL_REQUIRED" };
       }
 
       const result = await syncCatalogAndDeploy(product.produto, product.id, operationId);

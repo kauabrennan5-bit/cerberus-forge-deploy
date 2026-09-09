@@ -176,6 +176,7 @@ test("dry-run percorre as categorias sem criar produto, review ou catálogo", as
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: extractor() as any,
     pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
@@ -185,20 +186,21 @@ test("dry-run percorre as categorias sem criar produto, review ou catálogo", as
   });
   assert.equal(result.status, "dry_run");
   assert.equal(result.categories.length, 10);
-  assert.equal(result.categories[0].decision, "auto");
+  assert.equal(result.categories[0].decision, "review");
   assert.equal(createCalls, 0);
   assert.equal(reviewCalls, 0);
   assert.equal(syncCalls, 0);
 });
 
-test("candidato de alta confiança auto-publica uma vez e sincroniza o catálogo uma vez", async () => {
+test("candidato de alta confiança cria card e ignora auto_publish_enabled=true", async () => {
   const repo = persistence();
   let createCalls = 0;
   let updateCalls = 0;
   let syncCalls = 0;
   let imageAuditCalls = 0;
+  let reviewCalls = 0;
   const result = await runAutonomousCuratorDaily({ notify: false }, {
-    env: {},
+    env: { TELEGRAM_ADMIN_CHAT_ID: "123", TELEGRAM_ALLOWED_USER_IDS: "123" },
     now: new Date("2026-08-29T12:00:00-03:00"),
     shopeeClient: shopeeClient(),
     getConfig: async () => config(),
@@ -207,6 +209,7 @@ test("candidato de alta confiança auto-publica uma vez e sincroniza o catálogo
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     reserveSourceIdentity: repo.reserveSourceIdentity as any,
     bindSourceIdentity: repo.bindSourceIdentity as any,
     releaseSourceIdentity: repo.releaseSourceIdentity as any,
@@ -214,17 +217,22 @@ test("candidato de alta confiança auto-publica uma vez e sincroniza o catálogo
     productsLoader: async () => [],
     extractor: extractor() as any,
     pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
+    savePendingReview: (async () => { reviewCalls += 1; }) as any,
+    sendPhoto: (async () => ({ ok: true, result: { message_id: 1 } })) as any,
+    sendMessage: (async () => ({ ok: true, result: { message_id: 1 } })) as any,
     createProduct: (async (input: any) => { createCalls += 1; return product({ id: "auto-1", produto: input.produto, displayTitle: input.displayTitle, link: input.link, status: "approved" }); }) as any,
     updateProduct: (async (id: string) => { updateCalls += 1; return product({ id, status: "published" }); }) as any,
     catalogSync: (async () => { syncCalls += 1; return { success: true, operationId: "SYNC-1", supabaseCount: 1, jsonCount: 1, staticSiteUrl: "https://example.com" }; }) as any,
   });
   assert.equal(result.status, "completed");
-  assert.equal(result.autoPublished, 1);
-  assert.equal(createCalls, 1);
-  assert.equal(updateCalls, 1);
-  assert.equal(syncCalls, 1);
-  assert.equal(imageAuditCalls, 1);
-  assert.equal(repo.categoryRows.get("Iluminação")?.decision, "auto_published");
+  assert.equal(result.autoPublished, 0);
+  assert.equal(result.reviewRequired, 1);
+  assert.equal(reviewCalls, 1);
+  assert.equal(createCalls, 0);
+  assert.equal(updateCalls, 0);
+  assert.equal(syncCalls, 0);
+  assert.equal(imageAuditCalls, 0);
+  assert.equal([...repo.categoryRows.values()].filter(row => row.decision === "review_required").length, 1);
 });
 
 test("warning do pipeline impede auto-publicação e cai em revisão humana", async () => {
@@ -241,6 +249,7 @@ test("warning do pipeline impede auto-publicação e cai em revisão humana", as
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: extractor() as any,
     pipelineFactory: (() => ({ evaluate: async () => lifecycle("WARNING", "REVIEW") })) as any,
@@ -252,7 +261,7 @@ test("warning do pipeline impede auto-publicação e cai em revisão humana", as
   assert.equal(result.reviewRequired, 1);
   assert.equal(createCalls, 0);
   assert.equal(reviewCalls, 1);
-  assert.equal(repo.categoryRows.get("Iluminação")?.decision, "review_required");
+  assert.equal([...repo.categoryRows.values()].filter(row => row.decision === "review_required").length, 1);
 });
 
 test("identidade Shopee já publicada é descartada antes de Gemini/scraper", async () => {
@@ -268,6 +277,7 @@ test("identidade Shopee já publicada é descartada antes de Gemini/scraper", as
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: (async () => { extractorCalls += 1; return { success: false }; }) as any,
   });
@@ -300,6 +310,7 @@ test("identidade Shopee reservada por review ativa é descartada antes de Gemini
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: (async () => { extractorCalls += 1; return { success: false }; }) as any,
   });
@@ -321,6 +332,7 @@ test("usa preço oficial Shopee quando o scraper não consegue verificar preço"
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: (async (url: string) => {
       const extracted = await baseExtractor();
@@ -328,7 +340,7 @@ test("usa preço oficial Shopee quando o scraper não consegue verificar preço"
     }) as any,
     pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
   });
-  assert.equal(result.categories[0].decision, "auto");
+  assert.equal(result.categories[0].decision, "review");
 });
 
 test("rejeição do primeiro item não encerra a categoria e o próximo item é avaliado", async () => {
@@ -373,6 +385,7 @@ test("rejeição do primeiro item não encerra a categoria e o próximo item é 
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: (async (url: string) => {
       extractorCalls += 1;
@@ -401,7 +414,7 @@ test("rejeição do primeiro item não encerra a categoria e o próximo item é 
     pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
   });
   assert.equal(extractorCalls, 2);
-  assert.equal(result.categories[0].decision, "auto");
+  assert.equal(result.categories[0].decision, "review");
   assert.equal(result.categories[0].title, "Abajur Cogumelo Bauhaus de Mesa");
 });
 
@@ -425,10 +438,11 @@ test("quando a primeira query não encontra itens tenta as queries alternativas 
     saveCategoryResult: repo.saveCategoryResult as any,
     finishRun: repo.finishRun as any,
     findSourceIdentity: repo.findSourceIdentity as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: extractor() as any,
     pipelineFactory: (() => ({ evaluate: async () => lifecycle() })) as any,
   });
   assert.ok(searchCalls >= 2);
-  assert.equal(result.categories[0].decision, "auto");
+  assert.equal(result.categories[0].decision, "review");
 });

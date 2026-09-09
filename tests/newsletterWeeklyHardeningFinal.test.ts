@@ -34,7 +34,8 @@ function product(id: string, category = "Iluminação", overrides: Partial<Produ
     imageReviewModel: "gemini-image-test",
     imageReviewVersion: IMAGE_REVIEW_VERSION,
     imageReviewFingerprint: imageUrlFingerprint(image),
-    link: `https://market.example.com/item/${id}`,
+    link: `https://s.shopee.com.br/${id}`,
+    sourceIdentity: { marketplace: "Shopee", shopId: "123456", itemId: "789012", sourceProductUrl: "https://shopee.com.br/product/123456/789012", reviewId: `review-${id}` },
     ativo: true,
     destaque: false,
     status: "published",
@@ -68,7 +69,53 @@ test("troca da imagem principal invalida fingerprint editorial", () => {
   assert.equal(isImageReviewCurrent(staleVersion), false, "versão visual antiga exige nova revisão");
 });
 
-test("display_title ausente ou raw marketplace fallback é proibido", () => {
+test("aprovação humana Telegram atual habilita Weekly sem falsificar revisão automática", () => {
+  const image = "https://cdn.example.com/human-approved.jpg";
+  const approved = product("human-approved", "Iluminação", {
+    imagens: [image],
+    imageEditorialStatus: "review_required",
+    imageCuration: {
+      status: "review_required",
+      rawImageUrls: [image],
+      primaryImageUrl: image,
+      galleryImageUrls: [],
+      assessments: [],
+      reason: "image_review_unavailable",
+    },
+    imageReviewedAt: undefined,
+    imageReviewModel: undefined,
+    imageReviewVersion: undefined,
+    imageReviewFingerprint: undefined,
+    humanEditorialApprovedAt: "2026-08-30T11:00:00.000Z",
+    humanEditorialImageUrl: image,
+    humanEditorialImageFingerprint: imageUrlFingerprint(image),
+    humanEditorialReviewId: "review-human-approved",
+    humanEditorialAuthorizationId: "4d598784-2c74-4bde-a736-f7be51512b2d",
+  });
+
+  const eligibility = evaluateWeeklyProductEligibility(approved, NOW);
+  assert.equal(eligibility.eligible, true);
+  assert.equal(approved.imageEditorialStatus, "review_required", "autoridade humana não altera o estado da IA");
+  assert.match(eligibility.snapshot?.imageReviewVersion || "", /^human-telegram-v1:/);
+
+  const changed = structuredClone(approved);
+  changed.imagens = ["https://cdn.example.com/human-changed.jpg"];
+  changed.imageCuration!.primaryImageUrl = "https://cdn.example.com/human-changed.jpg";
+  assert.equal(evaluateWeeklyProductEligibility(changed, NOW).eligible, false, "fingerprint humano fica inválido ao trocar imagem");
+
+  const validVerbatim = structuredClone(approved);
+  validVerbatim.produto = "Luminária Cônica de Mesa";
+  validVerbatim.rawTitle = "Luminária Cônica de Mesa";
+  validVerbatim.displayTitle = "Luminária Cônica de Mesa";
+  validVerbatim.displayTitleStatus = "review_required";
+  assert.equal(
+    evaluateWeeklyProductEligibility(validVerbatim, NOW).eligible,
+    true,
+    "o clique humano pode validar um título tecnicamente seguro sem falsificar revisão automática",
+  );
+});
+
+test("display_title ausente, promocional ou raw sem autoridade humana é proibido", () => {
   const missing = product("no-title", "Iluminação", { displayTitle: undefined, displayTitleStatus: "review_required" });
   const raw = product("raw-title", "Iluminação", { displayTitle: "Oferta imperdível Shopee", displayTitleStatus: "ready" });
   const verbatim = product("verbatim", "Iluminação", {
@@ -84,16 +131,16 @@ test("display_title ausente ou raw marketplace fallback é proibido", () => {
   assert.equal(evaluateWeeklyProductEligibility(curatorReviewed, NOW).eligible, true, "reviewed/1.0 é prova editorial canônica");
 });
 
-test("curador contínuo persiste fingerprint e renova provas ao trocar conteúdo", () => {
+test("curador contínuo preserva o diagnóstico automático e nunca fabrica prova editorial", () => {
   const v1 = readFileSync(new URL("../server/services/autonomousCuratorContinuous.ts", import.meta.url), "utf8");
   const v2Coordinator = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
   const v2Base = readFileSync(new URL("../server/services/autonomousCuratorContinuousV2Base.ts", import.meta.url), "utf8");
-  for (const source of [v1, v2Base]) {
-    assert.match(source, /image_review_fingerprint:\s*imageUrlFingerprint\((?:candidate\.imageCuration\.primaryImageUrl|primary)\)/);
-    assert.match(source, /display_title_reviewed_at:\s*now\.toISOString\(\)/);
-    assert.match(source, /display_title_review_version:\s*DISPLAY_TITLE_REVIEW_VERSION/);
-  }
-  assert.match(v2Base, /image_review_version:\s*IMAGE_REVIEW_VERSION/);
+  assert.doesNotMatch(v1, /createProduct\s*\(/);
+  assert.doesNotMatch(v1, /publishProductWithGate\s*\(/);
+  assert.match(v2Base, /candidate\.imageEditorialStatus === "clean"/);
+  assert.match(v2Base, /image_review_fingerprint:\s*automaticImageApproved\s*\?/);
+  assert.match(v2Base, /display_title_reviewed_at:\s*automaticTitleApproved\s*\?/);
+  assert.match(v2Base, /status:\s*"pending"/);
   assert.match(v2Coordinator, /runAutonomousCuratorContinuousV2Base/);
 });
 

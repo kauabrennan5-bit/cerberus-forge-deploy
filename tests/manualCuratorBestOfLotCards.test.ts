@@ -114,6 +114,7 @@ test("manual curator sends best available card despite image warning, category m
     saveCategoryResult: (async (row: any) => { categoryRows.set(row.category, row); }) as any,
     finishRun: (async () => undefined) as any,
     findSourceIdentity: (async () => null) as any,
+    listReviewsByStatus: (async () => []) as any,
     productsLoader: async () => [],
     extractor: (async () => ({
       success: true,
@@ -157,9 +158,10 @@ test("manual curator sends best available card despite image warning, category m
   assert.equal(savedReview.categoria, "Decoração");
   assert.equal(savedReview.imageEditorialStatus, "review_required");
   assert.equal(savedReview.imagemPrincipal, "https://img.example.com/product.jpg");
-  assert.equal(categoryRows.get("Iluminação")?.decision, "review_required");
-  assert.equal(categoryRows.get("Iluminação")?.reason, "BEST_OF_LOT_WITH_EDITORIAL_WARNINGS");
-  assert.ok(Array.isArray(categoryRows.get("Iluminação")?.scoreBreakdown?.warnings));
-  assert.ok(categoryRows.get("Iluminação")?.scoreBreakdown?.warnings.some((warning: string) => warning.startsWith("CATEGORY_MISMATCH")));
-  assert.ok(categoryRows.get("Iluminação")?.scoreBreakdown?.warnings.some((warning: string) => warning.startsWith("IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR")));
+  const reviewedRow = [...categoryRows.values()].find(row => row.decision === "review_required");
+  assert.ok(reviewedRow, "uma categoria deficitária deve receber o melhor card disponível");
+  assert.equal(reviewedRow.reason, "BEST_OF_LOT_WITH_EDITORIAL_WARNINGS");
+  assert.ok(Array.isArray(reviewedRow.scoreBreakdown?.warnings));
+  assert.ok(reviewedRow.scoreBreakdown?.warnings.some((warning: string) => warning.startsWith("CATEGORY_MISMATCH")));
+  assert.ok(reviewedRow.scoreBreakdown?.warnings.some((warning: string) => warning.startsWith("IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR")));
 });

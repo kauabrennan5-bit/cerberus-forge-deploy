@@ -26,13 +26,13 @@ test("configured floor stays bounded and preserves the legacy minimum when absen
   assert.equal(configuredDailyFloor({ AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: "999" } as NodeJS.ProcessEnv), 10);
 });
 
-test("cumulative growth can make the configured floor stricter but never weaker", () => {
+test("calendar age never raises coverage above the explicitly configured floor", () => {
   const now = new Date("2026-09-04T12:00:00.000Z");
   const env = {
     AUTONOMOUS_CURATOR_GROWTH_START_DATE: "2026-08-28",
     AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: "6",
   } as NodeJS.ProcessEnv;
-  assert.equal(dailyTargetPerCategory([], now, env), 8);
+  assert.equal(dailyTargetPerCategory([], now, env), 6);
 });
 
 test("recovery burst is opt-in and strictly bounded", () => {
@@ -41,11 +41,12 @@ test("recovery burst is opt-in and strictly bounded", () => {
   assert.equal(recoveryBurstCycles({ AUTONOMOUS_CURATOR_RECOVERY_BURST_CYCLES: "999" } as NodeJS.ProcessEnv), 8);
 });
 
-test("recovery burst recomputes live deficits and still delegates every publication cycle to the canonical hard-gated base", async () => {
+test("coordinator scopes every cycle by cards_needed and an empty scope is an audited no-op", async () => {
   const source = await readFile(new URL("../server/services/autonomousCuratorContinuousV2.ts", import.meta.url), "utf8");
   assert.match(source, /for \(let burstIndex = 0; burstIndex < burstLimit; burstIndex \+= 1\)/);
-  assert.match(source, /calculateCategoryPolicy\(burstProducts, dailyTarget\)/);
+  assert.match(source, /calculateCategoryCoveragePolicy\(burstProducts, burstReviews, dailyTarget/);
+  assert.match(source, /cardDeficitCategories = burstCoverage\.prioritizedCategories\.filter/);
+  assert.match(source, /AUTONOMOUS_CURATOR_RECOVERY_MODE: "true"/);
   assert.match(source, /runAutonomousCuratorContinuousV2Base\(\{/);
-  assert.match(source, /if \(afterBurstPolicy\.totalDeficit === 0\) break/);
   assert.doesNotMatch(source, /\.from\(["']products["']\)\s*\.insert/);
 });

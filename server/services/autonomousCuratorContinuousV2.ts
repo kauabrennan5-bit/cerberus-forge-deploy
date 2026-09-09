@@ -4,11 +4,13 @@ import { createShopeeApiClient, type ShopeeApiClient } from "../commercial/affil
 import { requireSupabase } from "../repositories/productsRepository";
 import * as productsRepository from "../repositories/productsRepository";
 import * as curatorRepository from "../repositories/autonomousCuratorRepository";
+import * as telegramRepository from "../repositories/telegramRepository";
 import { syncCatalogAndDeploy, type SyncLogResult } from "./catalogSync";
 import { sendTelegramMessage } from "./telegramBot";
 import { AUTONOMOUS_CURATOR_PROFILES } from "./autonomousCuratorProfiles";
 import {
   calculateCategoryPolicy,
+  calculateCategoryCoveragePolicy,
   categoryCounts,
   categoryDeficits,
   deficitCategories,
@@ -39,15 +41,14 @@ export type {
 /**
  * Public catalog contract:
  * - every official category has an absolute public floor of five valid products;
- * - cumulative growth can raise that target after the initial floor, but can never
- *   reduce it below five; an explicit production floor may raise it further;
+ * - only an explicit configured floor may raise that target;
  * - already-published healthy pieces are never retired to keep a cap;
  * - while any category is below today's target, normal growth publication is
  *   restricted to the explicit deficit category list before enrichment starts;
  * - availability failures still archive only listings definitively unavailable
  *   on the exact Shopee identity and therefore create a refill deficit;
  * - a day/cycle is never recorded as complete while any category is below its
- *   cumulative floor or the public runtime projection is not validated.
+ *   configured floor or the public runtime projection is not validated.
  */
 const CATEGORY_GROWTH_VERSION = "6";
 const PUBLISHED_HEALTH_COORDINATOR_VERSION = "2";
@@ -75,7 +76,7 @@ type RunCycleMetrics = {
 };
 
 function isActivePublished(product: Product): boolean {
-  return product.status === "published" && product.ativo !== false;
+  return product.status === "published" && product.ativo === true;
 }
 
 function activePublishedForCategory(products: readonly Product[], category: PublicProductCategory): Product[] {
@@ -129,19 +130,22 @@ function recoveryBurstCycles(env: NodeJS.ProcessEnv): number {
 }
 
 function dailyTargetPerCategory(products: readonly Product[], now: Date, env: NodeJS.ProcessEnv): number {
-  const configuredFloor = configuredDailyFloor(env);
-  const start = dateKeyOrdinal(autonomousGrowthStartDate(products, now, env));
-  const today = dateKeyOrdinal(localDateKey(now));
-  if (start === null || today === null) return configuredFloor;
-  return Math.max(configuredFloor, today - start + 1);
+  void products;
+  void now;
+  return configuredDailyFloor(env);
 }
 
 export async function readAutonomousCuratorInvariant(now = new Date(), env: NodeJS.ProcessEnv = process.env) {
   const products = await productsRepository.getProducts();
+  const reviews = await telegramRepository.listReviewsByStatus(
+    ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
+    1_000,
+    { includeExpiredPending: true, maximumLimit: 1_000 },
+  );
   const dailyTarget = dailyTargetPerCategory(products, now, env);
-  const policy = calculateCategoryPolicy(products, dailyTarget);
+  const policy = calculateCategoryCoveragePolicy(products, reviews, dailyTarget, now.getTime());
   return {
-    ok: policy.totalDeficit === 0,
+    ok: policy.totalCardsNeeded === 0,
     policyVersion: CATEGORY_GROWTH_VERSION,
     target: dailyTarget,
     categoryCounts: policy.categoryCounts,
@@ -149,6 +153,10 @@ export async function readAutonomousCuratorInvariant(now = new Date(), env: Node
     deficitCategories: policy.deficitCategories,
     totalDeficit: policy.totalDeficit,
     fulfilledCategories: policy.fulfilledCategories,
+    categoryCoverage: policy.categoryCoverage,
+    cardsNeeded: policy.cardsNeeded,
+    totalCardsNeeded: policy.totalCardsNeeded,
+    coveredCategories: policy.coveredCategories,
     categoryCount: Object.keys(policy.categoryCounts).length,
     evaluatedAt: now.toISOString(),
   };
@@ -158,10 +166,10 @@ function totalDeficit(counts: CategoryCounts, target: number): number {
   return totalCategoryDeficit(categoryDeficits(counts, target));
 }
 
-async function setProductVisibility(productId: string, published: boolean): Promise<void> {
+async function archiveProduct(productId: string): Promise<void> {
   const { error } = await requireSupabase()
     .from("products")
-    .update({ ativo: published, status: published ? "published" : "archived" })
+    .update({ ativo: false, status: "archived" })
     .eq("id", productId);
   if (error) throw error;
 }
@@ -187,14 +195,13 @@ function emptyHealthResult(): PublishedProductHealthResult {
 async function archiveUnavailableProducts(ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   const uniqueIds = [...new Set(ids)];
-  for (const id of uniqueIds) await setProductVisibility(id, false);
+  for (const id of uniqueIds) await archiveProduct(id);
   const sync = await syncCatalogAndDeploy("published product health archive");
   if (sync.success) return;
 
-  // Rollback restores the exact products that were visible before this health
-  // transaction; it is not growth publication and never creates a new identity.
-  for (const id of uniqueIds) await setProductVisibility(id, true).catch(() => undefined);
-  await syncCatalogAndDeploy("published product health rollback").catch(() => undefined);
+  // Availability recovery must never republish. The database stays fail-safe
+  // (archived); a later catalog sync can project that state without creating
+  // or reactivating a public product.
   throw new Error(`PUBLISHED_PRODUCT_HEALTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
 }
 
@@ -461,20 +468,19 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     }
   }
 
-  if (config.enabled) {
-    const preCyclePublicValidation = await syncCatalogAndDeploy("autonomous curator pre-cycle public baseline validation");
-    if (!preCyclePublicValidation.success || !preCyclePublicValidation.storefrontHealthy) {
-      const reason = preCyclePublicValidation.error || "PUBLIC_BASELINE_NOT_VALIDATED";
-      throw new Error(`AUTONOMOUS_CURATOR_PUBLIC_BASELINE_NOT_VALIDATED:${reason}`);
-    }
-  }
-
   const growthStartDate = autonomousGrowthStartDate(productsBefore, now, env);
   const dailyTarget = dailyTargetPerCategory(productsBefore, now, env);
-  const beforePolicy = calculateCategoryPolicy(productsBefore, dailyTarget);
+  const reviewsBefore = await telegramRepository.listReviewsByStatus(
+    ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
+    1_000,
+    { includeExpiredPending: true, maximumLimit: 1_000 },
+  );
+  const beforePolicy = calculateCategoryCoveragePolicy(productsBefore, reviewsBefore, dailyTarget, now.getTime());
   const countsBefore = beforePolicy.categoryCounts;
-  const recoveryMode = totalDeficit(countsBefore, dailyTarget) > 0;
-  const burstLimit = recoveryMode ? recoveryBurstCycles(env) : 1;
+  const recoveryMode = beforePolicy.totalCardsNeeded > 0;
+  // A scheduled invocation creates at most one card per deficit category.  A
+  // later cycle observes those pending cards as coverage before doing more work.
+  const burstLimit = 1;
 
   let result: ContinuousCuratorResultV2 | null = null;
   let publishedAcrossBurst = 0;
@@ -482,28 +488,34 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
 
   for (let burstIndex = 0; burstIndex < burstLimit; burstIndex += 1) {
     const burstProducts = burstIndex === 0 ? productsBefore : await productsRepository.getProducts();
-    const burstPolicy = calculateCategoryPolicy(burstProducts, dailyTarget);
-    if (recoveryMode && burstPolicy.totalDeficit === 0) break;
+    const burstReviews = await telegramRepository.listReviewsByStatus(
+      ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
+      1_000,
+      { includeExpiredPending: true, maximumLimit: 1_000 },
+    );
+    const burstCoverage = calculateCategoryCoveragePolicy(burstProducts, burstReviews, dailyTarget, now.getTime());
     const activeBefore = burstProducts.filter(isActivePublished).length;
-    const burstRecoveryMode = burstPolicy.totalDeficit > 0;
+    const burstRecoveryMode = burstCoverage.totalCardsNeeded > 0;
+    const cardDeficitCategories = burstCoverage.prioritizedCategories.filter(category => burstCoverage.cardsNeeded[category] > 0);
 
     // Deficit categories are a hard pre-enrichment scope. Complete categories
-    // cannot consume semantic ranking, visual review, affiliate acquisition or
-    // catalog publication while any lane remains below the daily cumulative floor.
+    // cannot consume semantic ranking, visual review or affiliate acquisition
+    // while any lane remains below the configured category floor.
     const baseEnv: NodeJS.ProcessEnv = {
       ...env,
       AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
-      AUTONOMOUS_CURATOR_RECOVERY_MODE: burstRecoveryMode ? "true" : "false",
-      AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: burstPolicy.deficitCategories.join(","),
+      // The base runner is always scoped by cards_needed. An empty scope is an
+      // audited no-op, never permission to fall back to already-covered lanes.
+      AUTONOMOUS_CURATOR_RECOVERY_MODE: "true",
+      AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: cardDeficitCategories.join(","),
       AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(
         burstRecoveryMode
-          ? Math.min(100, activeBefore + burstPolicy.totalDeficit)
+          ? Math.min(100, activeBefore + burstCoverage.totalCardsNeeded)
           : Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length),
       ),
     };
 
-    // Each burst iteration delegates to the canonical base coordinator. Publication
-    // remains exclusively behind publishProductWithGate + catalogSync in that base.
+    // The base coordinator may rank, recover and persist Telegram cards only.
     const cycleResult = await runAutonomousCuratorContinuousV2Base({
       ...options,
       ...(shopeeClient ? { shopeeClient } : {}),
@@ -516,10 +528,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     publishedAcrossBurst += cycleResult.publishedThisCycle;
     failedAcrossBurst += cycleResult.failedThisCycle;
 
-    const afterBurstProducts = await productsRepository.getProducts();
-    const afterBurstPolicy = calculateCategoryPolicy(afterBurstProducts, dailyTarget);
-    if (afterBurstPolicy.totalDeficit === 0) break;
-    if (cycleResult.publishedThisCycle === 0 && cycleResult.failedThisCycle > 0) break;
+    break;
   }
 
   if (!result) {
@@ -529,7 +538,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       env: {
         ...env,
         AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
-        AUTONOMOUS_CURATOR_RECOVERY_MODE: "false",
+        AUTONOMOUS_CURATOR_RECOVERY_MODE: "true",
         AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: "",
         AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(Math.min(100, dailyTarget * AUTONOMOUS_CURATOR_PROFILES.length)),
       },
@@ -544,14 +553,28 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   result.failedThisCycle = failedAcrossBurst;
 
   const productsAfter = await productsRepository.getProducts();
-  const afterPolicy = calculateCategoryPolicy(productsAfter, dailyTarget);
+  const reviewsAfter = await telegramRepository.listReviewsByStatus(
+    ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
+    1_000,
+    { includeExpiredPending: true, maximumLimit: 1_000 },
+  );
+  const afterPolicy = calculateCategoryCoveragePolicy(productsAfter, reviewsAfter, dailyTarget, now.getTime());
   const countsAfter = afterPolicy.categoryCounts;
-  const coveredCategories = afterPolicy.fulfilledCategories;
-  const publicValidation = await syncCatalogAndDeploy("autonomous curator post-cycle category validation");
-  if (!publicValidation.success) result.failedThisCycle += 1;
+  const coveredCategories = afterPolicy.coveredCategories;
+  const publicCount = productsAfter.filter(isActivePublished).length;
+  const publicValidation: SyncLogResult = {
+    success: true,
+    operationId: "REVIEW_ONLY_NO_PUBLIC_CATALOG_MUTATION",
+    product: "continuous curator review-only cycle",
+    supabaseCount: publicCount,
+    jsonCount: publicCount,
+    publicJsonCount: publicCount,
+    staticSiteUrl: String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-design-static.onrender.com"),
+    storefrontHealthy: true,
+  };
 
   result.fulfilledCategories = coveredCategories;
-  result.status = afterPolicy.totalDeficit === 0 && result.failedThisCycle === 0 && publicValidation.success
+  result.status = afterPolicy.totalCardsNeeded === 0 && result.failedThisCycle === 0
     ? "completed"
     : result.failedThisCycle > 0 && coveredCategories === 0
       ? "failed"

@@ -11,6 +11,8 @@ import {
 import { productImageReviewInternals, resolveProductImageReviewModel } from "../services/productImageReview";
 import { getAutonomousCuratorConfig } from "../repositories/autonomousCuratorRepository";
 import { requireSupabase } from "../repositories/productsRepository";
+import { checkOpenAIVisualProviderHealth } from "../services/aiProviderHealth";
+import { callOpenAIHealthProbe } from "../services/openAIProviderRuntime";
 
 let activeExecution: Promise<void> | null = null;
 let activeMode: "daily" | "continuous" | null = null;
@@ -23,7 +25,6 @@ const SATURATED_AUTONOMOUS_CURATOR_COPY_MODELS = new Set([
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
 ]);
-const OPENAI_PROVIDER_PROBE_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAADQElEQVR42u3bodXqQBRGUWClBDrAkA4iKAI6oA0qoBwMJSDSwSg6wI5H4FEJJPn2Vs/9zGUONxFvXWtdQaqNESAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABwDw1RjCs0+U59p+4XXfmbAOAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABEC40f8/QNu2UQPdH+9GOqxSig0AAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAGA6GiMYRH/Yfv5x/uHf6h4vkxfAVK7+v/60DASQde8tBAG4+haCl2C3f56f0AZw9a0CAbj6MvAI5Pb7/AJwe5zCI5BL43HIBnD7nUsAbonTCcD9cEYBuBlOKgB3wnkF4DY4tQDcA2cXgBtgAgLw3ZuDAEAAfvZMQwC+bzMRgG/aZAQAAvAjZz4CAAH4+TclAbj9ZiUAiA7Az7+J2QAgAEgLwPOPudkAEBmAn3/TswFAAJAWgOcfM7QBQAAgAAgKwAuASdoAIAAQAAgAMgLwBmyeNgAIAAQAAgABgABAACAABAACAAGAAEAAIAAQwEx1j5dv1zxtABAACAAEADEBeA82SRsABAACgLgAvAaYoQ0AAoDMADwFmZ4NAMEBWALmZgOAACAzAE9BJmYDQHAAloBZpW8ADZiSRyAIDsASMB8bAIIDsARMJn0DaMBM0h+BNGAa3gHwDuBnz89/8Bw2vnsTsAHcAGcXgAacWgAacF4BaMBJBaABZxSABpxOABpwrsVqjODLXekPW1ffBrAKnEIAGvD5PQJ5HHL1BSADV98jkCcin9AGsApcfQGkr4K/l+DeCyB0Ibj6ApjcQtgf3XsvwSAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAACAAGAAEAAIAAQAAgAlqwZ+w+UUqIGero8jdQGAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgAxrautZoCNgAIAAQAAgABgABAACAAEAAIAAQAAgABgABght7JDeT3EEaMFQAAAABJRU5ErkJggg==";
 const OPENAI_QUOTA_ERROR_CODES = new Set([
   "insufficient_quota",
   "quota_exceeded",
@@ -100,66 +101,29 @@ async function probeAutonomousCuratorProviders(
     },
   };
 
-  if (!openaiConfigured) return { ...base, openai: { ...base.openai, status: "not_configured" as const } };
-  if (!openaiEnabled) return { ...base, openai: { ...base.openai, status: "disabled" as const } };
-
-  const rawUrl = "probe://cerberus-openai-image-review";
-  const request = productImageReviewInternals.buildOpenAIReviewRequest([
-    { url: rawUrl, mimeType: "image/png", data: OPENAI_PROVIDER_PROBE_PNG_BASE64 },
-  ], "Cerberus provider health probe. Do not infer product facts from this diagnostic image.", openaiModel);
-  const controller = new AbortController();
-  const timeoutMs = Math.min(15_000, Math.max(3_000, productImageReviewInternals.positiveInt(env.OPENAI_PRODUCT_IMAGE_REVIEW_TIMEOUT_MS, 10_000)));
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetchImpl("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openaiApiKey}`,
-        "Content-Type": "application/json",
-        "User-Agent": "CerberusFinds/1.0",
-      },
-      body: JSON.stringify(request),
-      signal: controller.signal,
-    });
-    const responseText = await response.text();
-    if (!response.ok) {
-      let errorCode: string | null = null;
-      let errorParam: string | null = null;
-      try {
-        const parsed = JSON.parse(responseText) as { error?: { code?: unknown; type?: unknown; param?: unknown } };
-        errorCode = safeProviderErrorCode(parsed?.error?.code) || safeProviderErrorCode(parsed?.error?.type);
-        errorParam = safeProviderErrorParam(parsed?.error?.param);
-      } catch {
-        // HTTP status remains sufficient for a safe classification.
-      }
-      return {
-        ...base,
-        openai: {
-          ...base.openai,
-          status: classifyOpenAIProviderProbe(response.status, errorCode),
-          httpStatus: response.status,
-          errorCode,
-          errorParam,
-        },
-      };
-    }
-
-    try {
-      const payload = JSON.parse(responseText);
-      const parsed = productImageReviewInternals.parseModelJson(productImageReviewInternals.extractOpenAIOutputText(payload)) as { images?: unknown[] };
-      if (!Array.isArray(parsed.images) || parsed.images.length === 0) {
-        return { ...base, openai: { ...base.openai, status: "invalid_response" as const, httpStatus: response.status } };
-      }
-    } catch {
-      return { ...base, openai: { ...base.openai, status: "invalid_response" as const, httpStatus: response.status } };
-    }
-    return { ...base, openai: { ...base.openai, status: "ok" as const, httpStatus: response.status } };
-  } catch (error) {
-    const isTimeout = error instanceof Error && (error.name === "AbortError" || /timeout|timed out/i.test(error.message));
-    return { ...base, openai: { ...base.openai, status: isTimeout ? "timeout" as const : "provider_unavailable" as const } };
-  } finally {
-    clearTimeout(timer);
-  }
+  const health = await checkOpenAIVisualProviderHealth({
+    env,
+    force: true,
+    call: input => callOpenAIHealthProbe({ ...input, fetchImpl }),
+  });
+  const legacyStatus: OpenAIProviderProbeStatus = health.status === "healthy"
+    ? "ok"
+    : health.status === "invalid_response"
+      ? "invalid_response"
+      : health.status;
+  return {
+    ...base,
+    openai: {
+      ...base.openai,
+      status: legacyStatus,
+      state: health.state,
+      effectiveModel: health.effectiveModel,
+      httpStatus: health.httpStatus,
+      errorCode: health.errorCode,
+      errorParam: health.errorParam,
+      canaries: health.canaries,
+    },
+  };
 }
 
 async function extractForAutonomousCurator(rawUrl: string, rawTextOverride?: string) {
@@ -218,17 +182,18 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
     const dryRun = req.body?.dryRun === true;
     const notify = req.body?.notify !== false;
     const wait = req.body?.wait === true;
+    const manual = req.body?.manual === true;
     try {
       const config = await getAutonomousCuratorConfig();
       if (!dryRun && !config.enabled) return res.status(200).json({ ok: true, accepted: false, status: "disabled" });
       if (activeExecution) return alreadyRunning(res);
       if (wait) {
-        const result = await runAutonomousCuratorDaily({ dryRun, notify }, { extractor: extractForAutonomousCurator });
+        const result = await runAutonomousCuratorDaily({ dryRun, notify, manual }, { extractor: extractForAutonomousCurator });
         return res.status(200).json({ ok: true, accepted: true, result });
       }
       activeMode = "daily";
       activeCycleId = null;
-      activeExecution = runAutonomousCuratorDaily({ dryRun, notify }, { extractor: extractForAutonomousCurator })
+      activeExecution = runAutonomousCuratorDaily({ dryRun, notify, manual }, { extractor: extractForAutonomousCurator })
         .then(result => console.info(`[AUTONOMOUS-CURATOR] background_complete status=${result.status} run=${result.runId || "none"}`))
         .catch(error => console.error(`[AUTONOMOUS-CURATOR] background_failed code=${safeCode(error)}`))
         .finally(() => { activeExecution = null; activeMode = null; activeCycleId = null; });

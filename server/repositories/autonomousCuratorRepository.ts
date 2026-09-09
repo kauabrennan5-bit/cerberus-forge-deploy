@@ -60,7 +60,9 @@ export type ProductSourceIdentity = {
 function mapConfig(row: any): AutonomousCuratorConfig {
   return {
     enabled: row?.enabled === true,
-    autoPublishEnabled: row?.auto_publish_enabled === true,
+    // Compatibility field only. The application and database both force the
+    // Curator to review-only even if stale/future configuration says true.
+    autoPublishEnabled: false,
     autoPublishThreshold: Number(row?.auto_publish_threshold ?? 88),
     reviewThreshold: Number(row?.review_threshold ?? 72),
     maxDailyPerCategory: Number(row?.max_daily_per_category ?? 1),
@@ -330,7 +332,8 @@ export async function bindProductSourceIdentityByReview(input: {
   const client = requireSupabase();
   const { data, error } = await client.from("product_source_identities").update({
     product_id: input.productId,
-    review_id: null,
+    // review_id is durable provenance, not a temporary reservation token.
+    review_id: input.reviewId,
     reserved_run_id: null,
     reserved_until: null,
     updated_at: new Date().toISOString(),
@@ -348,6 +351,7 @@ export async function bindProductSourceIdentityByReview(input: {
     .from("product_source_identities")
     .select("id")
     .eq("product_id", input.productId)
+    .eq("review_id", input.reviewId)
     .maybeSingle();
   if (alreadyBoundError) throw alreadyBoundError;
   if (alreadyBound) return;

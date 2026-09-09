@@ -414,7 +414,8 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.doesNotMatch(rendered.html, /socialMonogram|border-style:dashed|\bIG\b/);
   assert.match(rendered.html, /#0B0908|#181512|#8A1F1F|#E8E1D3|#E86B5F|#C0392B/);
   assert.match(rendered.html, /Preço verificado/);
-  assert.match(rendered.html, /Sobre esta seleção/);
+  assert.match(rendered.html, /Detalhes da peça/);
+  assert.doesNotMatch(rendered.html, /Selecionado por acabamento e utilidade/);
   assert.match(rendered.html, /Este e-mail pode conter links de afiliado/);
   assert.match(rendered.html, /{{UNSUBSCRIBE_URL}}/);
 
@@ -456,7 +457,8 @@ test("renderer adds editorial footer links only when configured and preserves th
     ],
   });
   assert.match(rendered.html, /Uma seleção editorial encontrada para você|Uma peça escolhida com olhar curatorial/);
-  assert.match(rendered.html, /Sobre esta seleção/);
+  assert.match(rendered.html, /Detalhes da peça/);
+  assert.doesNotMatch(rendered.html, /Selecionado por acabamento e utilidade/);
   assert.match(rendered.html, /Ver online/);
   assert.match(rendered.html, /Política de privacidade/);
   assert.match(rendered.html, /Termos e condições/);

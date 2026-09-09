@@ -1,28 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { ProductPipeline, type LifecycleRecord } from "../server/services/productPipeline";
-import { shopeePublicationPreflightInternals } from "../server/services/shopeePublicationPreflight";
 
-const { applyHumanManualLiveImageRefresh } = shopeePublicationPreflightInternals;
-
-test("human live-image refresh performed by preflight reaches canonical persistence", async () => {
+test("changed live image invalidates human approval before canonical persistence", async () => {
   const staleImage = "https://cf.shopee.com.br/file/sg-11134224-stale-card-asset";
   const liveImage = "https://down-br.img.susercontent.com/file/sg-11134224-current-live-asset";
-  let persistedPrimary = "";
+  let createCalls = 0;
 
   const pipeline = new ProductPipeline({
     getProducts: async () => [],
     preflightPublication: async candidate => {
-      const refreshed = applyHumanManualLiveImageRefresh(
-        candidate,
-        { imagens: [liveImage], imagensOriginais: [liveImage], imagemPrincipal: liveImage },
-        liveImage,
-      );
-      assert.equal(refreshed, true);
-      return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK" };
+      assert.equal(candidate.imagemPrincipal, staleImage);
+      assert.notEqual(candidate.imagemPrincipal, liveImage);
+      return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
     },
     createCanonicalProduct: async candidate => {
-      persistedPrimary = candidate.imagemPrincipal || candidate.imagens[0] || "";
+      createCalls += 1;
       return {
         id: "prod-live-image-refresh",
         produto: candidate.produto,
@@ -82,9 +75,10 @@ test("human live-image refresh performed by preflight reaches canonical persiste
 
   const result = await pipeline.publish(record, { humanManualApproval: true });
 
-  assert.equal(result.state, "PUBLISHED");
-  assert.equal(persistedPrimary, liveImage);
-  assert.equal(result.candidate.imagemPrincipal, liveImage);
-  assert.equal(result.candidate.imageCuration?.primaryImageUrl, liveImage);
+  assert.equal(result.state, "APPROVED");
+  assert.equal(result.diagnostic?.code, "SHOPEE_PREFLIGHT_IMAGE_CHANGED");
+  assert.equal(createCalls, 0);
+  assert.equal(result.candidate.imagemPrincipal, staleImage);
+  assert.equal(result.candidate.imageCuration?.primaryImageUrl, staleImage);
   assert.equal(result.candidate.imageEditorialStatus, "clean");
 });

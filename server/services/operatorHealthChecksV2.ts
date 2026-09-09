@@ -107,15 +107,20 @@ function productId(row: Record<string, unknown>): string {
 }
 
 function productIsPublic(row: Record<string, unknown>): boolean {
-  const status = String(row.status || "published");
-  const active = row.ativo === undefined ? row.active !== false : row.ativo !== false;
-  return status === "published" && active;
+  return row.ativo === true && row.status === "published";
 }
 
 function statusForAi(value: string): OperationalStatus {
   if (value === "healthy") return "HEALTHY";
   if (["disabled", "not_configured", "rate_limited", "timeout", "provider_unavailable", "model_unavailable"].includes(value)) return "DEGRADED";
   return "DOWN";
+}
+
+function statusForOpenAI(state: string | undefined, fallbackStatus: string): OperationalStatus {
+  if (state === "OPENAI_OK") return "HEALTHY";
+  if (state === "OPENAI_PROVIDER_DOWN") return "DOWN";
+  if (state) return "DEGRADED";
+  return statusForAi(fallbackStatus);
 }
 
 async function checkSite(fetchImpl: typeof fetch, url: string, timeoutMs: number): Promise<OperatorHealthObservation> {
@@ -263,7 +268,7 @@ export async function runOperatorHealthChecksV2(options: HealthOptions = {}): Pr
 
   const openaiStarted = Date.now();
   observations.push(openai
-    ? observation({ name: "OpenAI", status: statusForAi(openai.status), startedAt: openaiStarted - openai.latencyMs, httpStatus: openai.httpStatus ?? undefined, error: openai.status === "healthy" ? undefined : openai.errorCode || openai.status, diagnostic: { configured: openai.configured, enabled: openai.enabled, model: openai.model, fallbackModel: openai.fallbackModel, effectiveModel: openai.effectiveModel, status: openai.status, errorCode: openai.errorCode, errorParam: openai.errorParam } })
+    ? observation({ name: "OpenAI", status: statusForOpenAI(openai.state, openai.status), startedAt: openaiStarted - openai.latencyMs, httpStatus: openai.httpStatus ?? undefined, error: openai.state === "OPENAI_OK" ? undefined : openai.state || openai.errorCode || openai.status, diagnostic: { configured: openai.configured, enabled: openai.enabled, model: openai.model, fallbackModel: openai.fallbackModel, effectiveModel: openai.effectiveModel, status: openai.status, state: openai.state, errorCode: openai.errorCode, errorParam: openai.errorParam, canaries: openai.canaries } })
     : observation({ name: "OpenAI", status: "DOWN", startedAt: openaiStarted, error: "OPENAI_PROVIDER_HEALTH_FAILED", diagnostic: {} }));
 
   const geminiStarted = Date.now();
@@ -281,6 +286,7 @@ export const operatorHealthChecksV2Internals = {
   productId,
   productIsPublic,
   statusForAi,
+  statusForOpenAI,
   observation,
   checkSite,
   checkBackend,

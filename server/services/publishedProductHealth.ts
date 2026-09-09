@@ -43,7 +43,7 @@ function intervalMinutes(env: NodeJS.ProcessEnv): number {
 }
 
 function activePublished(product: Product): boolean {
-  return product.status === "published" && product.ativo !== false;
+  return product.status === "published" && product.ativo === true;
 }
 
 function isFresh(observedAt: string | undefined, now: Date, intervalMs: number): boolean {

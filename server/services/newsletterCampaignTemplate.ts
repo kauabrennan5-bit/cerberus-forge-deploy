@@ -113,7 +113,8 @@ export function renderNewsletterCampaign(
   const includeUnsubscribe = options.includeUnsubscribe !== false;
   const unsubscribeUrl = includeUnsubscribe ? (options.unsubscribeUrl?.trim() || UNSUBSCRIBE_URL_PLACEHOLDER) : "";
   const imageUrl = options.heroImageStatus === "clean" ? normalizeHttpUrl(options.heroImageUrl) : null;
-  const note = normalizeOptionalText(product.curatorNote);
+  // Internal Curator notes never cross into newsletter HTML, text or previews.
+  const note = "";
   const description = normalizeOptionalText(product.descricao);
   const offer = normalizeOffer(product.ofertaPromocional);
   const verifiedPrice = formatPrice(offer?.price || product.preco);

@@ -58,15 +58,40 @@ export function isImageReviewCurrent(product: Product): boolean {
     && product.imageReviewVersion === IMAGE_REVIEW_VERSION;
 }
 
+/**
+ * Prova alternativa da Weekly: decisão humana real, ligada à imagem que está
+ * atualmente no produto. Ela não altera nem finge o estado da revisão da IA.
+ */
+export function isHumanEditorialApprovalCurrent(product: Product): boolean {
+  const approvedAt = product.humanEditorialApprovedAt?.trim() || "";
+  const approvedImage = product.humanEditorialImageUrl?.trim() || "";
+  const currentPrimary = product.imageCuration?.status === "ready"
+    ? product.imageCuration.primaryImageUrl?.trim() || ""
+    : product.imagens?.find(image => /^https:\/\//i.test(String(image || "").trim()))?.trim() || "";
+  if (!approvedAt || !Number.isFinite(Date.parse(approvedAt))) return false;
+  if (!approvedImage || !/^https:\/\//i.test(approvedImage) || currentPrimary !== approvedImage) return false;
+  if (!Array.isArray(product.imagens) || !product.imagens.some(image => image.trim() === approvedImage)) return false;
+  if (!product.humanEditorialReviewId?.trim() || !product.humanEditorialAuthorizationId?.trim()) return false;
+  return product.humanEditorialImageFingerprint === imageUrlFingerprint(approvedImage);
+}
+
 export function invalidateImageReview(product: Product): Product {
+  const wasPublic = product.ativo === true && product.status === "published";
   return {
     ...product,
+    ativo: wasPublic ? false : product.ativo,
+    status: wasPublic ? "paused" : product.status,
     imageEditorialStatus: "unreviewed",
     imageCuration: undefined,
     imageReviewedAt: undefined,
     imageReviewModel: undefined,
     imageReviewVersion: undefined,
     imageReviewFingerprint: undefined,
+    humanEditorialApprovedAt: undefined,
+    humanEditorialImageUrl: undefined,
+    humanEditorialImageFingerprint: undefined,
+    humanEditorialReviewId: undefined,
+    humanEditorialAuthorizationId: undefined,
   };
 }
 

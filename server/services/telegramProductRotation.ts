@@ -7,6 +7,7 @@ import { syncCatalogAndDeploy } from "./catalogSync";
 import {
   approveProductRotation,
   cancelProductRotation,
+  claimProductRotationTelegramApproval,
   getProductRotationRequest,
   listRecoverableProductRotations,
   ProductRotationSearchError,
@@ -335,8 +336,10 @@ async function recoverApplyingRotation(requestId: string, chatId: string | numbe
 
     if (candidatePaused) {
       if (sourceArchived) {
-        const { error } = await requireSupabase().from("products").update({ ativo: true, status: "published" })
-          .eq("id", source.id).eq("status", "archived");
+        const { error } = await requireSupabase().rpc("restore_product_after_failed_rotation", {
+          p_request_id: request.id,
+          p_source_product_id: source.id,
+        });
         if (error) throw error;
       } else if (!sourcePublished) {
         throw new Error(`APPLY_RECOVERY_SOURCE_STATE:${source.status}:${String(source.ativo)}`);
@@ -360,7 +363,11 @@ async function recoverApplyingRotation(requestId: string, chatId: string | numbe
     }
 
     if (sourceArchived) {
-      await requireSupabase().from("products").update({ ativo: true, status: "published" }).eq("id", source.id).eq("status", "archived");
+      const { error: restoreError } = await requireSupabase().rpc("restore_product_after_failed_rotation", {
+        p_request_id: request.id,
+        p_source_product_id: source.id,
+      });
+      if (restoreError) throw restoreError;
     }
     const { error } = await requireSupabase().from("product_rotation_requests").update({
       status: "failed",
@@ -563,10 +570,22 @@ export async function handleProductRotationCallback(update: any): Promise<void> 
     return;
   }
 
-  await core.answerCallbackQuery(callbackId, "Conferindo e aplicando substituição...");
-  if (messageId) await core.editTelegramMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
-  await core.sendTelegramMessage(chatId, "🚀 <b>APROVAÇÃO RECEBIDA</b>\n\nA identidade, disponibilidade e o link Shopee serão conferidos antes da troca. O produto antigo só sai depois da sincronização segura do catálogo.");
-  void applyRotationAndNotify(requestId, chatId);
+  try {
+    await claimProductRotationTelegramApproval({
+      requestId,
+      approverUserId: senderId,
+      telegramChatId: chatId,
+      messageId: messageId || null,
+      callbackQueryId: callbackId,
+    });
+    await core.answerCallbackQuery(callbackId, "Conferindo e aplicando substituição...");
+    if (messageId) await core.editTelegramMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+    await core.sendTelegramMessage(chatId, "🚀 <b>APROVAÇÃO RECEBIDA</b>\n\nO clique humano e a imagem aprovada foram persistidos. A identidade, disponibilidade e o link Shopee serão conferidos antes da troca; o produto antigo só sai depois da sincronização segura do catálogo.");
+    void applyRotationAndNotify(requestId, chatId);
+  } catch (error) {
+    await core.answerCallbackQuery(callbackId, "A aprovação não pôde adquirir a claim.", true);
+    await core.sendTelegramMessage(chatId, `⚠️ <b>APROVAÇÃO NÃO APLICADA</b>\n\n<code>${escapeHtml(safeError(error))}</code>`);
+  }
 }
 
 if (process.env.ROTATION_SEARCH_SUPERVISOR_ENABLED === "true") {

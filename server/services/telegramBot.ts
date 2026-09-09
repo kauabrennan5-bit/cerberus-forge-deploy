@@ -157,8 +157,8 @@ async function refreshActiveProductCallback(update: any, data: string): Promise<
 
 /**
  * Render starts Telegram through this wrapper. The legacy category-drift
- * recovery is explicitly opt-in by reviewId, guarded by the prior human
- * approval + exact legacy diagnostic, and idempotent once the review publishes.
+ * recovery is explicitly opt-in by reviewId and only reopens the review for a
+ * fresh human click; it never replays a publication callback.
  */
 export async function startTelegramPolling(): Promise<void> {
   await core.startTelegramPolling();

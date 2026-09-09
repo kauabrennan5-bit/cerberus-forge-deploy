@@ -14,7 +14,7 @@ const recoveryCategories = [
   "Infantil",
 ] as const;
 
-test("profile 1.9 expands recall for categories that can fall behind the cumulative daily floor", () => {
+test("profile 1.9 expands recall for categories that can fall behind the coverage floor", () => {
   assert.equal(AUTONOMOUS_CURATOR_PROFILE_VERSION, "1.9");
   for (const category of recoveryCategories) {
     const profile = profileForCategory(category);

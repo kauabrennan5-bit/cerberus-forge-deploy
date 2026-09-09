@@ -18,6 +18,8 @@ export interface PendingReview {
   firstName: string;
   username: string;
   createdAt: number;
+  /** Timestamp da última claim/mutação persistida no registro operacional. */
+  updatedAt?: number;
   expiresAt?: number;
   produto: string;
   rawTitle?: string;

@@ -119,8 +119,8 @@ function publicListFromPayload(body: unknown): any[] {
 
 function isPublicRow(product: any): boolean {
   return Boolean(product?.id)
-    && product?.ativo !== false
-    && String(product?.status || "published") === "published";
+    && product?.ativo === true
+    && product?.status === "published";
 }
 
 function diagnosticForFailure(

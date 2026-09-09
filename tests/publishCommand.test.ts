@@ -401,7 +401,7 @@ test("/publicar é rejeitado para usuário não autorizado", async () => {
   }
 });
 
-test("confirm_pub bloqueia review cuja descrição só contém proveniência técnica", async () => {
+test("confirm_pub descarta proveniência técnica da descrição sem transformá-la em hard block editorial", async () => {
   const cleanup = installFakeTelegramTransport();
   const reviewId = "affprev-affiliate";
   const affiliateUrl = "https://s.shopee.com.br/40ftCq9rTu";
@@ -436,12 +436,10 @@ test("confirm_pub bloqueia review cuja descrição só contém proveniência té
         data: `confirm_pub:${reviewId}`,
       } as any,
     });
-    assert.equal(capturedCandidate, null, "review parcial não alcança a persistência canônica");
-    assert.equal(reviewsById.get(reviewId)?.status, "error");
-    assert.ok(
-      sentMessages.some((message) => /descrição editorial ausente/i.test(message.text)),
-      "o bloqueio explica que a proveniência técnica não é uma descrição pública",
-    );
+    assert.ok(capturedCandidate, "a aprovação humana pode superar a ausência de copy editorial");
+    assert.equal(capturedCandidate.descricao, "", "proveniência técnica nunca vira descrição pública");
+    assert.equal(reviewsById.get(reviewId)?.status, "published");
+    assert.equal(sentMessages.some((message) => message.text.includes(affiliateUrl)), false, "proveniência técnica não vaza na resposta");
   } finally {
     setTestProductPipeline(null);
     cleanup();

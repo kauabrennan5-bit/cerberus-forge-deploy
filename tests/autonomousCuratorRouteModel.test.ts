@@ -138,23 +138,32 @@ test("OpenAI provider canary classifies exhausted prepaid credit as quota", asyn
   assert.equal(JSON.stringify(result).includes("billing detail"), false);
 });
 
-test("OpenAI provider canary exposes only a sanitized invalid parameter", async () => {
+test("OpenAI vision canary exposes only a sanitized invalid parameter", async () => {
   const secret = "sk-test-never-return-this";
-  const fetchImpl = (async () => new Response(JSON.stringify({
-    error: {
-      code: "invalid_value",
-      type: "invalid_request_error",
-      param: "input[0].content[1].image_url",
-      message: `provider detail must stay private; secret=${secret}`,
-    },
-  }), {
-    status: 400,
-    headers: { "content-type": "application/json" },
-  })) as unknown as typeof fetch;
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body || "{}"));
+    if (JSON.stringify(body).includes("input_image")) {
+      return new Response(JSON.stringify({
+        error: {
+          code: "invalid_value",
+          type: "invalid_request_error",
+          param: "input[0].content[1].image_url",
+          message: `provider detail must stay private; secret=${secret}`,
+        },
+      }), { status: 400, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      output_text: JSON.stringify(body.text?.format ? { ok: true } : "OK"),
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as unknown as typeof fetch;
 
   const result = await autonomousCuratorRouteInternals.probeAutonomousCuratorProviders({ OPENAI_API_KEY: secret }, fetchImpl);
 
-  assert.equal(result.openai.status, "request_rejected");
+  assert.equal(result.openai.status, "invalid_response");
+  assert.equal(result.openai.state, "OPENAI_VISION_CANARY_FAILED");
+  assert.equal(result.openai.canaries?.connectivity.status, "ok");
+  assert.equal(result.openai.canaries?.structuredOutput.status, "ok");
+  assert.equal(result.openai.canaries?.vision.status, "failed");
   assert.equal("errorCode" in result.openai ? result.openai.errorCode : null, "invalid_value");
   assert.equal("errorParam" in result.openai ? result.openai.errorParam : null, "input[0].content[1].image_url");
   assert.equal(JSON.stringify(result).includes(secret), false);
@@ -168,12 +177,15 @@ test("OpenAI provider error parameter rejects unsafe diagnostic text", () => {
 });
 
 test("OpenAI provider canary proves a structured Responses API result", async () => {
+  const phases: string[] = [];
   const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
     assert.match(String(init?.headers && (init.headers as Record<string, string>).Authorization || ""), /^Bearer /);
+    const body = JSON.parse(String(init?.body || "{}"));
+    const serialized = JSON.stringify(body);
+    const phase = serialized.includes("input_image") ? "vision" : serialized.includes("json_schema") ? "structured" : "connectivity";
+    phases.push(phase);
     return new Response(JSON.stringify({
-      output_text: JSON.stringify({
-        images: [{ index: 1, decision: "unknown", confidence: "LOW", reason: "provider probe" }],
-      }),
+      output_text: phase === "structured" ? JSON.stringify({ ok: true }) : "OK",
     }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -188,21 +200,24 @@ test("OpenAI provider canary proves a structured Responses API result", async ()
   assert.equal(result.openai.status, "ok");
   assert.equal(result.openai.model, "gpt-5.6-luna");
   assert.equal("httpStatus" in result.openai ? result.openai.httpStatus : null, 200);
+  assert.equal(result.openai.state, "OPENAI_OK");
+  assert.deepEqual(phases, ["connectivity", "structured", "vision"]);
 });
 
-test("OpenAI provider canary sends an integrity-valid reviewable 256x256 PNG", async () => {
+test("OpenAI vision canary sends an integrity-valid reviewable 128x128 PNG", async () => {
   let checked = false;
   const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body || "{}"));
-    const dataUrl = String(body?.input?.[0]?.content?.[1]?.image_url || "");
-    assert.match(dataUrl, /^data:image\/png;base64,/);
-    const bytes = Buffer.from(dataUrl.split(",", 2)[1] || "", "base64");
-    assertValidPng(bytes, 256, 256);
-    checked = true;
+    const serialized = JSON.stringify(body);
+    if (serialized.includes("input_image")) {
+      const dataUrl = String(body?.input?.[0]?.content?.[1]?.image_url || "");
+      assert.match(dataUrl, /^data:image\/png;base64,/);
+      const bytes = Buffer.from(dataUrl.split(",", 2)[1] || "", "base64");
+      assertValidPng(bytes, 128, 128);
+      checked = true;
+    }
     return new Response(JSON.stringify({
-      output_text: JSON.stringify({
-        images: [{ index: 1, decision: "unknown", confidence: "LOW", reason: "provider probe" }],
-      }),
+      output_text: body.text?.format ? JSON.stringify({ ok: true }) : "OK",
     }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
 

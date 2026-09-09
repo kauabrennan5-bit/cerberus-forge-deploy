@@ -80,7 +80,7 @@ async function collectCatalogEvidence(client: SupabaseClient): Promise<RunRecove
   const productIds = new Set(products.map(row => String(row.id)));
   const boundIds = identities.map(row => String(row.product_id || "")).filter(Boolean);
   return {
-    activePublished: products.filter(row => row.status === "published" && row.ativo !== false).length,
+    activePublished: products.filter(row => row.status === "published" && row.ativo === true).length,
     boundIdentities: boundIds.length,
     danglingIdentities: boundIds.filter(productId => !productIds.has(productId)).length,
   };

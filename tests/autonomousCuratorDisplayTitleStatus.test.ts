@@ -10,8 +10,9 @@ const migration = readFileSync(
 );
 
 test("continuous curator display-title terminal state is accepted by the database contract", () => {
-  assert.match(continuous, /display_title_status:\s*"reviewed"/);
-  assert.match(continuousV2, /display_title_status:\s*"reviewed"/);
+  assert.match(continuous, /runAutonomousCuratorContinuousV2/);
+  assert.match(continuousV2, /displayTitleStatus:\s*"reviewed" \| "review_required"/);
+  assert.match(continuousV2, /display_title_status:\s*candidate\.displayTitleStatus/);
   assert.match(migration, /products_display_title_status_check/);
   assert.match(migration, /'reviewed'::text/);
 });

@@ -3,8 +3,14 @@ import type { Product, PromotionOffer } from "../../src/types";
 import { PUBLIC_PRODUCT_CATEGORIES } from "../../src/lib/productCategory";
 import { deriveConfidenceV2, deriveMinSampleSize, confidenceV2ToScore } from "../commercialBrain/statisticalRigor";
 import { isValidProductLink } from "../repositories/productsRepository";
+import { isValidShopeeAffiliateLink, validateOfficialProductLink } from "./shopeeProviderRuntime";
 import { validPromotionAt } from "./promotionOffer";
-import { isDisplayTitleReviewCurrent, isImageReviewCurrent } from "./productEditorialReview";
+import {
+  isDisplayTitleReviewCurrent,
+  isEditorialDisplayTitle,
+  isHumanEditorialApprovalCurrent,
+  isImageReviewCurrent,
+} from "./productEditorialReview";
 
 export type WeeklyCompositionMode = "thematic" | "diversified";
 
@@ -62,20 +68,46 @@ export function evaluateWeeklyProductEligibility(product: Product, now = new Dat
   if (product.status !== "published") reasons.push("PRODUCT_NOT_PUBLISHED");
   const ref = clean(product.ref);
   if (!ref || !/^[A-Za-z0-9][A-Za-z0-9._-]{1,119}$/.test(ref)) reasons.push("PRODUCT_REF_INVALID");
-  if (!isValidProductLink(product.link)) reasons.push("PRODUCT_LINK_INVALID");
-  if (!isDisplayTitleReviewCurrent(product)) reasons.push("DISPLAY_TITLE_REVIEW_REQUIRED");
-  if (!isImageReviewCurrent(product)) reasons.push("IMAGE_REVIEW_REQUIRED");
+  if (!isValidProductLink(product.link) || !isValidShopeeAffiliateLink(product.link)) reasons.push("PRODUCT_LINK_INVALID");
+  const identity = product.sourceIdentity;
+  if (
+    !identity
+    || identity.marketplace.toLowerCase() !== "shopee"
+    || !validateOfficialProductLink(identity.sourceProductUrl, identity.shopId, identity.itemId)
+  ) reasons.push("PRODUCT_SHOPEE_IDENTITY_INVALID");
+  const displayTitle = clean(product.displayTitle);
+  const rawTitle = clean(product.rawTitle || product.produto);
+  const automaticEditorialCurrent = isDisplayTitleReviewCurrent(product) && isImageReviewCurrent(product);
+  const humanEditorialCurrent = isHumanEditorialApprovalCurrent(product);
+  if (
+    !isEditorialDisplayTitle(displayTitle)
+    || (!humanEditorialCurrent && displayTitle.toLocaleLowerCase("pt-BR") === rawTitle.toLocaleLowerCase("pt-BR"))
+  ) {
+    reasons.push("PRODUCT_TITLE_INVALID");
+  }
+  if (!automaticEditorialCurrent && !humanEditorialCurrent) {
+    if (!isDisplayTitleReviewCurrent(product)) reasons.push("DISPLAY_TITLE_REVIEW_REQUIRED");
+    if (!isImageReviewCurrent(product)) reasons.push("IMAGE_REVIEW_REQUIRED");
+  }
   const category = clean(product.categoria);
   if (!PUBLIC_PRODUCT_CATEGORIES.includes(category as (typeof PUBLIC_PRODUCT_CATEGORIES)[number])) reasons.push("PRODUCT_CATEGORY_INVALID");
   const canonicalPrice = Number(product.preco);
   if (!Number.isFinite(canonicalPrice) || canonicalPrice <= 0) reasons.push("PRODUCT_BASE_PRICE_INVALID");
 
-  const primaryImageUrl = product.imageCuration?.status === "ready"
-    ? clean(product.imageCuration.primaryImageUrl)
-    : "";
-  const imageReviewFingerprint = clean(product.imageReviewFingerprint);
-  const imageReviewVersion = clean(product.imageReviewVersion);
-  const displayTitle = clean(product.displayTitle);
+  const technicalPrimaryImageUrl = humanEditorialCurrent
+    ? clean(product.humanEditorialImageUrl)
+    : product.imageCuration?.status === "ready"
+      ? clean(product.imageCuration.primaryImageUrl)
+      : clean(product.imagens?.find(image => /^https:\/\//i.test(String(image || ""))));
+  if (!/^https:\/\//i.test(technicalPrimaryImageUrl)) reasons.push("PRODUCT_IMAGE_HTTPS_INVALID");
+
+  const primaryImageUrl = technicalPrimaryImageUrl;
+  const imageReviewFingerprint = humanEditorialCurrent
+    ? clean(product.humanEditorialImageFingerprint)
+    : clean(product.imageReviewFingerprint);
+  const imageReviewVersion = humanEditorialCurrent
+    ? `human-telegram-v1:${clean(product.humanEditorialReviewId)}:${clean(product.humanEditorialAuthorizationId)}`
+    : clean(product.imageReviewVersion);
   const linkIdentity = destinationIdentity(product.link);
   const promotion = validPromotionAt(product.ofertaPromocional, now) || null;
 

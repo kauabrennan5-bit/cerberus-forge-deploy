@@ -184,6 +184,19 @@ export function validateOfficialProductLink(productLink: unknown, shopId: unknow
   return identity.shopId === shop && identity.itemId === item;
 }
 
+export function isValidShopeeAffiliateLink(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value.trim());
+    const host = url.hostname.toLowerCase();
+    return url.protocol === "https:"
+      && (host === "shopee.com.br" || host.endsWith(".shopee.com.br"))
+      && (url.pathname !== "/" || Boolean(url.search));
+  } catch {
+    return false;
+  }
+}
+
 export function maskShopeeReference(shopId: string | null | undefined, itemId: string | null | undefined): string {
   const mask = (value: string | null | undefined) => {
     const text = String(value || "");

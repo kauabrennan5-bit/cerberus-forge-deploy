@@ -140,50 +140,6 @@ function hasApprovedImageEvidence(savedImage: string, evidence: readonly string[
   return evidence.some(image => sameShopeeImageAsset(savedImage, image));
 }
 
-/**
- * A imagem do anúncio é um campo mutável da listagem. Depois que identidade,
- * disponibilidade, link afiliado e preço já foram revalidados, uma troca real
- * do asset visual não pode anular uma aprovação humana explícita.
- * Nesse caso substituímos somente a projeção de imagem do candidato pela
- * evidência HTTPS atual da mesma listagem. A curadoria visual original continua
- * preservada no PendingReview; esta mutação existe apenas no lifecycle da
- * tentativa aprovada e evita publicar uma URL de imagem que já saiu do anúncio.
- */
-function applyHumanManualLiveImageRefresh(
-  candidate: ProductCandidate,
-  current: CurrentImageState,
-  currentPrimaryImage: string,
-  rawListingEvidence: readonly string[] = [],
-): boolean {
-  const primaryImage = String(currentPrimaryImage || "").trim();
-  if (!/^https:\/\//i.test(primaryImage)) return false;
-
-  const currentImages = Array.from(new Set([
-    primaryImage,
-    ...currentImageEvidence(current),
-    ...rawListingEvidence,
-  ]
-    .map(image => String(image || "").trim())
-    .filter(image => /^https:\/\//i.test(image))));
-
-  if (currentImages.length === 0) return false;
-  const galleryImageUrls = currentImages.filter(image => image !== primaryImage);
-
-  candidate.imagens = currentImages;
-  candidate.imagensOriginais = currentImages;
-  candidate.imagemPrincipal = primaryImage;
-  candidate.imagensGaleria = galleryImageUrls;
-  candidate.imageEditorialStatus = "clean";
-  candidate.imageCuration = {
-    status: "ready",
-    rawImageUrls: currentImages,
-    primaryImageUrl: primaryImage,
-    galleryImageUrls,
-    assessments: current.imageCuration?.assessments || [],
-  };
-  return true;
-}
-
 async function fetchRawListingImageEvidence(productUrl: string): Promise<string[]> {
   try {
     const scraped = await fetchProductDataFromUrl(productUrl);
@@ -336,16 +292,9 @@ export async function revalidateShopeeCandidateBeforePublication(
   }
 
   if (!approvedImageStillPresent) {
-    // Para publicação humana, a invariável objetiva é a MESMA listagem Shopee
-    // continuar válida e possuir imagem HTTPS atual. O asset do card é mutável:
-    // se a loja o substituiu, publicamos com a evidência atual em vez de vetar a
-    // decisão do administrador por um snapshot visual obsoleto.
-    if (
-      options.humanManualApproval
-      && applyHumanManualLiveImageRefresh(candidate, current, currentPrimaryImage, rawListingEvidence)
-    ) {
-      return { ok: true, code: "SHOPEE_PUBLICATION_PREFLIGHT_OK", warnings };
-    }
+    // A aprovação humana é vinculada à imagem exibida no card. Uma troca no
+    // anúncio invalida essa evidência; somente um novo card/clique pode aprovar
+    // o fingerprint atual.
     return { ok: false, code: "SHOPEE_PREFLIGHT_IMAGE_CHANGED", transient: false };
   }
 
@@ -358,5 +307,4 @@ export const shopeePublicationPreflightInternals = {
   sameShopeeImageAsset,
   currentImageEvidence,
   hasApprovedImageEvidence,
-  applyHumanManualLiveImageRefresh,
 };

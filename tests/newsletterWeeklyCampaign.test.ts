@@ -11,7 +11,8 @@ function product(id: string, ref: string, createdAt: string, price: number, clic
   const image = `https://cdn.example.com/${id}.jpg`;
   return {
     id, ref, produto: `Produto bruto ${id}`, rawTitle: `Produto bruto ${id}`, displayTitle: `Peça editorial série ${id}xx`, displayTitleStatus: "ready", displayTitleReviewedAt: createdAt, displayTitleReviewModel: "test-curator", displayTitleReviewVersion: DISPLAY_TITLE_REVIEW_VERSION, categoria: "Iluminação", preco: price,
-    imagens: [image], imageEditorialStatus: "clean", imageCuration: { status: "ready", rawImageUrls: [image], primaryImageUrl: image, galleryImageUrls: [], assessments: [{ url: image, decision: "clean", confidence: "HIGH", reason: "fixture" }] }, imageReviewedAt: createdAt, imageReviewModel: "test-image-review", imageReviewVersion: IMAGE_REVIEW_VERSION, imageReviewFingerprint: imageUrlFingerprint(image), link: `https://market.example.com/${id}`,
+    imagens: [image], imageEditorialStatus: "clean", imageCuration: { status: "ready", rawImageUrls: [image], primaryImageUrl: image, galleryImageUrls: [], assessments: [{ url: image, decision: "clean", confidence: "HIGH", reason: "fixture" }] }, imageReviewedAt: createdAt, imageReviewModel: "test-image-review", imageReviewVersion: IMAGE_REVIEW_VERSION, imageReviewFingerprint: imageUrlFingerprint(image), link: `https://s.shopee.com.br/${id}`,
+    sourceIdentity: { marketplace: "Shopee", shopId: "123456", itemId: "789012", sourceProductUrl: "https://shopee.com.br/product/123456/789012", reviewId: `review-${id}` },
     ativo: true, destaque: false, status: "published", descricao: `Descrição factual ${id}`, createdAt, clicks,
   };
 }

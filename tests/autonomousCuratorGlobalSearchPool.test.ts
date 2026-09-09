@@ -24,10 +24,18 @@ test("semantic discovery can rescue only real Shopee pool identities before enri
   assert.match(source, /decision\?\.worthEnriching/);
 });
 
-test("global pool refactor keeps expensive Cerberus publication gates intact", () => {
-  assert.match(source, /hasBlockedProfileTerm\(input\.profile/);
-  assert.match(source, /IMAGE_REVIEW_NOT_CLEAN_AFTER_REPAIR/);
-  assert.match(source, /PIPELINE_NOT_AUTO_PUBLISHABLE/);
-  assert.match(source, /maximumCatalogSimilarity >= 0\.82/);
-  assert.match(source, /breakdown\.finalScore < input\.config\.autoPublishThreshold/);
+test("global pool keeps technical blocks hard and editorial signals rank-only", () => {
+  for (const hardBlock of [
+    "AFFILIATE_IDENTITY_MISMATCH",
+    "SCRAPER_IDENTITY_MISMATCH",
+    "PUBLIC_CATEGORY_INVALID",
+    "PRICE_UNVERIFIED_AFTER_OFFICIAL_SHOPEE_FALLBACK",
+    "IMAGE_USABLE_MISSING",
+    "PIPELINE_HARD_BLOCK",
+  ]) assert.match(source, new RegExp(hardBlock));
+  assert.match(source, /softWarnings\.push\(`PROFILE_BLOCKED_TERM:/);
+  assert.match(source, /softWarnings\.push\(`CATALOG_SIMILARITY:/);
+  assert.match(source, /softWarnings\.push\(`BELOW_REVIEW_THRESHOLD:/);
+  assert.doesNotMatch(source, /hasBlockedProfileTerm\(input\.profile, item\.name\).*continue/);
+  assert.doesNotMatch(source, /PIPELINE_NOT_AUTO_PUBLISHABLE/);
 });

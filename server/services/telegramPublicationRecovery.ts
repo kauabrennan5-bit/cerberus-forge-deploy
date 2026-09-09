@@ -5,25 +5,29 @@ import type { PendingReview } from "./telegramTypes";
 const LEGACY_CATEGORY_BLOCK = "SHOPEE_PREFLIGHT_CATEGORY_CHANGED";
 
 export type TelegramPublicationRecoveryResult = {
-  status: "disabled" | "skipped" | "attempted" | "published";
+  status: "disabled" | "skipped" | "reopened";
   reviewId?: string;
   reason?: string;
   previousOperationId?: string;
-  operationId?: string;
-  publishedProductId?: string;
 };
 
 type RecoveryDeps = {
   getReview: (reviewId: string) => Promise<PendingReview | null>;
   saveReview: (review: PendingReview) => Promise<void>;
-  handleUpdate: (update: any) => Promise<void>;
+  notifyReview: (review: PendingReview) => Promise<void>;
   now: () => number;
 };
 
 const productionDeps: RecoveryDeps = {
   getReview: telegramRepo.getPendingReview,
   saveReview: telegramRepo.savePendingReview,
-  handleUpdate: telegramCore.handleTelegramWebhookUpdate,
+  notifyReview: async review => {
+    await telegramCore.sendTelegramMessage(
+      review.chatId,
+      "↩️ <b>REVIEW RECUPERADA</b>\n\nA falha antiga foi liberada para nova tentativa. Nada foi publicado automaticamente; revise o card e confirme novamente se ainda quiser publicar.",
+      { inline_keyboard: [[{ text: "✅ Confirmar & Publicar", callback_data: `confirm_pub:${review.id}` }]] },
+    );
+  },
   now: Date.now,
 };
 
@@ -48,8 +52,6 @@ export async function runConfiguredShopeePublicationRecovery(
       status: "skipped",
       reviewId,
       reason: "ALREADY_PUBLISHED",
-      operationId: review.lifecycle?.operationId,
-      publishedProductId: review.lifecycle?.publishedProductId,
     };
   }
   if (currentStatus !== "error") {
@@ -104,46 +106,16 @@ export async function runConfiguredShopeePublicationRecovery(
     ],
   };
 
-  // Reabre explicitamente a review antes de reaplicar o mesmo callback canônico.
-  // A publicação ainda precisa adquirir o CAS pending/error -> publishing e passar
-  // novamente por identidade, disponibilidade, afiliado, preço e imagem.
+  // Recovery only releases the review back to human decision. It never
+  // synthesizes or replays a Telegram callback and therefore cannot publish.
   review.status = "pending";
   await deps.saveReview(review);
-
-  await deps.handleUpdate({
-    update_id: now,
-    callback_query: {
-      id: `recovery-${review.id}-${now}`,
-      from: { id: senderId },
-      message: {
-        message_id: review.cardMessageId || 1,
-        chat: { id: chatId },
-      },
-      data: `confirm_pub:${review.id}`,
-    },
-  });
-
-  const after = await deps.getReview(review.id);
-  const operationId = String(after?.lifecycle?.operationId || "").trim() || undefined;
-  const newOperationId = operationId && operationId !== previousOperationId ? operationId : undefined;
-
-  if (after?.status === "published" && after.lifecycle?.publishedProductId && newOperationId) {
-    return {
-      status: "published",
-      reviewId,
-      previousOperationId,
-      operationId: newOperationId,
-      publishedProductId: after.lifecycle.publishedProductId,
-    };
-  }
-
+  await deps.notifyReview(review);
   return {
-    status: "attempted",
+    status: "reopened",
     reviewId,
-    reason: after?.lifecycle?.diagnostic?.code || after?.lifecycle?.error || after?.status || "RECOVERY_RESULT_UNKNOWN",
+    reason: "PENDING_FRESH_HUMAN_APPROVAL",
     previousOperationId,
-    operationId: newOperationId,
-    publishedProductId: after?.lifecycle?.publishedProductId,
   };
 }
 

@@ -77,10 +77,10 @@ function eligibility(product = reviewedProduct(), evidenceOverrides: Record<stri
   });
 }
 
-test("fully reviewed candidate above canonical threshold can pass publication authority", () => {
+test("fully reviewed autonomous candidate remains blocked without human approval", () => {
   const result = eligibility();
-  assert.equal(result.ok, true);
-  assert.deepEqual(result.errors, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.includes("PUBLICATION_HUMAN_APPROVAL_REQUIRED"));
 });
 
 test("score 71 remains blocked when canonical threshold is 88", () => {
@@ -118,9 +118,29 @@ test("off-brand, REVIEW state and prohibited similarity remain hard blockers for
 });
 
 test("manual Product Rotation confirmation overrides editorial evidence but not technical integrity", () => {
+  const reviewId = "rotation-request-1";
   const manualEvidence = {
     source: "product_rotation",
     manualEditorialOverride: true,
+    humanManualApproval: true,
+    reviewId,
+    approvedAt: "2026-09-08T12:00:00.000Z",
+    operationId: "rotation-op-1",
+    approvalOrigin: "telegram",
+    sourceProductUrl: identity.sourceProductUrl,
+    primaryImageFingerprint: imageUrlFingerprint(primaryImageUrl),
+    humanApprovalEvidence: {
+      kind: "telegram_product_rotation_approval",
+      origin: "telegram",
+      reviewId,
+      operationId: "rotation-op-1",
+      approvedAt: "2026-09-08T12:00:00.000Z",
+      shopId: identity.shopId,
+      itemId: identity.itemId,
+      sourceProductUrl: identity.sourceProductUrl,
+      primaryImageUrl,
+      primaryImageFingerprint: imageUrlFingerprint(primaryImageUrl),
+    },
     score: 10,
     offBrand: true,
     lifecycleApproved: false,
@@ -146,6 +166,24 @@ test("Telegram PUBLICAR has final editorial authority but preserves objective ha
   const humanEvidence = {
     source: "admin" as const,
     humanManualApproval: true,
+    reviewId: "review-telegram-1",
+    approvedAt: "2026-09-08T12:00:00.000Z",
+    operationId: "telegram-publish-op-1",
+    approvalOrigin: "telegram" as const,
+    primaryImageFingerprint: imageUrlFingerprint(primaryImageUrl),
+    humanApprovalEvidence: {
+      kind: "telegram_product_publication_approval",
+      callbackId: "callback-1",
+      origin: "telegram",
+      reviewId: "review-telegram-1",
+      operationId: "telegram-publish-op-1",
+      approvedAt: "2026-09-08T12:00:00.000Z",
+      shopId: identity.shopId,
+      itemId: identity.itemId,
+      sourceProductUrl: identity.sourceProductUrl,
+      primaryImageUrl,
+      primaryImageFingerprint: imageUrlFingerprint(primaryImageUrl),
+    },
     sourceProductUrl: identity.sourceProductUrl,
     score: 10,
     maximumCatalogSimilarity: 0.99,
@@ -163,6 +201,18 @@ test("Telegram PUBLICAR has final editorial authority but preserves objective ha
   });
   assert.equal(result.ok, true);
   assert.deepEqual(result.errors, []);
+
+  const mismatchedApproval = validateProductPublicationEligibility({
+    product,
+    identity: { ...identity, productId: null, reviewId: "review-telegram-1" },
+    canonicalThreshold: 88,
+    duplicateProductIds: [],
+    evidence: {
+      ...humanEvidence,
+      humanApprovalEvidence: { ...humanEvidence.humanApprovalEvidence, itemId: "different-item" },
+    },
+  });
+  assert.ok(mismatchedApproval.errors.includes("PUBLICATION_HUMAN_APPROVAL_EVIDENCE_MISMATCH"));
 
   const invalidPrice = validateProductPublicationEligibility({
     product: { ...product, preco: 0 },

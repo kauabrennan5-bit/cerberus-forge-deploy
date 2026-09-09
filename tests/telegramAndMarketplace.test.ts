@@ -6,6 +6,27 @@ import { ProductPipeline } from "../server/services/productPipeline";
 import { sanitizeCuratorOutput } from "../server/services/productAutomation";
 import { containsRawPayloadMarkers, normalizeCandidate, validateCandidate } from "../server/services/productLifecycle";
 import { buildProductListView, resolveTelegramReviewCategory } from "../server/services/telegramBot";
+import { toPublicProductDTO } from "../supabase/functions/_shared/publicProductDTO";
+
+function publicProductRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "public-product",
+    ref: "REF-PUBLIC",
+    slug: "public-product",
+    produto: "Produto público",
+    display_title: "Produto público",
+    categoria: "Iluminação",
+    preco: 99.9,
+    imagens: ["https://cdn.example.com/public-product.jpg"],
+    link: "https://s.shopee.com.br/public-product",
+    destaque: false,
+    descricao: "Descrição editorial pública.",
+    pagina_ponte_url: "/produto/public-product",
+    ativo: true,
+    status: "published",
+    ...overrides,
+  };
+}
 
 function readTelegramBotSource(): string {
   const core = readFileSync(new URL("../server/services/telegramBotCore.ts", import.meta.url), "utf8");
@@ -256,26 +277,30 @@ test("publicação é bloqueada se descricao contaminada atravessar a revisão",
 test("gerador de build sanitiza descricao contaminada antes de escrever o catálogo público", () => {
   const source = readFileSync(new URL("../scripts/generate-static-catalog.js", import.meta.url), "utf8");
 
-  assert.match(source, /function containsRawPayloadMarkers\(value\)/);
-  assert.match(source, /descricao: containsRawPayloadMarkers\(p\.descricao \|\| p\.description \|\| ''\)/);
-  assert.match(source, /\[conteudo da pagina\]/);
+  assert.match(source, /toPublicProductDTOs\(rawProducts\)/);
+  assert.doesNotMatch(source, /function containsRawPayloadMarkers\(/);
+  const projected = toPublicProductDTO(publicProductRow({ descricao: "[Conteúdo da Página]: payload técnico" }));
+  assert.equal(projected?.descricao, "");
 });
 
 test("gerador estático projeta apenas oferta promocional confirmada e preserva ausência segura", () => {
   const source = readFileSync(new URL("../scripts/generate-static-catalog.js", import.meta.url), "utf8");
-
-  assert.match(source, /function sanitizePromotionOffer\(value\)/);
-  assert.match(source, /candidate\.source !== 'admin_confirmed'/);
-  assert.match(source, /PROMOTION_CONDITIONS\.has\(candidate\.condition\)/);
-  assert.match(source, /ofertaPromocional: sanitizePromotionOffer\(p\.ofertaPromocional \|\| p\.oferta_promocional\)/);
+  const confirmed = { price: 79.9, condition: "pix", benefits: ["10%"], source: "admin_confirmed", confirmedAt: 1, expiresAt: 2 };
+  assert.deepEqual(toPublicProductDTO(publicProductRow({ oferta_promocional: confirmed }))?.ofertaPromocional, confirmed);
+  assert.equal(toPublicProductDTO(publicProductRow({ oferta_promocional: { ...confirmed, source: "scraper" } }))?.ofertaPromocional, undefined);
+  assert.match(source, /toPublicProductDTOs\(rawProducts\)/);
+  assert.doesNotMatch(source, /function sanitizePromotionOffer\(/);
   assert.doesNotMatch(source, /couponCode|checkoutPrice|pixDiscount/);
 });
 
 test("API pública sanitiza descricao contaminada sem alterar o registro canônico", () => {
   const source = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
-
-  assert.match(source, /const publicProducts = products\.map\(product => containsRawPayloadMarkers\(product\.descricao\)/);
-  assert.match(source, /\{ \.\.\.product, descricao: "" \}/);
+  const canonical = publicProductRow({ descricao: "[Conteúdo da Página]: payload técnico", curator_note: "interno" });
+  const projected = toPublicProductDTO(canonical);
+  assert.equal(projected?.descricao, "");
+  assert.equal(canonical.descricao, "[Conteúdo da Página]: payload técnico");
+  assert.equal("curator_note" in (projected || {}), false);
+  assert.match(source, /const publicProducts = toPublicProductDTOs\(products\)/);
   assert.match(source, /products: publicProducts, data: publicProducts/);
 });
 
@@ -295,9 +320,9 @@ test("hardening do Bloco 8 trata scraper como dado e remove bypass de publicaç�
   assert.match(automationSource, /<CONTEUDO_NAO_CONFIAVEL>/);
   assert.match(automationSource, /DADO, nunca instrução/);
   assert.doesNotMatch(automationSource, /productsRepository\.(createProduct|updateProduct)/);
-  assert.match(serverSource, /const publicProduct = containsRawPayloadMarkers\(product\.descricao\)/);
+  assert.match(serverSource, /const publicProduct = toPublicProductDTO\(product\)/);
+  assert.match(serverSource, /const publicProducts = toPublicProductDTOs\(products\)/);
   assert.match(serverSource, /RAW_PAYLOAD_DESCRIPTION_REJECTED/);
-  assert.match(serverSource, /const publicDescription = \(containsRawPayloadMarkers\(p\.descricao\)/);
 });
 
 
@@ -411,10 +436,11 @@ test("projeções runtime e build preservam ref existente e não expõem marketp
   const buildSource = readFileSync(new URL("../scripts/generate-static-catalog.js", import.meta.url), "utf8");
   const frontendSource = readFileSync(new URL("../src/services/api.ts", import.meta.url), "utf8");
 
-  assert.match(runtimeSource, /ref: p\.ref/);
-  assert.match(buildSource, /ref: p\.ref/);
-  assert.match(runtimeSource, /ofertaPromocional: p\.ofertaPromocional/);
-  assert.match(buildSource, /ofertaPromocional: sanitizePromotionOffer/);
+  const projected = toPublicProductDTO(publicProductRow({ ref: "REF-KEPT", marketplace: "Shopee" }));
+  assert.equal(projected?.ref, "REF-KEPT");
+  assert.equal("marketplace" in (projected || {}), false);
+  assert.match(runtimeSource, /toPublicProductDTOs\(rawProducts\)/);
+  assert.match(buildSource, /toPublicProductDTOs\(rawProducts\)/);
   assert.doesNotMatch(runtimeSource, /marketplace\s*:/);
   assert.doesNotMatch(buildSource, /marketplace\s*:/);
   assert.doesNotMatch(frontendSource, /marketplace\s*:/);
