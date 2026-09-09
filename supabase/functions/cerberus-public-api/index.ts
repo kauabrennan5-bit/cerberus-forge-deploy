@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { toPublicProductDTO } from "../../../src/lib/publicProductDto.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,7 +26,6 @@ const PUBLIC_PRODUCT_COLUMNS = [
   "created_at",
   "oferta_promocional",
   "display_title",
-  "curator_note",
 ].join(",");
 
 const PUBLIC_ELIGIBILITY_COLUMNS = [
@@ -54,21 +54,6 @@ const PUBLIC_PRODUCT_CATEGORIES = new Set([
 const AUTONOMOUS_DEFICIT_FALLBACK_CREATED_BY = "autonomous_curator_queue";
 const AUTONOMOUS_DEFICIT_FALLBACK_IMAGE_MODEL = "deficit-fallback";
 const TELEGRAM_MANUAL_CREATED_BY = "telegram_manual";
-
-const RAW_PAYLOAD_MARKERS = [
-  "[url final]",
-  "[titulo identificado]",
-  "[preco identificado]",
-  "[total imagens oficiais]",
-  "[imagens extraidas]",
-  "[conteudo da pagina]",
-];
-
-function containsRawPayloadMarkers(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  return RAW_PAYLOAD_MARKERS.some((marker) => normalized.includes(marker));
-}
 
 function validHttpsUrl(value: unknown): boolean {
   try {
@@ -136,21 +121,6 @@ function isTelegramManualPublicRow(row: Record<string, unknown>): boolean {
     && validShopeeAffiliateLink(row.link);
 }
 
-function publicProjection(row: Record<string, unknown>): Record<string, unknown> {
-  const {
-    display_title_status: _displayTitleStatus,
-    image_editorial_status: _imageEditorialStatus,
-    image_curation: _imageCuration,
-    image_review_model: _imageReviewModel,
-    image_review_fingerprint: _imageReviewFingerprint,
-    created_by: _createdBy,
-    ...product
-  } = row;
-  return containsRawPayloadMarkers(product.descricao)
-    ? { ...product, descricao: "" }
-    : product;
-}
-
 function adminClient() {
   const url = Deno.env.get("SUPABASE_URL") || "";
   const secretKeysRaw = Deno.env.get("SUPABASE_SECRET_KEYS") || "{}";
@@ -197,7 +167,8 @@ Deno.serve(async (req: Request) => {
 
       const products = (Array.isArray(data) ? data : [])
         .filter((product: Record<string, unknown>) => isStrictEditorialRow(product) || isDeficitFallbackPublicRow(product) || isTelegramManualPublicRow(product))
-        .map((product: Record<string, unknown>) => publicProjection(product));
+        .map((product: Record<string, unknown>) => toPublicProductDTO(product))
+        .filter((product): product is NonNullable<typeof product> => product !== null);
 
       return json({ success: true, products, data: products, source: "supabase-edge" });
     }
