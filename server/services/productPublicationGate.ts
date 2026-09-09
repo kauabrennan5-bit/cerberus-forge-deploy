@@ -8,7 +8,7 @@ import {
   isEditorialDisplayTitle,
 } from "./productEditorialReview";
 
-export const PUBLICATION_GATE_VERSION = "1";
+export const PUBLICATION_GATE_VERSION = "2";
 export const MAX_CATALOG_SIMILARITY = 0.82;
 
 export type PublicationSource = "autonomous_curator" | "product_rotation" | "admin" | "queue" | "recovery";
@@ -29,8 +29,10 @@ export type ProductPublicationEvidence = {
   reviewId?: string | null;
   /** URL oficial Shopee que identifica a reserva exclusiva do card. */
   sourceProductUrl?: string | null;
-  /** Permite publicar o melhor lote técnico durante déficit; nunca substitui os hard gates. */
+  /** Campo legado de ranking. Nunca autoriza publicação. */
   deficitFallback?: boolean;
+  /** Campo legado de ranking. Nunca autoriza publicação. */
+  bestOfLotFallback?: boolean;
 };
 
 type SourceIdentity = {
@@ -80,13 +82,20 @@ function validOfficialShopeeIdentity(
 ): boolean {
   if (!identity || identity.marketplace.toLowerCase() !== "shopee") return false;
   if (!identity.shopId || !identity.itemId) return false;
-  const reservedByReview = Boolean(evidence.reviewId) && identity.reviewId === evidence.reviewId;
-  const reservedBySource = Boolean(evidence.sourceProductUrl) && identity.sourceProductUrl === evidence.sourceProductUrl;
-  const humanReservedIdentity = evidence.source === "admin"
-    && evidence.humanManualApproval === true
+
+  const humanApproval = evidence.source === "admin" && evidence.humanManualApproval === true;
+  const reservedBySource = Boolean(evidence.sourceProductUrl)
+    && identity.sourceProductUrl === evidence.sourceProductUrl;
+  const reviewMatches = !evidence.reviewId || identity.reviewId === evidence.reviewId;
+  const humanReservedIdentity = humanApproval
     && identity.productId === null
-    && (reservedByReview || reservedBySource);
+    && Boolean(identity.reviewId)
+    && reservedBySource
+    && reviewMatches;
+
   if (identity.productId !== productId && !humanReservedIdentity) return false;
+  if (humanApproval && !identity.reviewId) return false;
+
   const parsed = extractShopeeIdentity(identity.sourceProductUrl);
   return parsed.shopId === identity.shopId && parsed.itemId === identity.itemId;
 }
@@ -98,6 +107,10 @@ function normalizedLink(value: string | undefined): string {
   return `${url.hostname.toLowerCase()}${url.pathname.replace(/\/+$/, "")}${url.search}`;
 }
 
+function isAutonomousPublicationSource(source: PublicationSource): boolean {
+  return source === "autonomous_curator" || source === "queue" || source === "recovery";
+}
+
 export function validateProductPublicationEligibility(input: ProductPublicationEligibilityInput): ProductPublicationEligibility {
   const { product, evidence } = input;
   const errors: string[] = [];
@@ -107,18 +120,29 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   const manualEditorialOverride = evidence.source === "product_rotation" && evidence.manualEditorialOverride === true;
   const humanManualApproval = evidence.source === "admin" && evidence.humanManualApproval === true;
   const editorialOverride = manualEditorialOverride || humanManualApproval;
-  const deficitFallback = evidence.deficitFallback === true && (evidence.source === "autonomous_curator" || evidence.source === "recovery");
   const primaryImageUrl = product.imageCuration?.primaryImageUrl?.trim() || product.imagens?.[0]?.trim() || null;
+
+  // Absolute project invariant: autonomous ranking/recovery/fallback sources are
+  // never publication authorities. They must terminate in a Telegram review.
+  if (isAutonomousPublicationSource(evidence.source)) {
+    errors.push("PUBLICATION_AUTONOMOUS_SOURCE_FORBIDDEN");
+  }
+  if (evidence.source === "admin" && !humanManualApproval) {
+    errors.push("PUBLICATION_HUMAN_APPROVAL_REQUIRED");
+  }
+  if (humanManualApproval && !input.identity?.reviewId) {
+    errors.push("PUBLICATION_HUMAN_REVIEW_ID_MISSING");
+  }
 
   if (!validOfficialShopeeIdentity(input.identity, product.id, evidence)) errors.push("PUBLICATION_SHOPEE_IDENTITY_INVALID");
   if (!input.identity?.shopId || !input.identity?.itemId) errors.push("PUBLICATION_SHOPEE_IDS_MISSING");
   if (!input.identity?.sourceProductUrl || !validHttpsUrl(input.identity.sourceProductUrl)) errors.push("PUBLICATION_SOURCE_URL_INVALID");
   if (!validAffiliateLink(product.link)) errors.push("PUBLICATION_AFFILIATE_LINK_INVALID");
   if (!isPublicProductCategory(product.categoria)) errors.push("PUBLICATION_CATEGORY_INVALID");
-  if (!editorialOverride && !deficitFallback && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
+  if (!editorialOverride && (!Number.isFinite(evidence.score) || evidence.score < threshold)) errors.push("PUBLICATION_SCORE_BELOW_CANONICAL_THRESHOLD");
 
-  if (!editorialOverride && !deficitFallback && product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
-  if (!editorialOverride && !deficitFallback && (!product.imageCuration || product.imageCuration.status !== "ready")) errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
+  if (!editorialOverride && product.imageEditorialStatus !== "clean") errors.push("PUBLICATION_IMAGE_NOT_CLEAN");
+  if (!editorialOverride && (!product.imageCuration || product.imageCuration.status !== "ready")) errors.push("PUBLICATION_IMAGE_REVIEW_NOT_READY");
   if (!primaryImageUrl || !validHttpsUrl(primaryImageUrl)) errors.push("PUBLICATION_PRIMARY_IMAGE_MISSING");
   if (!editorialOverride && (!product.imageReviewFingerprint || !primaryImageUrl || product.imageReviewFingerprint !== imageUrlFingerprint(primaryImageUrl))) {
     errors.push("PUBLICATION_IMAGE_FINGERPRINT_STALE");
@@ -126,27 +150,27 @@ export function validateProductPublicationEligibility(input: ProductPublicationE
   const primaryAssessment = primaryImageUrl
     ? product.imageCuration?.assessments.find(assessment => assessment.url === primaryImageUrl)
     : undefined;
-  if (!editorialOverride && !deficitFallback && (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW")) {
+  if (!editorialOverride && (!primaryAssessment || primaryAssessment.decision !== "clean" || primaryAssessment.confidence === "LOW")) {
     errors.push("PUBLICATION_IMAGE_PRIMARY_NOT_EDITORIALLY_APPROVED");
   }
-  if (!editorialOverride && !deficitFallback && product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {
+  if (!editorialOverride && product.imageCuration?.assessments.some(assessment => assessment.decision === "off_brand" && assessment.confidence !== "LOW")) {
     errors.push("PUBLICATION_IMAGE_OFF_BRAND");
   }
 
   const displayTitle = String(product.displayTitle || "").replace(/\s+/g, " ").trim();
   const rawTitle = String(product.rawTitle || product.produto || "").replace(/\s+/g, " ").trim();
-  if (!editorialOverride && !deficitFallback && product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
-  if (!displayTitle || (!editorialOverride && !deficitFallback && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
+  if (!editorialOverride && product.displayTitleStatus !== "reviewed") errors.push("PUBLICATION_DISPLAY_TITLE_NOT_REVIEWED");
+  if (!displayTitle || (!editorialOverride && (displayTitle === rawTitle || !isEditorialDisplayTitle(displayTitle)))) errors.push("PUBLICATION_DISPLAY_TITLE_INVALID");
   if (!Number.isFinite(Number(product.preco)) || Number(product.preco) <= 0) errors.push("PUBLICATION_PRICE_UNVERIFIED");
   if ((input.duplicateProductIds || []).some(id => id !== product.id)) errors.push("PUBLICATION_DUPLICATE_PRODUCT");
   if (input.identity?.productId && input.identity.productId !== product.id) errors.push("PUBLICATION_IDENTITY_OWNED_BY_OTHER_PRODUCT");
-  if (!editorialOverride && !deficitFallback && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
+  if (!editorialOverride && (!Number.isFinite(evidence.maximumCatalogSimilarity) || evidence.maximumCatalogSimilarity >= MAX_CATALOG_SIMILARITY)) {
     errors.push("PUBLICATION_CATALOG_SIMILARITY_PROHIBITED");
   }
   if (evidence.categoryMismatch) errors.push("PUBLICATION_CATEGORY_MISMATCH");
-  if (!editorialOverride && !deficitFallback && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
-  if (!editorialOverride && !deficitFallback && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
-  if (!editorialOverride && !deficitFallback && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
+  if (!editorialOverride && evidence.offBrand) errors.push("PUBLICATION_OFF_BRAND");
+  if (!editorialOverride && !evidence.lifecycleApproved) errors.push("PUBLICATION_PIPELINE_NOT_APPROVED");
+  if (!editorialOverride && /REVIEW/i.test(String(evidence.reviewState || ""))) errors.push("PUBLICATION_REVIEW_STATE_FORBIDDEN");
 
   return { ok: errors.length === 0, errors: [...new Set(errors)], primaryImageUrl, threshold };
 }
@@ -201,6 +225,7 @@ async function loadIdentity(productId: string, evidence: ProductPublicationEvide
         .from("product_source_identities")
         .select("marketplace,shop_id,item_id,source_product_url,product_id,review_id")
         .eq("source_product_url", evidence.sourceProductUrl)
+        .not("review_id", "is", null)
         .is("product_id", null)
         .maybeSingle();
       if (sourceError) throw sourceError;
@@ -262,8 +287,15 @@ export async function publishProductWithGate(input: {
   createdBy?: string;
 }): Promise<void> {
   const eligibility = await assertProductPublicationEligibility(input.product, input.evidence);
-  const deficitFallback = input.evidence.deficitFallback === true && (input.evidence.source === "autonomous_curator" || input.evidence.source === "recovery");
   const humanManualApproval = input.evidence.source === "admin" && input.evidence.humanManualApproval === true;
+  const identity = await loadIdentity(input.product.id, input.evidence);
+  const resolvedReviewId = humanManualApproval ? identity?.reviewId || null : input.evidence.reviewId || null;
+  const resolvedSourceProductUrl = identity?.sourceProductUrl || input.evidence.sourceProductUrl || null;
+
+  if (humanManualApproval && !resolvedReviewId) {
+    throw new Error("PRODUCT_PUBLICATION_BLOCKED:PUBLICATION_HUMAN_REVIEW_ID_MISSING");
+  }
+
   const client = requireSupabase();
   const authorizationId = randomUUID();
   const expiresAt = new Date(Date.now() + 60_000).toISOString();
@@ -284,9 +316,11 @@ export async function publishProductWithGate(input: {
       reviewState: input.evidence.reviewState || null,
       manualEditorialOverride: input.evidence.manualEditorialOverride === true,
       humanManualApproval,
-      reviewId: input.evidence.reviewId || null,
-      sourceProductUrl: input.evidence.sourceProductUrl || null,
-      deficitFallback,
+      reviewId: resolvedReviewId,
+      sourceProductUrl: resolvedSourceProductUrl,
+      // These remain auditable legacy ranking signals but are never authorization.
+      deficitFallback: input.evidence.deficitFallback === true,
+      bestOfLotFallback: input.evidence.bestOfLotFallback === true,
     },
   });
   if (authorizationError) throw authorizationError;
