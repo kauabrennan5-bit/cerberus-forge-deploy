@@ -126,15 +126,15 @@ jobs:
           wait "$first_pid"
           first_count="$(head -n 1 "$first" | tr -d '[:space:]')"
           final_status="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 \
-            -v race_id="$race_id" -c "select status from public.telegram_pending_reviews where id = :'race_id'")"
+            -c "select status from public.telegram_pending_reviews where id = 'ci-reconciler-race'")"
           repeat_count="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 \
             -c "select count(*) from public.reconcile_stale_telegram_publications(interval '15 minutes', 1)")"
           test "$first_count" = "1"
           test "$second_count" = "0"
           test "$final_status" = "error"
           test "$repeat_count" = "0"
-          psql "$DB_URL" -X -q -v ON_ERROR_STOP=1 -v race_id="$race_id" \
-            -c "delete from public.telegram_pending_reviews where id = :'race_id'"
+          psql "$DB_URL" -X -q -v ON_ERROR_STOP=1 \
+            -c "delete from public.telegram_pending_reviews where id = 'ci-reconciler-race'"
 
       - name: Verify exact LIVE schema contract
         shell: bash
