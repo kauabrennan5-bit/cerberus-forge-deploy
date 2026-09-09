@@ -104,7 +104,15 @@ function recoveryDurationMs(createdAt: string, recoveredAt: string): number {
   return Math.max(0, recovered - created);
 }
 
-async function resolveIncident(client: SupabaseClient, incident: PersistedOperatorIncident, observation: OperatorHealthObservation): Promise<boolean> {
+const COMPONENT_HEALTHY_RECOVERY = "COMPONENT_HEALTHY_ON_INDEPENDENT_OPERATOR_CHECK";
+const DIAGNOSTIC_SUPERSEDED_RECOVERY = "SUPERSEDED_BY_NEW_COMPONENT_HEALTH_DIAGNOSTIC";
+
+async function resolveIncident(
+  client: SupabaseClient,
+  incident: PersistedOperatorIncident,
+  observation: OperatorHealthObservation,
+  recoveryReason = COMPONENT_HEALTHY_RECOVERY,
+): Promise<boolean> {
   const recoveredAt = observation.timestamp || new Date().toISOString();
   const healthEvidence = sanitizedHealthEvidence(observation);
   const metadata = incident.metadata && typeof incident.metadata === "object" ? incident.metadata : {};
@@ -114,14 +122,14 @@ async function resolveIncident(client: SupabaseClient, incident: PersistedOperat
       status: "RESOLVED",
       recovered_at: recoveredAt,
       duration_ms: recoveryDurationMs(incident.created_at, recoveredAt),
-      recovery_reason: "COMPONENT_HEALTHY_ON_INDEPENDENT_OPERATOR_CHECK",
+      recovery_reason: recoveryReason,
       health_evidence: healthEvidence,
       updated_at: recoveredAt,
       metadata: {
         ...metadata,
         component: observation.name,
         recoveredAt,
-        recoveryReason: "COMPONENT_HEALTHY_ON_INDEPENDENT_OPERATOR_CHECK",
+        recoveryReason,
         recoveryHealthEvidence: healthEvidence,
       },
     })
@@ -207,11 +215,22 @@ export async function synchronizeOperatorIncidents(
       }
       continue;
     }
-    // When one fingerprint is still failing, do not resolve another incident for
-    // the same dependency simply because its exact error string changed.
     const result = await updateOrOpenIncident(client, observation, active);
     if (result.opened) opened.push(result.opened);
     if (result.updated) updated.push(result.updated);
+
+    // A component has one current independently observed health state. Once the
+    // current fingerprint has been persisted, older active fingerprints for the
+    // same component are historical diagnoses and must not remain simultaneously
+    // open. This closes bad-payload incidents when a later probe proves a quota,
+    // model, structured-output or vision-specific failure instead.
+    const currentFingerprint = incidentFingerprint(observation);
+    for (const incident of componentActive) {
+      if (incident.fingerprint === currentFingerprint) continue;
+      if (await resolveIncident(client, incident, observation, DIAGNOSTIC_SUPERSEDED_RECOVERY)) {
+        resolved.push(incident.incident_id);
+      }
+    }
   }
 
   return { opened, updated, resolved, active: Math.max(0, active.length + opened.length - resolved.length) };
