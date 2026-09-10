@@ -57,6 +57,10 @@ function getPublicCatalogBackendFallbackUrl(): string {
   return `${getApiUrl('/api/products')}?t=${Date.now()}`;
 }
 
+function getLastKnownGoodCatalogUrl(): string {
+  return `/data/products.json?t=${Date.now()}`;
+}
+
 function catalogListFromPayload(payload: any): any[] | null {
   return Array.isArray(payload)
     ? payload
@@ -89,10 +93,12 @@ async function loadPublicCatalog(url: string, source: string): Promise<any[]> {
 
 /**
  * A Supabase Edge continua sendo a fonte pública canônica. Se o navegador não
- * conseguir alcançar o domínio Supabase (ex.: falha DNS/transport), fazemos uma
- * única tentativa de leitura pelo backend, que devolve a mesma whitelist pública
- * e continua lendo o mesmo public.products. O backend é apenas fallback de
- * transporte; não vira uma segunda fonte de verdade e nenhuma mutação é refeita.
+ * conseguir alcançá-la, tentamos uma vez o backend público, que lê o mesmo banco
+ * e devolve a mesma whitelist. Se ambos os transportes online falharem, o site
+ * usa somente para leitura o último snapshot público sanitizado empacotado no
+ * storefront. O snapshot pode estar defasado e nunca vira fonte de verdade nem
+ * participa de mutações/publicação; serve apenas para manter o acervo visível
+ * durante uma indisponibilidade externa de DNS/rede.
  */
 export async function getProducts(): Promise<any[]> {
   try {
@@ -104,8 +110,14 @@ export async function getProducts(): Promise<any[]> {
   try {
     return await loadPublicCatalog(getPublicCatalogBackendFallbackUrl(), 'backend Cerberus');
   } catch (backendError) {
-    console.error('[Catalog] Edge e fallback público do backend indisponíveis.', backendError);
-    throw new Error('Catálogo temporariamente indisponível. Não foi possível alcançar a fonte pública nem o transporte de contingência.');
+    console.warn('[Catalog] Edge e backend indisponíveis; usando snapshot público last-known-good em modo degradado.', backendError);
+  }
+
+  try {
+    return await loadPublicCatalog(getLastKnownGoodCatalogUrl(), 'snapshot público last-known-good');
+  } catch (snapshotError) {
+    console.error('[Catalog] Edge, backend e snapshot público indisponíveis.', snapshotError);
+    throw new Error('Catálogo temporariamente indisponível. Não foi possível alcançar nenhuma fonte pública de leitura.');
   }
 }
 
@@ -283,5 +295,6 @@ export const publicCatalogApiInternals = {
   PUBLIC_CATALOG_EDGE_BASE,
   getPublicCatalogApiUrl,
   getPublicCatalogBackendFallbackUrl,
+  getLastKnownGoodCatalogUrl,
   catalogListFromPayload,
 };
