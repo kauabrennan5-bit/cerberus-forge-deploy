@@ -5,6 +5,8 @@ import { catalogSyncInternals } from "../server/services/catalogSync";
 
 const catalogSyncSource = readFileSync(new URL("../server/services/catalogSync.ts", import.meta.url), "utf8");
 const frontendApiSource = readFileSync(new URL("../src/services/api.ts", import.meta.url), "utf8");
+const frontendMainSource = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
+const serverSource = readFileSync(new URL("../server.ts", import.meta.url), "utf8");
 const runtimeManifest = JSON.parse(readFileSync(new URL("../public/catalog-runtime.json", import.meta.url), "utf8"));
 const edgeSource = readFileSync(new URL("../supabase/functions/cerberus-public-api/index.ts", import.meta.url), "utf8");
 
@@ -55,16 +57,27 @@ test("runtime public list only treats active published rows as visible", () => {
   assert.deepEqual(catalogSyncInternals.publicListFromPayload({ products: [{ id: "a" }] }), [{ id: "a" }]);
 });
 
-test("frontend consumes the canonical Edge API instead of its branch-local products.json", () => {
+test("frontend keeps Supabase Edge canonical and uses backend only as public transport fallback", () => {
   const getProductsBody = frontendApiSource.slice(
     frontendApiSource.indexOf("export async function getProducts"),
-    frontendApiSource.indexOf("export async function verifyAdminPassword"),
+    frontendApiSource.indexOf("export async function getPublicSocialLinks"),
   );
   assert.match(getProductsBody, /getPublicCatalogApiUrl\(\)/);
+  assert.match(getProductsBody, /getPublicCatalogBackendFallbackUrl\(\)/);
+  assert.match(getProductsBody, /Supabase Edge/);
+  assert.match(getProductsBody, /backend Cerberus/);
   assert.equal(getProductsBody.includes("/data/products.json"), false);
-  assert.match(getProductsBody, /toPublicProductDTOs\(list\)/);
-  assert.doesNotMatch(getProductsBody, /ativo\s*!==\s*false/);
+  assert.match(frontendApiSource, /toPublicProductDTOs\(list\)/);
   assert.match(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
+  assert.match(serverSource, /app\.get\("\/api\/products"/);
+  assert.match(serverSource, /toPublicProductDTOs\(products\)/);
+});
+
+test("archive title hotfix loads after dark surface so the original h1 cannot reappear", () => {
+  const darkSurfaceIndex = frontendMainSource.indexOf("design-system-dark-surface.css");
+  const archiveFixIndex = frontendMainSource.indexOf("design-system-archive-title-fix.css");
+  assert.ok(darkSurfaceIndex >= 0);
+  assert.ok(archiveFixIndex > darkSurfaceIndex);
 });
 
 test("public Edge uses the shared whitelist and fetches human proof only for filtering", () => {
