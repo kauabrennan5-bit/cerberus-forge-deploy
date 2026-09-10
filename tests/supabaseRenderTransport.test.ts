@@ -18,6 +18,18 @@ test("Supabase transport is scoped to configured origin and avoids Undici socket
   assert.doesNotMatch(source, /retrying|for \(.*retry|setInterval/i);
 });
 
+test("transport diagnostics expose only sanitized low-level failure classification", async () => {
+  const source = await readFile(new URL("../server/lib/supabaseNetworkBootstrap.mjs", import.meta.url), "utf8");
+  assert.match(source, /request_failed phase=\$\{safePhase\} code=\$\{code\} syscall=\$\{syscall\}/);
+  assert.match(source, /NETWORK_DIAGNOSTIC_INTERVAL_MS = 30_000/);
+  assert.match(source, /phase = "LOOKUP"/);
+  assert.match(source, /phase = "TCP_CONNECT"/);
+  assert.match(source, /phase = "TLS_HANDSHAKE"/);
+  assert.match(source, /phase = "WAITING_RESPONSE"/);
+  assert.match(source, /phase = "RESPONSE_BODY"/);
+  assert.doesNotMatch(source, /request_failed[^\n]*(target\.hostname|request\.url|headers|body)/);
+});
+
 test("preload replaces fetch only when Supabase is configured", () => {
   const bootstrap = fileURLToPath(new URL("../server/lib/supabaseNetworkBootstrap.mjs", import.meta.url));
   const probe = "process.stdout.write(globalThis.fetch.name)";
