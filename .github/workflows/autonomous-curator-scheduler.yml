@@ -71,27 +71,111 @@ jobs:
             printf '%s' "$token"
           }
 
-          start_file="$RUNNER_TEMP/autonomous-curator-start.json"
-          status_file="$RUNNER_TEMP/autonomous-curator-status.json"
-          token="$(get_oidc_token)"
-          curl --fail-with-body --silent --show-error --max-time 30 \
-            -o "$start_file" \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Content-Type: application/json' \
-            -d '{"dryRun":false,"notify":true}' \
-            "$base/api/internal/autonomous-curator/daily"
+          response_code() {
+            node - "$1" <<'NODE'
+          const fs = require('node:fs');
+          try {
+            const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+            const code = typeof body?.code === 'string' ? body.code : '';
+            process.stdout.write(/^[A-Z0-9_:.-]{1,160}$/.test(code) ? code : '');
+          } catch { process.stdout.write(''); }
+          NODE
+          }
 
-          node - "$start_file" <<'NODE'
+          readiness_file="$RUNNER_TEMP/autonomous-curator-readiness.json"
+          readiness_ready=false
+          for attempt in $(seq 1 24); do
+            token="$(get_oidc_token)"
+            readiness_status="$(curl --silent --show-error --max-time 30 \
+              -o "$readiness_file" -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              "$base/api/internal/autonomous-curator/readiness" || true)"
+
+            if [ "$readiness_status" = "200" ]; then
+              if node - "$readiness_file" <<'NODE'
           const fs = require('node:fs');
           const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (body?.ok !== true) process.exit(1);
-          if (body?.status === 'disabled') {
-            console.log('AUTONOMOUS_CURATOR=disabled');
-            process.exit(0);
-          }
-          if (body?.accepted !== true) process.exit(1);
-          console.log(`AUTONOMOUS_CURATOR_START=${body.status || 'accepted'}`);
+          if (body?.ok !== true || body?.dependency !== 'supabase' || body?.reviewOnly !== true) process.exit(1);
           NODE
+              then
+                readiness_ready=true
+                echo "AUTONOMOUS_CURATOR_READINESS=true"
+                break
+              fi
+            fi
+
+            if [ "$readiness_status" = "401" ] || [ "$readiness_status" = "403" ]; then
+              echo "Autonomous Curator readiness authorization failed."
+              exit 1
+            fi
+
+            code="$(response_code "$readiness_file")"
+            echo "Autonomous Curator not ready yet (attempt ${attempt}/24, http=${readiness_status:-000}, code=${code:-unknown}); retrying."
+            sleep 10
+          done
+
+          if [ "$readiness_ready" != "true" ]; then
+            echo "Autonomous Curator dependencies did not become ready in time."
+            exit 1
+          fi
+
+          start_file="$RUNNER_TEMP/autonomous-curator-start.json"
+          status_file="$RUNNER_TEMP/autonomous-curator-status.json"
+          start_accepted=false
+          for attempt in $(seq 1 12); do
+            token="$(get_oidc_token)"
+            start_status="$(curl --silent --show-error --max-time 30 \
+              -o "$start_file" -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Content-Type: application/json' \
+              -d '{"dryRun":false,"notify":true}' \
+              "$base/api/internal/autonomous-curator/daily" || true)"
+
+            if [ "$start_status" = "200" ] || [ "$start_status" = "202" ]; then
+              start_state="$(node - "$start_file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true) process.stdout.write('invalid');
+          else if (body?.status === 'disabled') process.stdout.write('disabled');
+          else if (body?.accepted === true) process.stdout.write(`accepted:${body.status || 'accepted'}`);
+          else process.stdout.write('invalid');
+          NODE
+          )"
+              if [ "$start_state" = "disabled" ]; then
+                echo "AUTONOMOUS_CURATOR=disabled"
+                exit 0
+              fi
+              if [[ "$start_state" == accepted:* ]]; then
+                echo "AUTONOMOUS_CURATOR_START=${start_state#accepted:}"
+                start_accepted=true
+                break
+              fi
+              echo "Autonomous Curator returned an invalid successful response."
+              exit 1
+            fi
+
+            case "$start_status" in
+              000|429|502|503|504)
+                code="$(response_code "$start_file")"
+                echo "Autonomous Curator start transient failure (attempt ${attempt}/12, http=${start_status:-000}, code=${code:-unknown}); retrying."
+                sleep 10
+                ;;
+              401|403)
+                echo "Autonomous Curator start authorization failed."
+                exit 1
+                ;;
+              *)
+                code="$(response_code "$start_file")"
+                echo "Autonomous Curator start failed (http=${start_status:-000}, code=${code:-unknown})."
+                exit 1
+                ;;
+            esac
+          done
+
+          if [ "$start_accepted" != "true" ]; then
+            echo "Autonomous Curator start was not accepted after transient retries."
+            exit 1
+          fi
 
           expected_date="$(TZ=America/Fortaleza date +%F)"
           for attempt in $(seq 1 180); do
