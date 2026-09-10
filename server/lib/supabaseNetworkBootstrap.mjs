@@ -1,10 +1,14 @@
+import dns from "node:dns";
 import https from "node:https";
 
-const rawSupabaseUrl = String(process.env.SUPABASE_URL || "").trim();
+const rawSupabaseUrl = String(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "").trim();
 const rawTimeout = Number.parseInt(String(process.env.SUPABASE_HTTP_TIMEOUT_MS || ""), 10);
 const timeoutMs = Number.isSafeInteger(rawTimeout)
   ? Math.min(60_000, Math.max(1_000, rawTimeout))
   : 15_000;
+
+const fallbackResolver = new dns.Resolver();
+fallbackResolver.setServers(["1.1.1.1", "8.8.8.8"]);
 
 function safeNetworkError(error) {
   const rawCode = error && typeof error === "object" ? String(error.code || "") : "";
@@ -21,6 +25,32 @@ function appendHeaders(target, source) {
       target.append(name, String(value));
     }
   }
+}
+
+function resilientIpv4Lookup(hostname, options, callback) {
+  dns.lookup(hostname, { family: 4 }, (error, address, family) => {
+    if (!error && address) {
+      callback(null, address, family || 4);
+      return;
+    }
+
+    const code = error && typeof error === "object" ? String(error.code || "") : "";
+    if (code !== "ENOTFOUND" && code !== "EAI_AGAIN") {
+      callback(error || Object.assign(new Error("DNS lookup failed"), { code: "EAI_FAIL" }));
+      return;
+    }
+
+    fallbackResolver.resolve4(hostname, (fallbackError, addresses) => {
+      const fallbackAddress = Array.isArray(addresses) ? addresses[0] : undefined;
+      if (fallbackError || !fallbackAddress) {
+        callback(fallbackError || error || Object.assign(new Error("DNS fallback failed"), { code: "ENOTFOUND" }));
+        return;
+      }
+
+      console.warn(`[SUPABASE-TRANSPORT] dns_fallback host=${hostname} system_code=${code || "unknown"}`);
+      callback(null, fallbackAddress, 4);
+    });
+  });
 }
 
 async function requestWithFreshIpv4Socket(request, expectedOrigin) {
@@ -55,6 +85,7 @@ async function requestWithFreshIpv4Socket(request, expectedOrigin) {
       method: request.method,
       headers: Object.fromEntries(request.headers.entries()),
       family: 4,
+      lookup: resilientIpv4Lookup,
       agent: false,
     }, (nodeResponse) => {
       const chunks = [];
@@ -108,7 +139,7 @@ if (rawSupabaseUrl && typeof globalThis.fetch === "function") {
       return requestWithFreshIpv4Socket(request, supabaseOrigin);
     };
 
-    console.log(`[SUPABASE-TRANSPORT] enabled mode=node-https-ipv4-fresh-socket timeout_ms=${timeoutMs}`);
+    console.log(`[SUPABASE-TRANSPORT] enabled mode=node-https-ipv4-fresh-socket-dns-fallback timeout_ms=${timeoutMs}`);
   } catch {
     console.error("[SUPABASE-TRANSPORT] invalid SUPABASE_URL; custom transport not enabled");
   }
