@@ -53,10 +53,62 @@ function getPublicCatalogApiUrl(): string {
   return `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}`;
 }
 
+function getPublicCatalogBackendFallbackUrl(): string {
+  return `${getApiUrl('/api/products')}?t=${Date.now()}`;
+}
+
+function catalogListFromPayload(payload: any): any[] | null {
+  return Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.products)
+      ? payload.products
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : null;
+}
+
+async function loadPublicCatalog(url: string, source: string): Promise<any[]> {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`${source} retornou HTTP ${response.status}.`);
+  }
+
+  const payload = await response.json();
+  const list = catalogListFromPayload(payload);
+  if (!list) {
+    throw new Error(`${source} não contém uma lista válida.`);
+  }
+
+  const publicProducts = toPublicProductDTOs(list);
+  if (publicProducts.length !== list.length) {
+    console.warn(`[Catalog] ${list.length - publicProducts.length} registro(s) omitido(s) pela projeção pública canônica em ${source}.`);
+  }
+  console.log(`[Catalog] ${publicProducts.length} registros públicos carregados via ${source}.`);
+  return publicProducts;
+}
+
 /**
- * Leituras públicas do catálogo são servidas exclusivamente pela Edge Function.
- * O backend Render permanece reservado a operações administrativas e mutações.
+ * A Supabase Edge continua sendo a fonte pública canônica. Se o navegador não
+ * conseguir alcançar o domínio Supabase (ex.: falha DNS/transport), fazemos uma
+ * única tentativa de leitura pelo backend, que devolve a mesma whitelist pública
+ * e continua lendo o mesmo public.products. O backend é apenas fallback de
+ * transporte; não vira uma segunda fonte de verdade e nenhuma mutação é refeita.
  */
+export async function getProducts(): Promise<any[]> {
+  try {
+    return await loadPublicCatalog(getPublicCatalogApiUrl(), 'Supabase Edge');
+  } catch (edgeError) {
+    console.warn('[Catalog] Falha no transporte direto da Supabase Edge; tentando fallback público do backend.', edgeError);
+  }
+
+  try {
+    return await loadPublicCatalog(getPublicCatalogBackendFallbackUrl(), 'backend Cerberus');
+  } catch (backendError) {
+    console.error('[Catalog] Edge e fallback público do backend indisponíveis.', backendError);
+    throw new Error('Catálogo temporariamente indisponível. Não foi possível alcançar a fonte pública nem o transporte de contingência.');
+  }
+}
+
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   try {
     const res = await fetch(getApiUrl('/api/institutional/social-links'), { cache: 'no-store' });
@@ -72,33 +124,6 @@ export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
   } catch {
     return [];
   }
-}
-
-export async function getProducts(): Promise<any[]> {
-  const response = await fetch(getPublicCatalogApiUrl(), { cache: 'no-store' });
-
-  if (!response.ok) {
-    throw new Error(`Catálogo indisponível: API pública retornou HTTP ${response.status}.`);
-  }
-
-  const payload = await response.json();
-  const list = Array.isArray(payload)
-    ? payload
-    : Array.isArray(payload?.products)
-      ? payload.products
-      : Array.isArray(payload?.data)
-        ? payload.data
-        : null;
-  if (!list) {
-    throw new Error('Catálogo indisponível: API pública não contém uma lista válida.');
-  }
-
-  console.log(`[Catalog] ${list.length} registros carregados da API pública canônica.`);
-  const publicProducts = toPublicProductDTOs(list);
-  if (publicProducts.length !== list.length) {
-    console.warn(`[Catalog] ${list.length - publicProducts.length} registro(s) omitido(s) pela projeção pública canônica.`);
-  }
-  return publicProducts;
 }
 
 export async function verifyAdminPassword(password: string): Promise<{ success: boolean; error?: string }> {
@@ -257,4 +282,6 @@ export const publicCatalogApiInternals = {
   PRODUCTION_API_BASE,
   PUBLIC_CATALOG_EDGE_BASE,
   getPublicCatalogApiUrl,
+  getPublicCatalogBackendFallbackUrl,
+  catalogListFromPayload,
 };
