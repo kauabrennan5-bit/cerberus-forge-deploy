@@ -67,6 +67,31 @@ function safeProviderErrorParam(value: unknown): string | null {
   return /^[a-zA-Z0-9_.\[\]-]{1,120}$/.test(normalized) ? normalized : null;
 }
 
+function safeDiagnosticText(value: unknown, maxLength = 180): string | null {
+  const normalized = String(value ?? "").trim().replace(/[^a-zA-Z0-9 _.:/\-]/g, "_");
+  if (!normalized) return null;
+  return normalized.slice(0, maxLength);
+}
+
+function safeDependencyDiagnostic(error: unknown): string {
+  if (error instanceof Error) {
+    const name = safeDiagnosticText(error.name, 60) || "Error";
+    const message = safeDiagnosticText(error.message) || "unknown";
+    const cause = error.cause && typeof error.cause === "object"
+      ? safeDiagnosticText((error.cause as { code?: unknown }).code, 80)
+      : null;
+    return [name, message, cause].filter(Boolean).join(":");
+  }
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const code = safeDiagnosticText(record.code, 80);
+    const status = safeDiagnosticText(record.status ?? record.statusCode, 20);
+    const message = safeDiagnosticText(record.message);
+    return [code, status, message].filter(Boolean).join(":") || "unknown_object";
+  }
+  return safeDiagnosticText(error) || "unknown";
+}
+
 function classifyOpenAIProviderProbe(httpStatus: number, errorCode: string | null): OpenAIProviderProbeStatus {
   if (httpStatus === 401 || httpStatus === 403) return "auth_error";
   if (httpStatus === 404) return "model_unavailable";
@@ -158,6 +183,22 @@ function alreadyRunning(res: Response) {
 }
 
 export function registerAutonomousCuratorRoutes(app: Express): void {
+  app.get("/api/internal/autonomous-curator/readiness", async (req, res) => {
+    if (!(await authorize(req, res))) return;
+    try {
+      const config = await getAutonomousCuratorConfig();
+      return res.status(200).json({
+        ok: true,
+        dependency: "supabase",
+        enabled: config.enabled,
+        reviewOnly: config.autoPublishEnabled === false,
+      });
+    } catch (error) {
+      console.warn(`[AUTONOMOUS-CURATOR] readiness_dependency_unavailable diagnostic=${safeDependencyDiagnostic(error)}`);
+      return res.status(503).json({ ok: false, code: "AUTONOMOUS_CURATOR_DEPENDENCY_UNAVAILABLE" });
+    }
+  });
+
   app.get("/api/internal/autonomous-curator/invariant", async (req, res) => {
     if (!(await authorize(req, res))) return;
     try {
@@ -183,8 +224,16 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
     const notify = req.body?.notify !== false;
     const wait = req.body?.wait === true;
     const manual = req.body?.manual === true;
+
+    let config;
     try {
-      const config = await getAutonomousCuratorConfig();
+      config = await getAutonomousCuratorConfig();
+    } catch (error) {
+      console.warn(`[AUTONOMOUS-CURATOR] daily_dependency_unavailable diagnostic=${safeDependencyDiagnostic(error)}`);
+      return res.status(503).json({ ok: false, code: "AUTONOMOUS_CURATOR_DEPENDENCY_UNAVAILABLE" });
+    }
+
+    try {
       if (!dryRun && !config.enabled) return res.status(200).json({ ok: true, accepted: false, status: "disabled" });
       if (activeExecution) return alreadyRunning(res);
       if (wait) {
@@ -195,12 +244,12 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
       activeCycleId = null;
       activeExecution = runAutonomousCuratorDaily({ dryRun, notify, manual }, { extractor: extractForAutonomousCurator })
         .then(result => console.info(`[AUTONOMOUS-CURATOR] background_complete status=${result.status} run=${result.runId || "none"}`))
-        .catch(error => console.error(`[AUTONOMOUS-CURATOR] background_failed code=${safeCode(error)}`))
+        .catch(error => console.error(`[AUTONOMOUS-CURATOR] background_failed code=${safeCode(error)} diagnostic=${safeDependencyDiagnostic(error)}`))
         .finally(() => { activeExecution = null; activeMode = null; activeCycleId = null; });
       return res.status(202).json({ ok: true, accepted: true, status: "started", dryRun });
     } catch (error) {
       const code = safeCode(error);
-      console.error(`[AUTONOMOUS-CURATOR] daily_start_failed code=${code}`);
+      console.error(`[AUTONOMOUS-CURATOR] daily_start_failed code=${code} diagnostic=${safeDependencyDiagnostic(error)}`);
       return res.status(500).json({ ok: false, code });
     }
   });
@@ -209,8 +258,16 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
     if (!(await authorize(req, res))) return;
     const notify = req.body?.notify !== false;
     const wait = req.body?.wait === true;
+
+    let config;
     try {
-      const config = await getAutonomousCuratorConfig();
+      config = await getAutonomousCuratorConfig();
+    } catch (error) {
+      console.warn(`[AUTONOMOUS-CURATOR] continuous_dependency_unavailable diagnostic=${safeDependencyDiagnostic(error)}`);
+      return res.status(503).json({ ok: false, code: "AUTONOMOUS_CURATOR_DEPENDENCY_UNAVAILABLE" });
+    }
+
+    try {
       if (!config.enabled) return res.status(200).json({ ok: true, accepted: false, status: "disabled" });
       if (activeExecution) return alreadyRunning(res);
       const cycleId = `continuous-${randomUUID()}`;
@@ -222,12 +279,12 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
       activeCycleId = cycleId;
       activeExecution = runAutonomousCuratorContinuousV2({ cycleId, notify, extractor: extractForAutonomousCurator })
         .then(result => console.info(`[AUTONOMOUS-CURATOR] continuous_v2_complete status=${result.status} run=${result.runId || "none"} cycle=${cycleId}`))
-        .catch(error => console.error(`[AUTONOMOUS-CURATOR] continuous_v2_failed cycle=${cycleId} code=${safeCode(error)}`))
+        .catch(error => console.error(`[AUTONOMOUS-CURATOR] continuous_v2_failed cycle=${cycleId} code=${safeCode(error)} diagnostic=${safeDependencyDiagnostic(error)}`))
         .finally(() => { activeExecution = null; activeMode = null; activeCycleId = null; });
       return res.status(202).json({ ok: true, accepted: true, status: "started", mode: "continuous", cycleId });
     } catch (error) {
       const code = safeCode(error);
-      console.error(`[AUTONOMOUS-CURATOR] continuous_start_failed code=${code}`);
+      console.error(`[AUTONOMOUS-CURATOR] continuous_start_failed code=${code} diagnostic=${safeDependencyDiagnostic(error)}`);
       return res.status(500).json({ ok: false, code });
     }
   });
@@ -282,7 +339,8 @@ export function registerAutonomousCuratorRoutes(app: Express): void {
         latestContinuousCycle: latest?.metadata && typeof latest.metadata === "object" ? latest.metadata.continuous_cycles?.slice?.(-1)?.[0] || null : null,
         categories,
       });
-    } catch {
+    } catch (error) {
+      console.warn(`[AUTONOMOUS-CURATOR] status_dependency_unavailable diagnostic=${safeDependencyDiagnostic(error)}`);
       return res.status(503).json({ ok: false, code: "AUTONOMOUS_CURATOR_STATUS_UNAVAILABLE" });
     }
   });
@@ -292,6 +350,7 @@ export const autonomousCuratorRouteInternals = {
   resolveAutonomousCuratorCopyModel,
   safeProviderErrorCode,
   safeProviderErrorParam,
+  safeDependencyDiagnostic,
   classifyOpenAIProviderProbe,
   probeAutonomousCuratorProviders,
   extractForAutonomousCurator,
