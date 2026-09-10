@@ -57,16 +57,20 @@ test("runtime public list only treats active published rows as visible", () => {
   assert.deepEqual(catalogSyncInternals.publicListFromPayload({ products: [{ id: "a" }] }), [{ id: "a" }]);
 });
 
-test("frontend keeps Supabase Edge canonical and uses backend only as public transport fallback", () => {
+test("frontend preserves canonical live ordering and uses snapshot only as last-known-good contingency", () => {
   const getProductsBody = frontendApiSource.slice(
     frontendApiSource.indexOf("export async function getProducts"),
     frontendApiSource.indexOf("export async function getPublicSocialLinks"),
   );
-  assert.match(getProductsBody, /getPublicCatalogApiUrl\(\)/);
-  assert.match(getProductsBody, /getPublicCatalogBackendFallbackUrl\(\)/);
-  assert.match(getProductsBody, /Supabase Edge/);
-  assert.match(getProductsBody, /backend Cerberus/);
-  assert.equal(getProductsBody.includes("/data/products.json"), false);
+  const edgeIndex = getProductsBody.indexOf("getPublicCatalogApiUrl()");
+  const backendIndex = getProductsBody.indexOf("getPublicCatalogBackendFallbackUrl()");
+  const snapshotIndex = getProductsBody.indexOf("getLastKnownGoodCatalogUrl()");
+
+  assert.ok(edgeIndex >= 0, "Supabase Edge must remain the primary public source");
+  assert.ok(backendIndex > edgeIndex, "backend transport fallback must run only after Edge failure");
+  assert.ok(snapshotIndex > backendIndex, "last-known-good snapshot must be the final read-only contingency");
+  assert.match(frontendApiSource, /function getLastKnownGoodCatalogUrl\(\).*\/data\/products\.json/s);
+  assert.match(getProductsBody, /snapshot público last-known-good/);
   assert.match(frontendApiSource, /toPublicProductDTOs\(list\)/);
   assert.match(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
   assert.match(serverSource, /app\.get\("\/api\/products"/);
