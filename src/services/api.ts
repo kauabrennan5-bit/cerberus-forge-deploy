@@ -29,7 +29,7 @@ export interface ApiResponse<T = any> {
 }
 
 const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
-const PUBLIC_CATALOG_EDGE_BASE = String(import.meta.env.VITE_PUBLIC_CATALOG_EDGE_BASE || '').replace(/\/+$/, '');
+const PUBLIC_CATALOG_EDGE_BASE = String(import.meta.env?.VITE_PUBLIC_CATALOG_EDGE_BASE || '').replace(/\/+$/, '');
 
 function getApiUrl(path: string): string {
   try {
