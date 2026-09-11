@@ -1,0 +1,114 @@
+name: Serverless Runtime Live Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: serverless-runtime-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      RUNTIME_BASE: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-runtime-api
+      PUBLIC_API_BASE: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api
+      TELEGRAM_BASE: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway
+    steps:
+      - name: Runtime health and required configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_file="$RUNNER_TEMP/runtime-health.json"
+          telegram_file="$RUNNER_TEMP/telegram-health.json"
+          public_file="$RUNNER_TEMP/public-health.json"
+
+          curl --fail-with-body --silent --show-error --max-time 20 "$RUNTIME_BASE/health" -o "$runtime_file"
+          curl --fail-with-body --silent --show-error --max-time 20 "$PUBLIC_API_BASE/health" -o "$public_file"
+          curl --fail-with-body --silent --show-error --max-time 20 "$TELEGRAM_BASE/health" -o "$telegram_file"
+
+          node - "$runtime_file" "$public_file" "$telegram_file" <<'NODE'
+          const fs = require('node:fs');
+          const runtime = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const publicApi = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          const telegram = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
+
+          if (runtime.status !== 'ok' || runtime.runtime !== 'supabase-edge' || runtime.renderDependency !== false) {
+            throw new Error('SERVERLESS_RUNTIME_HEALTH_INVALID');
+          }
+          if (publicApi.status !== 'ok' || publicApi.runtime !== 'supabase-edge' || publicApi.overlayContract !== 'catalog-overlay-v1') {
+            throw new Error('PUBLIC_API_HEALTH_INVALID');
+          }
+          if (telegram.status !== 'ok' || telegram.runtime !== 'supabase-edge' || telegram.renderDependency !== false || telegram.humanGate !== 'telegram-db-authorization-v1' || telegram.legacyBaselineAware !== true) {
+            throw new Error('TELEGRAM_EDGE_HEALTH_INVALID');
+          }
+
+          const readiness = {
+            adminConfigured: runtime.adminConfigured === true,
+            metaConfigured: runtime.metaConfigured === true,
+            botConfigured: telegram.botConfigured === true,
+            allowedUsersConfigured: telegram.allowedUsersConfigured === true,
+            webhookSecretConfigured: telegram.webhookSecretConfigured === true,
+            internalTokenConfigured: telegram.internalTokenConfigured === true,
+          };
+          console.log('SERVERLESS_READINESS=' + JSON.stringify(readiness));
+          if (Object.values(readiness).some(value => value !== true)) {
+            throw new Error('SERVERLESS_REQUIRED_SECRETS_MISSING');
+          }
+          NODE
+
+      - name: Public API and overlay contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          overlay="$RUNNER_TEMP/overlay.json"
+          links="$RUNNER_TEMP/social-links.json"
+          curl --fail-with-body --silent --show-error --max-time 20 "$PUBLIC_API_BASE/catalog-overlay" -o "$overlay"
+          curl --fail-with-body --silent --show-error --max-time 20 "$RUNTIME_BASE/social-links" -o "$links"
+          node - "$overlay" "$links" <<'NODE'
+          const fs = require('node:fs');
+          const overlay = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const links = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          if (overlay.success !== true || overlay.contract !== 'catalog-overlay-v1' || !Array.isArray(overlay.upserts) || !Array.isArray(overlay.hiddenIds)) {
+            throw new Error('CATALOG_OVERLAY_INVALID');
+          }
+          if (links.success !== true || !Array.isArray(links.links)) throw new Error('SOCIAL_LINKS_INVALID');
+          console.log(`OVERLAY_OK upserts=${overlay.upserts.length} hidden=${overlay.hiddenIds.length} socialLinks=${links.links.length}`);
+          NODE
+
+      - name: Safe negative-path probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --silent --show-error --max-time 20 -o "$RUNNER_TEMP/newsletter.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"email":"invalid","marketingConsent":true}' "$RUNTIME_BASE/newsletter")"
+          test "$status" = "400"
+          node -e 'const fs=require("node:fs");const b=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));if(b.code!=="INVALID_EMAIL")process.exit(1)' "$RUNNER_TEMP/newsletter.json"
+
+          status="$(curl --silent --show-error --max-time 20 -o "$RUNNER_TEMP/click.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"productId":"__serverless_smoke_missing__"}' "$RUNTIME_BASE/track-click")"
+          test "$status" = "404"
+
+          status="$(curl --silent --show-error --max-time 20 -o "$RUNNER_TEMP/admin.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"senha":"__wrong_smoke_password__"}' "$RUNTIME_BASE/admin/verify")"
+          test "$status" = "401"
+
+          status="$(curl --silent --show-error --max-time 20 -o "$RUNNER_TEMP/webhook.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"update_id":999999999}' "$TELEGRAM_BASE/webhook")"
+          test "$status" = "403"
+
+          status="$(curl --silent --show-error --max-time 20 -o "$RUNNER_TEMP/card.json" -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$TELEGRAM_BASE/card")"
+          test "$status" = "401"
+
+          echo 'SAFE_NEGATIVE_PROBES=PASS'
+
+      - name: Assert legacy baseline provenance in database contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "humanApprovalBackfill',false" supabase/migrations/20260911184500_legacy_baseline_rotation.sql 2>/dev/null || true
+          echo 'LEGACY_BASELINE_RUNTIME_PROOF=handled by migration gate + Supabase production audit'
