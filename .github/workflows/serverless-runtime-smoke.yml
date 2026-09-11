@@ -1,0 +1,94 @@
+name: Serverless Runtime Smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/services/api.ts"
+      - "supabase/functions/**"
+      - "supabase/migrations/**"
+      - ".github/workflows/serverless-runtime-smoke.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "src/services/api.ts"
+      - "supabase/functions/**"
+      - "supabase/migrations/**"
+      - ".github/workflows/serverless-runtime-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_FUNCTIONS_BASE: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1
+    steps:
+      - name: Probe public catalog Edge health
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/public-health.json"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            "$SUPABASE_FUNCTIONS_BASE/cerberus-public-api/health" -o "$file"
+          node - "$file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.status !== 'ok') throw new Error('public API health failed');
+          if (body?.runtime !== 'supabase-edge') throw new Error('public API is not Supabase Edge');
+          if (body?.publicationGate !== 'strict-or-human-v1') throw new Error('publication gate mismatch');
+          if (body?.overlayContract !== 'catalog-overlay-v1') throw new Error('catalog overlay contract mismatch');
+          console.log('PUBLIC_EDGE_HEALTH=PASS');
+          NODE
+
+      - name: Probe public overlay contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/catalog-overlay.json"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            "$SUPABASE_FUNCTIONS_BASE/cerberus-public-api/catalog-overlay" -o "$file"
+          node - "$file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.success !== true || body?.contract !== 'catalog-overlay-v1') throw new Error('invalid catalog overlay');
+          if (!Array.isArray(body?.upserts) || !Array.isArray(body?.hiddenIds)) throw new Error('invalid overlay shape');
+          console.log(`CATALOG_OVERLAY=PASS upserts=${body.upserts.length} hidden=${body.hiddenIds.length}`);
+          NODE
+
+      - name: Probe runtime Edge health
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/runtime-health.json"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            "$SUPABASE_FUNCTIONS_BASE/cerberus-runtime-api/health" -o "$file"
+          node - "$file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.status !== 'ok' || body?.runtime !== 'supabase-edge') throw new Error('runtime API health failed');
+          if (body?.renderDependency !== false) throw new Error('runtime API still depends on Render');
+          console.log(`RUNTIME_EDGE_HEALTH=PASS adminConfigured=${body.adminConfigured} metaConfigured=${body.metaConfigured}`);
+          NODE
+
+      - name: Probe Telegram Edge health
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="$RUNNER_TEMP/telegram-health.json"
+          curl --fail-with-body --silent --show-error --max-time 20 \
+            "$SUPABASE_FUNCTIONS_BASE/cerberus-telegram-gateway/health" -o "$file"
+          node - "$file" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.status !== 'ok' || body?.runtime !== 'supabase-edge') throw new Error('Telegram Edge health failed');
+          if (body?.renderDependency !== false) throw new Error('Telegram Edge still depends on Render');
+          if (body?.humanGate !== 'telegram-db-authorization-v1') throw new Error('Telegram human gate mismatch');
+          if (body?.legacyBaselineAware !== true) throw new Error('Telegram legacy baseline contract missing');
+          console.log(`TELEGRAM_EDGE_HEALTH=PASS botConfigured=${body.botConfigured} webhookSecretConfigured=${body.webhookSecretConfigured}`);
+          NODE
