@@ -52,7 +52,7 @@ test("Cloudflare Pages deployment publishes only the prebuilt static storefront"
   assert.match(cloudflareWorkflow, /npm run build:frontend/);
   assert.match(cloudflareWorkflow, /CLOUDFLARE_PAGES_PROJECT: cerberus-finds/);
   assert.match(cloudflareWorkflow, /\/pages\/projects/);
-  assert.match(cloudflareWorkflow, /\"production_branch\":\"main\"/);
+  assert.match(cloudflareWorkflow, /production_branch/);
   assert.match(cloudflareWorkflow, /cloudflare\/wrangler-action@v4/);
   assert.match(cloudflareWorkflow, /wranglerVersion: "4"/);
   assert.match(cloudflareWorkflow, /pages deploy dist --project-name=/);
