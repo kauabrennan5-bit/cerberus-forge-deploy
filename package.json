@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "node scripts/build-by-target.mjs",
+    "build:frontend": "node --import ./server/lib/supabaseNetworkBootstrap.mjs --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js",
     "build:full": "node --import ./server/lib/supabaseNetworkBootstrap.mjs --import tsx scripts/generate-static-catalog.js && vite build && node --import tsx scripts/generate-product-og-pages.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "build:backend": "node --import ./server/lib/supabaseNetworkBootstrap.mjs --import tsx scripts/generate-static-catalog.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node --import ./server/lib/supabaseNetworkBootstrap.mjs dist/server.cjs",
