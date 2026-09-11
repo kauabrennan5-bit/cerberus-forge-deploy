@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   smoke:
+    if: github.event_name == 'workflow_dispatch' || vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
