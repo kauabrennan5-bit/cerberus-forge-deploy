@@ -92,6 +92,21 @@ jobs:
           console.log(`Cloudflare Pages project created: ${body.result.name} (${body.result.subdomain})`);
           NODE
 
+      - name: Stamp deployment metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          fs.writeFileSync('dist/deploy-meta.json', JSON.stringify({
+            version: 1,
+            platform: 'cloudflare-pages',
+            sha: process.env.GITHUB_SHA,
+            repository: process.env.GITHUB_REPOSITORY,
+            generatedAt: new Date().toISOString(),
+          }, null, 2));
+          NODE
+
       - name: Deploy storefront to Cloudflare Pages
         uses: cloudflare/wrangler-action@v4
         with:
@@ -99,3 +114,41 @@ jobs:
           accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4"
           command: pages deploy dist --project-name=${{ env.CLOUDFLARE_PAGES_PROJECT }} --branch=main
+
+      - name: Verify canonical Cloudflare storefront
+        shell: bash
+        env:
+          STOREFRONT_URL: https://cerberus-finds.pages.dev
+        run: |
+          set -euo pipefail
+          root_file="$RUNNER_TEMP/cloudflare-root.html"
+          catalog_file="$RUNNER_TEMP/cloudflare-products.json"
+          meta_file="$RUNNER_TEMP/cloudflare-deploy-meta.json"
+
+          for attempt in $(seq 1 18); do
+            root_status="$(curl --silent --show-error --max-time 20 -o "$root_file" -w '%{http_code}' "$STOREFRONT_URL/" || true)"
+            catalog_status="$(curl --silent --show-error --max-time 20 -o "$catalog_file" -w '%{http_code}' "$STOREFRONT_URL/data/products.json" || true)"
+            meta_status="$(curl --silent --show-error --max-time 20 -o "$meta_file" -w '%{http_code}' "$STOREFRONT_URL/deploy-meta.json" || true)"
+            if [ "$root_status" = "200" ] && [ "$catalog_status" = "200" ] && [ "$meta_status" = "200" ]; then
+              if node - "$catalog_file" "$meta_file" <<'NODE'
+          const fs = require('node:fs');
+          const catalog = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const meta = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          if (!Array.isArray(catalog) || catalog.length < 1) process.exit(2);
+          if (meta?.sha !== process.env.GITHUB_SHA || meta?.platform !== 'cloudflare-pages') process.exit(3);
+          for (const row of catalog) {
+            if (row?.ativo !== true || row?.status !== 'published') process.exit(4);
+            if ('curator_note' in row || 'created_by' in row || 'human_editorial_review_id' in row) process.exit(5);
+          }
+          console.log(`CLOUDFLARE_STOREFRONT_VERIFIED products=${catalog.length} sha=${meta.sha}`);
+          NODE
+              then
+                exit 0
+              fi
+            fi
+            echo "Cloudflare storefront not ready yet, attempt $attempt/18 (root=$root_status catalog=$catalog_status meta=$meta_status)."
+            sleep 5
+          done
+
+          echo "Cloudflare storefront verification failed."
+          exit 1
