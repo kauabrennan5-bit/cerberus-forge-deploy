@@ -34,8 +34,9 @@ jobs:
         run: npm run build:frontend
 
       - name: Deploy to Cloudflare Workers Static Assets
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: 74f70eb5897940cbeb73dd38d911542c
+          wranglerVersion: "4"
           command: deploy
