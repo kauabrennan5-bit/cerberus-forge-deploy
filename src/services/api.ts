@@ -84,7 +84,10 @@ function parseCatalogOverlay(payload: any): CatalogOverlay | null {
   if (!payload || payload.success !== true || payload.contract !== 'catalog-overlay-v1') return null;
   if (!Array.isArray(payload.upserts) || !Array.isArray(payload.hiddenIds)) return null;
   const upserts = toPublicProductDTOs(payload.upserts);
-  const hiddenIds = [...new Set(payload.hiddenIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0).map((id: string) => id.trim()))];
+  const normalizedHiddenIds: string[] = payload.hiddenIds
+    .filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
+    .map((id: string) => id.trim());
+  const hiddenIds: string[] = [...new Set<string>(normalizedHiddenIds)];
   return { contract: 'catalog-overlay-v1', upserts, hiddenIds };
 }
 
