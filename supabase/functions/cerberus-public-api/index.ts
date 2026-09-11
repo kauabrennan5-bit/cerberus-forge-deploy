@@ -49,7 +49,7 @@ async function eligibleProductsByIds(ids?: string[]): Promise<Record<string, unk
   if (error) throw new Error(`PRODUCTS_QUERY_FAILED:${error.code || "unknown"}`);
   const rows = Array.isArray(data) ? data as Record<string, unknown>[] : [];
   const gate = await Promise.all(rows.map(publicationGate));
-  return rows.filter((_, i) => gate[i]);
+  return rows.filter((_, index) => gate[index]);
 }
 
 function json(body: unknown, status = 200) { return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" } }); }
