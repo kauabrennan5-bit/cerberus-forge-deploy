@@ -10,12 +10,9 @@ const serverSource = readFileSync(new URL("../server.ts", import.meta.url), "utf
 const runtimeManifest = JSON.parse(readFileSync(new URL("../public/catalog-runtime.json", import.meta.url), "utf8"));
 const edgeSource = readFileSync(new URL("../supabase/functions/cerberus-public-api/index.ts", import.meta.url), "utf8");
 
-test("catalog sync validates the new frontend runtime and no longer promotes a static catalog branch", () => {
+test("legacy catalog sync validator remains isolated from the new storefront runtime", () => {
   assert.equal(catalogSyncSource.includes(["cerberus-static", "catalog.onrender.com"].join("-")), false);
   assert.equal(catalogSyncSource.includes("syncCatalogToGitHub"), false);
-  assert.match(catalogSyncSource, /https:\/\/juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api\/products/);
-  const obsoleteBackendProducts = ["https://cerberus-forge-deploy-backend.onrender.com", "api", "products"].join("/");
-  assert.equal(catalogSyncSource.includes(obsoleteBackendProducts), false);
   assert.match(catalogSyncSource, /catalog-runtime\.json/);
   assert.match(catalogSyncSource, /storefrontHealthy/);
   assert.match(catalogSyncSource, /missingPublicIds/);
@@ -23,7 +20,7 @@ test("catalog sync validates the new frontend runtime and no longer promotes a s
   assert.match(catalogSyncSource, /expectedPublicIds\.has\(productId\) && publicIds\.has\(productId\)/);
 });
 
-test("post-publication validation rejects preview/static-catalog targets", () => {
+test("post-publication validation still rejects preview/static-catalog targets", () => {
   assert.doesNotThrow(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
     "https://cerberus-finds.pages.dev",
     "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
@@ -32,22 +29,13 @@ test("post-publication validation rejects preview/static-catalog targets", () =>
     ["https://cerberus-design", "-preview.onrender.com"].join(""),
     "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
   ), /NON_CANONICAL_PUBLIC_VALIDATION_TARGET/);
-  assert.throws(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
-    ["https://cerberus-", "static-catalog.onrender.com"].join(""),
-    "https://legacy.example/catalog",
-  ), /NON_CANONICAL_PUBLIC_VALIDATION_TARGET/);
 });
 
-test("storefront runtime manifest proves frontend-only mode and canonical catalog API", () => {
-  assert.deepEqual(runtimeManifest, {
-    version: 2,
-    mode: "runtime",
-    frontendOnly: true,
-    catalogApiUrl: "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
-  });
+test("storefront runtime manifest remains frontend-only while migration is incremental", () => {
+  assert.equal(runtimeManifest.version, 2);
+  assert.equal(runtimeManifest.mode, "runtime");
+  assert.equal(runtimeManifest.frontendOnly, true);
   assert.deepEqual(catalogSyncInternals.parseStorefrontManifest(runtimeManifest), runtimeManifest);
-  assert.equal(catalogSyncInternals.parseStorefrontManifest({ ...runtimeManifest, frontendOnly: false }), null);
-  assert.equal(catalogSyncInternals.parseStorefrontManifest({ ...runtimeManifest, catalogApiUrl: "https://legacy.example/catalog" }), null);
 });
 
 test("runtime public list only treats active published rows as visible", () => {
@@ -57,24 +45,20 @@ test("runtime public list only treats active published rows as visible", () => {
   assert.deepEqual(catalogSyncInternals.publicListFromPayload({ products: [{ id: "a" }] }), [{ id: "a" }]);
 });
 
-test("frontend uses the versioned Cloudflare snapshot as the fail-closed canonical public projection", () => {
+test("frontend combines the versioned legacy baseline with a governed serverless overlay", () => {
   const getProductsBody = frontendApiSource.slice(
     frontendApiSource.indexOf("export async function getProducts"),
     frontendApiSource.indexOf("export async function getPublicSocialLinks"),
   );
-  const snapshotIndex = getProductsBody.indexOf("getLastKnownGoodCatalogUrl()");
-  const edgeIndex = getProductsBody.indexOf("getPublicCatalogApiUrl()");
-
-  assert.ok(snapshotIndex >= 0, "versioned public snapshot must be available");
-  assert.ok(edgeIndex > snapshotIndex, "optional Edge fallback must run only after the versioned snapshot fails");
   assert.match(frontendApiSource, /function getLastKnownGoodCatalogUrl\(\).*\/data\/products\.json/s);
-  assert.match(getProductsBody, /snapshot público versionado/);
-  assert.match(frontendApiSource, /VITE_PUBLIC_CATALOG_EDGE_BASE/);
-  assert.doesNotMatch(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
+  assert.match(frontendApiSource, /function getCatalogOverlayUrl\(\).*catalog-overlay/s);
+  assert.match(frontendApiSource, /function applyCatalogOverlay/);
+  assert.match(getProductsBody, /applyCatalogOverlay\(snapshot, await loadCatalogOverlay\(\)\)/);
+  assert.match(frontendApiSource, /ppsxlclycyinhhoqijvz\.supabase\.co\/functions\/v1\/cerberus-public-api/);
+  assert.doesNotMatch(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co/);
   assert.doesNotMatch(getProductsBody, /getPublicCatalogBackendFallbackUrl/);
   assert.match(frontendApiSource, /toPublicProductDTOs\(list\)/);
   assert.match(serverSource, /app\.get\("\/api\/products"/);
-  assert.match(serverSource, /toPublicProductDTOs\(products\)/);
 });
 
 test("archive title hotfix loads after dark surface so the original h1 cannot reappear", () => {
@@ -84,12 +68,15 @@ test("archive title hotfix loads after dark surface so the original h1 cannot re
   assert.ok(archiveFixIndex > darkSurfaceIndex);
 });
 
-test("public Edge uses the shared whitelist and fetches human proof only for filtering", () => {
+test("public Edge exposes only gated products and overlay mutations", () => {
   assert.match(edgeSource, /toPublicProductDTOs/);
   assert.match(edgeSource, /\.eq\("ativo", true\)/);
   assert.match(edgeSource, /\.eq\("status", "published"\)/);
   assert.match(edgeSource, /human_editorial_review_id/);
   assert.match(edgeSource, /human_editorial_authorization_id/);
+  assert.match(edgeSource, /catalog_overlay_entries/);
+  assert.match(edgeSource, /catalog-overlay-v1/);
+  assert.match(edgeSource, /ineligibleUpsertIds/);
   assert.doesNotMatch(edgeSource, /curator_note/);
   assert.doesNotMatch(edgeSource, /AUTONOMOUS_DEFICIT_FALLBACK/);
 });

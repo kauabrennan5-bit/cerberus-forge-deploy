@@ -28,29 +28,33 @@ export interface ApiResponse<T = any> {
   message?: string;
 }
 
-const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
-const PUBLIC_CATALOG_EDGE_BASE = String(import.meta.env?.VITE_PUBLIC_CATALOG_EDGE_BASE || '').replace(/\/+$/, '');
+const DEFAULT_SERVERLESS_RUNTIME_BASE = 'https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-runtime-api';
+const DEFAULT_PUBLIC_CATALOG_EDGE_BASE = 'https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api';
+const SERVERLESS_RUNTIME_BASE = String(import.meta.env?.VITE_SERVERLESS_RUNTIME_BASE || DEFAULT_SERVERLESS_RUNTIME_BASE).replace(/\/+$/, '');
+const PUBLIC_CATALOG_EDGE_BASE = String(import.meta.env?.VITE_PUBLIC_CATALOG_EDGE_BASE || DEFAULT_PUBLIC_CATALOG_EDGE_BASE).replace(/\/+$/, '');
 
-function getApiUrl(path: string): string {
-  try {
-    if (typeof window !== 'undefined' && window.location) {
-      const hostname = window.location.hostname;
-      // No storefront estático de produção, operações não-catálogo usam o backend canônico.
-      if (hostname === 'cerberusfinds.com' || hostname.includes('cerberus-design-static')) {
-        return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
-      }
-      if (window.location.origin && window.location.origin !== 'null' && !window.location.origin.startsWith('blob:')) {
-        return `${window.location.origin}${path.startsWith('/') ? path : '/' + path}`;
-      }
-    }
-  } catch {
-    // Fallback
-  }
-  return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
+function runtimePath(path: string): string {
+  if (path === '/api/institutional/social-links') return '/social-links';
+  if (path === '/api/admin/verify') return '/admin/verify';
+  if (path === '/api/admin/extract') return '/admin/extract';
+  if (path === '/api/meta-capi') return '/meta-capi';
+  if (path === '/api/track-click') return '/track-click';
+  if (path === '/api/newsletter') return '/newsletter';
+  if (path === '/api/products') return '/admin/products';
+  if (path.startsWith('/api/products/')) return `/admin/products/${path.slice('/api/products/'.length)}`;
+  throw new Error(`SERVERLESS_ROUTE_NOT_MIGRATED:${path}`);
 }
 
-function getPublicCatalogApiUrl(): string | null {
-  return PUBLIC_CATALOG_EDGE_BASE ? `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}` : null;
+function getApiUrl(path: string): string {
+  return `${SERVERLESS_RUNTIME_BASE}${runtimePath(path)}`;
+}
+
+function getPublicCatalogApiUrl(): string {
+  return `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}`;
+}
+
+function getCatalogOverlayUrl(): string {
+  return `${PUBLIC_CATALOG_EDGE_BASE}/catalog-overlay?t=${Date.now()}`;
 }
 
 function getLastKnownGoodCatalogUrl(): string {
@@ -69,49 +73,70 @@ function catalogListFromPayload(payload: any): any[] | null {
 
 async function loadPublicCatalog(url: string, source: string): Promise<any[]> {
   const response = await fetch(url, { cache: 'no-store' });
-  if (!response.ok) {
-    throw new Error(`${source} retornou HTTP ${response.status}.`);
-  }
-
+  if (!response.ok) throw new Error(`${source} retornou HTTP ${response.status}.`);
   const payload = await response.json();
   const list = catalogListFromPayload(payload);
-  if (!list) {
-    throw new Error(`${source} não contém uma lista válida.`);
-  }
-
+  if (!list) throw new Error(`${source} não contém uma lista válida.`);
   const publicProducts = toPublicProductDTOs(list);
   if (publicProducts.length !== list.length) {
     console.warn(`[Catalog] ${list.length - publicProducts.length} registro(s) omitido(s) pela projeção pública canônica em ${source}.`);
   }
-  console.log(`[Catalog] ${publicProducts.length} registros públicos carregados via ${source}.`);
   return publicProducts;
 }
 
+async function loadCatalogOverlay(): Promise<{ upserts: any[]; hiddenIds: string[] }> {
+  const response = await fetch(getCatalogOverlayUrl(), { cache: 'no-store' });
+  if (!response.ok) throw new Error(`catalog overlay retornou HTTP ${response.status}.`);
+  const payload = await response.json();
+  if (payload?.success !== true || payload?.contract !== 'catalog-overlay-v1' || !Array.isArray(payload.upserts) || !Array.isArray(payload.hiddenIds)) {
+    throw new Error('catalog overlay inválido.');
+  }
+  return {
+    upserts: toPublicProductDTOs(payload.upserts),
+    hiddenIds: payload.hiddenIds.filter((value: unknown): value is string => typeof value === 'string' && value.length > 0),
+  };
+}
+
+function applyCatalogOverlay(base: any[], overlay: { upserts: any[]; hiddenIds: string[] }): any[] {
+  const hidden = new Set(overlay.hiddenIds);
+  const upserts = new Map(overlay.upserts.map(product => [String(product.id), product]));
+  const merged = base
+    .filter(product => !hidden.has(String(product.id)))
+    .map(product => upserts.get(String(product.id)) || product);
+  const baseIds = new Set(base.map(product => String(product.id)));
+  const newRows = overlay.upserts.filter(product => !baseIds.has(String(product.id)) && !hidden.has(String(product.id)));
+  return [...newRows, ...merged];
+}
+
 /**
- * Durante a migração serverless, o snapshot versionado publicado junto do
- * storefront é a projeção pública canônica e fail-closed. Ele só muda por PR/CI
- * e nunca participa de mutações. Uma Supabase Edge nova pode ser habilitada
- * explicitamente por VITE_PUBLIC_CATALOG_EDGE_BASE quando a proveniência do
- * banco estiver reconciliada; até lá não fazemos chamadas ao projeto antigo nem
- * ao backend Render suspenso.
+ * O snapshot versionado continua sendo a baseline dos 30 itens legados, cuja
+ * prova histórica não pode ser inventada. Toda mutação serverless passa pelo
+ * Supabase e aparece na vitrine por um overlay governado: upserts somente de
+ * produtos que passam no gate público e tombstones para itens arquivados/rotados.
  */
 export async function getProducts(): Promise<any[]> {
+  let snapshot: any[] | null = null;
   try {
-    return await loadPublicCatalog(getLastKnownGoodCatalogUrl(), 'snapshot público versionado');
+    snapshot = await loadPublicCatalog(getLastKnownGoodCatalogUrl(), 'snapshot público versionado');
   } catch (snapshotError) {
     console.error('[Catalog] Snapshot público indisponível.', snapshotError);
   }
 
-  const edgeUrl = getPublicCatalogApiUrl();
-  if (edgeUrl) {
+  if (snapshot) {
     try {
-      return await loadPublicCatalog(edgeUrl, 'Supabase Edge configurada');
-    } catch (edgeError) {
-      console.error('[Catalog] Snapshot e Supabase Edge configurada indisponíveis.', edgeError);
+      return applyCatalogOverlay(snapshot, await loadCatalogOverlay());
+    } catch (overlayError) {
+      console.warn('[Catalog] Overlay serverless indisponível; preservando baseline versionada em modo degradado.', overlayError);
+      return snapshot;
     }
   }
 
-  throw new Error('Catálogo temporariamente indisponível. Não foi possível carregar a projeção pública versionada.');
+  try {
+    return await loadPublicCatalog(getPublicCatalogApiUrl(), 'Supabase Edge');
+  } catch (edgeError) {
+    console.error('[Catalog] Snapshot e Supabase Edge indisponíveis.', edgeError);
+    throw new Error('Catálogo temporariamente indisponível.');
+  }
 }
 
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
@@ -136,13 +161,13 @@ export async function verifyAdminPassword(password: string): Promise<{ success: 
     const res = await fetch(getApiUrl('/api/admin/verify'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
+      body: JSON.stringify({ senha: password })
     });
     if (!res.ok) return { success: false, error: 'Senha incorreta.' };
     const data = await res.json();
     return { success: Boolean(data.success), error: data.error };
   } catch {
-    return { success: false, error: 'Erro ao conectar ao servidor.' };
+    return { success: false, error: 'Erro ao conectar ao runtime serverless.' };
   }
 }
 
@@ -153,8 +178,7 @@ export async function createProduct(payload: any, password?: string): Promise<Ap
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, senha: password || payload.senha })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao criar produto.' };
   }
@@ -167,8 +191,7 @@ export async function updateProduct(id: string, payload: any, password?: string)
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...payload, senha: password || payload.senha })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao atualizar produto.' };
   }
@@ -181,8 +204,7 @@ export async function deleteProduct(id: string, password?: string): Promise<ApiR
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ senha: password })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
     return { success: false, error: err.message || 'Erro ao remover produto.' };
   }
@@ -190,15 +212,16 @@ export async function deleteProduct(id: string, password?: string): Promise<ApiR
 
 export async function sendMetaCapiEvent(eventData: any): Promise<boolean> {
   try {
+    const { metaPixelId: _legacyPixelId, metaAccessToken: _legacyAccessToken, ...safeEventData } = eventData || {};
     const res = await fetch(getApiUrl('/api/meta-capi'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(eventData),
+      body: JSON.stringify(safeEventData),
       keepalive: true
     });
     return res.ok;
   } catch (err) {
-    console.warn('[Meta CAPI] Falha ao enviar evento CAPI:', err);
+    console.warn('[Meta CAPI] Falha ao enviar evento ao Edge:', err);
     return false;
   }
 }
@@ -213,7 +236,7 @@ export async function trackProductClickApi(data: any): Promise<boolean> {
     });
     return res.ok;
   } catch (err) {
-    console.warn('[Analytics] Falha ao enviar clique para o backend:', err);
+    console.warn('[Analytics] Falha ao enviar clique ao Edge:', err);
     return false;
   }
 }
@@ -226,37 +249,21 @@ export async function subscribeNewsletter(email: string, marketingConsent: boole
       body: JSON.stringify({ email, marketingConsent })
     });
     const payload = await res.json().catch(() => ({}));
-
     if ((res.status === 201 || res.status === 200) && payload.success === true) {
       const successResponse: { success: true; result?: string; replayed?: boolean } = { success: true };
       if (typeof payload.result === 'string') successResponse.result = payload.result;
       if (typeof payload.replayed === 'boolean') successResponse.replayed = payload.replayed;
       return successResponse;
     }
-
-    if (res.status === 400 && payload.code === 'INVALID_EMAIL') {
-      return { success: false, error: 'E-mail inválido. Verifique e tente novamente.' };
-    }
-
-    if (res.status === 400 && payload.code === 'CONSENT_REQUIRED') {
-      return { success: false, error: 'Confirme que deseja receber novas seleções, recomendações e ofertas.' };
-    }
-
-    if (res.status === 409 && payload.code === 'RECONSENT_REQUIRED') {
-      return { success: false, error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.' };
-    }
-
-    if (res.status === 409 && payload.code === 'IDEMPOTENCY_COLLISION') {
-      return { success: false, error: 'A intenção de inscrição não coincide com a intenção já registrada.' };
-    }
-
-    if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') {
-      return { success: false, error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' };
-    }
-
+    if (res.status === 400 && payload.code === 'INVALID_EMAIL') return { success: false, error: 'E-mail inválido. Verifique e tente novamente.' };
+    if (res.status === 400 && payload.code === 'CONSENT_REQUIRED') return { success: false, error: 'Confirme que deseja receber novas seleções, recomendações e ofertas.' };
+    if (res.status === 409 && payload.code === 'RECONSENT_REQUIRED') return { success: false, error: 'Este contato está fora da lista de marketing. Uma reativação exigirá um fluxo explícito futuro.' };
+    if (res.status === 409 && payload.code === 'IDEMPOTENCY_COLLISION') return { success: false, error: 'A intenção de inscrição não coincide com a intenção já registrada.' };
+    if (res.status === 429) return { success: false, error: 'Muitas tentativas. Aguarde um instante e tente novamente.' };
+    if (res.status === 503 && payload.code === 'NEWSLETTER_UNAVAILABLE') return { success: false, error: 'Serviço temporariamente indisponível. Tente novamente em instantes.' };
     return { success: false, error: payload.error || 'Cadastro indisponível.' };
   } catch {
-    return { success: false, error: 'Não foi possível conectar. Se o site acabou de carregar, aguarde alguns segundos e tente novamente.' };
+    return { success: false, error: 'Não foi possível conectar ao runtime serverless.' };
   }
 }
 
@@ -267,10 +274,9 @@ export async function extractProduct(url: string, rawText?: string, adminPass?: 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, rawText, senha: adminPass })
     });
-    const data = await res.json();
-    return data;
+    return await res.json();
   } catch (err: any) {
-    return { success: false, error: err.message || 'Erro ao extrair produto com IA.' };
+    return { success: false, error: err.message || 'Erro ao extrair produto.' };
   }
 }
 
@@ -284,9 +290,14 @@ export async function fetchProxyCsv(url: string): Promise<string> {
 }
 
 export const publicCatalogApiInternals = {
-  PRODUCTION_API_BASE,
+  DEFAULT_SERVERLESS_RUNTIME_BASE,
+  DEFAULT_PUBLIC_CATALOG_EDGE_BASE,
+  SERVERLESS_RUNTIME_BASE,
   PUBLIC_CATALOG_EDGE_BASE,
+  getApiUrl,
   getPublicCatalogApiUrl,
+  getCatalogOverlayUrl,
   getLastKnownGoodCatalogUrl,
   catalogListFromPayload,
+  applyCatalogOverlay,
 };
