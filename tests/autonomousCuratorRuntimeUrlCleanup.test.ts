@@ -5,10 +5,12 @@ import { readFileSync } from "node:fs";
 const frontendApiSource = readFileSync(new URL("../src/services/api.ts", import.meta.url), "utf8");
 const inspectorSource = readFileSync(new URL("../inspect_remote.py", import.meta.url), "utf8");
 
-test("runtime helpers use only the canonical production storefront and public Edge catalog", () => {
+test("runtime helpers keep the storefront catalog fail-closed while legacy diagnostics still target the public Edge contract", () => {
   assert.doesNotMatch(frontendApiSource, /cerberus-static-catalog/);
   assert.match(frontendApiSource, /cerberus-design-static/);
-  assert.match(frontendApiSource, /cerberus-public-api/);
+  assert.match(frontendApiSource, /VITE_PUBLIC_CATALOG_EDGE_BASE/);
+  assert.match(frontendApiSource, /data\/products\.json/);
+  assert.doesNotMatch(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
 
   assert.doesNotMatch(inspectorSource, /cerberus-static-catalog/);
   assert.doesNotMatch(inspectorSource, /data\/products\.json/);
