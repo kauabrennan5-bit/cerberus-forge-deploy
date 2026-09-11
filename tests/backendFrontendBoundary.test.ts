@@ -39,3 +39,10 @@ test("Render backend build target skips Vite and frontend OG generation", () => 
   assert.match(buildSelector, /CERBERUS_BUILD_TARGET/);
   assert.match(buildSelector, /target === 'backend' \? 'build:backend' : 'build:full'/);
 });
+
+test("frontend-only hosting build never emits the Node backend bundle", () => {
+  assert.match(packageJson.scripts["build:frontend"], /generate-static-catalog\.js/);
+  assert.match(packageJson.scripts["build:frontend"], /vite build/);
+  assert.match(packageJson.scripts["build:frontend"], /generate-product-og-pages\.js/);
+  assert.equal(packageJson.scripts["build:frontend"].includes("esbuild server.ts"), false);
+});
