@@ -5,6 +5,7 @@ import test from "node:test";
 const serverSource = fs.readFileSync("server.ts", "utf8");
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const buildSelector = fs.readFileSync("scripts/build-by-target.mjs", "utf8");
+const netlifyConfig = fs.readFileSync("netlify.toml", "utf8");
 
 test("production backend never serves the legacy SPA fallback", () => {
   assert.equal(serverSource.includes('res.sendFile(path.join(distPath, "index.html"))'), false);
@@ -38,4 +39,21 @@ test("Render backend build target skips Vite and frontend OG generation", () => 
   assert.equal(packageJson.scripts["build:backend"].includes("generate-product-og-pages"), false);
   assert.match(buildSelector, /CERBERUS_BUILD_TARGET/);
   assert.match(buildSelector, /target === 'backend' \? 'build:backend' : 'build:full'/);
+});
+
+test("frontend-only hosting build never emits the Node backend bundle", () => {
+  assert.match(packageJson.scripts["build:frontend"], /generate-static-catalog\.js/);
+  assert.match(packageJson.scripts["build:frontend"], /vite build/);
+  assert.match(packageJson.scripts["build:frontend"], /generate-product-og-pages\.js/);
+  assert.equal(packageJson.scripts["build:frontend"].includes("esbuild server.ts"), false);
+});
+
+test("Netlify configuration deploys only the static storefront with SPA fallback", () => {
+  assert.match(netlifyConfig, /command = "npm run build:frontend"/);
+  assert.match(netlifyConfig, /publish = "dist"/);
+  assert.match(netlifyConfig, /NODE_VERSION = "24\.14\.1"/);
+  assert.match(netlifyConfig, /from = "\/\*"/);
+  assert.match(netlifyConfig, /to = "\/index\.html"/);
+  assert.match(netlifyConfig, /status = 200/);
+  assert.equal(netlifyConfig.includes("functions"), false);
 });
