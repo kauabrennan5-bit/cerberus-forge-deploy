@@ -1,0 +1,76 @@
+name: Telegram Edge Webhook
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Telegram webhook operation
+        required: true
+        default: verify
+        type: choice
+        options:
+          - verify
+          - register_and_verify
+
+permissions:
+  contents: read
+
+jobs:
+  telegram-webhook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TELEGRAM_WEBHOOK_URL: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway/webhook
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+    steps:
+      - name: Validate required GitHub secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+            echo "TELEGRAM_BOT_TOKEN GitHub secret is required." >&2
+            exit 1
+          fi
+          if [ "${{ inputs.action }}" = "register_and_verify" ] && [ -z "${TELEGRAM_WEBHOOK_SECRET:-}" ]; then
+            echo "TELEGRAM_WEBHOOK_SECRET GitHub secret is required for webhook registration." >&2
+            exit 1
+          fi
+          echo "::add-mask::$TELEGRAM_BOT_TOKEN"
+          if [ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]; then echo "::add-mask::$TELEGRAM_WEBHOOK_SECRET"; fi
+
+      - name: Register Supabase Edge webhook
+        if: inputs.action == 'register_and_verify'
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/set-webhook.json"
+          status="$(curl --silent --show-error --max-time 30 -o "$response" -w '%{http_code}' \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+            -H 'Content-Type: application/json' \
+            --data "$(node -e 'process.stdout.write(JSON.stringify({url:process.env.TELEGRAM_WEBHOOK_URL,secret_token:process.env.TELEGRAM_WEBHOOK_SECRET,allowed_updates:[\"message\",\"callback_query\"],drop_pending_updates:false}))')")"
+          test "$status" = "200"
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true || body?.result !== true) throw new Error('Telegram rejected setWebhook');
+          console.log('TELEGRAM_EDGE_WEBHOOK_REGISTERED=true');
+          NODE
+
+      - name: Verify webhook points only to Supabase Edge
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/get-webhook.json"
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo" -o "$response"
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const expected = process.env.TELEGRAM_WEBHOOK_URL;
+          const actual = body?.result?.url;
+          if (body?.ok !== true) throw new Error('Telegram getWebhookInfo failed');
+          if (actual !== expected) throw new Error(`Webhook mismatch: expected ${expected}, got ${actual || '<empty>'}`);
+          const pending = Number(body?.result?.pending_update_count || 0);
+          console.log(`TELEGRAM_EDGE_WEBHOOK_VERIFIED=true pending_updates=${pending}`);
+          NODE

@@ -63,10 +63,10 @@ test("frontend uses the versioned Cloudflare snapshot as the fail-closed canonic
     frontendApiSource.indexOf("export async function getPublicSocialLinks"),
   );
   const snapshotIndex = getProductsBody.indexOf("getLastKnownGoodCatalogUrl()");
-  const edgeIndex = getProductsBody.indexOf("getPublicCatalogApiUrl()");
+  const overlayIndex = getProductsBody.indexOf("loadCatalogOverlay()");
 
   assert.ok(snapshotIndex >= 0, "versioned public snapshot must be available");
-  assert.ok(edgeIndex > snapshotIndex, "optional Edge fallback must run only after the versioned snapshot fails");
+  assert.ok(overlayIndex > snapshotIndex, "governed Edge overlay must run only after the versioned snapshot loads");
   assert.match(frontendApiSource, /function getLastKnownGoodCatalogUrl\(\).*\/data\/products\.json/s);
   assert.match(getProductsBody, /snapshot público versionado/);
   assert.match(frontendApiSource, /VITE_PUBLIC_CATALOG_EDGE_BASE/);
