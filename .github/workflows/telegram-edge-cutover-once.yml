@@ -1,0 +1,108 @@
+name: Telegram Edge Cutover Once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/telegram-edge-cutover-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TELEGRAM_EDGE_BASE: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway
+      TELEGRAM_WEBHOOK_URL: https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway/webhook
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+    steps:
+      - name: Validate required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${TELEGRAM_BOT_TOKEN:-}" || { echo "TELEGRAM_BOT_TOKEN missing" >&2; exit 1; }
+          test -n "${TELEGRAM_WEBHOOK_SECRET:-}" || { echo "TELEGRAM_WEBHOOK_SECRET missing" >&2; exit 1; }
+          echo "::add-mask::$TELEGRAM_BOT_TOKEN"
+          echo "::add-mask::$TELEGRAM_WEBHOOK_SECRET"
+
+      - name: Prove Edge readiness and no Render dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          health="$RUNNER_TEMP/telegram-edge-health.json"
+          curl --fail-with-body --silent --show-error --max-time 30 "$TELEGRAM_EDGE_BASE/health" -o "$health"
+          node - "$health" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const required = [
+            ['status', body?.status === 'ok'],
+            ['service', body?.service === 'cerberus-telegram-gateway'],
+            ['runtime', body?.runtime === 'supabase-edge'],
+            ['botConfigured', body?.botConfigured === true],
+            ['allowedUsersConfigured', body?.allowedUsersConfigured === true],
+            ['webhookSecretConfigured', body?.webhookSecretConfigured === true],
+            ['renderDependency', body?.renderDependency === false],
+            ['humanGate', body?.humanGate === 'telegram-db-authorization-v1'],
+          ];
+          const failed = required.filter(([, ok]) => !ok).map(([name]) => name);
+          if (failed.length) throw new Error(`Telegram Edge readiness failed: ${failed.join(', ')}`);
+          console.log('TELEGRAM_EDGE_HEALTH=PASS renderDependency=false humanGate=telegram-db-authorization-v1');
+          NODE
+
+      - name: Prove webhook secret is enforced
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/telegram-edge-unauthorized.json"
+          status="$(curl --silent --show-error --max-time 30 -o "$response" -w '%{http_code}' \
+            -X POST "$TELEGRAM_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -H 'X-Telegram-Bot-Api-Secret-Token: intentionally-wrong-cutover-probe' \
+            --data '{"update_id":2147483000}')"
+          test "$status" = "403"
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.error !== 'TELEGRAM_WEBHOOK_UNAUTHORIZED') process.exit(1);
+          console.log('TELEGRAM_EDGE_SECRET_GATE=PASS');
+          NODE
+
+      - name: Register Supabase Edge webhook
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/set-webhook.json"
+          status="$(curl --silent --show-error --max-time 30 -o "$response" -w '%{http_code}' \
+            -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+            -H 'Content-Type: application/json' \
+            --data "$(node -e 'process.stdout.write(JSON.stringify({url:process.env.TELEGRAM_WEBHOOK_URL,secret_token:process.env.TELEGRAM_WEBHOOK_SECRET,allowed_updates:[\"message\",\"callback_query\"],drop_pending_updates:false}))')")"
+          test "$status" = "200"
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true || body?.result !== true) throw new Error('Telegram rejected setWebhook');
+          console.log('TELEGRAM_EDGE_WEBHOOK_REGISTERED=true');
+          NODE
+
+      - name: Verify Telegram cutover
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$RUNNER_TEMP/get-webhook.json"
+          curl --fail-with-body --silent --show-error --max-time 30 \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo" -o "$response"
+          node - "$response" <<'NODE'
+          const fs = require('node:fs');
+          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (body?.ok !== true) throw new Error('Telegram getWebhookInfo failed');
+          if (body?.result?.url !== process.env.TELEGRAM_WEBHOOK_URL) {
+            throw new Error(`Webhook mismatch: ${body?.result?.url || '<empty>'}`);
+          }
+          const pending = Number(body?.result?.pending_update_count || 0);
+          const lastError = Number(body?.result?.last_error_date || 0);
+          console.log(`TELEGRAM_EDGE_CUTOVER=PASS pending_updates=${pending} last_error_date=${lastError}`);
+          NODE
