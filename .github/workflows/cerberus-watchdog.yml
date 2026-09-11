@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   health-check:
-    if: github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *' || github.event_name == 'workflow_dispatch' && inputs.operation == 'health'
+    if: (github.event_name == 'workflow_dispatch' && inputs.operation == 'health') || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -72,7 +72,7 @@ jobs:
           key: watchdog-state-${{ github.run_id }}
 
   weekly-draft:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5' || github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test' || inputs.operation == 'weekly-design-test')
+    if: (github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test' || inputs.operation == 'weekly-design-test')) || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
@@ -99,7 +99,7 @@ jobs:
             "$base/api/internal/newsletter/weekly-draft"
 
   weekly-preflight:
-    if: github.event_name == 'schedule' && github.event.schedule == '30 12 * * 5' || github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-preflight'
+    if: (github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-preflight') || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '30 12 * * 5')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:
@@ -152,7 +152,7 @@ jobs:
             "$base/api/internal/newsletter/weekly-editorial-backfill"
 
   weekly-stale:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 13 * * 6' || github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-stale'
+    if: (github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-stale') || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '0 13 * * 6')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     env:

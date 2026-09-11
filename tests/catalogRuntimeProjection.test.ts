@@ -25,7 +25,7 @@ test("catalog sync validates the new frontend runtime and no longer promotes a s
 
 test("post-publication validation rejects preview/static-catalog targets", () => {
   assert.doesNotThrow(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
-    "https://cerberus-design-static.onrender.com",
+    "https://cerberus-finds.pages.dev",
     "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
   ));
   assert.throws(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
@@ -57,22 +57,22 @@ test("runtime public list only treats active published rows as visible", () => {
   assert.deepEqual(catalogSyncInternals.publicListFromPayload({ products: [{ id: "a" }] }), [{ id: "a" }]);
 });
 
-test("frontend preserves canonical live ordering and uses snapshot only as last-known-good contingency", () => {
+test("frontend uses the versioned Cloudflare snapshot as the fail-closed canonical public projection", () => {
   const getProductsBody = frontendApiSource.slice(
     frontendApiSource.indexOf("export async function getProducts"),
     frontendApiSource.indexOf("export async function getPublicSocialLinks"),
   );
-  const edgeIndex = getProductsBody.indexOf("getPublicCatalogApiUrl()");
-  const backendIndex = getProductsBody.indexOf("getPublicCatalogBackendFallbackUrl()");
   const snapshotIndex = getProductsBody.indexOf("getLastKnownGoodCatalogUrl()");
+  const edgeIndex = getProductsBody.indexOf("getPublicCatalogApiUrl()");
 
-  assert.ok(edgeIndex >= 0, "Supabase Edge must remain the primary public source");
-  assert.ok(backendIndex > edgeIndex, "backend transport fallback must run only after Edge failure");
-  assert.ok(snapshotIndex > backendIndex, "last-known-good snapshot must be the final read-only contingency");
+  assert.ok(snapshotIndex >= 0, "versioned public snapshot must be available");
+  assert.ok(edgeIndex > snapshotIndex, "optional Edge fallback must run only after the versioned snapshot fails");
   assert.match(frontendApiSource, /function getLastKnownGoodCatalogUrl\(\).*\/data\/products\.json/s);
-  assert.match(getProductsBody, /snapshot público last-known-good/);
+  assert.match(getProductsBody, /snapshot público versionado/);
+  assert.match(frontendApiSource, /VITE_PUBLIC_CATALOG_EDGE_BASE/);
+  assert.doesNotMatch(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
+  assert.doesNotMatch(getProductsBody, /getPublicCatalogBackendFallbackUrl/);
   assert.match(frontendApiSource, /toPublicProductDTOs\(list\)/);
-  assert.match(frontendApiSource, /juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api/);
   assert.match(serverSource, /app\.get\("\/api\/products"/);
   assert.match(serverSource, /toPublicProductDTOs\(products\)/);
 });

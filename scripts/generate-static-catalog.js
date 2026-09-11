@@ -9,7 +9,7 @@ dotenv.config();
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-const publicCatalogUrl = process.env.PUBLIC_CATALOG_API_URL || process.env.PUBLIC_CATALOG_URL || 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products';
+const publicCatalogUrl = process.env.PUBLIC_CATALOG_API_URL || process.env.PUBLIC_CATALOG_URL || '';
 
 function requestCanonicalJson(url, attempts = 3) {
   return new Promise((resolve, reject) => {
@@ -84,8 +84,8 @@ async function generateStaticCatalog() {
 
   // A Edge Function pública é o único fallback de rede para o mesmo Supabase;
   // nunca é permitido usar o backend ou um arquivo local como fonte concorrente do catálogo.
-  if (!sourceLoaded) {
-    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela Supabase Edge: ${publicCatalogUrl}`);
+  if (!sourceLoaded && publicCatalogUrl) {
+    console.log(`ℹ️ [Build Catalog] Buscando a projeção canônica pela Supabase Edge configurada: ${publicCatalogUrl}`);
     try {
       const json = await requestCanonicalJson(publicCatalogUrl);
       const products = json.products || json.data;
@@ -103,7 +103,8 @@ async function generateStaticCatalog() {
   }
 
   if (!sourceLoaded) {
-    throw new Error('Nenhuma fonte canônica carregada; products.json não será gerado a partir de dados locais.');
+    console.warn('⚠️ [Build Catalog] Nenhuma fonte canônica de rede configurada; preservando o snapshot público versionado existente.');
+    return;
   }
 
   const validProducts = toPublicProductDTOs(rawProducts);

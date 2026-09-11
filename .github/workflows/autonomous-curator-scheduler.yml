@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   manual-review-curator:
-    if: github.event_name == 'schedule' || contains(github.event.head_commit.message, '[prove-curator-flow]')
+    if: vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && (github.event_name == 'schedule' || contains(github.event.head_commit.message, '[prove-curator-flow]'))
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:

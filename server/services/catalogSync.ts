@@ -49,7 +49,7 @@ async function acquireCatalogSyncLock(): Promise<() => void> {
 }
 
 function storefrontUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-design-static.onrender.com").replace(/\/+$/, "");
+  return String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-finds.pages.dev").replace(/\/+$/, "");
 }
 
 function publicCatalogApiUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -60,7 +60,7 @@ function assertCanonicalRuntimeTargets(storefront: string, catalogApi: string): 
   if (/cerberus-design-preview|cerberus-static-catalog/i.test(`${storefront} ${catalogApi}`)) {
     throw new Error("NON_CANONICAL_PUBLIC_VALIDATION_TARGET");
   }
-  if (!/^https:\/\/cerberus-design-static\.onrender\.com$/i.test(storefront)) {
+  if (!/^https:\/\/cerberus-finds\.pages\.dev$/i.test(storefront)) {
     throw new Error("OFFICIAL_STOREFRONT_REQUIRED");
   }
   if (!/^https:\/\/juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api\/products$/i.test(catalogApi)) {

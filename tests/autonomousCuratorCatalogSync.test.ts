@@ -52,9 +52,11 @@ test("catalog branch promotion is restricted to a validated protected pull reque
   assert.match(workflow, /pulls\/\$CATALOG_PR_NUMBER\/merge/);
   assert.match(workflow, /-f sha="\$GITHUB_SHA"/);
   assert.match(workflow, /CATALOG_MERGE_SHA/);
-  assert.match(workflow, /Wait for Render to serve protected catalog merge/);
-  assert.match(workflow, /CERBERUS_HEALTH_URL/);
-  assert.match(workflow, /RENDER_CATALOG_LIVE_SHA_VERIFIED=true/);
+  assert.match(workflow, /Wait for Cloudflare Pages to serve protected catalog merge/);
+  assert.match(workflow, /https:\/\/cerberus-finds\.pages\.dev/);
+  assert.match(workflow, /deploy-meta\.json/);
+  assert.match(workflow, /CLOUDFLARE_CATALOG_LIVE_SHA_VERIFIED=true/);
   assert.match(workflow, /live_sha.*CATALOG_MERGE_SHA/s);
+  assert.doesNotMatch(workflow, /Wait for Render to serve protected catalog merge/);
   assert.doesNotMatch(workflow, /git push origin "\$GITHUB_SHA:refs\/heads\/main"/);
 });
