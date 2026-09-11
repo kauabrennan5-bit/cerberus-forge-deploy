@@ -5,7 +5,6 @@ import test from "node:test";
 const serverSource = fs.readFileSync("server.ts", "utf8");
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const buildSelector = fs.readFileSync("scripts/build-by-target.mjs", "utf8");
-const wranglerConfig = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
 const cloudflareWorkflow = fs.readFileSync(".github/workflows/cloudflare-storefront-deploy.yml", "utf8");
 
 test("production backend never serves the legacy SPA fallback", () => {
@@ -49,18 +48,17 @@ test("frontend-only hosting build never emits the Node backend bundle", () => {
   assert.equal(packageJson.scripts["build:frontend"].includes("esbuild server.ts"), false);
 });
 
-test("Cloudflare configuration deploys only the static storefront with SPA fallback", () => {
-  assert.equal(wranglerConfig.name, "cerberus-finds");
-  assert.equal(wranglerConfig.compatibility_date, "2026-09-11");
-  assert.equal(wranglerConfig.workers_dev, true);
-  assert.equal(wranglerConfig.assets?.directory, "./dist");
-  assert.equal(wranglerConfig.assets?.not_found_handling, "single-page-application");
-  assert.equal(Object.hasOwn(wranglerConfig, "main"), false);
-
+test("Cloudflare Pages deployment publishes only the prebuilt static storefront", () => {
   assert.match(cloudflareWorkflow, /npm run build:frontend/);
+  assert.match(cloudflareWorkflow, /CLOUDFLARE_PAGES_PROJECT: cerberus-finds/);
+  assert.match(cloudflareWorkflow, /\/pages\/projects/);
+  assert.match(cloudflareWorkflow, /\"production_branch\":\"main\"/);
   assert.match(cloudflareWorkflow, /cloudflare\/wrangler-action@v4/);
   assert.match(cloudflareWorkflow, /wranglerVersion: "4"/);
-  assert.match(cloudflareWorkflow, /command: deploy/);
+  assert.match(cloudflareWorkflow, /pages deploy dist --project-name=/);
+  assert.match(cloudflareWorkflow, /--branch=main/);
+  assert.equal(cloudflareWorkflow.includes("command: deploy\n"), false);
   assert.equal(cloudflareWorkflow.includes("npm start"), false);
   assert.equal(cloudflareWorkflow.includes("build:backend"), false);
+  assert.equal(cloudflareWorkflow.includes("workers/subdomain"), false);
 });
