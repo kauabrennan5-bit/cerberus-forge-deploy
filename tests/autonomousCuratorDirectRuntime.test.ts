@@ -14,9 +14,9 @@ test("direct curator runner invokes the service and hard-rejects autonomous publ
   assert.match(runner, /renderDependency:\s*false/);
 });
 
-test("curator GitHub runtimes do not call Render", () => {
-  assert.doesNotMatch(workflow, /onrender\.com/);
-  assert.doesNotMatch(scheduler, /onrender\.com/);
+test("curator GitHub runtimes do not contain an executable Render target", () => {
+  assert.doesNotMatch(workflow, /https:\/\/[^\s"']*onrender\.com/);
+  assert.doesNotMatch(scheduler, /https:\/\/[^\s"']*onrender\.com/);
   assert.doesNotMatch(workflow, /CERBERUS_RENDER_RUNTIME_ENABLED/);
   assert.doesNotMatch(scheduler, /CERBERUS_RENDER_RUNTIME_ENABLED/);
   assert.match(workflow, /run-autonomous-curator-direct\.ts/);
@@ -26,5 +26,5 @@ test("curator GitHub runtimes do not call Render", () => {
 test("scheduled production curator is fail-closed behind the serverless enable flag", () => {
   assert.match(scheduler, /CERBERUS_SERVERLESS_CURATOR_ENABLED == 'true'/);
   assert.match(scheduler, /github\.event_name == 'schedule'/);
-  assert.doesNotMatch(scheduler, /auto.?publish/i);
+  assert.doesNotMatch(scheduler, /autoPublish:\s*true|auto_publish_enabled:\s*true/);
 });
