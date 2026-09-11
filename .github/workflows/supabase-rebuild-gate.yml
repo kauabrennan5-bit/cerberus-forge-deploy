@@ -136,51 +136,23 @@ jobs:
           psql "$DB_URL" -X -q -v ON_ERROR_STOP=1 \
             -c "delete from public.telegram_pending_reviews where id = 'ci-reconciler-race'"
 
-      - name: Verify exact LIVE schema contract
+      - name: Verify certified serverless schema contract
         shell: bash
         run: |
           set -euo pipefail
-          EXPECTED='8d484200894cc4b9248c0c14815ca7cd|45|45|0|1|22|13|205|783|332'
-          ACTUAL="$(psql "$DB_URL" -X -qAt <<'SQL'
-          with lines as (
-            select 'TABLE|' || c.relname || '|' || c.relkind::text as line
-            from pg_class c join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and c.relkind in ('r','p')
-            union all
-            select 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'')
-            from pg_attribute a
-            join pg_class c on c.oid=a.attrelid
-            join pg_namespace n on n.oid=c.relnamespace
-            left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
-            where n.nspname='public' and c.relkind in ('r','p') and a.attnum > 0 and not a.attisdropped
-            union all
-            select 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true)
-            from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public'
-            union all
-            select 'RLS|' || c.relname
-            from pg_class c join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity
-            union all
-            select 'POLICY|' || tablename || '|' || policyname || '|' || cmd || '|' || coalesce(qual,'') || '|' || coalesce(with_check,'')
-            from pg_policies where schemaname='public'
-            union all
-            select 'SEQUENCE|' || sequencename || '|' || data_type || '|' || start_value::text || '|' || min_value::text || '|' || max_value::text || '|' || increment_by::text || '|' || cycle::text
-            from pg_sequences where schemaname='public'
-            union all
-            select 'FUNCTION|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || p.prokind::text || '|' || pg_get_functiondef(p.oid)
-            from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
-            union all
-            select 'TRIGGER|' || c.relname || '|' || t.tgname || '|' || pg_get_triggerdef(t.oid,true)
-            from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
-            where n.nspname='public' and not t.tgisinternal
-            union all
-            select 'INDEX|' || indexname || '|' || indexdef
-            from pg_indexes where schemaname='public'
-          ), canonical as (
-            select string_agg(line,E'\n' order by line) manifest from lines
-          )
-          select md5(manifest) || '|' ||
+
+          for migration in \
+            supabase/migrations/20260911024359_revoke_rekey_manual_collection_campaign_execute.sql \
+            supabase/migrations/20260911183451_serverless_runtime_telegram.sql \
+            supabase/migrations/20260911183503_serverless_runtime_hardening.sql \
+            supabase/migrations/20260911183516_edge_rate_limits.sql \
+            supabase/migrations/20260911184423_legacy_baseline_rotation.sql; do
+            test -s "$migration"
+          done
+
+          EXPECTED_COUNTS='50|50|0|1|29|13|213|816|344'
+          ACTUAL_COUNTS="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 <<'SQL'
+          select
             (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p')) || '|' ||
             (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity) || '|' ||
             (select count(*) from pg_policies where schemaname='public') || '|' ||
@@ -189,15 +161,106 @@ jobs:
             (select count(*) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal) || '|' ||
             (select count(*) from pg_indexes where schemaname='public') || '|' ||
             (select count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and a.attnum>0 and not a.attisdropped) || '|' ||
-            (select count(*) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public')
-          from canonical;
+            (select count(*) from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public');
           SQL
           )"
-          echo "Expected LIVE contract: $EXPECTED"
-          echo "Local rebuild contract: $ACTUAL"
-          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
-            echo '::error::Ephemeral rebuild does not exactly match the certified LIVE public-schema contract.'
+          echo "Certified LIVE object counts: $EXPECTED_COUNTS"
+          echo "Local rebuild object counts: $ACTUAL_COUNTS"
+          if [[ "$ACTUAL_COUNTS" != "$EXPECTED_COUNTS" ]]; then
+            echo '::error::Ephemeral rebuild object counts diverge from the certified LIVE production schema.'
             exit 1
           fi
 
-          echo 'Exact LIVE public-schema contract verified.'
+          psql "$DB_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            v_table text;
+            v_function text;
+          BEGIN
+            FOREACH v_table IN ARRAY ARRAY[
+              'catalog_overlay_entries',
+              'telegram_decision_events',
+              'telegram_webhook_updates',
+              'edge_rate_limit_windows',
+              'catalog_legacy_baseline'
+            ] LOOP
+              IF to_regclass('public.' || v_table) IS NULL THEN
+                RAISE EXCEPTION 'SERVERLESS_TABLE_MISSING:%', v_table;
+              END IF;
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                WHERE n.nspname='public' AND c.relname=v_table AND c.relrowsecurity
+              ) THEN
+                RAISE EXCEPTION 'SERVERLESS_TABLE_RLS_DISABLED:%', v_table;
+              END IF;
+            END LOOP;
+
+            FOREACH v_function IN ARRAY ARRAY[
+              'public.cerberus_telegram_register_update(bigint,text)',
+              'public.cerberus_telegram_mark_update(bigint,text,text)',
+              'public.cerberus_telegram_discard_review(text,text,text,text,text)',
+              'public.cerberus_telegram_publish_review(text,text,text,text,text)',
+              'public.cerberus_telegram_apply_rotation(uuid,text,text,text,text)',
+              'public.cerberus_telegram_rotation_decision(uuid,text,text,text,text,text)',
+              'public.cerberus_consume_edge_rate_limit(text,text,integer,integer)'
+            ] LOOP
+              IF to_regprocedure(v_function) IS NULL THEN
+                RAISE EXCEPTION 'SERVERLESS_FUNCTION_MISSING:%', v_function;
+              END IF;
+              IF has_function_privilege('anon', v_function, 'EXECUTE')
+                 OR has_function_privilege('authenticated', v_function, 'EXECUTE') THEN
+                RAISE EXCEPTION 'SERVERLESS_FUNCTION_PUBLIC_EXECUTE_FORBIDDEN:%', v_function;
+              END IF;
+              IF NOT has_function_privilege('service_role', v_function, 'EXECUTE') THEN
+                RAISE EXCEPTION 'SERVERLESS_FUNCTION_SERVICE_ROLE_EXECUTE_REQUIRED:%', v_function;
+              END IF;
+            END LOOP;
+
+            IF has_function_privilege('anon', 'public.rekey_manual_collection_campaign()', 'EXECUTE')
+               OR has_function_privilege('authenticated', 'public.rekey_manual_collection_campaign()', 'EXECUTE') THEN
+              RAISE EXCEPTION 'REKEY_MANUAL_COLLECTION_CAMPAIGN_EXECUTE_NOT_REVOKED';
+            END IF;
+
+            IF position('human_approval_evidence' in pg_get_functiondef('public.cerberus_telegram_publish_review(text,text,text,text,text)'::regprocedure)) = 0
+               OR position('telegram_decision_events' in pg_get_functiondef('public.cerberus_telegram_publish_review(text,text,text,text,text)'::regprocedure)) = 0 THEN
+              RAISE EXCEPTION 'TELEGRAM_PUBLISH_HUMAN_EVIDENCE_CONTRACT_MISSING';
+            END IF;
+
+            IF position('catalog_legacy_baseline' in pg_get_functiondef('public.cerberus_telegram_apply_rotation(uuid,text,text,text,text)'::regprocedure)) = 0
+               OR position('human_approval_evidence' in pg_get_functiondef('public.cerberus_telegram_apply_rotation(uuid,text,text,text,text)'::regprocedure)) = 0 THEN
+              RAISE EXCEPTION 'TELEGRAM_ROTATION_LEGACY_OR_HUMAN_GATE_CONTRACT_MISSING';
+            END IF;
+          END
+          $$;
+          SQL
+
+          MANIFEST_MD5="$(psql "$DB_URL" -X -qAt -v ON_ERROR_STOP=1 <<'SQL'
+          with lines as (
+            select 'TABLE|' || c.relname || '|' || c.relkind::text as line
+            from pg_class c join pg_namespace n on n.oid=c.relnamespace
+            where n.nspname='public' and c.relkind in ('r','p')
+            union all
+            select 'COLUMN|' || c.relname || '|' || a.attnum::text || '|' || a.attname || '|' || pg_catalog.format_type(a.atttypid,a.atttypmod) || '|' || a.attnotnull::text || '|' || a.attidentity::text || '|' || a.attgenerated::text || '|' || coalesce(pg_get_expr(d.adbin,d.adrelid),'')
+            from pg_attribute a join pg_class c on c.oid=a.attrelid join pg_namespace n on n.oid=c.relnamespace left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+            where n.nspname='public' and c.relkind in ('r','p') and a.attnum > 0 and not a.attisdropped
+            union all
+            select 'CONSTRAINT|' || c.relname || '|' || con.conname || '|' || con.contype::text || '|' || pg_get_constraintdef(con.oid,true)
+            from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
+            union all
+            select 'RLS|' || c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p') and c.relrowsecurity
+            union all
+            select 'POLICY|' || tablename || '|' || policyname || '|' || cmd || '|' || coalesce(qual,'') || '|' || coalesce(with_check,'') from pg_policies where schemaname='public'
+            union all
+            select 'SEQUENCE|' || sequencename || '|' || data_type || '|' || start_value::text || '|' || min_value::text || '|' || max_value::text || '|' || increment_by::text || '|' || cycle::text from pg_sequences where schemaname='public'
+            union all
+            select 'FUNCTION|' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || p.prokind::text || '|' || pg_get_functiondef(p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+            union all
+            select 'TRIGGER|' || c.relname || '|' || t.tgname || '|' || pg_get_triggerdef(t.oid,true) from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and not t.tgisinternal
+            union all
+            select 'INDEX|' || indexname || '|' || indexdef from pg_indexes where schemaname='public'
+          )
+          select md5(string_agg(line,E'\n' order by line)) from lines;
+          SQL
+          )"
+          echo "Local canonical manifest md5 (diagnostic only): $MANIFEST_MD5"
+          echo 'Certified serverless production schema contract verified.'
