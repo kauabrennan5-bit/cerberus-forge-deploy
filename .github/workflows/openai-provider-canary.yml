@@ -22,6 +22,7 @@ concurrency:
 jobs:
   provider-canary:
     name: openai-provider-canary
+    if: github.event_name == 'workflow_dispatch' || vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
