@@ -29,7 +29,7 @@ export interface ApiResponse<T = any> {
 }
 
 const PRODUCTION_API_BASE = 'https://cerberus-forge-deploy-backend.onrender.com';
-const PUBLIC_CATALOG_EDGE_BASE = 'https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api';
+const PUBLIC_CATALOG_EDGE_BASE = String(import.meta.env.VITE_PUBLIC_CATALOG_EDGE_BASE || '').replace(/\/+$/, '');
 
 function getApiUrl(path: string): string {
   try {
@@ -49,12 +49,8 @@ function getApiUrl(path: string): string {
   return `${PRODUCTION_API_BASE}${path.startsWith('/') ? path : '/' + path}`;
 }
 
-function getPublicCatalogApiUrl(): string {
-  return `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}`;
-}
-
-function getPublicCatalogBackendFallbackUrl(): string {
-  return `${getApiUrl('/api/products')}?t=${Date.now()}`;
+function getPublicCatalogApiUrl(): string | null {
+  return PUBLIC_CATALOG_EDGE_BASE ? `${PUBLIC_CATALOG_EDGE_BASE}/products?t=${Date.now()}` : null;
 }
 
 function getLastKnownGoodCatalogUrl(): string {
@@ -92,33 +88,30 @@ async function loadPublicCatalog(url: string, source: string): Promise<any[]> {
 }
 
 /**
- * A Supabase Edge continua sendo a fonte pública canônica. Se o navegador não
- * conseguir alcançá-la, tentamos uma vez o backend público, que lê o mesmo banco
- * e devolve a mesma whitelist. Se ambos os transportes online falharem, o site
- * usa somente para leitura o último snapshot público sanitizado empacotado no
- * storefront. O snapshot pode estar defasado e nunca vira fonte de verdade nem
- * participa de mutações/publicação; serve apenas para manter o acervo visível
- * durante uma indisponibilidade externa de DNS/rede.
+ * Durante a migração serverless, o snapshot versionado publicado junto do
+ * storefront é a projeção pública canônica e fail-closed. Ele só muda por PR/CI
+ * e nunca participa de mutações. Uma Supabase Edge nova pode ser habilitada
+ * explicitamente por VITE_PUBLIC_CATALOG_EDGE_BASE quando a proveniência do
+ * banco estiver reconciliada; até lá não fazemos chamadas ao projeto antigo nem
+ * ao backend Render suspenso.
  */
 export async function getProducts(): Promise<any[]> {
   try {
-    return await loadPublicCatalog(getPublicCatalogApiUrl(), 'Supabase Edge');
-  } catch (edgeError) {
-    console.warn('[Catalog] Falha no transporte direto da Supabase Edge; tentando fallback público do backend.', edgeError);
-  }
-
-  try {
-    return await loadPublicCatalog(getPublicCatalogBackendFallbackUrl(), 'backend Cerberus');
-  } catch (backendError) {
-    console.warn('[Catalog] Edge e backend indisponíveis; usando snapshot público last-known-good em modo degradado.', backendError);
-  }
-
-  try {
-    return await loadPublicCatalog(getLastKnownGoodCatalogUrl(), 'snapshot público last-known-good');
+    return await loadPublicCatalog(getLastKnownGoodCatalogUrl(), 'snapshot público versionado');
   } catch (snapshotError) {
-    console.error('[Catalog] Edge, backend e snapshot público indisponíveis.', snapshotError);
-    throw new Error('Catálogo temporariamente indisponível. Não foi possível alcançar nenhuma fonte pública de leitura.');
+    console.error('[Catalog] Snapshot público indisponível.', snapshotError);
   }
+
+  const edgeUrl = getPublicCatalogApiUrl();
+  if (edgeUrl) {
+    try {
+      return await loadPublicCatalog(edgeUrl, 'Supabase Edge configurada');
+    } catch (edgeError) {
+      console.error('[Catalog] Snapshot e Supabase Edge configurada indisponíveis.', edgeError);
+    }
+  }
+
+  throw new Error('Catálogo temporariamente indisponível. Não foi possível carregar a projeção pública versionada.');
 }
 
 export async function getPublicSocialLinks(): Promise<PublicSocialLink[]> {
@@ -294,7 +287,6 @@ export const publicCatalogApiInternals = {
   PRODUCTION_API_BASE,
   PUBLIC_CATALOG_EDGE_BASE,
   getPublicCatalogApiUrl,
-  getPublicCatalogBackendFallbackUrl,
   getLastKnownGoodCatalogUrl,
   catalogListFromPayload,
 };
