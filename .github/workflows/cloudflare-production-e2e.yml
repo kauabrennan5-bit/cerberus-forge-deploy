@@ -1,0 +1,57 @@
+name: Cloudflare Production E2E
+
+on:
+  workflow_run:
+    workflows:
+      - Cloudflare Storefront Deploy
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Expected deployed main SHA
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production-e2e
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout deployed revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+
+      - name: Verify Cloudflare Pages production E2E
+        shell: bash
+        env:
+          STOREFRONT_URL: https://cerberus-finds.pages.dev
+          EXPECTED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || inputs.expected_sha || github.sha }}
+          EXPECTED_PRODUCT_COUNT: "30"
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 24); do
+            if node scripts/verify-cloudflare-storefront.mjs; then
+              echo "CLOUDFLARE_PRODUCTION_E2E=PASS"
+              echo "CLOUDFLARE_CANONICAL_URL=$STOREFRONT_URL"
+              exit 0
+            fi
+            echo "Cloudflare canonical alias not fully propagated yet; retrying ($attempt/24)."
+            sleep 5
+          done
+          echo "Cloudflare production E2E verification failed."
+          exit 1
