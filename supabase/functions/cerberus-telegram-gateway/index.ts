@@ -4,6 +4,8 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const MAX_BODY_BYTES = 1_000_000;
 const PUBLIC_SITE = "https://cerberus-finds.pages.dev";
 
+type JsonRecord = Record<string, any>;
+
 function text(value: unknown, max = 2000): string {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
@@ -71,9 +73,7 @@ async function telegram(method: string, payload: Record<string, unknown>): Promi
     body: JSON.stringify(payload),
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || body?.ok !== true) {
-    throw new Error(`TELEGRAM_API_${method.toUpperCase()}_${response.status}`);
-  }
+  if (!response.ok || body?.ok !== true) throw new Error(`TELEGRAM_API_${method.toUpperCase()}_${response.status}`);
   return body.result;
 }
 
@@ -105,11 +105,11 @@ async function answerCallback(callbackId: string, message?: string, showAlert = 
   }).catch(() => undefined);
 }
 
-function reviewData(row: any): Record<string, any> {
+function reviewData(row: any): JsonRecord {
   return row?.data && typeof row.data === "object" && !Array.isArray(row.data) ? row.data : {};
 }
 
-function reviewImage(data: Record<string, any>): string {
+function reviewImage(data: JsonRecord): string {
   const candidates = [
     data?.imageCuration?.primaryImageUrl,
     data?.imagemPrincipal,
@@ -154,7 +154,7 @@ async function sendReviewCard(row: any, overrideChatId?: string | number): Promi
       await sendPhoto(chatId, image, caption, keyboard);
       return;
     } catch {
-      // A URL pode expirar ou bloquear hotlink; texto preserva o gate humano.
+      // A imagem pode bloquear hotlink; o card textual mantém o gate humano.
     }
   }
   await sendMessage(chatId, caption, keyboard);
@@ -170,6 +170,19 @@ function rotationKeyboard(requestId: string) {
   };
 }
 
+async function legacyBaselineIds(): Promise<Set<string>> {
+  const { data, error } = await adminClient().from("catalog_legacy_baseline").select("product_id");
+  if (error) throw new Error(`LEGACY_BASELINE_UNAVAILABLE:${error.code || "unknown"}`);
+  return new Set((Array.isArray(data) ? data : []).map((row: any) => text(row.product_id)).filter(Boolean));
+}
+
+async function isPublicRotationSource(product: any): Promise<{ allowed: boolean; legacyBaseline: boolean }> {
+  if (!product || product.status !== "published") return { allowed: false, legacyBaseline: false };
+  if (product.ativo === true) return { allowed: true, legacyBaseline: false };
+  const baseline = await legacyBaselineIds();
+  return { allowed: baseline.has(String(product.id)), legacyBaseline: baseline.has(String(product.id)) };
+}
+
 async function sendRotationCard(requestId: string, chatId?: string | number): Promise<void> {
   const client = adminClient();
   const { data: request, error } = await client
@@ -179,11 +192,10 @@ async function sendRotationCard(requestId: string, chatId?: string | number): Pr
     .maybeSingle();
   if (error || !request) throw new Error("ROTATION_REQUEST_NOT_FOUND");
   if (request.status !== "candidate_ready" || !request.candidate_product_id) throw new Error(`ROTATION_NOT_READY:${request.status}`);
-  const ids = [request.source_product_id, request.candidate_product_id];
   const { data: products, error: productsError } = await client
     .from("products")
     .select("id,produto,display_title,preco,categoria,imagens,image_curation")
-    .in("id", ids);
+    .in("id", [request.source_product_id, request.candidate_product_id]);
   if (productsError) throw new Error("ROTATION_PRODUCTS_UNAVAILABLE");
   const source = (products || []).find((row: any) => row.id === request.source_product_id);
   const candidate = (products || []).find((row: any) => row.id === request.candidate_product_id);
@@ -201,14 +213,21 @@ async function sendRotationCard(requestId: string, chatId?: string | number): Pr
   const targetChat = chatId ?? request.telegram_chat_id;
   const image = reviewImage(candidate);
   if (image) {
-    try { await sendPhoto(targetChat, image, message, rotationKeyboard(requestId)); return; } catch { /* fallback text */ }
+    try {
+      await sendPhoto(targetChat, image, message, rotationKeyboard(requestId));
+      return;
+    } catch {
+      // fallback textual
+    }
   }
   await sendMessage(targetChat, message, rotationKeyboard(requestId));
 }
 
 async function persistUpdate(updateId: number, rawBody: string): Promise<void> {
-  const hash = await sha256(rawBody);
-  await adminClient().rpc("cerberus_telegram_register_update", { p_update_id: updateId, p_payload_hash: hash });
+  await adminClient().rpc("cerberus_telegram_register_update", {
+    p_update_id: updateId,
+    p_payload_hash: await sha256(rawBody),
+  });
 }
 
 async function markUpdate(updateId: number, status: "processed" | "rejected" | "error", code?: string): Promise<void> {
@@ -294,16 +313,15 @@ async function handleCallback(update: any): Promise<void> {
     const retry = ctx.data.startsWith("rotation_retry:");
     const prefix = retry ? "rotation_retry:" : "rotation_cancel:";
     const requestId = ctx.data.slice(prefix.length);
-    const decision = retry ? "rotation_retry" : "rotation_cancel";
-    await answerCallback(ctx.callbackId, retry ? "Nova busca registrada." : "Rotação cancelada.");
     const { data, error } = await client.rpc("cerberus_telegram_rotation_decision", {
       p_request_id: requestId,
-      p_decision: decision,
+      p_decision: retry ? "rotation_retry" : "rotation_cancel",
       p_sender_id: ctx.senderId,
       p_chat_id: ctx.chatId,
       p_message_id: ctx.messageId,
       p_callback_query_id: ctx.callbackId,
     });
+    await answerCallback(ctx.callbackId, retry ? "Nova busca registrada." : "Rotação cancelada.");
     if (error) throw new Error(`ROTATION_DECISION_REJECTED:${error.code || "unknown"}`);
     await sendMessage(ctx.chatId, retry
       ? `🔁 <b>NOVA BUSCA SOLICITADA</b>\n\nRequest: <code>${escapeHtml(requestId)}</code>\nEstado: <code>${escapeHtml(data?.status || "searching")}</code>`
@@ -314,15 +332,25 @@ async function handleCallback(update: any): Promise<void> {
   if (ctx.data.startsWith("product_rotate:")) {
     const productId = ctx.data.slice("product_rotate:".length);
     await answerCallback(ctx.callbackId, "Criando solicitação de rotação...");
-    const { data: product, error: productError } = await client.from("products").select("id,categoria,ativo,status").eq("id", productId).maybeSingle();
-    if (productError || !product || product.ativo !== true || product.status !== "published") throw new Error("ROTATION_SOURCE_INVALID");
+    const { data: product, error: productError } = await client
+      .from("products")
+      .select("id,categoria,ativo,status")
+      .eq("id", productId)
+      .maybeSingle();
+    if (productError || !product) throw new Error("ROTATION_SOURCE_INVALID");
+    const visibility = await isPublicRotationSource(product);
+    if (!visibility.allowed) throw new Error("ROTATION_SOURCE_NOT_PUBLIC");
     const { data: request, error } = await client.from("product_rotation_requests").insert({
       source_product_id: product.id,
       category: product.categoria,
       status: "searching",
       requested_by: ctx.senderId,
       telegram_chat_id: ctx.chatId,
-      metadata: { origin: "telegram-edge", callbackQueryId: ctx.callbackId },
+      metadata: {
+        origin: "telegram-edge",
+        callbackQueryId: ctx.callbackId,
+        sourceWasLegacyBaseline: visibility.legacyBaseline,
+      },
     }).select("id,status").single();
     if (error) throw new Error(`ROTATION_REQUEST_CREATE_FAILED:${error.code || "unknown"}`);
     await sendMessage(ctx.chatId, `🔎 <b>ROTAÇÃO REGISTRADA</b>\n\nRequest: <code>${escapeHtml(request.id)}</code>\nA peça atual permanece publicada até uma candidata ser apresentada e você tocar em <b>Aprovar substituição</b>.`);
@@ -331,6 +359,17 @@ async function handleCallback(update: any): Promise<void> {
 
   await answerCallback(ctx.callbackId, "Ação não suportada neste runtime.", true);
   throw new Error("TELEGRAM_CALLBACK_UNSUPPORTED");
+}
+
+async function publicProductsForTelegram(): Promise<any[]> {
+  const client = adminClient();
+  const [baselineResult, productsResult] = await Promise.all([
+    client.from("catalog_legacy_baseline").select("product_id"),
+    client.from("products").select("id,ref,produto,display_title,slug,ativo,status").eq("status", "published").limit(100),
+  ]);
+  if (baselineResult.error || productsResult.error) throw new Error("PRODUCT_LIST_UNAVAILABLE");
+  const baseline = new Set((baselineResult.data || []).map((row: any) => String(row.product_id)));
+  return (productsResult.data || []).filter((row: any) => row.ativo === true || baseline.has(String(row.id))).slice(0, 10);
 }
 
 async function handleMessage(update: any): Promise<void> {
@@ -347,7 +386,7 @@ async function handleMessage(update: any): Promise<void> {
       "",
       "O webhook está no Supabase Edge; não depende do Render.",
       "• <code>/review ID</code> — reabrir card pendente",
-      "• <code>/produtos</code> — listar peças públicas governadas no banco novo",
+      "• <code>/produtos</code> — listar peças públicas, inclusive a baseline legada",
       "",
       "Publicação e rotação continuam exigindo seu callback explícito no Telegram.",
     ].join("\n"));
@@ -366,13 +405,11 @@ async function handleMessage(update: any): Promise<void> {
   }
 
   if (/^\/produtos(?:\s|$)/i.test(command)) {
-    const { data, error } = await adminClient().from("products").select("id,ref,produto,display_title,slug").eq("ativo", true).eq("status", "published").limit(10);
-    if (error) throw new Error("PRODUCT_LIST_UNAVAILABLE");
-    const rows = Array.isArray(data) ? data : [];
+    const rows = await publicProductsForTelegram();
     const rendered = rows.length
       ? rows.map((row: any) => `• <a href="${PUBLIC_SITE}/produto/${encodeURIComponent(row.slug || row.id)}">${escapeHtml(row.display_title || row.produto)}</a> · <code>${escapeHtml(row.ref || row.id)}</code>`).join("\n")
-      : "Nenhuma peça serverless governada está ativa no banco novo.";
-    await sendMessage(chatId, `📦 <b>PEÇAS PÚBLICAS GOVERNADAS</b>\n\n${rendered}`);
+      : "Nenhuma peça pública encontrada.";
+    await sendMessage(chatId, `📦 <b>PEÇAS PÚBLICAS</b>\n\n${rendered}`);
     return;
   }
 
@@ -401,7 +438,7 @@ async function internalAuthorized(req: Request): Promise<boolean> {
   return equalSecret(configured, supplied);
 }
 
-async function parseJson(req: Request): Promise<Record<string, any>> {
+async function parseJson(req: Request): Promise<JsonRecord> {
   const raw = await req.text();
   if (!raw || raw.length > MAX_BODY_BYTES) throw new Error("INVALID_BODY");
   const body = JSON.parse(raw);
@@ -409,9 +446,11 @@ async function parseJson(req: Request): Promise<Record<string, any>> {
   return body;
 }
 
-function normalizeReviewPayload(input: Record<string, any>) {
+function normalizeReviewPayload(input: JsonRecord) {
   const data = input.data && typeof input.data === "object" && !Array.isArray(input.data) ? input.data : input;
-  const images = Array.isArray(data.imagens) ? data.imagens.map((item: unknown) => text(item, 2048)).filter((item: string) => /^https:\/\//i.test(item)).slice(0, 12) : [];
+  const images = Array.isArray(data.imagens)
+    ? data.imagens.map((item: unknown) => text(item, 2048)).filter((item: string) => /^https:\/\//i.test(item)).slice(0, 12)
+    : [];
   const primary = text(data?.imageCuration?.primaryImageUrl || data.imagemPrincipal || images[0], 2048);
   return {
     ...data,
@@ -421,7 +460,9 @@ function normalizeReviewPayload(input: Record<string, any>) {
     categoria: text(data.categoria, 160),
     preco: Number(data.preco),
     imagens: images,
-    imageCuration: data.imageCuration && typeof data.imageCuration === "object" ? data.imageCuration : { status: "ready", primaryImageUrl: primary },
+    imageCuration: data.imageCuration && typeof data.imageCuration === "object"
+      ? data.imageCuration
+      : { status: "ready", primaryImageUrl: primary },
     link: text(data.link, 2048),
     normalizedUrl: text(data.normalizedUrl || data.sourceProductUrl, 2048),
     shopId: text(data.shopId || data?.existingProduct?.shopId, 120),
@@ -432,7 +473,7 @@ function normalizeReviewPayload(input: Record<string, any>) {
 
 async function createCard(req: Request): Promise<Response> {
   if (!await internalAuthorized(req)) return json({ ok: false, error: "UNAUTHORIZED" }, 401);
-  let body: Record<string, any>;
+  let body: JsonRecord;
   try { body = await parseJson(req); } catch { return json({ ok: false, error: "INVALID_BODY" }, 400); }
   const data = normalizeReviewPayload(body);
   const chatId = text(body.chatId || body.chat_id, 64);
@@ -463,7 +504,7 @@ async function createCard(req: Request): Promise<Response> {
 
 async function sendRotationCardEndpoint(req: Request): Promise<Response> {
   if (!await internalAuthorized(req)) return json({ ok: false, error: "UNAUTHORIZED" }, 401);
-  let body: Record<string, any>;
+  let body: JsonRecord;
   try { body = await parseJson(req); } catch { return json({ ok: false, error: "INVALID_BODY" }, 400); }
   const requestId = text(body.requestId, 80);
   if (!requestId) return json({ ok: false, error: "REQUEST_ID_REQUIRED" }, 400);
@@ -506,6 +547,7 @@ Deno.serve(async (req: Request) => {
       internalTokenConfigured: Boolean(text(Deno.env.get("CERBERUS_INTERNAL_TOKEN"))),
       renderDependency: false,
       humanGate: "telegram-db-authorization-v1",
+      legacyBaselineAware: true,
     });
   }
 
@@ -528,9 +570,6 @@ Deno.serve(async (req: Request) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "TELEGRAM_EDGE_ERROR";
     console.error(`[telegram-edge] ${message.slice(0, 180)}`);
-    // Telegram retries non-2xx deliveries. Unauthorized users and unsupported
-    // updates are acknowledged only after being persisted/rejected; technical
-    // failures remain 503 so a transient outage can retry.
     if (message.includes("NOT_ALLOWED") || message.includes("UNSUPPORTED")) return json({ ok: true, accepted: true, rejected: true }, 200);
     return json({ ok: false, error: "TELEGRAM_EDGE_UNAVAILABLE" }, 503);
   }
