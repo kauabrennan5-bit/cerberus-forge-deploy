@@ -5,7 +5,7 @@ import test from "node:test";
 const serverSource = fs.readFileSync("server.ts", "utf8");
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const buildSelector = fs.readFileSync("scripts/build-by-target.mjs", "utf8");
-const vercelConfig = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
+const netlifyConfig = fs.readFileSync("netlify.toml", "utf8");
 
 test("production backend never serves the legacy SPA fallback", () => {
   assert.equal(serverSource.includes('res.sendFile(path.join(distPath, "index.html"))'), false);
@@ -48,10 +48,12 @@ test("frontend-only hosting build never emits the Node backend bundle", () => {
   assert.equal(packageJson.scripts["build:frontend"].includes("esbuild server.ts"), false);
 });
 
-test("Vercel configuration deploys only the static storefront with SPA fallback", () => {
-  assert.equal(vercelConfig.framework, "vite");
-  assert.equal(vercelConfig.installCommand, "npm ci");
-  assert.equal(vercelConfig.buildCommand, "npm run build:frontend");
-  assert.equal(vercelConfig.outputDirectory, "dist");
-  assert.deepEqual(vercelConfig.rewrites, [{ source: "/(.*)", destination: "/index.html" }]);
+test("Netlify configuration deploys only the static storefront with SPA fallback", () => {
+  assert.match(netlifyConfig, /command = "npm run build:frontend"/);
+  assert.match(netlifyConfig, /publish = "dist"/);
+  assert.match(netlifyConfig, /NODE_VERSION = "24\.14\.1"/);
+  assert.match(netlifyConfig, /from = "\/\*"/);
+  assert.match(netlifyConfig, /to = "\/index\.html"/);
+  assert.match(netlifyConfig, /status = 200/);
+  assert.equal(netlifyConfig.includes("functions"), false);
 });
