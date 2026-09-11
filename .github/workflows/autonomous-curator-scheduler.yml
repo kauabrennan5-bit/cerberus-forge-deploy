@@ -1,5 +1,6 @@
 name: Cerberus Autonomous Curator Scheduler
-# Dedicated production scheduler. Curated discoveries go to Telegram for a human publish/discard decision.
+# Direct production scheduler. It is fail-closed until CERBERUS_SERVERLESS_CURATOR_ENABLED=true.
+# Curated discoveries may create Telegram review cards, but publication remains a separate human callback.
 
 on:
   schedule:
@@ -9,10 +10,10 @@ on:
       - main
     paths:
       - ".github/workflows/autonomous-curator-scheduler.yml"
+      - "scripts/run-autonomous-curator-direct.ts"
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: cerberus-autonomous-curator-production
@@ -20,202 +21,32 @@ concurrency:
 
 jobs:
   manual-review-curator:
-    if: vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && (github.event_name == 'schedule' || contains(github.event.head_commit.message, '[prove-curator-flow]'))
+    if: vars.CERBERUS_SERVERLESS_CURATOR_ENABLED == 'true' && github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 50
     env:
-      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
-      OIDC_AUDIENCE: cerberus-weekly-automation
+      SUPABASE_URL: https://ppsxlclycyinhhoqijvz.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+      SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
+      SHOPEE_AFFILIATE_APP_ID: ${{ secrets.SHOPEE_AFFILIATE_APP_ID }}
+      SHOPEE_AFFILIATE_APP_SECRET: ${{ secrets.SHOPEE_AFFILIATE_APP_SECRET }}
+      SHOPEE_AFFILIATE_API_BASE_URL: ${{ vars.SHOPEE_AFFILIATE_API_BASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.TELEGRAM_ALLOWED_USER_IDS }}
+      TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+      TELEGRAM_ADMIN_USER_ID: ${{ secrets.TELEGRAM_ADMIN_USER_ID }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_PRODUCT_CURATOR_MODEL: ${{ vars.GEMINI_PRODUCT_CURATOR_MODEL }}
     steps:
-      - name: Wait for exact Render SHA
-        shell: bash
-        run: |
-          set -euo pipefail
-          response_file="$RUNNER_TEMP/cerberus-health.json"
-          for attempt in $(seq 1 60); do
-            status="$(curl --silent --show-error --max-time 20 -o "$response_file" -w '%{http_code}' "$CERBERUS_HEALTH_URL" || true)"
-            if [ "$status" = "200" ]; then
-              live_sha="$(node - "$response_file" <<'NODE'
-          const fs = require('node:fs');
-          try {
-            const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-            process.stdout.write(typeof body?.version === 'string' ? body.version.trim() : '');
-          } catch { process.stdout.write(''); }
-          NODE
-          )"
-              if [ "$live_sha" = "$GITHUB_SHA" ]; then
-                echo "RENDER_LIVE_SHA_VERIFIED=true"
-                break
-              fi
-            fi
-            if [ "$attempt" = "60" ]; then
-              echo "Render did not serve the expected SHA."
-              exit 1
-            fi
-            sleep 10
-          done
-
-      - name: Start manual-review curator and wait for audited completion
-        shell: bash
-        run: |
-          set -euo pipefail
-          base="${CERBERUS_HEALTH_URL%/health}"
-
-          get_oidc_token() {
-            local token_json token
-            token_json="$(curl --fail --silent --show-error --max-time 20 \
-              -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
-            token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
-            echo "::add-mask::$token" >&2
-            printf '%s' "$token"
-          }
-
-          response_code() {
-            node - "$1" <<'NODE'
-          const fs = require('node:fs');
-          try {
-            const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-            const code = typeof body?.code === 'string' ? body.code : '';
-            process.stdout.write(/^[A-Z0-9_:.-]{1,160}$/.test(code) ? code : '');
-          } catch { process.stdout.write(''); }
-          NODE
-          }
-
-          readiness_file="$RUNNER_TEMP/autonomous-curator-readiness.json"
-          readiness_ready=false
-          for attempt in $(seq 1 24); do
-            token="$(get_oidc_token)"
-            readiness_status="$(curl --silent --show-error --max-time 30 \
-              -o "$readiness_file" -w '%{http_code}' \
-              -H "Authorization: Bearer ${token}" \
-              "$base/api/internal/autonomous-curator/readiness" || true)"
-
-            if [ "$readiness_status" = "200" ]; then
-              if node - "$readiness_file" <<'NODE'
-          const fs = require('node:fs');
-          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (body?.ok !== true || body?.dependency !== 'supabase' || body?.reviewOnly !== true) process.exit(1);
-          NODE
-              then
-                readiness_ready=true
-                echo "AUTONOMOUS_CURATOR_READINESS=true"
-                break
-              fi
-            fi
-
-            if [ "$readiness_status" = "401" ] || [ "$readiness_status" = "403" ]; then
-              echo "Autonomous Curator readiness authorization failed."
-              exit 1
-            fi
-
-            code="$(response_code "$readiness_file")"
-            echo "Autonomous Curator not ready yet (attempt ${attempt}/24, http=${readiness_status:-000}, code=${code:-unknown}); retrying."
-            sleep 10
-          done
-
-          if [ "$readiness_ready" != "true" ]; then
-            echo "Autonomous Curator dependencies did not become ready in time."
-            exit 1
-          fi
-
-          start_file="$RUNNER_TEMP/autonomous-curator-start.json"
-          status_file="$RUNNER_TEMP/autonomous-curator-status.json"
-          start_accepted=false
-          for attempt in $(seq 1 12); do
-            token="$(get_oidc_token)"
-            start_status="$(curl --silent --show-error --max-time 30 \
-              -o "$start_file" -w '%{http_code}' \
-              -H "Authorization: Bearer ${token}" \
-              -H 'Content-Type: application/json' \
-              -d '{"dryRun":false,"notify":true}' \
-              "$base/api/internal/autonomous-curator/daily" || true)"
-
-            if [ "$start_status" = "200" ] || [ "$start_status" = "202" ]; then
-              start_state="$(node - "$start_file" <<'NODE'
-          const fs = require('node:fs');
-          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (body?.ok !== true) process.stdout.write('invalid');
-          else if (body?.status === 'disabled') process.stdout.write('disabled');
-          else if (body?.accepted === true) process.stdout.write(`accepted:${body.status || 'accepted'}`);
-          else process.stdout.write('invalid');
-          NODE
-          )"
-              if [ "$start_state" = "disabled" ]; then
-                echo "AUTONOMOUS_CURATOR=disabled"
-                exit 0
-              fi
-              if [[ "$start_state" == accepted:* ]]; then
-                echo "AUTONOMOUS_CURATOR_START=${start_state#accepted:}"
-                start_accepted=true
-                break
-              fi
-              echo "Autonomous Curator returned an invalid successful response."
-              exit 1
-            fi
-
-            case "$start_status" in
-              000|429|502|503|504)
-                code="$(response_code "$start_file")"
-                echo "Autonomous Curator start transient failure (attempt ${attempt}/12, http=${start_status:-000}, code=${code:-unknown}); retrying."
-                sleep 10
-                ;;
-              401|403)
-                echo "Autonomous Curator start authorization failed."
-                exit 1
-                ;;
-              *)
-                code="$(response_code "$start_file")"
-                echo "Autonomous Curator start failed (http=${start_status:-000}, code=${code:-unknown})."
-                exit 1
-                ;;
-            esac
-          done
-
-          if [ "$start_accepted" != "true" ]; then
-            echo "Autonomous Curator start was not accepted after transient retries."
-            exit 1
-          fi
-
-          expected_date="$(TZ=America/Fortaleza date +%F)"
-          for attempt in $(seq 1 180); do
-            token="$(get_oidc_token)"
-            if ! curl --fail-with-body --silent --show-error --max-time 45 \
-              -o "$status_file" -H "Authorization: Bearer ${token}" \
-              "$base/api/internal/autonomous-curator/status?dryRun=false"; then
-              echo "Autonomous Curator status poll transient failure; retrying."
-              sleep 15
-              continue
-            fi
-
-            state="$(node - "$status_file" "$expected_date" <<'NODE'
-          const fs = require('node:fs');
-          const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          const expectedDate = process.argv[3];
-          const run = body?.latestRun;
-          if (!run || String(run.run_date) !== expectedDate) {
-            process.stdout.write('waiting');
-            process.exit(0);
-          }
-          const terminalStatus = ['completed','partial','failed'].includes(String(run.status));
-          if (terminalStatus && run.completed_at) {
-            const autonomousPublications = Number(run.auto_published || 0);
-            if (!Number.isSafeInteger(autonomousPublications) || autonomousPublications !== 0) {
-              console.error(`AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED:${run.auto_published}`);
-              process.exit(2);
-            }
-            console.log(`done:${run.status}:${run.auto_published || 0}:${run.review_required || 0}:${run.rejected || 0}:${run.failed || 0}`);
-            process.exit(0);
-          }
-          process.stdout.write('waiting');
-          NODE
-          )"
-            if [[ "$state" == done:* ]]; then
-              echo "AUTONOMOUS_CURATOR_RESULT=$state"
-              if [[ "$state" == done:failed:* ]]; then exit 1; fi
-              exit 0
-            fi
-            sleep 15
-          done
-          echo "Autonomous Curator did not reach a terminal audited state in time."
-          exit 1
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run direct review-only Curator
+        run: npx tsx scripts/run-autonomous-curator-direct.ts manual_review
