@@ -8,6 +8,7 @@ const telegram = readFileSync(new URL("../supabase/functions/cerberus-telegram-g
 const publicApi = readFileSync(new URL("../supabase/functions/cerberus-public-api/index.ts", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../supabase/migrations/20260911183500_serverless_runtime_telegram.sql", import.meta.url), "utf8");
 const rateMigration = readFileSync(new URL("../supabase/migrations/20260911183700_edge_rate_limits.sql", import.meta.url), "utf8");
+const legacyBaselineMigration = readFileSync(new URL("../supabase/migrations/20260911184500_legacy_baseline_rotation.sql", import.meta.url), "utf8");
 
 test("frontend public/admin runtime no longer calls Render", () => {
   assert.doesNotMatch(frontend, /cerberus-forge-deploy-backend\.onrender\.com/);
@@ -57,6 +58,9 @@ test("Telegram gateway is a real Edge handler rather than a Render relay", () =>
   assert.match(telegram, /\/rotation-card/);
   assert.match(telegram, /\/register-webhook/);
   assert.match(telegram, /humanGate:\s*"telegram-db-authorization-v1"/);
+  assert.match(telegram, /legacyBaselineAware:\s*true/);
+  assert.match(telegram, /catalog_legacy_baseline/);
+  assert.match(telegram, /sourceWasLegacyBaseline/);
 });
 
 test("database transaction persists callback proof before the publication guard can activate a product", () => {
@@ -71,6 +75,20 @@ test("database transaction persists callback proof before the publication guard 
   assert.match(migration, /update public\.products\s+set ativo=true, status='published'/s);
   assert.match(migration, /grant execute on function public\.cerberus_telegram_publish_review[\s\S]*service_role/);
   assert.doesNotMatch(migration, /grant execute[\s\S]*\bto anon\b/i);
+});
+
+test("legacy Cloudflare baseline supports governed rotation without fabricating approval", () => {
+  assert.match(legacyBaselineMigration, /create table if not exists public\.catalog_legacy_baseline/);
+  assert.match(legacyBaselineMigration, /949fef27ace775f53b98901db616a759ce4cc025/);
+  assert.match(legacyBaselineMigration, /'humanApprovalBackfill',false/);
+  assert.match(legacyBaselineMigration, /created_by is null/);
+  assert.match(legacyBaselineMigration, /human_editorial_review_id is null/);
+  assert.match(legacyBaselineMigration, /human_editorial_authorization_id is null/);
+  assert.match(legacyBaselineMigration, /sourceWasLegacyBaseline/);
+  assert.match(legacyBaselineMigration, /catalog_overlay_entries/);
+  assert.match(legacyBaselineMigration, /'hide','telegram_rotation'/);
+  assert.match(legacyBaselineMigration, /'upsert','telegram_rotation'/);
+  assert.doesNotMatch(legacyBaselineMigration, /update public\.products[\s\S]{0,120}human_editorial_review_id/i);
 });
 
 test("catalog overlay exposes only public-gated upserts and explicit tombstones", () => {
