@@ -5,6 +5,7 @@ import test from "node:test";
 const serverSource = fs.readFileSync("server.ts", "utf8");
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const buildSelector = fs.readFileSync("scripts/build-by-target.mjs", "utf8");
+const vercelConfig = JSON.parse(fs.readFileSync("vercel.json", "utf8"));
 
 test("production backend never serves the legacy SPA fallback", () => {
   assert.equal(serverSource.includes('res.sendFile(path.join(distPath, "index.html"))'), false);
@@ -45,4 +46,12 @@ test("frontend-only hosting build never emits the Node backend bundle", () => {
   assert.match(packageJson.scripts["build:frontend"], /vite build/);
   assert.match(packageJson.scripts["build:frontend"], /generate-product-og-pages\.js/);
   assert.equal(packageJson.scripts["build:frontend"].includes("esbuild server.ts"), false);
+});
+
+test("Vercel configuration deploys only the static storefront with SPA fallback", () => {
+  assert.equal(vercelConfig.framework, "vite");
+  assert.equal(vercelConfig.installCommand, "npm ci");
+  assert.equal(vercelConfig.buildCommand, "npm run build:frontend");
+  assert.equal(vercelConfig.outputDirectory, "dist");
+  assert.deepEqual(vercelConfig.rewrites, [{ source: "/(.*)", destination: "/index.html" }]);
 });
