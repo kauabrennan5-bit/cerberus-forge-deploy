@@ -32,6 +32,26 @@ function publicAssetPaths(html) {
   return [...refs];
 }
 
+function validateAffiliateLink(product) {
+  invariant(typeof product?.link === 'string' && product.link.trim().length > 0, `missing affiliate link for ${product?.id || 'unknown'}`);
+
+  let url;
+  try {
+    url = new URL(product.link);
+  } catch {
+    throw new Error(`invalid affiliate URL for ${product?.id || 'unknown'}: ${product?.link}`);
+  }
+
+  invariant(url.protocol === 'https:', `affiliate link must use HTTPS for ${product?.id || 'unknown'}`);
+  const hostname = url.hostname.toLowerCase();
+  invariant(
+    hostname === 'shopee.com.br' || hostname.endsWith('.shopee.com.br'),
+    `unexpected affiliate host for ${product?.id || 'unknown'}: ${hostname}`,
+  );
+  invariant(url.username === '' && url.password === '', `affiliate link contains credentials for ${product?.id || 'unknown'}`);
+  invariant(!url.hash, `affiliate link contains an unexpected fragment for ${product?.id || 'unknown'}`);
+}
+
 async function verify() {
   invariant(Number.isSafeInteger(expectedCount) && expectedCount > 0, 'EXPECTED_PRODUCT_COUNT must be a positive integer');
 
@@ -65,11 +85,14 @@ async function verify() {
   invariant(catalog.length === expectedCount, `expected ${expectedCount} public products, got ${catalog.length}`);
 
   const slugs = new Set();
+  let affiliateLinksVerified = 0;
   for (const product of catalog) {
     invariant(product?.ativo === true && product?.status === 'published', `non-public product leaked into snapshot: ${product?.id || 'unknown'}`);
     invariant(typeof product?.slug === 'string' && product.slug.trim().length > 0, `missing slug for ${product?.id || 'unknown'}`);
     invariant(!slugs.has(product.slug), `duplicate slug in snapshot: ${product.slug}`);
     slugs.add(product.slug);
+    validateAffiliateLink(product);
+    affiliateLinksVerified += 1;
     for (const internalField of ['curator_note', 'created_by', 'human_editorial_review_id', 'human_editorial_authorization_id']) {
       invariant(!(internalField in product), `internal field ${internalField} leaked for ${product.id}`);
     }
@@ -110,6 +133,7 @@ async function verify() {
     storefront: baseUrl,
     products: catalog.length,
     productPagesVerified,
+    affiliateLinksVerified,
     assetsVerified: assets.length,
     spaFallback: true,
     backendBundleExposed: false,
