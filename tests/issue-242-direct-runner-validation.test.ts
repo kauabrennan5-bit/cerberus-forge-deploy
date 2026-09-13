@@ -18,9 +18,11 @@ test("Issue #242: Autonomous Curator workflow boundary — no onrender.com", asy
   const curatorYaml = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
   const schedulerYaml = await readFile(new URL("../.github/workflows/autonomous-curator-scheduler.yml", import.meta.url), "utf8");
 
-  assert.doesNotMatch(curatorYaml, /onrender\.com/);
-  assert.doesNotMatch(schedulerYaml, /onrender\.com/);
-  console.log("✅ Workflows: zero onrender.com references");
+  // The boundary job itself contains the literal "onrender.com" in a negative grep.
+  // What must never exist is an actual Render URL/dependency in either workflow.
+  assert.doesNotMatch(curatorYaml, /https?:\/\/[^\s'\"]*onrender\.com/i);
+  assert.doesNotMatch(schedulerYaml, /https?:\/\/[^\s'\"]*onrender\.com/i);
+  console.log("✅ Workflows: zero onrender.com URL dependencies");
 });
 
 test("Issue #242: Direct runner has no /api/internal/autonomous-curator/ dependencies", async () => {
@@ -64,9 +66,9 @@ test("Issue #242: autoPublished contract is enforced in direct runner", async ()
   assert.match(runner, /AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED/);
   assert.match(runner, /autoPublished\s*!==\s*0/);
 
-  // Must also check in status mode
-  assert.match(runner, /latestRun.*auto_published/);
-  assert.match(runner, /if.*AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED/);
+  // Must also check in status mode. Allow the guard and throw to span lines.
+  assert.match(runner, /latestRun[\s\S]*?auto_published/);
+  assert.match(runner, /if\s*\([^)]*latestRun[^)]*\)[\s\S]*?AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED/);
 
   console.log("✅ Direct runner: autoPublished === 0 enforced");
 });
@@ -161,11 +163,11 @@ test("Issue #242: Manual review creates cards without auto-publishing", async ()
 test("Issue #242: Workflow dispatch has explicit mode inputs", async () => {
   const curator = await readFile(new URL("../.github/workflows/autonomous-curator.yml", import.meta.url), "utf8");
 
-  // Must have explicit mode selection
+  // Must have explicit mode selection and all three safe options.
   assert.match(curator, /inputs:\s*mode/);
-  assert.match(curator, /options:\s*-\s*dry_run/);
-  assert.match(curator, /options:\s*-\s*manual_review/);
-  assert.match(curator, /options:\s*-\s*status/);
+  assert.match(curator, /options:[\s\S]*?-\s*dry_run/);
+  assert.match(curator, /options:[\s\S]*?-\s*manual_review/);
+  assert.match(curator, /options:[\s\S]*?-\s*status/);
 
   console.log("✅ Workflow dispatch: explicit safe modes");
 });
@@ -206,9 +208,9 @@ test("Issue #242: Environment variables in workflows use secrets, never hardcode
   assert.match(curator, /secrets\./);
   assert.match(scheduler, /secrets\./);
 
-  // Bot token must come from secrets
-  assert.match(curator, /TELEGRAM_BOT_TOKEN:\s*\{\{\s*secrets\./);
-  assert.match(scheduler, /TELEGRAM_BOT_TOKEN:\s*\{\{\s*secrets\./);
+  // Bot token must come from secrets (GitHub Actions syntax is ${{ secrets.NAME }}).
+  assert.match(curator, /TELEGRAM_BOT_TOKEN:\s*\$\{\{\s*secrets\./);
+  assert.match(scheduler, /TELEGRAM_BOT_TOKEN:\s*\$\{\{\s*secrets\./);
 
   console.log("✅ Workflows: secrets never hardcoded");
 });
