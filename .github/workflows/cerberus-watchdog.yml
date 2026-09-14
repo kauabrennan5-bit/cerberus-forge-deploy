@@ -1,176 +1,113 @@
-name: Cerberus external watchdog
+name: Cerberus weekly direct automation
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
-    # Sexta 09:30 America/Fortaleza (12:30 UTC): diagnóstico somente leitura.
+    # Sexta 09:30 America/Fortaleza (12:30 UTC): preflight somente leitura.
     - cron: "30 12 * * 5"
-    # Sexta 10:00 America/Fortaleza (13:00 UTC): cria somente o rascunho.
+    # Sexta 10:00 America/Fortaleza (13:00 UTC): draft, somente com gates serverless explícitos.
     - cron: "0 13 * * 5"
-    # Sábado 10:00 America/Fortaleza: lembra rascunhos sem decisão; nunca envia.
+    # Sábado 10:00 America/Fortaleza (13:00 UTC): lembrete de draft pendente.
     - cron: "0 13 * * 6"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cerberus-watchdog.yml"
+      - "scripts/run-newsletter-weekly-direct.ts"
+      - "server/services/newsletterWeeklyCampaign.ts"
+      - "server/services/newsletterWeeklyPreflight.ts"
+      - "server/services/newsletterWeeklyEditorialBackfill.ts"
   workflow_dispatch:
     inputs:
       operation:
-        description: "Operação controlada"
+        description: "Operação semanal controlada"
         required: true
         type: choice
-        default: health
+        default: weekly-preflight
         options:
-          - health
           - weekly-preflight
           - weekly-editorial-backfill-dry-run
           - weekly-editorial-backfill-execute
           - weekly-draft
-          - weekly-draft-test
-          - weekly-design-test
           - weekly-stale
 
 permissions:
   contents: read
-  id-token: write
-  actions: write
 
 concurrency:
-  group: cerberus-watchdog
-  cancel-in-progress: true
+  group: cerberus-weekly-direct
+  cancel-in-progress: false
 
 jobs:
-  health-check:
-    if: (github.event_name == 'workflow_dispatch' && inputs.operation == 'health') || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '*/15 * * * *')
+  weekly:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || vars.CERBERUS_SERVERLESS_NEWSLETTER_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     env:
-      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
+      SUPABASE_URL: https://ppsxlclycyinhhoqijvz.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
-      WATCHDOG_TIMEOUT_MS: "75000"
-      WATCHDOG_MAX_ATTEMPTS: "2"
-      WATCHDOG_STATE_PATH: state/watchdog-state.json
+      TELEGRAM_ADMIN_USER_ID: ${{ secrets.TELEGRAM_ADMIN_USER_ID }}
+      TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.TELEGRAM_ALLOWED_USER_IDS }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+      PUBLIC_SITE_URL: https://cerberus-finds.pages.dev
+      CERBERUS_SERVERLESS_NEWSLETTER_ENABLED: ${{ vars.CERBERUS_SERVERLESS_NEWSLETTER_ENABLED || 'false' }}
+      CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY: ${{ vars.CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY || 'false' }}
+      WEEKLY_BACKFILL_LIMIT: "50"
     steps:
-      - name: Checkout watchdog state
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 1
-
-      - name: Restore watchdog transition state
-        uses: actions/cache/restore@v4
-        with:
-          path: state/watchdog-state.json
-          key: watchdog-state-${{ github.run_id }}
-          restore-keys: |
-            watchdog-state-
-
-      - name: Run external health check
-        run: node scripts/watchdog.mjs
-
-      - name: Persist watchdog transition state outside main
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: state/watchdog-state.json
-          key: watchdog-state-${{ github.run_id }}
-
-  weekly-draft:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-draft' || inputs.operation == 'weekly-draft-test' || inputs.operation == 'weekly-design-test')) || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '0 13 * * 5')
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    env:
-      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
-      OIDC_AUDIENCE: cerberus-weekly-automation
-    steps:
-      - name: Trigger weekly draft only
+          node-version: 24.14.1
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Resolve controlled operation
+        id: operation
         shell: bash
         run: |
           set -euo pipefail
-          base="${CERBERUS_HEALTH_URL%/health}"
-          body='{}'
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "weekly-draft-test" ]; then body='{"testMode":true}'; fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.operation }}" = "weekly-design-test" ]; then body='{"testMode":true,"designTestMode":true}'; fi
-          token_json="$(curl --fail --silent --show-error --max-time 20 \
-            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
-          oidc_token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
-          echo "::add-mask::$oidc_token"
-          curl --fail-with-body --silent --show-error --max-time 45 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -d "$body" \
-            "$base/api/internal/newsletter/weekly-draft"
-
-  weekly-preflight:
-    if: (github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-preflight') || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '30 12 * * 5')
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    env:
-      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
-      OIDC_AUDIENCE: cerberus-weekly-automation
-    steps:
-      - name: Run read-only weekly production preflight
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            case "${{ inputs.operation }}" in
+              weekly-preflight) op=preflight ;;
+              weekly-draft) op=draft ;;
+              weekly-stale) op=stale ;;
+              weekly-editorial-backfill-dry-run) op=backfill-dry-run ;;
+              weekly-editorial-backfill-execute) op=backfill-execute ;;
+              *) echo "Unsupported operation"; exit 1 ;;
+            esac
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            op=preflight
+          else
+            case "${{ github.event.schedule }}" in
+              "30 12 * * 5") op=preflight ;;
+              "0 13 * * 5") op=draft ;;
+              "0 13 * * 6") op=stale ;;
+              *) echo "Unsupported schedule"; exit 1 ;;
+            esac
+          fi
+          echo "operation=$op" >> "$GITHUB_OUTPUT"
+      - name: Run direct weekly operation
+        env:
+          WEEKLY_OPERATION: ${{ steps.operation.outputs.operation }}
+          WEEKLY_PREFLIGHT_TELEGRAM_NOTIFY: ${{ github.event_name == 'schedule' && github.event.schedule == '30 12 * * 5' && 'true' || 'false' }}
+          WEEKLY_ALLOW_EDITORIAL_BACKFILL_EXECUTE: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-editorial-backfill-execute' && vars.CERBERUS_WEEKLY_BACKFILL_EXECUTE_ENABLED == 'true' && 'true' || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
-          base="${CERBERUS_HEALTH_URL%/health}"
-          token_json="$(curl --fail --silent --show-error --max-time 20 \
-            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
-          oidc_token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
-          echo "::add-mask::$oidc_token"
-          # 409 significa diagnóstico entregue com gates não prontos; não há mutação de campanha.
-          status="$(curl --silent --show-error --max-time 45 -o preflight.json -w '%{http_code}' \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -d '{}' \
-            "$base/api/internal/newsletter/weekly-preflight")"
-          node -e 'const fs=require("fs"); const v=JSON.parse(fs.readFileSync("preflight.json","utf8")); console.log(JSON.stringify({success:v.success,ready:v.result?.ready,eligible:v.result?.eligibleProducts,composition:v.result?.probableComposition}))'
-          test "$status" = "200" || test "$status" = "409"
-
-  weekly-editorial-backfill:
-    if: github.event_name == 'workflow_dispatch' && (inputs.operation == 'weekly-editorial-backfill-dry-run' || inputs.operation == 'weekly-editorial-backfill-execute')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
-      OIDC_AUDIENCE: cerberus-weekly-automation
-    steps:
-      - name: Run controlled editorial backfill
-        shell: bash
-        run: |
-          set -euo pipefail
-          base="${CERBERUS_HEALTH_URL%/health}"
-          execute=false
-          if [ "${{ inputs.operation }}" = "weekly-editorial-backfill-execute" ]; then execute=true; fi
-          token_json="$(curl --fail --silent --show-error --max-time 20 \
-            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
-          oidc_token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
-          echo "::add-mask::$oidc_token"
-          curl --fail-with-body --silent --show-error --max-time 600 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -d "{\"execute\":${execute},\"limit\":50}" \
-            "$base/api/internal/newsletter/weekly-editorial-backfill"
-
-  weekly-stale:
-    if: (github.event_name == 'workflow_dispatch' && inputs.operation == 'weekly-stale') || (vars.CERBERUS_RENDER_RUNTIME_ENABLED == 'true' && github.event_name == 'schedule' && github.event.schedule == '0 13 * * 6')
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    env:
-      CERBERUS_HEALTH_URL: https://cerberus-forge-deploy-backend.onrender.com/health
-      OIDC_AUDIENCE: cerberus-weekly-automation
-    steps:
-      - name: Notify stale weekly draft without sending
-        shell: bash
-        run: |
-          set -euo pipefail
-          base="${CERBERUS_HEALTH_URL%/health}"
-          token_json="$(curl --fail --silent --show-error --max-time 20 \
-            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${OIDC_AUDIENCE}")"
-          oidc_token="$(node -e 'const b=JSON.parse(process.argv[1]); if(typeof b.value!=="string"||!b.value) process.exit(1); process.stdout.write(b.value)' "$token_json")"
-          echo "::add-mask::$oidc_token"
-          curl --fail-with-body --silent --show-error --max-time 45 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${oidc_token}" \
-            -d '{}' \
-            "$base/api/internal/newsletter/weekly-stale"
+          if [ "$WEEKLY_OPERATION" = "draft" ]; then
+            if [ "$CERBERUS_SERVERLESS_NEWSLETTER_ENABLED" != "true" ] || [ "$CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY" != "true" ]; then
+              echo "WEEKLY_DIRECT=SKIPPED serverless_or_preview_not_ready"
+              exit 0
+            fi
+          elif [ "$WEEKLY_OPERATION" = "stale" ]; then
+            if [ "$CERBERUS_SERVERLESS_NEWSLETTER_ENABLED" != "true" ]; then
+              echo "WEEKLY_DIRECT=SKIPPED serverless_newsletter_not_ready"
+              exit 0
+            fi
+          fi
+          npx tsx scripts/run-newsletter-weekly-direct.ts
