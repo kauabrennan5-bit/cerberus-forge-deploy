@@ -14,6 +14,17 @@ test("weekly scheduler runs direct services without Render or OIDC", () => {
   assert.doesNotMatch(workflow, /watchdog\.mjs/);
 });
 
+test("push proof is read-only preflight and scheduled writes remain fail closed", () => {
+  assert.match(workflow, /github\.event_name == 'push'/);
+  assert.match(workflow, /elif \[ "\$\{\{ github\.event_name \}\}" = "push" \]; then\s+op=preflight/s);
+  assert.match(workflow, /CERBERUS_SERVERLESS_NEWSLETTER_ENABLED/);
+  assert.match(workflow, /CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY/);
+  assert.match(workflow, /WEEKLY_PREFLIGHT_TELEGRAM_NOTIFY:/);
+  assert.match(workflow, /github\.event_name == 'schedule'/);
+  assert.match(workflow, /WEEKLY_ALLOW_EDITORIAL_BACKFILL_EXECUTE/);
+  assert.match(workflow, /CERBERUS_WEEKLY_BACKFILL_EXECUTE_ENABLED/);
+});
+
 test("direct weekly runner preserves send and consent safety boundaries", () => {
   assert.match(runner, /runWeeklyProductionPreflight/);
   assert.match(runner, /runWeeklyDraftCycle/);
@@ -25,5 +36,6 @@ test("direct weekly runner preserves send and consent safety boundaries", () => 
   assert.match(runner, /consentChanges:\s*0/);
   assert.match(runner, /providerCampaignCreates:\s*0/);
   assert.match(runner, /WEEKLY_DIRECT_BACKFILL_EXECUTE_NOT_AUTHORIZED/);
+  assert.match(runner, /serverlessWeeklyPreviewReady/);
   assert.doesNotMatch(runner, /sendNow|syncWeeklyBrevoProductionAudience|enableWeeklyProductionAfterVerifiedSync/);
 });
