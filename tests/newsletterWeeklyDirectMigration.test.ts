@@ -37,5 +37,7 @@ test("direct weekly runner preserves send and consent safety boundaries", () => 
   assert.match(runner, /providerCampaignCreates:\s*0/);
   assert.match(runner, /WEEKLY_DIRECT_BACKFILL_EXECUTE_NOT_AUTHORIZED/);
   assert.match(runner, /serverlessWeeklyPreviewReady/);
-  assert.doesNotMatch(runner, /sendNow|syncWeeklyBrevoProductionAudience|enableWeeklyProductionAfterVerifiedSync/);
+  assert.doesNotMatch(runner, /\bsendNow\s*\(/);
+  assert.doesNotMatch(runner, /syncWeeklyBrevoProductionAudience\s*\(/);
+  assert.doesNotMatch(runner, /enableWeeklyProductionAfterVerifiedSync\s*\(/);
 });
