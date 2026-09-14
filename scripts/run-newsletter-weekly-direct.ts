@@ -35,6 +35,11 @@ async function main(): Promise<void> {
   let editorialProductsUpdated = 0;
   let status = "ok";
   let result: unknown = null;
+  const trackedTelegramSender = async (chatId: string, text: string, replyMarkup?: unknown) => {
+    const delivery = await sendTelegramMessage(chatId, text, replyMarkup);
+    if (delivery.ok) telegramMessagesSent += 1;
+    return delivery;
+  };
 
   if (op === "preflight") {
     const preflight = await runWeeklyProductionPreflight();
@@ -42,29 +47,29 @@ async function main(): Promise<void> {
     if (process.env.WEEKLY_PREFLIGHT_TELEGRAM_NOTIFY === "true") {
       const chatId = String(process.env.TELEGRAM_ADMIN_CHAT_ID || "").trim();
       if (!chatId) throw new Error("WEEKLY_DIRECT_TELEGRAM_ADMIN_CHAT_MISSING");
-      const delivery = await sendTelegramMessage(chatId, renderWeeklyPreflightTelegram(preflight));
+      const delivery = await trackedTelegramSender(chatId, renderWeeklyPreflightTelegram(preflight));
       if (!delivery.ok) throw new Error("WEEKLY_DIRECT_PREFLIGHT_TELEGRAM_FAILED");
-      telegramMessagesSent = 1;
     }
   } else if (op === "draft") {
     if (!serverlessNewsletterEnabled() || !(await isWeeklyProductionEnabled())) {
       status = "skipped";
       result = { reason: "weekly_production_disabled" };
     } else {
-      const outcome = await runWeeklyDraftCycle({ env: { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" } });
+      const outcome = await runWeeklyDraftCycle({
+        env: { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" },
+        telegramSender: trackedTelegramSender,
+      });
       result = outcome.status === "created"
         ? { status: outcome.status, campaignId: outcome.campaign.id, productCount: outcome.products.length }
         : outcome;
       campaignDraftsCreated = outcome.status === "created" ? 1 : 0;
-      // runWeeklyDraftCycle may deliver the human-approval card, but never sends an email.
-      telegramMessagesSent = outcome.status === "created" ? 1 : 0;
     }
   } else if (op === "stale") {
     if (!serverlessNewsletterEnabled()) {
       status = "skipped";
       result = { reason: "serverless_newsletter_disabled" };
     } else {
-      result = { notified: await runWeeklyStaleDraftCheck() };
+      result = { notified: await runWeeklyStaleDraftCheck({ telegramSender: trackedTelegramSender }) };
     }
   } else if (op === "backfill-dry-run") {
     result = await runWeeklyEditorialBackfill({ execute: false, limit: Number(process.env.WEEKLY_BACKFILL_LIMIT || 50) });
