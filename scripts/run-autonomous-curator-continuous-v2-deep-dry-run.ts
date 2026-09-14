@@ -1,3 +1,4 @@
+// Operational proof trigger only; runtime semantics unchanged.
 import "dotenv/config";
 import { runAutonomousCuratorContinuousV2 } from "../server/services/autonomousCuratorContinuousV2";
 
