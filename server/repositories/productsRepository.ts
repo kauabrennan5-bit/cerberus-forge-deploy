@@ -1,3 +1,4 @@
+import { curatorGuardedSupabaseFetch } from "../lib/curatorDryRunGuard";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import { generateSlug } from "../../src/data/initialProducts";
@@ -20,7 +21,7 @@ dotenv.config();
 const supabaseUrl = process.env.SUPABASE_URL || "";
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_SECRET_KEY || "";
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseKey)
-  ? createClient(supabaseUrl, supabaseKey)
+  ? createClient(supabaseUrl, supabaseKey, { global: { fetch: curatorGuardedSupabaseFetch } })
   : null;
 
 if (supabase) {

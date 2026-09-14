@@ -1,3 +1,4 @@
+import { assertCuratorMutationAllowed } from "../lib/curatorDryRunGuard";
 import { createHash } from "node:crypto";
 
 const TELEGRAM_REQUEST_TIMEOUT_MS = 15_000;
@@ -86,6 +87,7 @@ export async function telegramApiFetch(
   method: string,
   payload: Record<string, unknown>,
 ): Promise<Response> {
+  assertCuratorMutationAllowed("telegram_api");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TELEGRAM_REQUEST_TIMEOUT_MS);
   try {

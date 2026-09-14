@@ -32,6 +32,7 @@ import {
   autonomousCuratorContinuousV2Internals as baseInternals,
   type ContinuousCuratorResultV2,
 } from "./autonomousCuratorContinuousV2Base";
+import { runAutonomousCuratorContinuousV2DeepDryRun } from "./autonomousCuratorContinuousV2DeepDryRun";
 
 export type {
   ContinuousCuratorCategoryResultV2,
@@ -58,7 +59,7 @@ const MAX_RECOVERY_BURST_CYCLES = 8;
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0];
+type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0] & { dryRun?: boolean };
 
 type BeforeProduct = {
   id: string;
@@ -179,7 +180,8 @@ function resolveShopeeClient(env: NodeJS.ProcessEnv, provided?: ShopeeApiClient)
   const appId = String(env.SHOPEE_APP_ID || env.SHOPEE_AFFILIATE_APP_ID || "").trim();
   const secret = String(env.SHOPEE_APP_SECRET || env.SHOPEE_AFFILIATE_APP_SECRET || "").trim();
   if (!appId || !secret) return null;
-  return createShopeeApiClient({ appId, secret, baseUrl: env.SHOPEE_AFFILIATE_API_BASE_URL });
+  const baseUrl = String(env.SHOPEE_AFFILIATE_API_BASE_URL || "").trim() || undefined;
+  return createShopeeApiClient({ appId, secret, baseUrl });
 }
 
 function emptyHealthResult(): PublishedProductHealthResult {
@@ -445,6 +447,16 @@ async function notifyGrowth(
 export async function runAutonomousCuratorContinuousV2(options: ContinuousOptions = {}): Promise<ContinuousCuratorResultV2> {
   const env = options.env || process.env;
   const now = options.now || new Date();
+  if (options.dryRun === true) {
+    return runAutonomousCuratorContinuousV2DeepDryRun({
+      cycleId: options.cycleId,
+      now,
+      env,
+      shopeeClient: options.shopeeClient,
+      extractor: options.extractor,
+    });
+  }
+
   const config = await curatorRepository.getAutonomousCuratorConfig();
   let productsBefore = await productsRepository.getProducts();
   const beforeHealth = publishedSnapshot(productsBefore);
