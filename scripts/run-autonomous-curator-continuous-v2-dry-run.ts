@@ -68,6 +68,8 @@ async function main(): Promise<void> {
       page,
       ok: search.ok,
       reason: search.ok ? null : search.reason || "SHOPEE_SEARCH_FAILED",
+      httpStatus: search.httpStatus,
+      errorDetail: search.error?.detail ?? null,
       candidatesObserved: search.ok ? search.items.length : 0,
     });
   }
