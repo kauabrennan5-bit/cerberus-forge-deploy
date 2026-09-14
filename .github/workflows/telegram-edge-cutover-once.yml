@@ -76,11 +76,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          payload="$RUNNER_TEMP/set-webhook-payload.json"
           response="$RUNNER_TEMP/set-webhook.json"
+
+          node - "$payload" <<'NODE'
+          const fs = require('node:fs');
+          const payloadPath = process.argv[2];
+          const payload = {
+            url: process.env.TELEGRAM_WEBHOOK_URL,
+            secret_token: process.env.TELEGRAM_WEBHOOK_SECRET,
+            allowed_updates: ['message', 'callback_query'],
+            drop_pending_updates: false,
+          };
+          if (!payload.url) throw new Error('TELEGRAM_WEBHOOK_URL missing');
+          if (!payload.secret_token) throw new Error('TELEGRAM_WEBHOOK_SECRET missing');
+          fs.writeFileSync(payloadPath, JSON.stringify(payload));
+          NODE
+
+          node - "$payload" <<'NODE'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (payload.url !== process.env.TELEGRAM_WEBHOOK_URL) throw new Error('Webhook payload URL mismatch');
+          if (typeof payload.secret_token !== 'string' || payload.secret_token.length === 0) throw new Error('Webhook payload secret missing');
+          if (JSON.stringify(payload.allowed_updates) !== JSON.stringify(['message', 'callback_query'])) throw new Error('Webhook payload allowed_updates mismatch');
+          if (payload.drop_pending_updates !== false) throw new Error('Webhook payload drop_pending_updates mismatch');
+          console.log('TELEGRAM_EDGE_WEBHOOK_PAYLOAD=PASS');
+          NODE
+
           status="$(curl --silent --show-error --max-time 30 -o "$response" -w '%{http_code}' \
             -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
             -H 'Content-Type: application/json' \
-            --data "$(node -e 'process.stdout.write(JSON.stringify({url:process.env.TELEGRAM_WEBHOOK_URL,secret_token:process.env.TELEGRAM_WEBHOOK_SECRET,allowed_updates:[\"message\",\"callback_query\"],drop_pending_updates:false}))')")"
+            --data-binary "@$payload")"
           test "$status" = "200"
           node - "$response" <<'NODE'
           const fs = require('node:fs');
