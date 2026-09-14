@@ -8,6 +8,15 @@ on:
     - cron: "0 13 * * 5"
     # Sábado 10:00 America/Fortaleza (13:00 UTC): lembrete de draft pendente.
     - cron: "0 13 * * 6"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cerberus-watchdog.yml"
+      - "scripts/run-newsletter-weekly-direct.ts"
+      - "server/services/newsletterWeeklyCampaign.ts"
+      - "server/services/newsletterWeeklyPreflight.ts"
+      - "server/services/newsletterWeeklyEditorialBackfill.ts"
   workflow_dispatch:
     inputs:
       operation:
@@ -31,7 +40,7 @@ concurrency:
 
 jobs:
   weekly:
-    if: github.event_name == 'workflow_dispatch' || vars.CERBERUS_SERVERLESS_NEWSLETTER_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || vars.CERBERUS_SERVERLESS_NEWSLETTER_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -71,6 +80,8 @@ jobs:
               weekly-editorial-backfill-execute) op=backfill-execute ;;
               *) echo "Unsupported operation"; exit 1 ;;
             esac
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            op=preflight
           else
             case "${{ github.event.schedule }}" in
               "30 12 * * 5") op=preflight ;;
@@ -88,9 +99,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$WEEKLY_OPERATION" = "draft" ] || [ "$WEEKLY_OPERATION" = "stale" ]; then
+          if [ "$WEEKLY_OPERATION" = "draft" ]; then
             if [ "$CERBERUS_SERVERLESS_NEWSLETTER_ENABLED" != "true" ] || [ "$CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY" != "true" ]; then
               echo "WEEKLY_DIRECT=SKIPPED serverless_or_preview_not_ready"
+              exit 0
+            fi
+          elif [ "$WEEKLY_OPERATION" = "stale" ]; then
+            if [ "$CERBERUS_SERVERLESS_NEWSLETTER_ENABLED" != "true" ]; then
+              echo "WEEKLY_DIRECT=SKIPPED serverless_newsletter_not_ready"
               exit 0
             fi
           fi
