@@ -22,5 +22,5 @@ test("direct invariant runner is observational and cannot auto-publish", () => {
   assert.match(runner, /const autoPublished = 0/);
   assert.match(runner, /AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED/);
   assert.doesNotMatch(runner, /runAutonomousCuratorDaily|runAutonomousCuratorContinuousV2/);
-  assert.doesNotMatch(runner, /publish|activateProduct|sendNow/i);
+  assert.doesNotMatch(runner, /syncCatalogAndDeploy|archiveProduct|activateProduct|sendTelegramMessage|sendNow/);
 });
