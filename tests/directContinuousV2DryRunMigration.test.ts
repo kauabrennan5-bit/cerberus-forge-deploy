@@ -7,6 +7,7 @@ const runner = readFileSync("scripts/run-autonomous-curator-continuous-v2-dry-ru
 
 test("Continuous V2 dry-run executes directly without Render or OIDC", () => {
   assert.match(workflow, /run-autonomous-curator-continuous-v2-dry-run\.ts/);
+  assert.match(workflow, /cron:\s*["']23 \* \* \* \*["']/);
   assert.doesNotMatch(workflow, /onrender\.com/i);
   assert.doesNotMatch(workflow, /CERBERUS_RENDER_RUNTIME_ENABLED/);
   assert.doesNotMatch(workflow, /ACTIONS_ID_TOKEN_REQUEST|OIDC_AUDIENCE/);
