@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/autonomous-curator-continuous-v2-dry-run.yml"
       - "scripts/run-autonomous-curator-continuous-v2-dry-run.ts"
+      - "server/commercial/affiliate/shopeeApiClient.ts"
       - "server/services/autonomousCuratorContinuousV2.ts"
       - "server/services/autonomousCuratorContinuousV2Base.ts"
 
