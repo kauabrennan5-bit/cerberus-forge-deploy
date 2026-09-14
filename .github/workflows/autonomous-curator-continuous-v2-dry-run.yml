@@ -80,6 +80,40 @@ jobs:
             });
           })().catch(() => console.log('SHOPEE_NETWORK_PREFLIGHT=FAIL code=unexpected'));
           NODE
+      - name: Probe Shopee HTTP transports without auth
+        shell: bash
+        run: |
+          endpoint="https://open-api.affiliate.shopee.com.br/graphql"
+          payload='{"query":"{ __typename }"}'
+          set +e
+          curl_status="$(curl -sS --connect-timeout 5 --max-time 10 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary "$payload" "$endpoint" 2>/tmp/shopee-curl.err)"
+          curl_exit=$?
+          set -e
+          if [ "$curl_exit" -eq 0 ]; then
+            echo "SHOPEE_CURL_HTTP=PASS status=${curl_status}"
+          else
+            curl_code="$(sed -n 's/^curl: (\([0-9][0-9]*\)).*/\1/p' /tmp/shopee-curl.err | head -n1)"
+            echo "SHOPEE_CURL_HTTP=FAIL exit=${curl_exit} code=${curl_code:-unknown}"
+          fi
+          node <<'NODE'
+          const endpoint = 'https://open-api.affiliate.shopee.com.br/graphql';
+          const payload = JSON.stringify({ query: '{ __typename }' });
+          (async () => {
+            try {
+              const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: payload,
+                signal: AbortSignal.timeout(10000),
+              });
+              console.log(`SHOPEE_NODE_FETCH=PASS status=${response.status}`);
+              await response.body?.cancel();
+            } catch (error) {
+              const code = error?.cause?.code || error?.code || error?.name || 'unknown';
+              console.log(`SHOPEE_NODE_FETCH=FAIL code=${String(code)}`);
+            }
+          })().catch(() => console.log('SHOPEE_NODE_FETCH=FAIL code=unexpected'));
+          NODE
       - name: Install dependencies
         run: npm ci
       - name: Run Continuous V2 direct dry-run probe
