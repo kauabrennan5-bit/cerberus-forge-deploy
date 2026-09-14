@@ -1,0 +1,53 @@
+name: Continuous V2 Deep Dry Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/autonomous-curator-continuous-v2-deep-dry-run.yml"
+      - "scripts/run-autonomous-curator-continuous-v2-deep-dry-run.ts"
+      - "server/services/autonomousCuratorContinuousV2.ts"
+      - "server/services/autonomousCuratorContinuousV2DeepDryRun.ts"
+      - "server/services/productAutomation.ts"
+      - "server/services/productPipeline.ts"
+      - "server/services/productRotationPublication.ts"
+      - "server/commercial/affiliate/shopeeApiClient.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cerberus-continuous-v2-deep-dry-run
+  cancel-in-progress: true
+
+jobs:
+  deep-dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUPABASE_URL: https://ppsxlclycyinhhoqijvz.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+      SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
+      SHOPEE_AFFILIATE_APP_ID: ${{ secrets.SHOPEE_AFFILIATE_APP_ID }}
+      SHOPEE_AFFILIATE_APP_SECRET: ${{ secrets.SHOPEE_AFFILIATE_APP_SECRET }}
+      SHOPEE_AFFILIATE_API_BASE_URL: ${{ vars.SHOPEE_AFFILIATE_API_BASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: "5"
+      CONTINUOUS_V2_DEEP_DRY_RUN_MAX_SEARCH: "3"
+      CONTINUOUS_V2_DEEP_DRY_RUN_MAX_ENRICH: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run real Continuous V2 entrypoint in deep dry-run mode
+        run: npx tsx scripts/run-autonomous-curator-continuous-v2-deep-dry-run.ts
