@@ -1,6 +1,8 @@
 name: Continuous V2 Direct Dry Run
 
 on:
+  schedule:
+    - cron: "23 * * * *"
   workflow_dispatch:
   push:
     branches:
