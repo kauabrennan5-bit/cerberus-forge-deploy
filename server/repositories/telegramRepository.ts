@@ -1,3 +1,4 @@
+import { curatorGuardedSupabaseFetch, assertCuratorMutationAllowed, isCuratorDryRun } from "../lib/curatorDryRunGuard";
 import fs from "fs";
 import path from "path";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
@@ -22,7 +23,7 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 export const supabase: SupabaseClient | null = (supabaseUrl && supabaseServiceRoleKey)
-  ? createClient(supabaseUrl, supabaseServiceRoleKey)
+  ? createClient(supabaseUrl, supabaseServiceRoleKey, { global: { fetch: curatorGuardedSupabaseFetch } })
   : null;
 
 export type UserStateInput = {
@@ -50,6 +51,7 @@ function readReviewsFromFile(): Record<string, PendingReview> {
 }
 
 function writeReviewsToFile(reviews: Record<string, PendingReview>): void {
+  assertCuratorMutationAllowed("telegram_review_write");
   try {
     fs.writeFileSync(REVIEWS_FILE, JSON.stringify(reviews, null, 2), "utf-8");
   } catch (err) {
@@ -70,6 +72,7 @@ function readUserStatesFromFile(): Record<string, UserState> {
 }
 
 function writeUserStatesToFile(states: Record<string, UserState>): void {
+  assertCuratorMutationAllowed("telegram_review_write");
   try {
     fs.writeFileSync(USER_STATES_FILE, JSON.stringify(states, null, 2), "utf-8");
   } catch (err) {
@@ -275,6 +278,7 @@ export async function persistClaimedPublishingReview(review: PendingReview): Pro
 }
 
 export async function savePendingReview(review: PendingReview): Promise<void> {
+  assertCuratorMutationAllowed("telegram_review_write");
   if (testOverrideSavePendingReview) {
     await testOverrideSavePendingReview(review);
     return;
@@ -485,6 +489,7 @@ export async function listReviewsByStatus(
     }
   }
 
+  if (isCuratorDryRun()) throw new Error("CONTINUOUS_V2_DRY_RUN_REVIEW_READ_FAILED");
   const statusSet = new Set<TelegramReviewStatus>(uniqueStatuses);
   const now = Date.now();
   return Object.values(readReviewsFromFile())

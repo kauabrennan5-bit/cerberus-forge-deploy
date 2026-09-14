@@ -1,3 +1,4 @@
+import { assertCuratorMutationAllowed } from "../lib/curatorDryRunGuard";
 import { exportStaticProductsJson } from "./exportProductsJson";
 import { getProducts } from "../repositories/productsRepository";
 import {
@@ -150,6 +151,7 @@ function diagnosticForFailure(
  * publicamente qual API ele consome e que permanece frontend-only.
  */
 export async function syncCatalogAndDeploy(productTitle?: string, productId?: string, operationId = createOperationId("SYNC")): Promise<SyncLogResult> {
+  assertCuratorMutationAllowed("catalog_sync");
   const release = await acquireCatalogSyncLock();
   const staticSiteUrl = storefrontUrl();
   const catalogApiUrl = publicCatalogApiUrl();

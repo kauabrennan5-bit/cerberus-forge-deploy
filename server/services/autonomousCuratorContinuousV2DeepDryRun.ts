@@ -1,3 +1,4 @@
+import { withCuratorDryRun } from "../lib/curatorDryRunGuard";
 import { randomUUID } from "node:crypto";
 import type { Product } from "../../src/types";
 import { isPublicProductCategory, type PublicProductCategory } from "../../src/lib/productCategory";
@@ -34,6 +35,7 @@ export type ContinuousV2DeepDryRunResult = ContinuousCuratorResultV2 & {
   telegramMessagesSent: 0;
   productionRunOpened: false;
   deepEvaluations: number;
+  pipelineEvaluations: number;
   qualifiedCandidates: number;
 };
 
@@ -92,7 +94,7 @@ async function deepEvaluateCandidate(input: {
   env: NodeJS.ProcessEnv;
   extractor: typeof extractProductForReview;
   reviewThreshold: number;
-}): Promise<{ qualified: boolean; score: number | null; title: string | null; reason: string }> {
+}): Promise<{ qualified: boolean; score: number | null; title: string | null; reason: string; pipelineEvaluated?: true }> {
   const shopId = String(input.item.shopId || "");
   const itemId = String(input.item.itemId || "");
   if (!shopId || !itemId) return { qualified: false, score: null, title: null, reason: "DRY_RUN_IDENTITY_MISSING" };
@@ -193,7 +195,7 @@ async function deepEvaluateCandidate(input: {
     descricao: (data.descricao || "").trim(),
   }, { humanReview: true });
   if (lifecycle.validation.outcome === "FAIL" || lifecycle.state === "ERROR" || lifecycle.state === "REJECTED") {
-    return { qualified: false, score: null, title: displayTitle, reason: `DRY_RUN_PIPELINE_BLOCK:${lifecycle.validation.errors.join("|") || lifecycle.state}` };
+    return { pipelineEvaluated: true, qualified: false, score: null, title: displayTitle, reason: `DRY_RUN_PIPELINE_BLOCK:${lifecycle.validation.errors.join("|") || lifecycle.state}` };
   }
 
   const breakdown = scoreAutonomousCandidate({
@@ -209,6 +211,7 @@ async function deepEvaluateCandidate(input: {
   });
   const qualified = breakdown.finalScore >= input.reviewThreshold;
   return {
+    pipelineEvaluated: true,
     qualified,
     score: breakdown.finalScore,
     title: displayTitle,
@@ -217,23 +220,151 @@ async function deepEvaluateCandidate(input: {
 }
 
 export async function runAutonomousCuratorContinuousV2DeepDryRun(options: DeepDryRunOptions = {}): Promise<ContinuousV2DeepDryRunResult> {
-  const env = options.env || process.env;
-  const now = options.now || new Date();
-  const cycleId = options.cycleId || `continuous-dry-run-${randomUUID()}`;
-  const runDate = localRunDate(now);
-  const config = await curatorRepository.getAutonomousCuratorConfig();
-  if (!config.enabled) {
+  return withCuratorDryRun(async () => {
+    const env = options.env || process.env;
+    const now = options.now || new Date();
+    const cycleId = options.cycleId || `continuous-dry-run-${randomUUID()}`;
+    const runDate = localRunDate(now);
+    const config = await curatorRepository.getAutonomousCuratorConfig();
+    if (!config.enabled) {
+      return {
+        cycleId,
+        cycleNumber: 0,
+        runId: "",
+        runDate,
+        status: "disabled",
+        publishedThisCycle: 0,
+        fulfilledCategories: 0,
+        queuedProducts: 0,
+        failedThisCycle: 0,
+        categories: [],
+        dryRun: true,
+        renderDependency: false,
+        reviewOnly: true,
+        autoPublished: 0,
+        catalogMutations: 0,
+        reviewsCreated: 0,
+        telegramMessagesSent: 0,
+        productionRunOpened: false,
+        deepEvaluations: 0,
+        pipelineEvaluations: 0,
+        qualifiedCandidates: 0,
+      };
+    }
+
+    const client = resolveClient(env, options.shopeeClient);
+    if (!client) throw new Error("AUTONOMOUS_CURATOR_SHOPEE_NOT_CONFIGURED");
+    const extractor = options.extractor || extractProductForReview;
+    const [products, reviews] = await Promise.all([
+      productsRepository.getProducts(),
+      telegramRepository.listReviewsByStatus(
+        ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
+        1_000,
+        { includeExpiredPending: true, maximumLimit: 1_000 },
+      ),
+    ]);
+    const floor = positiveInt(env.AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY, 5, 10);
+    const coverage = calculateCategoryCoveragePolicy(products, reviews, floor, now.getTime());
+    const maxSearchCandidates = positiveInt(env.CONTINUOUS_V2_DEEP_DRY_RUN_MAX_SEARCH, Math.min(config.maxSearchCandidates, 3), 10);
+    const maxEnrichPerCategory = positiveInt(env.CONTINUOUS_V2_DEEP_DRY_RUN_MAX_ENRICH, 1, 3);
+    const categories: ContinuousCuratorCategoryResultV2[] = [];
+    let failedThisCycle = 0;
+    let deepEvaluations = 0;
+    let pipelineEvaluations = 0;
+    let qualifiedCandidates = 0;
+
+    for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
+      if (coverage.cardsNeeded[profile.category] <= 0) {
+        categories.push({
+          category: profile.category,
+          due: false,
+          published: false,
+          queued: false,
+          score: null,
+          title: null,
+          reason: "DRY_RUN_CATEGORY_COVERED",
+          productId: null,
+          searchedPages: [],
+        });
+        continue;
+      }
+
+      const query = profile.queries[0];
+      const result: ContinuousCuratorCategoryResultV2 = {
+        category: profile.category,
+        due: true,
+        published: false,
+        queued: false,
+        score: null,
+        title: null,
+        reason: "DRY_RUN_SEARCHING",
+        productId: null,
+        searchedPages: [1],
+      };
+      if (!query) {
+        result.reason = "DRY_RUN_QUERY_MISSING";
+        failedThisCycle += 1;
+        categories.push(result);
+        continue;
+      }
+
+      try {
+        const search = await client.searchOffers({ query, page: 1, limit: maxSearchCandidates });
+        if (!search.ok) {
+          result.reason = `DRY_RUN_SHOPEE_SEARCH:${search.reason || "failed"}`;
+          failedThisCycle += 1;
+          categories.push(result);
+          continue;
+        }
+        const ranked = [...search.items]
+          .filter(item => Boolean(item.name))
+          .sort((a, b) => cheapProfileScore(profile, b.name || "") - cheapProfileScore(profile, a.name || ""));
+        let best: { score: number; title: string; reason: string } | null = null;
+        for (const item of ranked.slice(0, maxEnrichPerCategory)) {
+          deepEvaluations += 1;
+          const evaluation = await deepEvaluateCandidate({
+            profile,
+            item,
+            products,
+            client,
+            env,
+            extractor,
+            reviewThreshold: config.reviewThreshold,
+          });
+          if (evaluation.pipelineEvaluated === true) pipelineEvaluations += 1;
+          if (evaluation.score !== null && evaluation.title && (!best || evaluation.score > best.score)) {
+            best = { score: evaluation.score, title: evaluation.title, reason: evaluation.reason };
+          }
+          if (evaluation.qualified) qualifiedCandidates += 1;
+        }
+        if (best) {
+          result.score = best.score;
+          result.title = best.title;
+          result.reason = best.reason;
+        } else {
+          result.reason = "DRY_RUN_NO_DEEP_CANDIDATE_QUALIFIED";
+        }
+      } catch (error) {
+        failedThisCycle += 1;
+        result.reason = `DRY_RUN_CATEGORY_FAILED:${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`;
+      }
+      categories.push(result);
+    }
+
+    const status: ContinuousCuratorResultV2["status"] = failedThisCycle > 0 && deepEvaluations === 0
+      ? "failed"
+      : coverage.totalCardsNeeded === 0 && failedThisCycle === 0 ? "completed" : "partial";
     return {
       cycleId,
       cycleNumber: 0,
       runId: "",
       runDate,
-      status: "disabled",
+      status,
       publishedThisCycle: 0,
-      fulfilledCategories: 0,
+      fulfilledCategories: coverage.coveredCategories,
       queuedProducts: 0,
-      failedThisCycle: 0,
-      categories: [],
+      failedThisCycle,
+      categories,
       dryRun: true,
       renderDependency: false,
       reviewOnly: true,
@@ -242,131 +373,9 @@ export async function runAutonomousCuratorContinuousV2DeepDryRun(options: DeepDr
       reviewsCreated: 0,
       telegramMessagesSent: 0,
       productionRunOpened: false,
-      deepEvaluations: 0,
-      qualifiedCandidates: 0,
+      deepEvaluations,
+      pipelineEvaluations,
+      qualifiedCandidates,
     };
-  }
-
-  const client = resolveClient(env, options.shopeeClient);
-  if (!client) throw new Error("AUTONOMOUS_CURATOR_SHOPEE_NOT_CONFIGURED");
-  const extractor = options.extractor || extractProductForReview;
-  const [products, reviews] = await Promise.all([
-    productsRepository.getProducts(),
-    telegramRepository.listReviewsByStatus(
-      ["pending", "publishing", "expired", "rejected", "cancelled", "error"],
-      1_000,
-      { includeExpiredPending: true, maximumLimit: 1_000 },
-    ),
-  ]);
-  const floor = positiveInt(env.AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY, 5, 10);
-  const coverage = calculateCategoryCoveragePolicy(products, reviews, floor, now.getTime());
-  const maxSearchCandidates = positiveInt(env.CONTINUOUS_V2_DEEP_DRY_RUN_MAX_SEARCH, Math.min(config.maxSearchCandidates, 3), 10);
-  const maxEnrichPerCategory = positiveInt(env.CONTINUOUS_V2_DEEP_DRY_RUN_MAX_ENRICH, 1, 3);
-  const categories: ContinuousCuratorCategoryResultV2[] = [];
-  let failedThisCycle = 0;
-  let deepEvaluations = 0;
-  let qualifiedCandidates = 0;
-
-  for (const profile of AUTONOMOUS_CURATOR_PROFILES) {
-    if (coverage.cardsNeeded[profile.category] <= 0) {
-      categories.push({
-        category: profile.category,
-        due: false,
-        published: false,
-        queued: false,
-        score: null,
-        title: null,
-        reason: "DRY_RUN_CATEGORY_COVERED",
-        productId: null,
-        searchedPages: [],
-      });
-      continue;
-    }
-
-    const query = profile.queries[0];
-    const result: ContinuousCuratorCategoryResultV2 = {
-      category: profile.category,
-      due: true,
-      published: false,
-      queued: false,
-      score: null,
-      title: null,
-      reason: "DRY_RUN_SEARCHING",
-      productId: null,
-      searchedPages: [1],
-    };
-    if (!query) {
-      result.reason = "DRY_RUN_QUERY_MISSING";
-      failedThisCycle += 1;
-      categories.push(result);
-      continue;
-    }
-
-    try {
-      const search = await client.searchOffers({ query, page: 1, limit: maxSearchCandidates });
-      if (!search.ok) {
-        result.reason = `DRY_RUN_SHOPEE_SEARCH:${search.reason || "failed"}`;
-        failedThisCycle += 1;
-        categories.push(result);
-        continue;
-      }
-      const ranked = [...search.items]
-        .filter(item => Boolean(item.name))
-        .sort((a, b) => cheapProfileScore(profile, b.name || "") - cheapProfileScore(profile, a.name || ""));
-      let best: { score: number; title: string; reason: string } | null = null;
-      for (const item of ranked.slice(0, maxEnrichPerCategory)) {
-        deepEvaluations += 1;
-        const evaluation = await deepEvaluateCandidate({
-          profile,
-          item,
-          products,
-          client,
-          env,
-          extractor,
-          reviewThreshold: config.reviewThreshold,
-        });
-        if (evaluation.score !== null && evaluation.title && (!best || evaluation.score > best.score)) {
-          best = { score: evaluation.score, title: evaluation.title, reason: evaluation.reason };
-        }
-        if (evaluation.qualified) qualifiedCandidates += 1;
-      }
-      if (best) {
-        result.score = best.score;
-        result.title = best.title;
-        result.reason = best.reason;
-      } else {
-        result.reason = "DRY_RUN_NO_DEEP_CANDIDATE_QUALIFIED";
-      }
-    } catch (error) {
-      failedThisCycle += 1;
-      result.reason = `DRY_RUN_CATEGORY_FAILED:${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`;
-    }
-    categories.push(result);
-  }
-
-  const status: ContinuousCuratorResultV2["status"] = failedThisCycle > 0 && deepEvaluations === 0
-    ? "failed"
-    : coverage.totalCardsNeeded === 0 && failedThisCycle === 0 ? "completed" : "partial";
-  return {
-    cycleId,
-    cycleNumber: 0,
-    runId: "",
-    runDate,
-    status,
-    publishedThisCycle: 0,
-    fulfilledCategories: coverage.coveredCategories,
-    queuedProducts: 0,
-    failedThisCycle,
-    categories,
-    dryRun: true,
-    renderDependency: false,
-    reviewOnly: true,
-    autoPublished: 0,
-    catalogMutations: 0,
-    reviewsCreated: 0,
-    telegramMessagesSent: 0,
-    productionRunOpened: false,
-    deepEvaluations,
-    qualifiedCandidates,
-  };
+  });
 }

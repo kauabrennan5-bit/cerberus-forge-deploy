@@ -19,6 +19,7 @@ type DeepProof = {
   telegramMessagesSent?: number;
   productionRunOpened?: boolean;
   deepEvaluations?: number;
+  pipelineEvaluations?: number;
   qualifiedCandidates?: number;
 };
 
@@ -50,8 +51,12 @@ async function main(): Promise<void> {
   if (violations.length > 0) {
     throw new Error(`CONTINUOUS_V2_DEEP_DRY_RUN_MUTATION_CONTRACT_VIOLATED:${violations.join(",")}`);
   }
-  if (!Number.isFinite(proof.deepEvaluations) || Number(proof.deepEvaluations) <= 0) {
+  if (!Number.isFinite(proof.pipelineEvaluations) || Number(proof.pipelineEvaluations) <= 0) {
     throw new Error("CONTINUOUS_V2_DEEP_DRY_RUN_NOT_DEEP_ENOUGH");
+  }
+
+  if (result.failedThisCycle > 0 || result.status === "failed") {
+    throw new Error("CONTINUOUS_V2_DEEP_DRY_RUN_OPERATIONAL_FAILURE");
   }
 
   console.log(JSON.stringify({
@@ -66,6 +71,7 @@ async function main(): Promise<void> {
     telegramMessagesSent: proof.telegramMessagesSent,
     productionRunOpened: proof.productionRunOpened,
     deepEvaluations: proof.deepEvaluations,
+    pipelineEvaluations: proof.pipelineEvaluations,
     qualifiedCandidates: proof.qualifiedCandidates,
     status: result.status,
     failedThisCycle: result.failedThisCycle,
