@@ -71,7 +71,7 @@ function reviewImage(data: JsonRecord): string {
   return candidates.find(v => /^https:\/\//i.test(v)) || "";
 }
 function reviewKeyboard(reviewId: string) {
-  return { inline_keyboard: [[{ text: "✅ PUBLICAR", callback_data: `confirm_pub:${reviewId}` }], [{ text: "❌ DESCARTAR", callback_data: `cancel_rev:${reviewId}` }]] };
+  return { inline_keyboard: [[{ text: "✅ APROVAR", callback_data: `approve_only:${reviewId}` }], [{ text: "❌ DESCARTAR", callback_data: `cancel_rev:${reviewId}` }]] };
 }
 function reviewCaption(row: any): string {
   const data = reviewData(row), price = Number(data.preco);
@@ -81,7 +81,7 @@ function reviewCaption(row: any): string {
     `Categoria: <b>${escapeHtml(data.categoria || "não informada")}</b>`,
     `Preço-base: <b>${Number.isFinite(price) && price > 0 ? `R$ ${price.toFixed(2).replace(".", ",")}` : "não confirmado"}</b>`,
     `Review: <code>${escapeHtml(row.id)}</code>`, "",
-    "⚠️ <b>PUBLICAR</b> é uma decisão humana auditável. O banco só ativa o produto se review, identidade Shopee, imagem, autorização e callback forem coerentes.",
+    "✅ <b>APROVAR</b> registra somente a decisão humana auditável; não publica nem ativa produto automaticamente.",
     "❌ <b>DESCARTAR</b> encerra esta review sem publicar.",
   ].join("\n");
 }
@@ -142,16 +142,46 @@ async function handleCallback(update: any) {
   if (!isAllowed(ctx.senderId)) { await answerCallback(ctx.callbackId, "Usuário não autorizado.", true); throw new Error("TELEGRAM_USER_NOT_ALLOWED"); }
   const client = adminClient();
 
-  if (ctx.data.startsWith("confirm_pub:")) {
-    const reviewId = ctx.data.slice("confirm_pub:".length);
-    await answerCallback(ctx.callbackId, "⏳ Validando aprovação humana...");
-    const { data, error } = await client.rpc("cerberus_telegram_publish_review", { p_review_id: reviewId, p_sender_id: ctx.senderId, p_chat_id: ctx.chatId, p_message_id: ctx.messageId, p_callback_query_id: ctx.callbackId });
-    if (error) {
-      await sendMessage(ctx.chatId, `❌ <b>PUBLICAÇÃO BLOQUEADA</b>\n\n<code>${escapeHtml(error.message || error.code || "HUMAN_GATE_REJECTED")}</code>\n\nNenhum bypass foi executado.`);
-      throw new Error(`PUBLISH_REJECTED:${error.code || "unknown"}`);
+  if (ctx.data.startsWith("approve_only:")) {
+    const reviewId = ctx.data.slice("approve_only:".length);
+    await answerCallback(ctx.callbackId, "Registrando decisão humana...");
+    const { data: review, error: reviewError } = await client.from("telegram_pending_reviews").select("id,status,sender_id,chat_id,expires_at,data").eq("id", reviewId).maybeSingle();
+    if (reviewError || !review) throw new Error("APPROVE_ONLY_REVIEW_NOT_FOUND");
+    if (review.sender_id && String(review.sender_id) !== ctx.senderId) throw new Error("APPROVE_ONLY_OWNER_MISMATCH");
+    if (review.chat_id && String(review.chat_id) !== ctx.chatId) throw new Error("APPROVE_ONLY_CHAT_MISMATCH");
+    const expiresAt = Number(review.expires_at || 0);
+    if (Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() > expiresAt) throw new Error("APPROVE_ONLY_EXPIRED");
+    if (review.status === "published") {
+      await sendMessage(ctx.chatId, `✅ <b>DECISÃO JÁ REGISTRADA</b>\n\nReview: <code>${escapeHtml(reviewId)}</code>\nNenhuma publicação automática foi executada.`);
+      return;
     }
-    await sendMessage(ctx.chatId, `✅ <b>PUBLICAÇÃO CONFIRMADA</b>\n\nProduto: <code>${escapeHtml(data?.productId || "confirmado")}</code>\nOperação: <code>${escapeHtml(data?.operationId || "confirmada")}</code>\n\nA prova do seu callback foi persistida e a autorização humana foi consumida pelo banco.`);
+    if (review.status !== "pending") throw new Error(`APPROVE_ONLY_STATUS_INVALID:${review.status || "unknown"}`);
+    const approvedAt = new Date().toISOString();
+    const data = {
+      ...reviewData(review),
+      edgeApproval: {
+        mode: "approve_only",
+        senderId: ctx.senderId,
+        chatId: ctx.chatId,
+        messageId: ctx.messageId,
+        callbackQueryId: ctx.callbackId,
+        approvedAt,
+      },
+    };
+    const { data: saved, error } = await client.from("telegram_pending_reviews")
+      .update({ status: "published", data, updated_at: approvedAt })
+      .eq("id", reviewId)
+      .eq("status", "pending")
+      .select("id,status")
+      .maybeSingle();
+    if (error || !saved) throw new Error(`APPROVE_ONLY_PERSIST_FAILED:${error?.code || "conflict"}`);
+    await sendMessage(ctx.chatId, `✅ <b>DECISÃO REGISTRADA</b>\n\nReview: <code>${escapeHtml(reviewId)}</code>\nEstado: <code>approved</code>\n\nNenhum produto foi publicado ou ativado. A publicação permanece uma etapa manual separada.`);
     return;
+  }
+
+  if (ctx.data.startsWith("confirm_pub:")) {
+    await answerCallback(ctx.callbackId, "Fluxo legado de publicação bloqueado. Use a aprovação segura atual.", true);
+    throw new Error("TELEGRAM_CALLBACK_UNSUPPORTED_CONFIRM_PUB");
   }
 
   if (ctx.data.startsWith("cancel_rev:")) {
@@ -222,7 +252,7 @@ async function handleMessage(update: any) {
       "O webhook está no Supabase Edge; não depende do Render.",
       "• <code>/review ID</code> — reabrir card pendente",
       "• <code>/produtos</code> — listar peças públicas, inclusive a baseline legada", "",
-      "Publicação e rotação continuam exigindo seu callback explícito no Telegram.",
+      "Aprovação de review registra somente a decisão; publicação real continua separada. Rotações continuam exigindo seu callback explícito.",
     ].join("\n"));
     return;
   }
