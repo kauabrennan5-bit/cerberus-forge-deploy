@@ -29,6 +29,25 @@ function serverlessWeeklyPreviewReady(): boolean {
   return process.env.CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY === "true";
 }
 
+function safeDiagnostic(value: unknown, max = 180): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/[\r\n\t]+/g, " ").replace(/[^a-zA-Z0-9_ .,:;()\-\/]/g, "?").trim().slice(0, max);
+}
+
+function describeDirectFailure(error: unknown): string {
+  if (error instanceof Error) {
+    const message = safeDiagnostic(error.message);
+    return message ? `WEEKLY_DIRECT_RUN_FAILED:${message}` : "WEEKLY_DIRECT_RUN_FAILED";
+  }
+  if (error && typeof error === "object") {
+    const raw = error as Record<string, unknown>;
+    const code = safeDiagnostic(raw.code, 80);
+    const message = safeDiagnostic(raw.message);
+    if (code || message) return ["WEEKLY_DIRECT_RUN_FAILED", code, message].filter(Boolean).join(":");
+  }
+  return "WEEKLY_DIRECT_RUN_FAILED";
+}
+
 async function main(): Promise<void> {
   requireAny("SUPABASE_URL", ["SUPABASE_URL"]);
   requireAny("SUPABASE_SERVICE_ROLE", ["SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "SUPABASE_SECRET_KEY"]);
@@ -110,7 +129,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : "WEEKLY_DIRECT_RUN_FAILED";
-  console.error(message);
+  console.error(describeDirectFailure(error));
   process.exitCode = 1;
 });

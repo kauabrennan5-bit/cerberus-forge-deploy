@@ -41,3 +41,11 @@ test("direct weekly runner preserves send and consent safety boundaries", () => 
   assert.doesNotMatch(runner, /syncWeeklyBrevoProductionAudience\s*\(/);
   assert.doesNotMatch(runner, /enableWeeklyProductionAfterVerifiedSync\s*\(/);
 });
+
+test("direct weekly failure diagnostics expose only bounded code and message", () => {
+  assert.match(runner, /function describeDirectFailure\(error: unknown\)/);
+  assert.match(runner, /safeDiagnostic\(raw\.code, 80\)/);
+  assert.match(runner, /safeDiagnostic\(raw\.message\)/);
+  assert.doesNotMatch(runner, /JSON\.stringify\(error\)|raw\.details|raw\.hint|raw\.headers|raw\.request/);
+  assert.match(runner, /console\.error\(describeDirectFailure\(error\)\)/);
+});
