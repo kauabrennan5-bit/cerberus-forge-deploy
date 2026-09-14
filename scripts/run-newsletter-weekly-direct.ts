@@ -25,6 +25,10 @@ function serverlessNewsletterEnabled(): boolean {
   return process.env.CERBERUS_SERVERLESS_NEWSLETTER_ENABLED === "true";
 }
 
+function serverlessWeeklyPreviewReady(): boolean {
+  return process.env.CERBERUS_SERVERLESS_WEEKLY_PREVIEW_READY === "true";
+}
+
 async function main(): Promise<void> {
   requireAny("SUPABASE_URL", ["SUPABASE_URL"]);
   requireAny("SUPABASE_SERVICE_ROLE", ["SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY", "SUPABASE_SECRET_KEY"]);
@@ -51,9 +55,9 @@ async function main(): Promise<void> {
       if (!delivery.ok) throw new Error("WEEKLY_DIRECT_PREFLIGHT_TELEGRAM_FAILED");
     }
   } else if (op === "draft") {
-    if (!serverlessNewsletterEnabled() || !(await isWeeklyProductionEnabled())) {
+    if (!serverlessNewsletterEnabled() || !serverlessWeeklyPreviewReady() || !(await isWeeklyProductionEnabled())) {
       status = "skipped";
-      result = { reason: "weekly_production_disabled" };
+      result = { reason: "weekly_production_or_preview_disabled" };
     } else {
       const outcome = await runWeeklyDraftCycle({
         env: { ...process.env, NEWSLETTER_WEEKLY_ENABLED: "true" },
