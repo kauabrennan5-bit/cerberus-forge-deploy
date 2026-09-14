@@ -25,6 +25,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Keep CI on the canonical runtime declared by package.json engines.node.
       - uses: actions/setup-node@v4
         with:
           node-version: 24.14.1
