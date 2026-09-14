@@ -32,6 +32,7 @@ import {
   autonomousCuratorContinuousV2Internals as baseInternals,
   type ContinuousCuratorResultV2,
 } from "./autonomousCuratorContinuousV2Base";
+import { runAutonomousCuratorContinuousV2DeepDryRun } from "./autonomousCuratorContinuousV2DeepDryRun";
 
 export type {
   ContinuousCuratorCategoryResultV2,
@@ -58,7 +59,7 @@ const MAX_RECOVERY_BURST_CYCLES = 8;
 const GROWTH_TIME_ZONE = "America/Fortaleza";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0];
+type ContinuousOptions = Parameters<typeof runAutonomousCuratorContinuousV2Base>[0] & { dryRun?: boolean };
 
 type BeforeProduct = {
   id: string;
@@ -179,7 +180,8 @@ function resolveShopeeClient(env: NodeJS.ProcessEnv, provided?: ShopeeApiClient)
   const appId = String(env.SHOPEE_APP_ID || env.SHOPEE_AFFILIATE_APP_ID || "").trim();
   const secret = String(env.SHOPEE_APP_SECRET || env.SHOPEE_AFFILIATE_APP_SECRET || "").trim();
   if (!appId || !secret) return null;
-  return createShopeeApiClient({ appId, secret, baseUrl: env.SHOPEE_AFFILIATE_API_BASE_URL });
+  const baseUrl = String(env.SHOPEE_AFFILIATE_API_BASE_URL || "").trim() || undefined;
+  return createShopeeApiClient({ appId, secret, baseUrl });
 }
 
 function emptyHealthResult(): PublishedProductHealthResult {
@@ -199,9 +201,6 @@ async function archiveUnavailableProducts(ids: readonly string[]): Promise<void>
   const sync = await syncCatalogAndDeploy("published product health archive");
   if (sync.success) return;
 
-  // Availability recovery must never republish. The database stays fail-safe
-  // (archived); a later catalog sync can project that state without creating
-  // or reactivating a public product.
   throw new Error(`PUBLISHED_PRODUCT_HEALTH_CATALOG_SYNC_FAILED:${sync.error || "unknown"}`);
 }
 
@@ -445,6 +444,16 @@ async function notifyGrowth(
 export async function runAutonomousCuratorContinuousV2(options: ContinuousOptions = {}): Promise<ContinuousCuratorResultV2> {
   const env = options.env || process.env;
   const now = options.now || new Date();
+  if (options.dryRun === true) {
+    return runAutonomousCuratorContinuousV2DeepDryRun({
+      cycleId: options.cycleId,
+      now,
+      env,
+      shopeeClient: options.shopeeClient,
+      extractor: options.extractor,
+    });
+  }
+
   const config = await curatorRepository.getAutonomousCuratorConfig();
   let productsBefore = await productsRepository.getProducts();
   const beforeHealth = publishedSnapshot(productsBefore);
@@ -478,8 +487,6 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
   const beforePolicy = calculateCategoryCoveragePolicy(productsBefore, reviewsBefore, dailyTarget, now.getTime());
   const countsBefore = beforePolicy.categoryCounts;
   const recoveryMode = beforePolicy.totalCardsNeeded > 0;
-  // A scheduled invocation creates at most one card per deficit category.  A
-  // later cycle observes those pending cards as coverage before doing more work.
   const burstLimit = 1;
 
   let result: ContinuousCuratorResultV2 | null = null;
@@ -498,14 +505,9 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     const burstRecoveryMode = burstCoverage.totalCardsNeeded > 0;
     const cardDeficitCategories = burstCoverage.prioritizedCategories.filter(category => burstCoverage.cardsNeeded[category] > 0);
 
-    // Deficit categories are a hard pre-enrichment scope. Complete categories
-    // cannot consume semantic ranking, visual review or affiliate acquisition
-    // while any lane remains below the configured category floor.
     const baseEnv: NodeJS.ProcessEnv = {
       ...env,
       AUTONOMOUS_CURATOR_DAILY_TARGET_PER_CATEGORY: String(dailyTarget),
-      // The base runner is always scoped by cards_needed. An empty scope is an
-      // audited no-op, never permission to fall back to already-covered lanes.
       AUTONOMOUS_CURATOR_RECOVERY_MODE: "true",
       AUTONOMOUS_CURATOR_DEFICIT_CATEGORIES: cardDeficitCategories.join(","),
       AUTONOMOUS_CURATOR_LIVE_CATALOG_TARGET: String(
@@ -515,7 +517,6 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
       ),
     };
 
-    // The base coordinator may rank, recover and persist Telegram cards only.
     const cycleResult = await runAutonomousCuratorContinuousV2Base({
       ...options,
       ...(shopeeClient ? { shopeeClient } : {}),
@@ -527,7 +528,6 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     result = cycleResult;
     publishedAcrossBurst += cycleResult.publishedThisCycle;
     failedAcrossBurst += cycleResult.failedThisCycle;
-
     break;
   }
 
