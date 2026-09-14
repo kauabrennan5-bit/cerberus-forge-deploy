@@ -1,0 +1,45 @@
+name: Continuous V2 Direct Dry Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/autonomous-curator-continuous-v2-dry-run.yml"
+      - "scripts/run-autonomous-curator-continuous-v2-dry-run.ts"
+      - "server/services/autonomousCuratorContinuousV2.ts"
+      - "server/services/autonomousCuratorContinuousV2Base.ts"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cerberus-continuous-v2-direct-dry-run
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_URL: https://ppsxlclycyinhhoqijvz.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      SHOPEE_APP_ID: ${{ secrets.SHOPEE_APP_ID }}
+      SHOPEE_APP_SECRET: ${{ secrets.SHOPEE_APP_SECRET }}
+      SHOPEE_AFFILIATE_APP_ID: ${{ secrets.SHOPEE_AFFILIATE_APP_ID }}
+      SHOPEE_AFFILIATE_APP_SECRET: ${{ secrets.SHOPEE_AFFILIATE_APP_SECRET }}
+      SHOPEE_AFFILIATE_API_BASE_URL: ${{ vars.SHOPEE_AFFILIATE_API_BASE_URL }}
+      CONTINUOUS_V2_DRY_RUN_MAX_CANDIDATES: "3"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Continuous V2 direct dry-run probe
+        run: npx tsx scripts/run-autonomous-curator-continuous-v2-dry-run.ts
