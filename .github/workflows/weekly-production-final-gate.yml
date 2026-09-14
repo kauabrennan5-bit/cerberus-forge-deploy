@@ -27,7 +27,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          # Must match package.json engines.node to avoid cross-runtime node:test serialization failures.
+          # Match package.json engines.node so node:test workers use the canonical runtime.
           node-version: 24.14.1
           cache: npm
       - run: npm ci
