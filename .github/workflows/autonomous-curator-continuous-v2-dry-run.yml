@@ -39,6 +39,47 @@ jobs:
         with:
           node-version: 24.14.1
           cache: npm
+      - name: Probe Shopee DNS and TLS path
+        shell: bash
+        run: |
+          node <<'NODE'
+          const dns = require('node:dns').promises;
+          const tls = require('node:tls');
+          const host = 'open-api.affiliate.shopee.com.br';
+          (async () => {
+            try {
+              const result = await dns.lookup(host);
+              console.log(`SHOPEE_DNS=PASS family=${result.family}`);
+            } catch (error) {
+              console.log(`SHOPEE_DNS=FAIL code=${String(error?.code || 'unknown')}`);
+              return;
+            }
+            await new Promise((resolve) => {
+              let settled = false;
+              const finish = (message) => {
+                if (settled) return;
+                settled = true;
+                console.log(message);
+                resolve();
+              };
+              const socket = tls.connect({ host, port: 443, servername: host, rejectUnauthorized: true });
+              const timer = setTimeout(() => {
+                socket.destroy();
+                finish('SHOPEE_TLS=FAIL code=timeout');
+              }, 5000);
+              socket.once('secureConnect', () => {
+                clearTimeout(timer);
+                const protocol = socket.getProtocol() || 'unknown';
+                socket.end();
+                finish(`SHOPEE_TLS=PASS protocol=${protocol}`);
+              });
+              socket.once('error', (error) => {
+                clearTimeout(timer);
+                finish(`SHOPEE_TLS=FAIL code=${String(error?.code || 'unknown')}`);
+              });
+            });
+          })().catch(() => console.log('SHOPEE_NETWORK_PREFLIGHT=FAIL code=unexpected'));
+          NODE
       - name: Install dependencies
         run: npm ci
       - name: Run Continuous V2 direct dry-run probe
