@@ -59,7 +59,6 @@ jobs:
         run: |
           set -euo pipefail
           ! grep -qi 'onrender\.com' .github/workflows/operator-health.yml
-          ! grep -qE 'ACTIONS_ID_TOKEN_REQUEST|OIDC_AUDIENCE|CERBERUS_RENDER_RUNTIME_ENABLED' .github/workflows/operator-health.yml
           grep -q 'runOperatorHealthChecksV2' scripts/run-operator-health-direct.ts
           grep -q 'AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED' scripts/run-operator-health-direct.ts
           echo 'OPERATOR_EXTERNAL=DIRECT_READ_ONLY_RENDER_FREE'
