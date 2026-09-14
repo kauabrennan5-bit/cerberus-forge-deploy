@@ -28,6 +28,11 @@ function positiveLimit(value: unknown, fallback: number, max: number): number {
   return Math.min(max, parsed);
 }
 
+function optionalTrimmed(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 async function main(): Promise<void> {
   preflight();
 
@@ -38,7 +43,7 @@ async function main(): Promise<void> {
   const client = createShopeeApiClient({
     appId,
     secret,
-    baseUrl: process.env.SHOPEE_AFFILIATE_API_BASE_URL,
+    baseUrl: optionalTrimmed(process.env.SHOPEE_AFFILIATE_API_BASE_URL),
   });
 
   const maxCandidates = positiveLimit(
