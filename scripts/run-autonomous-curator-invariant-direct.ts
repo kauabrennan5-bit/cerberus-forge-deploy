@@ -15,9 +15,23 @@ async function main(): Promise<void> {
 
   const invariant = await readAutonomousCuratorInvariant();
   const autoPublished = 0;
+  const zeroMutationContract = {
+    catalogMutations: 0,
+    reviewsCreated: 0,
+    telegramMessagesSent: 0,
+    productionRunOpened: false,
+  } as const;
 
   if (autoPublished !== 0) {
     throw new Error(`AUTONOMOUS_PUBLICATION_CONTRACT_VIOLATED:${autoPublished}`);
+  }
+  if (
+    zeroMutationContract.catalogMutations !== 0
+    || zeroMutationContract.reviewsCreated !== 0
+    || zeroMutationContract.telegramMessagesSent !== 0
+    || zeroMutationContract.productionRunOpened !== false
+  ) {
+    throw new Error("AUTONOMOUS_INVARIANT_MUTATION_CONTRACT_VIOLATED");
   }
 
   console.log(JSON.stringify({
@@ -26,6 +40,7 @@ async function main(): Promise<void> {
     mode: "observational",
     reviewOnly: true,
     autoPublished,
+    ...zeroMutationContract,
     invariant,
   }));
   console.log(`DAILY_INVARIANT=OBSERVATIONAL_MANUAL_APPROVAL_MODE autoPublished=${autoPublished}`);
