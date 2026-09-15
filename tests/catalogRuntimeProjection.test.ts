@@ -13,7 +13,7 @@ const edgeSource = readFileSync(new URL("../supabase/functions/cerberus-public-a
 test("catalog sync validates the new frontend runtime and no longer promotes a static catalog branch", () => {
   assert.equal(catalogSyncSource.includes(["cerberus-static", "catalog.onrender.com"].join("-")), false);
   assert.equal(catalogSyncSource.includes("syncCatalogToGitHub"), false);
-  assert.match(catalogSyncSource, /https:\/\/juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api\/products/);
+  assert.match(catalogSyncSource, /https:\/\/ppsxlclycyinhhoqijvz\.supabase\.co\/functions\/v1\/cerberus-public-api\/products/);
   const obsoleteBackendProducts = ["https://cerberus-forge-deploy-backend.onrender.com", "api", "products"].join("/");
   assert.equal(catalogSyncSource.includes(obsoleteBackendProducts), false);
   assert.match(catalogSyncSource, /catalog-runtime\.json/);
@@ -26,11 +26,11 @@ test("catalog sync validates the new frontend runtime and no longer promotes a s
 test("post-publication validation rejects preview/static-catalog targets", () => {
   assert.doesNotThrow(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
     "https://cerberus-finds.pages.dev",
-    "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
+    "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products",
   ));
   assert.throws(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
     ["https://cerberus-design", "-preview.onrender.com"].join(""),
-    "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
+    "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products",
   ), /NON_CANONICAL_PUBLIC_VALIDATION_TARGET/);
   assert.throws(() => catalogSyncInternals.assertCanonicalRuntimeTargets(
     ["https://cerberus-", "static-catalog.onrender.com"].join(""),
@@ -43,7 +43,7 @@ test("storefront runtime manifest proves frontend-only mode and canonical catalo
     version: 2,
     mode: "runtime",
     frontendOnly: true,
-    catalogApiUrl: "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products",
+    catalogApiUrl: "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products",
   });
   assert.deepEqual(catalogSyncInternals.parseStorefrontManifest(runtimeManifest), runtimeManifest);
   assert.equal(catalogSyncInternals.parseStorefrontManifest({ ...runtimeManifest, frontendOnly: false }), null);

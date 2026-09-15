@@ -1348,7 +1348,7 @@ NUNCA modifique ou invente preços ou imagens.`,
     });
     app.use(vite.middlewares);
   } else {
-    const publicSiteBase = (process.env.PUBLIC_SITE_URL || "https://cerberus-design-static.onrender.com").replace(/\/+$/, "");
+    const publicSiteBase = (process.env.PUBLIC_SITE_URL || "https://cerberus-finds.pages.dev").replace(/\/+$/, "");
     const publicDataRoot = path.resolve(process.cwd(), "public", "data");
 
     const redirectToPublicSite = (req: express.Request, res: express.Response) => {

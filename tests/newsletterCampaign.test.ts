@@ -395,10 +395,10 @@ test("renderer enforces the official dark palette, explicit table backgrounds an
   assert.match(rendered.html, /class="email-price"[^>]*color:#FFFFFF/);
   assert.match(rendered.html, /class="email-eyebrow"[^>]*color:#E86B5F/);
   assert.doesNotMatch(rendered.html, /<td width="8"[^>]*#8A1F1F/);
-  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
-  assert.doesNotMatch(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
-  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-cta-red\.png"/);
-  assert.doesNotMatch(rendered.html, /background-image:url\('https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png'\)/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-finds\.pages\.dev\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
+  assert.doesNotMatch(rendered.html, /background="https:\/\/cerberus-finds\.pages\.dev\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-finds\.pages\.dev\/assets\/newsletter\/backgrounds\/cerberus-cta-red\.png"/);
+  assert.doesNotMatch(rendered.html, /background-image:url\('https:\/\/cerberus-finds\.pages\.dev\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png'\)/);
   assert.match(rendered.html, /class="email-price-card"[^>]+border-top:1px solid #3A342E/);
   assert.doesNotMatch(rendered.html, /#b0b0b0|#888888/);
   assert.doesNotMatch(rendered.html, /border-(left|right):/);
@@ -531,8 +531,8 @@ test("welcome campaign renders institutional copy and keeps product reference nu
   assert.doesNotMatch(rendered.html, /#B8B0A3|#504A3F|#5A5448|#6B6255|#80786A/);
   assert.doesNotMatch(rendered.html, /<td width="8"[^>]*#8A1F1F/);
   assert.doesNotMatch(rendered.html, /gradient/);
-  assert.match(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
-  assert.doesNotMatch(rendered.html, /background="https:\/\/cerberus-forge-deploy-backend\.onrender\.com\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
+  assert.match(rendered.html, /background="https:\/\/cerberus-finds\.pages\.dev\/assets\/newsletter\/backgrounds\/cerberus-canvas-dark\.png"/);
+  assert.doesNotMatch(rendered.html, /background="https:\/\/cerberus-finds\.pages\.dev\/assets\/newsletter\/backgrounds\/cerberus-surface-dark\.png"/);
   assert.equal(rendered.offerUrl, "");
 
   const store = new FakeCampaignStore();
@@ -803,7 +803,7 @@ test("administrative real-mode test remains exclusive to configured test email",
     env: {
       DRY_RUN: "false",
       NEWSLETTER_TEST_EMAIL: "Gutemberg160701@gmail.com",
-      NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus-forge-deploy-backend.onrender.com",
+      NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus-finds.pages.dev",
     },
   });
   assert.equal(result.providerResult.providerReference, "fake-test-message");
@@ -824,7 +824,7 @@ test("administrative duplicate test persists the provider reference without reci
     provider: { sendCampaign: async () => ({ status: "duplicate", providerReference: "duplicate-message" }) },
     env: {
       NEWSLETTER_TEST_EMAIL: "gutemberg160701@gmail.com",
-      NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus-forge-deploy-backend.onrender.com",
+      NEWSLETTER_PUBLIC_BASE_URL: "https://cerberus-finds.pages.dev",
     },
   });
   assert.equal(result.providerResult.status, "duplicate");
@@ -1542,7 +1542,7 @@ test("MASTHEAD is the first editorial block and Variant A is universal", () => {
   assert.equal(rendered.mastheadVariant, "A");
   assert.equal(rendered.mastheadImageUrl, null);
   assert.match(rendered.html, /editorial-masthead editorial-masthead-a/);
-  assert.equal(rendered.mastheadLogoUrl, "https://cerberus-forge-deploy-backend.onrender.com/assets/newsletter/branding/cerberus-logo-user-tight.png");
+  assert.equal(rendered.mastheadLogoUrl, "https://cerberus-finds.pages.dev/assets/newsletter/branding/cerberus-logo-user-tight.png");
   assert.match(rendered.html, /class="email-masthead-logo"[^>]+width="96" height="70"/);
   assert.doesNotMatch(rendered.html, /email-masthead-logo-print|cerberus-logo-square\.png/);
   assert.match(rendered.html, /class="email-masthead-brand-mark" width="108" height="82"/);

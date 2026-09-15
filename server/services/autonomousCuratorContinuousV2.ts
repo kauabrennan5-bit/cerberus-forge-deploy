@@ -581,7 +581,7 @@ export async function runAutonomousCuratorContinuousV2(options: ContinuousOption
     supabaseCount: publicCount,
     jsonCount: publicCount,
     publicJsonCount: publicCount,
-    staticSiteUrl: String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-design-static.onrender.com"),
+    staticSiteUrl: String(env.PUBLIC_STOREFRONT_URL || "https://cerberus-finds.pages.dev"),
     storefrontHealthy: true,
   };
 
