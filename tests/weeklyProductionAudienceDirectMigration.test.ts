@@ -16,8 +16,8 @@ test("weekly audience workflow has no Render or OIDC dependency", () => {
 });
 
 test("push proof is status-only and schedule cannot mutate audience", () => {
-  assert.match(workflow, /github\.event_name == 'push'[\s\S]*op=status/);
-  assert.match(workflow, /github\.event_name == 'schedule'[\s\S]*op=reconcile/);
+  assert.match(workflow, /if \[ "\$\{\{ github\.event_name \}\}" = "push" \]; then\s+op=status\s+allow_provider_mutations=false\s+allow_enable_production=false/);
+  assert.match(workflow, /elif \[ "\$\{\{ github\.event_name \}\}" = "schedule" \]; then\s+op=reconcile\s+allow_provider_mutations=false\s+allow_enable_production=false/);
   assert.match(workflow, /CERBERUS_SERVERLESS_NEWSLETTER_PROVIDER_RECONCILE_ENABLED/);
   assert.match(workflow, /confirm_provider_mutations/);
   assert.match(workflow, /confirm_enable_production/);
