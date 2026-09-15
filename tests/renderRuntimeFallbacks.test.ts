@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { getExpectedTelegramWebhookUrl } from "../server/services/telegramDiagnostics";
 import { resolvePublicSiteUrl, resolveNewsletterAssetBaseUrl } from "../server/services/newsletterInstitutional";
@@ -49,4 +50,18 @@ test("provider canary is direct, gated, and has no production write credentials"
   assert.match(workflow, /run-openai-provider-canary-direct\.ts/);
   assert.match(workflow, /CERBERUS_SERVERLESS_PROVIDER_CANARY_ENABLED/);
   assert.doesNotMatch(workflow, /SUPABASE|TELEGRAM|BREVO|OIDC|id-token|CERBERUS_RENDER_RUNTIME_ENABLED/);
+});
+
+test("production source and workflows have zero legacy hosting endpoint dependencies", () => {
+  const files = ["server.ts", ".env.example", "inspect_api.py", "inspect_remote.py"];
+  function collect(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) collect(path);
+      else if (/\.(?:[cm]?js|tsx?|py|sh|ya?ml|json)$/.test(entry.name)) files.push(path);
+    }
+  }
+  for (const directory of ["src", "server", "scripts", "supabase", ".github/workflows"]) collect(directory);
+  const dependencies = files.filter(file => /https?:\/\/[^\s"'`]*(?:onrender\.com|api\.render\.com)/i.test(readFileSync(file, "utf8")));
+  assert.deepEqual(dependencies, [], "production endpoint dependencies must stay at zero");
 });
