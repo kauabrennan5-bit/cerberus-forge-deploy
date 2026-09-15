@@ -146,8 +146,8 @@ const CONFIG = {
   failureThresholdForError: 3 // 3 falhas consecutivas elevam para ERROR persistente
 };
 
-const BACKEND_HEALTH_URL = `${String(process.env.PUBLIC_BACKEND_URL || "https://cerberus-forge-deploy-backend.onrender.com").replace(/\/+$/, "")}/health`;
-const PUBLIC_CATALOG_URL = process.env.PUBLIC_CATALOG_URL || process.env.PUBLIC_CATALOG_API_URL || "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products";
+const BACKEND_HEALTH_URL = `${String(process.env.PUBLIC_BACKEND_URL || "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway").replace(/\/+$/, "")}/health`;
+const PUBLIC_CATALOG_URL = process.env.PUBLIC_CATALOG_URL || process.env.PUBLIC_CATALOG_API_URL || "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products";
 const GITHUB_MAIN_URL = "https://api.github.com/repos/kauabrennan5-bit/cerberus-forge-deploy/branches/main";
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 15_000): Promise<any> {

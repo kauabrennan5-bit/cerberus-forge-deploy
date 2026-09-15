@@ -1,7 +1,7 @@
 #!/bin/bash
 # Poll /health até o SHA novo (Fase 24) ser servido. Sem secrets.
 TARGET_SHA="3deb7556611be7134cf46a2241b8c1c0ffd0d45b"
-URL="https://cerberus-forge-deploy-backend.onrender.com/health"
+URL="https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway/health"
 for i in $(seq 1 90); do
   resp=$(curl -sS --max-time 20 "$URL") || resp="TIMEOUT"
   ver=$(echo "$resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null) || ver="PARSE_FAIL"

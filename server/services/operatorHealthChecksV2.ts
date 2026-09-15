@@ -6,9 +6,9 @@ import { inspectShopeeProviderEnv } from "./shopeeProviderRuntime";
 import type { ComponentObservation, OperationalStatus } from "./operatorAutonomy";
 import { isPublicCatalogEligibleDbRow, PUBLIC_CATALOG_ELIGIBILITY_CONTRACT_VERSION } from "./publicCatalogEligibility";
 
-export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-static.onrender.com";
-export const DEFAULT_PUBLIC_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
-export const DEFAULT_PUBLIC_CATALOG_URL = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products";
+export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-finds.pages.dev";
+export const DEFAULT_PUBLIC_BACKEND_URL = "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway";
+export const DEFAULT_PUBLIC_CATALOG_URL = "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products";
 const DEFAULT_TIMEOUT_MS = 12_000;
 
 export type OperatorHealthComponentName =

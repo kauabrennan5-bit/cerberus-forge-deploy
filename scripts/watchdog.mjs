@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
-const DEFAULT_HEALTH_URL = "https://cerberus-forge-deploy-backend.onrender.com/health";
+const DEFAULT_HEALTH_URL = "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway/health";
 const STATE_PATH = process.env.WATCHDOG_STATE_PATH || "state/watchdog-state.json";
 const healthUrl = process.env.CERBERUS_HEALTH_URL || DEFAULT_HEALTH_URL;
 const timeoutMs = Math.max(75_000, Number.parseInt(process.env.WATCHDOG_TIMEOUT_MS || "75000", 10));

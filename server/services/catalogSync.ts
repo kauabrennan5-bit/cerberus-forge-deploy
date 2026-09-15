@@ -54,7 +54,7 @@ function storefrontUrl(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function publicCatalogApiUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return String(env.PUBLIC_CATALOG_API_URL || "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/products").replace(/\/+$/, "");
+  return String(env.PUBLIC_CATALOG_API_URL || "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products").replace(/\/+$/, "");
 }
 
 function assertCanonicalRuntimeTargets(storefront: string, catalogApi: string): void {
@@ -64,7 +64,7 @@ function assertCanonicalRuntimeTargets(storefront: string, catalogApi: string): 
   if (!/^https:\/\/cerberus-finds\.pages\.dev$/i.test(storefront)) {
     throw new Error("OFFICIAL_STOREFRONT_REQUIRED");
   }
-  if (!/^https:\/\/juiychcfdqxgnatffnla\.supabase\.co\/functions\/v1\/cerberus-public-api\/products$/i.test(catalogApi)) {
+  if (!/^https:\/\/ppsxlclycyinhhoqijvz\.supabase\.co\/functions\/v1\/cerberus-public-api\/products$/i.test(catalogApi)) {
     throw new Error("OFFICIAL_PUBLIC_CATALOG_API_REQUIRED");
   }
 }
@@ -97,7 +97,7 @@ function parseStorefrontManifest(body: unknown): StorefrontRuntimeManifest | nul
   if (!body || typeof body !== "object") return null;
   const row = body as Record<string, unknown>;
   const catalogApiUrl = normalizeApiUrl(row.catalogApiUrl);
-  const canonicalEdgePrefix = "https://juiychcfdqxgnatffnla.supabase.co/functions/v1/cerberus-public-api/";
+  const canonicalEdgePrefix = "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/";
   if (Number(row.version) < 2 || row.mode !== "runtime" || row.frontendOnly !== true || !catalogApiUrl.startsWith(canonicalEdgePrefix)) return null;
   return { version: Number(row.version), mode: "runtime", frontendOnly: true, catalogApiUrl };
 }

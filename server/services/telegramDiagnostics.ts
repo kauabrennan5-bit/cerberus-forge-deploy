@@ -37,7 +37,7 @@ export type TelegramWebhookReconcileResult = {
   reason: "disabled" | "token_missing" | "secret_missing" | "already_configured" | "updated" | "provider_error";
 };
 
-const DEFAULT_BACKEND_URL = "https://cerberus-forge-deploy-backend.onrender.com";
+const DEFAULT_BACKEND_URL = "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-telegram-gateway";
 let telegramBackendReady = false;
 let lastTelegramBootstrapAt: string | undefined;
 let webhookReconcileScheduled = false;
@@ -57,7 +57,8 @@ function normalizeUrl(value: string): string {
 export function getExpectedTelegramWebhookUrl(): string {
   const configured = process.env.TELEGRAM_WEBHOOK_URL?.trim();
   if (configured) return normalizeUrl(configured);
-  const backend = (process.env.PUBLIC_BACKEND_URL || DEFAULT_BACKEND_URL).trim();
+  const backend = process.env.PUBLIC_BACKEND_URL?.trim();
+  if (!backend || normalizeUrl(backend) === DEFAULT_BACKEND_URL) return `${DEFAULT_BACKEND_URL}/webhook`;
   return `${normalizeUrl(backend)}/api/telegram/webhook`;
 }
 

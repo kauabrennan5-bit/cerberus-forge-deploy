@@ -8,7 +8,7 @@ import { resolveCanonicalProductImage } from "../../src/lib/productCanonical";
 import type { NewsletterSocialLink } from "./newsletterCampaignTemplate";
 import { emptySocialLinkConfig, readCanonicalSocialLinks, SOCIAL_NETWORKS, type SocialLinksClient } from "./socialLinks";
 
-export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-design-static.onrender.com";
+export const DEFAULT_PUBLIC_SITE_URL = "https://cerberus-finds.pages.dev";
 
 export function resolvePublicSiteUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = (env.PUBLIC_SITE_URL || env.PUBLIC_STOREFRONT_URL || DEFAULT_PUBLIC_SITE_URL).trim();
@@ -25,7 +25,7 @@ export function buildInstitutionalUrl(path: string, env: NodeJS.ProcessEnv = pro
   return new URL(path, `${resolvePublicSiteUrl(env)}/`).toString();
 }
 
-export const DEFAULT_NEWSLETTER_ASSET_BASE_URL = "https://cerberus-forge-deploy-backend.onrender.com";
+export const DEFAULT_NEWSLETTER_ASSET_BASE_URL = "https://cerberus-finds.pages.dev";
 
 export function resolveNewsletterAssetBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = (env.NEWSLETTER_PUBLIC_ASSET_BASE_URL || env.NEWSLETTER_PUBLIC_BASE_URL || DEFAULT_NEWSLETTER_ASSET_BASE_URL).trim();
