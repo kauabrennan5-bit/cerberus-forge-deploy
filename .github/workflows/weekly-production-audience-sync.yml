@@ -1,5 +1,6 @@
 name: Weekly Production Audience Sync
 
+# Push runs are intentionally status-only and cannot mutate the provider.
 on:
   schedule:
     - cron: "7 * * * *"
