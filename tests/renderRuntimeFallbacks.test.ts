@@ -39,6 +39,8 @@ test("migrated runtime defaults contain no legacy production hostname", () => {
     "server/services/newsletterInstitutional.ts", "server/services/cerberusOperatorLegacy.ts",
     "server/services/autonomousCuratorContinuousV2.ts", "scripts/watchdog.mjs",
     "scripts/poll_health_phase24.sh", ".github/workflows/openai-provider-canary.yml",
+    "server.ts", ".env.example", "inspect_api.py",
+    "scripts/run_render_job.sh", "scripts/phase22_list_env_names.py",
   ]) assert.doesNotMatch(readFileSync(file, "utf8"), /https?:\/\/[^\s"']*onrender\.com/, file);
 });
 

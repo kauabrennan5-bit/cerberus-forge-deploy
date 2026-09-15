@@ -1,6 +1,6 @@
 import requests
 
-url = "https://cerberus-forge-deploy.onrender.com/api/products"
+url = "https://ppsxlclycyinhhoqijvz.supabase.co/functions/v1/cerberus-public-api/products"
 try:
     r = requests.get(url, timeout=10)
     print(f"Status Code: {r.status_code}")
