@@ -22,6 +22,6 @@ test("Shopee client falls back to official endpoint when baseUrl is empty", asyn
     transport,
     clock: () => 1_700_000_000_000,
   });
-  await client.searchOffers({ query: "luminaria", limit: 1 });
+  await client.searchOffers({ query: "luminaria", limit: 5 });
   assert.equal(requestedUrl, SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL);
 });
