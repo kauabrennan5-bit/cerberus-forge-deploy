@@ -76,7 +76,7 @@ export function createShopeeApiClient(options: ShopeeApiClientOptions) {
   if (!options.appId || !options.secret) {
     throw new ShopeeClientError("SHOPEE_NOT_CONFIGURED", "credentials_missing");
   }
-  const baseUrl = (options.baseUrl ?? SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL).replace(/\/+$/, "");
+  const baseUrl = (options.baseUrl?.trim() || SHOPEE_AFFILIATE_API_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const timeoutMs = options.timeoutMs ?? SHOPEE_DEFAULT_TIMEOUT_MS;
   const transport = options.transport ?? fetch;
   const clock = options.clock ?? (() => Date.now());
